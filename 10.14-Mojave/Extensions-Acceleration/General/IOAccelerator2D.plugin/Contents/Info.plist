@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>BuildMachineOSBuild</key>
+	<string>16B2657</string>
+	<key>CFBundleExecutable</key>
+	<string>IOAccelerator2D</string>
+	<key>CFBundleGetInfoString</key>
+	<string>IOAccelerator2D 1.0</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.apple.driver.IOAccelerator2D</string>
+	<key>CFBundleName</key>
+	<string>IOAccelerator 2D Plugin</string>
+	<key>CFBundleShortVersionString</key>
+	<string>378.18.1</string>
+	<key>CFBundleSupportedPlatforms</key>
+	<array>
+		<string>MacOSX</string>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>378.18.1</string>
+	<key>CFPlugInDynamicRegistration</key>
+	<string>NO</string>
+	<key>CFPlugInFactories</key>
+	<dict>
+		<key>2000ffff-0000-0000-0000-ffffffffffff</key>
+		<string>IOAccelerator2DFactory</string>
+	</dict>
+	<key>CFPlugInTypes</key>
+	<dict>
+		<key>ACCF0000-0000-0000-0000-000a2789904e</key>
+		<array>
+			<string>2000ffff-0000-0000-0000-ffffffffffff</string>
+		</array>
+	</dict>
+	<key>DTCompiler</key>
+	<string>com.apple.compilers.llvm.clang.1_0</string>
+	<key>DTPlatformBuild</key>
+	<string>9P107g</string>
+	<key>DTPlatformVersion</key>
+	<string>GM</string>
+	<key>DTSDKBuild</key>
+	<string>17F28</string>
+	<key>DTSDKName</key>
+	<string>macosx10.13internal</string>
+	<key>DTXcode</key>
+	<string>0930</string>
+	<key>DTXcodeBuild</key>
+	<string>9P107g</string>
+	<key>NSExecutable</key>
+	<string>IOAccelerator2D</string>
+	<key>Personality</key>
+	<dict>
+		<key>IOProviderClass</key>
+		<string>IOFramebuffer</string>
+	</dict>
+</dict>
+</plist>

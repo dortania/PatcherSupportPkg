@@ -1,0 +1,28 @@
+name: CI - Catalina Binaries
+
+on:
+  push:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    name: Zip and Upload Catalina Binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - run: zip -r 10.15-Catalina.zip 10.15-Catalina
+      - name: Upload Binary to Artifacts
+        uses: actions/upload-artifact@v2
+        with:
+          name: 10.15-Catalina
+          path: 10.15-Catalina.zip
+      - name: Upload to Release
+        if: github.event_name == 'release'
+        uses: svenstaro/upload-release-action@e74ff71f7d8a4c4745b560a485cc5fdb9b5b999d
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: 10.15-Catalina.zip
+          tag: ${{ github.ref }}
+          file_glob: true
