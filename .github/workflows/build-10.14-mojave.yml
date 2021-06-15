@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
-      - run: zip -r 10.14-Mojave.zip 10.15-Mojave
+      - run: zip -r 10.14-Mojave.zip 10.14-Mojave
       - name: Upload Binary to Artifacts
         uses: actions/upload-artifact@v2
         with:
