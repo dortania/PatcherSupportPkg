@@ -1,0 +1,5 @@
+Copyright (c) 2017-2021, Apple.inc
+Copyright (c) 2020-2021, ASentientBot
+Copyright (c) 2019-2021, dosdude1
+Copyright (c) 2021, Khronokernel
+All rights reserved to respective authors.
