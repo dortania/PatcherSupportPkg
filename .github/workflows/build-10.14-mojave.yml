@@ -9,7 +9,7 @@ on:
 jobs:
   build:
     name: Zip and Upload Mojave Binaries
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v2
       - run: zip -r 10.14-Mojave.zip 10.14-Mojave
