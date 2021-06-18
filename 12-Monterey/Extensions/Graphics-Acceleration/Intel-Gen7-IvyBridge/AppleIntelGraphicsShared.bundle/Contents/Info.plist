@@ -7,7 +7,7 @@
 	<key>CFBundleExecutable</key>
 	<string>AppleIntelGraphicsSharedIL</string>
 	<key>CFBundleGetInfoString</key>
-	<string>AppleIntelGraphicsSharedIL 16.0.42 10</string>
+	<string>AppleIntelGraphicsSharedIL 16.4.5 10</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.apple.AppleIntelGraphicsSharedIL</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -17,11 +17,11 @@
 	<key>CFBundlePackageType</key>
 	<string>BNDL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>16.0.42</string>
+	<string>16.4.5</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
 	<key>CFBundleVersion</key>
-	<string>16.0.0</string>
+	<string>16.0.4</string>
 	<key>NSPrincipalClass</key>
 	<string>AppleIntelGraphicsSharedIL</string>
 </dict>
