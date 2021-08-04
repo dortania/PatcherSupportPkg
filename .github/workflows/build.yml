@@ -8,78 +8,25 @@ on:
 
 jobs:
   build_mojave:
-    name: Zip and Upload Mojave Binaries
+    name: Zip and Upload Binaries
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
-      - run: zip -r --symlinks 10.14-Mojave.zip 10.14-Mojave
-      - name: Upload Binary to Artifacts
-        uses: actions/upload-artifact@v2
-        with:
-          name: 10.14-Mojave
-          path: 10.14-Mojave.zip
+      - run: |
+          zip -r --symlinks 10.14-Mojave.zip 10.14-Mojave
+          zip -r --symlinks 10.15-Catalina.zip 10.15-Catalina
+          zip -r --symlinks 11-Big-Sur.zip 11-Big-Sur
+          zip -r --symlinks 12-Monterey.zip 12-Monterey
+      - name: Generate Checksums
+        run: sha256sum *.zip > sha256sum.txt
+      - run: |
+          mkdir deploy
+          mv *.zip sha256sum.txt deploy/
       - name: Upload to Release
         if: github.event_name == 'release'
         uses: svenstaro/upload-release-action@e74ff71f7d8a4c4745b560a485cc5fdb9b5b999d
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: 10.14-Mojave.zip
-          tag: ${{ github.ref }}
-          file_glob: true
-  build_catalina:
-    name: Zip and Upload Catalina Binaries
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - run: zip -r --symlinks 10.15-Catalina.zip 10.15-Catalina
-      - name: Upload Binary to Artifacts
-        uses: actions/upload-artifact@v2
-        with:
-          name: 10.15-Catalina
-          path: 10.15-Catalina.zip
-      - name: Upload to Release
-        if: github.event_name == 'release'
-        uses: svenstaro/upload-release-action@e74ff71f7d8a4c4745b560a485cc5fdb9b5b999d
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: 10.15-Catalina.zip
-          tag: ${{ github.ref }}
-          file_glob: true
-  build_big_sur:
-    name: Zip and Upload Big Sur Binaries
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - run: zip -r --symlinks 11-Big-Sur.zip 11-Big-Sur
-      - name: Upload Binary to Artifacts
-        uses: actions/upload-artifact@v2
-        with:
-          name: 11-Big-Sur
-          path: 11-Big-Sur.zip
-      - name: Upload to Release
-        if: github.event_name == 'release'
-        uses: svenstaro/upload-release-action@e74ff71f7d8a4c4745b560a485cc5fdb9b5b999d
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: 11-Big-Sur.zip
-          tag: ${{ github.ref }}
-          file_glob: true
-  build_monterey:
-    name: Zip and Upload Monterey Binaries
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - run: zip -r --symlinks 12-Monterey.zip 12-Monterey
-      - name: Upload Binary to Artifacts
-        uses: actions/upload-artifact@v2
-        with:
-          name: 12-Monterey
-          path: 12-Monterey.zip
-      - name: Upload to Release
-        if: github.event_name == 'release'
-        uses: svenstaro/upload-release-action@e74ff71f7d8a4c4745b560a485cc5fdb9b5b999d
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: 12-Monterey.zip
+          file: deploy/*
           tag: ${{ github.ref }}
           file_glob: true
