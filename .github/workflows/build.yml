@@ -19,6 +19,31 @@ jobs:
           zip -r --symlinks 12-Monterey.zip 12-Monterey
       - name: Generate Checksums
         run: sha256sum *.zip > sha256sum.txt
+      - name: Upload Mojave to Artifacts
+        uses: actions/upload-artifact@v2
+        with:
+          name: 10.14-Mojave
+          path: 10.14-Mojave.zip
+      - name: Upload Catalina to Artifacts
+        uses: actions/upload-artifact@v2
+        with:
+          name: 10.15-Catalina
+          path: 10.15-Catalina.zip
+      - name: Upload Big Sur to Artifacts
+        uses: actions/upload-artifact@v2
+        with:
+          name: 11-Big-Sur
+          path: 11-Big-Sur.zip
+      - name: Upload Monterey to Artifacts
+        uses: actions/upload-artifact@v2
+        with:
+          name: 12-Monterey
+          path: 12-Monterey.zip
+      - name: Upload Checksums to Artifacts
+        uses: actions/upload-artifact@v2
+        with:
+          name: sha256sum.txt
+          path: sha256sum.txt
       - run: |
           mkdir deploy
           mv *.zip sha256sum.txt deploy/
