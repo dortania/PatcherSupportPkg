@@ -1,4 +1,4 @@
-Pulled from macOS 11.0 B6 (20A5364e):
+Pulled from macOS 11.0 B3 (20A5323l):
 
 - GeForceAIRPlugin.bundle
 - GeForceGLDriver.bundle
