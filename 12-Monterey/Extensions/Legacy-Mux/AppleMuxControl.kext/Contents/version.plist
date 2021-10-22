@@ -3,14 +3,14 @@
 <plist version="1.0">
 <dict>
 	<key>BuildVersion</key>
-	<string>14</string>
+	<string>1</string>
 	<key>CFBundleShortVersionString</key>
-	<string>3.14.49</string>
+	<string>3.14.52</string>
 	<key>CFBundleVersion</key>
-	<string>3.14.49</string>
+	<string>3.14.52b52</string>
 	<key>ProjectName</key>
 	<string>AppleGraphicsControl</string>
 	<key>SourceVersion</key>
-	<string>3014049000000</string>
+	<string>3014052000000</string>
 </dict>
 </plist>
