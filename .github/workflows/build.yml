@@ -13,22 +13,16 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - run: |
-          zip -r --symlinks 10.14-Mojave.zip 10.14-Mojave
-          zip -r --symlinks 10.15-Catalina.zip 10.15-Catalina
           zip -r --symlinks 11-Big-Sur.zip 11-Big-Sur
           zip -r --symlinks 12-Monterey.zip 12-Monterey
+          zip -r --symlinks Universal-Extensions.zip Universal-Extensions
       - name: Generate Checksums
         run: sha256sum *.zip > sha256sum.txt
-      - name: Upload Mojave to Artifacts
+      - name: Upload Universal-Extensions to Artifacts
         uses: actions/upload-artifact@v2
         with:
-          name: 10.14-Mojave
-          path: 10.14-Mojave.zip
-      - name: Upload Catalina to Artifacts
-        uses: actions/upload-artifact@v2
-        with:
-          name: 10.15-Catalina
-          path: 10.15-Catalina.zip
+          name: Universal-Extensions
+          path: Universal-Extensions.zip
       - name: Upload Big Sur to Artifacts
         uses: actions/upload-artifact@v2
         with:
