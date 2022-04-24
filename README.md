@@ -1,6 +1,6 @@
 # PatcherSupportPkg
 
-Repo dedicated to Apple binaries used with oatching macOS to run with legacy hardware
+Repo dedicated to Apple binaries used for patching macOS to run with legacy hardware.
 
 ## Sources:
 
