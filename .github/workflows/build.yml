@@ -12,8 +12,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
-      - run: |
-          zip -r --symlinks Universal-Binaries.zip Universal-Binaries
+      - name: Pre-flight cleaning
+      - run: sudo python3 clean.py
+      - name: Zip Binaries
+      - run: zip -r --symlinks Universal-Binaries.zip Universal-Binaries
       - name: Generate Checksums
         run: sha256sum *.zip > sha256sum.txt
       - name: Upload Universal Binaries to Artifacts

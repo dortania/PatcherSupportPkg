@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>English</string>
+	<key>CFBundleExecutable</key>
+	<string>GeForceTeslaGAWeb</string>
+	<key>CFBundleGetInfoString</key>
+	<string>GeForceTeslaGAWeb 10.33.0 387.10.10.10.40.140</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.nvidia.web.GeForceTeslaGAWeb</string>
+	<key>CFBundleName</key>
+	<string>NVIDIA GeForce Tesla Graphics Driver</string>
+	<key>CFBundleShortVersionString</key>
+	<string>10.33.0</string>
+	<key>CFBundleVersion</key>
+	<string>10.3.3</string>
+	<key>CFPlugInDynamicRegistration</key>
+	<string>NO</string>
+	<key>CFPlugInFactories</key>
+	<dict>
+		<key>E426BB00-3E5C-47BC-91D7-3E9E89389BEC</key>
+		<string>GeForceTeslaGAWebFactory</string>
+	</dict>
+	<key>CFPlugInTypes</key>
+	<dict>
+		<key>ACCF0000-0000-0000-0000-000a2789904e</key>
+		<array>
+			<string>E426BB00-3E5C-47BC-91D7-3E9E89389BEC</string>
+		</array>
+	</dict>
+	<key>NSExecutable</key>
+	<string>GeForceTeslaGAWeb</string>
+	<key>Personality</key>
+	<dict>
+		<key>IOProviderClass</key>
+		<string>IOFramebuffer</string>
+	</dict>
+</dict>
+</plist>

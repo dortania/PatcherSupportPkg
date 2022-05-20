@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>BuildMachineOSBuild</key>
+	<string>11A511</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>English</string>
+	<key>CFBundleExecutable</key>
+	<string>NVDAStartupWeb</string>
+	<key>CFBundleGetInfoString</key>
+	<string>NVDAStartupWeb 10.33.0 387.10.10.10.40.140</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.nvidia.NVDAStartupWeb</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>NVDAStartupWeb</string>
+	<key>CFBundlePackageType</key>
+	<string>KEXT</string>
+	<key>CFBundleShortVersionString</key>
+	<string>10.33.0</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleVersion</key>
+	<string>10.3.3</string>
+	<key>GPUCompanionBundles</key>
+	<array>
+		<string>GeForceAIRPluginWeb.bundle</string>
+		<string>GeForceGLDriverWeb.bundle</string>
+		<string>GeForceMTLDriverWeb.bundle</string>
+		<string>GeForceVADriverWeb.bundle</string>
+		<string>GeForceTeslaGLDriverWeb.bundle</string>
+		<string>GeForceTeslaVADriverWeb.bundle</string>
+		<string>GeForceTeslaGAWeb.bundle</string>
+	</array>
+	<key>IOKitPersonalities</key>
+	<dict>
+		<key>NVDAStartup</key>
+		<dict>
+			<key>CFBundleIdentifier</key>
+			<string>com.nvidia.NVDAStartupWeb</string>
+			<key>IOClass</key>
+			<string>NVDAStartupWeb</string>
+			<key>IOMatchCategory</key>
+			<string>IOFramebuffer</string>
+			<key>IOPCIClassMatch</key>
+			<string>0x03000000&amp;0xff000000</string>
+			<key>IOPCIMatch</key>
+			<string>0x000010de&amp;0x0000ffff</string>
+			<key>IOProbeScore</key>
+			<integer>200000</integer>
+			<key>IOProviderClass</key>
+			<string>IOPCIDevice</string>
+			<key>NVDARequiredOS</key>
+			<string>17G14042</string>
+			<key>NVDAType</key>
+			<string>Web</string>
+		</dict>
+	</dict>
+	<key>OSBundleLibraries</key>
+	<dict>
+		<key>com.apple.iokit.IOPCIFamily</key>
+		<string>1.0b1</string>
+		<key>com.apple.kpi.iokit</key>
+		<string>7.0</string>
+		<key>com.apple.kpi.libkern</key>
+		<string>8.0d0</string>
+	</dict>
+	<key>OSBundleRequired</key>
+	<string>Safe Boot</string>
+</dict>
+</plist>
