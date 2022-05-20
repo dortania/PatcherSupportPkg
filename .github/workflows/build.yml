@@ -13,9 +13,9 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - name: Pre-flight cleaning
-      - run: sudo python3 clean.py
+        run: sudo python3 clean.py
       - name: Zip Binaries
-      - run: zip -r --symlinks Universal-Binaries.zip Universal-Binaries
+        run: zip -r --symlinks Universal-Binaries.zip Universal-Binaries
       - name: Generate Checksums
         run: sha256sum *.zip > sha256sum.txt
       - name: Upload Universal Binaries to Artifacts
