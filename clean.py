@@ -21,7 +21,7 @@ def delete_folders():
     for folder in folders_to_delete:
         path = root_path + "/" + folder
         if Path(path).exists():
-            print("Removing: " + path)
+            print("  - Removing: " + path)
             subprocess.run(["rm", "-rf", path])
 
 
