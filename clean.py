@@ -11,8 +11,8 @@ folders_to_delete = [
     "10.14.6-19",
 
     # Nvidia Web Driver Patches
-    # Currently under development, no use for public distribution
-    "WebDriver-387.10.10.10.40.140",
+    # Remove .pkg, unused by patcher
+    "WebDriver-387.10.10.10.40.140/WebDriver-387.10.10.10.40.140.pkg",
 ]
 
 def delete_folders():
