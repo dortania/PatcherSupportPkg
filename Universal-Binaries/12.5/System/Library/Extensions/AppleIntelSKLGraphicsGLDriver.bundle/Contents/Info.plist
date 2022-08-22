@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>English</string>
+	<key>CFBundleExecutable</key>
+	<string>AppleIntelSKLGraphicsGLDriver</string>
+	<key>CFBundleGetInfoString</key>
+	<string>AppleIntelSKLGraphicsGLDriver 18.8.4 10</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.apple.driver.AppleIntelSKLGraphicsGLDriver</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Intel g9 OpenGL Driver</string>
+	<key>CFBundlePackageType</key>
+	<string>BNDL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>18.8.4</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleVersion</key>
+	<string>18.0.8</string>
+	<key>CLFeatureList</key>
+	<dict>
+		<key>CLHangOnL3ParityErr</key>
+		<integer>0</integer>
+		<key>CLSSKernelDebugEnable</key>
+		<integer>0</integer>
+	</dict>
+</dict>
+</plist>
