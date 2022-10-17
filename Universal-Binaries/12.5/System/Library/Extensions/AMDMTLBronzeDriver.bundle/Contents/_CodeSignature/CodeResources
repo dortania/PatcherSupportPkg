@@ -4,134 +4,63 @@
 <dict>
 	<key>files</key>
 	<dict>
-		<key>Resources/BridgeSupport/Metal.arm64e.bridgesupport</key>
+		<key>Resources/BronzeStatistics-analysis.js</key>
 		<data>
-		E3cYstCgVb+nWXLwWArJQskgn5c=
+		bMeg/IVSQsLl16iHtQQFiMS2baU=
 		</data>
-		<key>Resources/BridgeSupport/Metal.bridgesupport</key>
+		<key>Resources/BronzeStatistics-counters.plist</key>
 		<data>
-		E3cYstCgVb+nWXLwWArJQskgn5c=
+		x2fvZw6QJ/71JJ/M08q7NemgISA=
 		</data>
-		<key>Resources/BridgeSupport/Metal.dylib</key>
+		<key>Resources/BronzeStatistics-derived.js</key>
 		<data>
-		jufnIwa7XO7VxTXgvHj469JmqEM=
+		4ThUX8KEIS8m58REo2jYizv8Jik=
 		</data>
-		<key>Resources/Info.plist</key>
+		<key>Resources/SI-BronzeStatistics-counters.plist</key>
 		<data>
-		/gp2HMVDmtEmart484ywVTTelAw=
+		fRVCamzDHMtV2SJdG/Ks45wcUMc=
 		</data>
-		<key>Resources/MTLBVHBuilder.metallib</key>
+		<key>version.plist</key>
 		<data>
-		i3RCj5RuhyA1g7Tb+3l8OKcM53s=
-		</data>
-		<key>Resources/MTLECBE.metallib</key>
-		<data>
-		v7jK3H+gqAeZdlLL5MPoAe/u9wU=
-		</data>
-		<key>Resources/MTLGPUDebugRaytracingRuntime.rtlib</key>
-		<data>
-		KcRGaI9J5uqQXRHoC2lcrQoBZu4=
-		</data>
-		<key>Resources/MTLRaytracingRuntime.rtlib</key>
-		<data>
-		cu0dhAPQj1RGWyuCcY8InQvHsjo=
-		</data>
-		<key>Resources/en.lproj/InfoPlist.strings</key>
-		<dict>
-			<key>hash</key>
-			<data>
-			zmV6UqBSo6r1NOz798vd5O4zTBA=
-			</data>
-			<key>optional</key>
-			<true/>
-		</dict>
-		<key>Resources/version.plist</key>
-		<data>
-		1ziplmZykD9wxSiNheRDZd3zUO4=
+		qOD5mRpJvjbTwq98EUrvUAnqfZ8=
 		</data>
 	</dict>
 	<key>files2</key>
 	<dict>
-		<key>Resources/BridgeSupport/Metal.arm64e.bridgesupport</key>
+		<key>Resources/BronzeStatistics-analysis.js</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			V1btBFhcxCQUIu8PPDxtU8DjMqzMRMklrzT3nyzHZ14=
+			WBpZItbzfG+rImGZNIYaZyvYR2La9SVxBj6ZhDXVrws=
 			</data>
 		</dict>
-		<key>Resources/BridgeSupport/Metal.bridgesupport</key>
+		<key>Resources/BronzeStatistics-counters.plist</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			V1btBFhcxCQUIu8PPDxtU8DjMqzMRMklrzT3nyzHZ14=
+			9ZVyEV18bsDWx3+kPOtVu5ABSLHWvUzcdSIVwLf7UU8=
 			</data>
 		</dict>
-		<key>Resources/BridgeSupport/Metal.dylib</key>
+		<key>Resources/BronzeStatistics-derived.js</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			HiLpKsO4DnSD43g1varcjRvfhqTp7jognQpIgsIvtQM=
+			LeanShscP8DsKtS8Abu0qN2atF2GV84TyDH3hY1Z8HI=
 			</data>
 		</dict>
-		<key>Resources/Info.plist</key>
+		<key>Resources/SI-BronzeStatistics-counters.plist</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			KEFgcOcEHJKsWcBw/quUE2jQ3HrDE/HCHgchis3gbdI=
+			ALDcjlOmqzPdMtZ9csvxoZlpXHodath/1kwW0WVFb9A=
 			</data>
 		</dict>
-		<key>Resources/MTLBVHBuilder.metallib</key>
+		<key>version.plist</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			x3WOym7kwFBmnB38A6qeSaUWZBs9nwvZaChR6/qjRqk=
+			6A9zmKa26viK0qRnkUJl1LDhiyU7q9ziG0QjRoUlIP4=
 			</data>
-		</dict>
-		<key>Resources/MTLECBE.metallib</key>
-		<dict>
-			<key>hash2</key>
-			<data>
-			2avpd0UxgXsGGzOWDJD9J5IY0ol4pmQb4qsJ05eDk/g=
-			</data>
-		</dict>
-		<key>Resources/MTLGPUDebugRaytracingRuntime.rtlib</key>
-		<dict>
-			<key>hash2</key>
-			<data>
-			WRoIaGt+PYi13P1uyuPl4tAWrwIxJbreKWMCIsbAmgY=
-			</data>
-		</dict>
-		<key>Resources/MTLRaytracingRuntime.rtlib</key>
-		<dict>
-			<key>hash2</key>
-			<data>
-			VIDgDdQ25AnH58CAxTMwkzV31qSibArpvd8qfMsTq9A=
-			</data>
-		</dict>
-		<key>Resources/en.lproj/InfoPlist.strings</key>
-		<dict>
-			<key>hash2</key>
-			<data>
-			kmHsztpgjvF0JW5f3HdMHm49z1M0CcG8OT1JDQHHE/E=
-			</data>
-			<key>optional</key>
-			<true/>
-		</dict>
-		<key>Resources/version.plist</key>
-		<dict>
-			<key>hash2</key>
-			<data>
-			FTEjEXFByGTfs6Da/LFVPnuz+I3DuRs/dDAib8XDls8=
-			</data>
-		</dict>
-		<key>XPCServices/MTLCompilerService.xpc</key>
-		<dict>
-			<key>cdhash</key>
-			<data>
-			rjw/j8OFlCRkuIHXGlZyEU9vyEU=
-			</data>
-			<key>requirement</key>
-			<string>identifier "com.apple.MTLCompilerService" and anchor apple</string>
 		</dict>
 	</dict>
 	<key>rules</key>
