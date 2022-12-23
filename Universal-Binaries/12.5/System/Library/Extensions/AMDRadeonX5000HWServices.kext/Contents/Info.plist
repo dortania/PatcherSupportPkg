@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>BuildMachineOSBuild</key>
+	<string>20A241133</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>AMDRadeonX5000HWServices</string>
+	<key>CFBundleGetInfoString</key>
+	<string>AMDRadeonX5000HWServices 4.8.101 24119</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.apple.kext.AMDRadeonX5000HWServices</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>AMDRadeonX5000HWServices</string>
+	<key>CFBundlePackageType</key>
+	<string>KEXT</string>
+	<key>CFBundleShortVersionString</key>
+	<string>4.8.101</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleSupportedPlatforms</key>
+	<array>
+		<string>MacOSX</string>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>4.0.8</string>
+	<key>DTCompiler</key>
+	<string>com.apple.compilers.llvm.clang.1_0</string>
+	<key>DTPlatformBuild</key>
+	<string>21G71</string>
+	<key>DTPlatformName</key>
+	<string>macosx</string>
+	<key>DTPlatformVersion</key>
+	<string>12.5</string>
+	<key>DTSDKBuild</key>
+	<string>21G71</string>
+	<key>DTSDKName</key>
+	<string>macosx12.5.internal</string>
+	<key>DTXcode</key>
+	<string>1330</string>
+	<key>DTXcodeBuild</key>
+	<string>13E6049a</string>
+	<key>IOKitPersonalities</key>
+	<dict>
+		<key>AMD Radeon X5000 HW Services</key>
+		<dict>
+			<key>CFBundleIdentifier</key>
+			<string>com.apple.kext.AMDRadeonX5000HWServices</string>
+			<key>IOClass</key>
+			<string>AMDRadeonX5000_AMDRadeonHWServicesVega</string>
+			<key>IOMatchCategory</key>
+			<string>AMDRadeonX5000HWServices</string>
+			<key>IOPCIMatch</key>
+			<string>0x68601002 0x68611002 0x68621002 0x68631002 0x68641002 0x68671002 0x68681002 0x68691002 0x686A1002 0x686B1002  0x686C1002 0x686D1002 0x686E1002 0x686F1002 0x687F1002 0x69A01002 0x69A11002 0x69A21002 0x69A31002 0x69AF1002 0x66A01002 0x66A11002 0x66A21002 0x66A31002 0x66A71002 0x66AF1002</string>
+			<key>IOPCITunnelCompatible</key>
+			<true/>
+			<key>IOProbeScore</key>
+			<integer>65051</integer>
+			<key>IOPropertyMatch</key>
+			<dict>
+				<key>LoadHWServices</key>
+				<true/>
+			</dict>
+			<key>IOProviderClass</key>
+			<string>IOPCIDevice</string>
+		</dict>
+	</dict>
+	<key>LSMinimumSystemVersion</key>
+	<string>12.5</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2020 Advanced Micro Devices, Inc. All rights reserved.</string>
+	<key>OSBundleCompatibleVersion</key>
+	<string>4.0.8</string>
+	<key>OSBundleLibraries</key>
+	<dict>
+		<key>com.apple.iokit.IOACPIFamily</key>
+		<string>1.4</string>
+		<key>com.apple.iokit.IOGraphicsFamily</key>
+		<string>2.4.1</string>
+		<key>com.apple.iokit.IOPCIFamily</key>
+		<string>2.9</string>
+		<key>com.apple.kpi.bsd</key>
+		<string>15.0.0</string>
+		<key>com.apple.kpi.iokit</key>
+		<string>15.0.0</string>
+		<key>com.apple.kpi.libkern</key>
+		<string>15.0.0</string>
+		<key>com.apple.kpi.mach</key>
+		<string>15.0.0</string>
+		<key>com.apple.kpi.unsupported</key>
+		<string>15.0.0</string>
+	</dict>
+</dict>
+</plist>
