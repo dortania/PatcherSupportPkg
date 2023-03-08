@@ -5,21 +5,33 @@ import argparse
 import subprocess
 from pathlib import Path
 
-class moraea_binary_merging:
+class MoraeaBinaryMerging:
 
-    def __init__(self, version, input_folder):
-        self.version = self.convert_os_to_kernel(version)
-        self.file_map = self.generate_file_map(self.version)
+    def __init__(self, input_folder: str, version: str = None):
+        """
+        Merge Moraea's generated binaries with PatcherSupportPkg format
 
-        self.input_folder = Path(input_folder)
+        Parameters:
+            input_folder (str): Input folder, containing the binaries to merge
+            version (str): OS version, defaults to folder name if not specified
+        """
+
+        self.input_folder: Path = Path(input_folder)
         if not self.input_folder.exists():
             print("Input folder does not exist")
             exit(1)
 
-        self.update_binaries()
+        if version is None:
+            version = self.input_folder.name[:2]
+            print(f"  - No OS version specified, using folder name: {version}")
+
+        self.version = self._convert_os_to_kernel(version)
+        self.file_map = self._generate_file_map(self.version)
+
+        self._update_binaries()
 
 
-    def convert_os_to_kernel(self, version):
+    def _convert_os_to_kernel(self, version):
         try:
             version = int(version)
         except ValueError:
@@ -33,7 +45,7 @@ class moraea_binary_merging:
         raise ValueError("Invalid OS version, only 11+ supported")
 
 
-    def generate_file_map(self, version):
+    def _generate_file_map(self, version: str):
         FILE_MAP = {
             "Cass2": {
                 "IOAccelerator":          f"Universal-Binaries/10.13.6-{version}/System/Library/PrivateFrameworks/IOAccelerator.framework/Versions/A/IOAccelerator",
@@ -57,7 +69,7 @@ class moraea_binary_merging:
 
         return FILE_MAP
 
-    def update_binaries(self):
+    def _update_binaries(self):
         print(f"- Processing files against version: {self.version}")
         for folder in self.file_map:
             for binary in self.file_map[folder]:
@@ -87,14 +99,11 @@ if __name__ == "__main__":
     parser.add_argument("--input", type=str, help="Input folder")
     args = parser.parse_args()
 
-    if not args.version or not args.input:
+    if not args.input:
         print("Missing arguments:")
-        if not args.version:
-            print("  --version")
-        if not args.input:
-            print("  --input")
+        print("  --input")
         exit(1)
 
-    moraea_binary_merging(args.version, args.input)
+    MoraeaBinaryMerging(input_folder=args.input, version=args.version)
 
     print("- Done")
