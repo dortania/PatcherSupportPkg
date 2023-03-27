@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>BuildMachineOSBuild</key>
+	<string>20A241133</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>English</string>
+	<key>CFBundleExecutable</key>
+	<string>IOUSBLib</string>
+	<key>CFBundleGetInfoString</key>
+	<string>900.4.2, Copyright © 2000-2020 Apple Inc. All Rights Reserved.</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.apple.iokit.IOUSBLib</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>I/O Kit USB Library</string>
+	<key>CFBundlePackageType</key>
+	<string>BNDL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>900.4.2</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleSupportedPlatforms</key>
+	<array>
+		<string>MacOSX</string>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>900.4.2</string>
+	<key>CFPlugInDynamicRegisterFunction</key>
+	<string></string>
+	<key>CFPlugInDynamicRegistration</key>
+	<string>NO</string>
+	<key>CFPlugInFactories</key>
+	<dict>
+		<key>4547a8aa-9ef3-11d4-a9bd-000a27052861</key>
+		<string>IOUSBLibFactory</string>
+	</dict>
+	<key>CFPlugInTypes</key>
+	<dict>
+		<key>2d9786c6-9ef3-11d4-ad51-000a27052861</key>
+		<array>
+			<string>4547a8aa-9ef3-11d4-a9bd-000a27052861</string>
+		</array>
+		<key>9dc7b780-9ec0-11d4-a54f-000a27052861</key>
+		<array>
+			<string>4547a8aa-9ef3-11d4-a9bd-000a27052861</string>
+		</array>
+	</dict>
+	<key>CFPlugInUnloadFunction</key>
+	<string></string>
+	<key>DTCompiler</key>
+	<string>com.apple.compilers.llvm.clang.1_0</string>
+	<key>DTPlatformBuild</key>
+	<string>21G309</string>
+	<key>DTPlatformName</key>
+	<string>macosx</string>
+	<key>DTPlatformVersion</key>
+	<string>12.6</string>
+	<key>DTSDKBuild</key>
+	<string>21G309</string>
+	<key>DTSDKName</key>
+	<string>macosx12.6.internal</string>
+	<key>DTXcode</key>
+	<string>1330</string>
+	<key>DTXcodeBuild</key>
+	<string>13E6049a</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>12.6</string>
+</dict>
+</plist>
