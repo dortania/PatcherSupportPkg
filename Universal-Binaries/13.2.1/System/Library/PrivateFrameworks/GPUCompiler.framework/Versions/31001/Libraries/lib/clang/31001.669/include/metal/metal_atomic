@@ -1,0 +1,523 @@
+// -*- Metal -*-
+//===-- metal_atomic ------------------------------------------------------===//
+// Copyright (c) 2014-2021 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_ATOMIC
+#define __METAL_ATOMIC
+
+#include <metal_compute>
+
+namespace metal
+{
+// Metal 1.1 s2.3: Atomic Data Types.
+
+template <typename T, typename _E = void>
+struct _atomic
+{
+  _atomic() threadgroup = default;
+  _atomic() device = delete;
+  _atomic(const threadgroup _atomic &) threadgroup = delete;
+  _atomic(const device _atomic &) threadgroup = delete;
+  _atomic(const threadgroup _atomic &) device = delete;
+  _atomic(const device _atomic &) device = delete;
+  threadgroup _atomic &operator=(const threadgroup _atomic &) threadgroup = delete;
+  threadgroup _atomic &operator=(const device _atomic &) threadgroup = delete;
+  device _atomic &operator=(const threadgroup _atomic &) device = delete;
+  device _atomic &operator=(const device _atomic &) device = delete;
+};
+#if defined(__HAVE_ATOMIC_TEMPLATE__)
+template <typename T>
+using atomic = _atomic<T>;
+#endif
+
+template <typename T>
+struct _atomic<T, typename enable_if<_disjunction<is_same<T, int>, is_same<T, uint>
+#if defined(__HAVE_ATOMIC_ULONG__)
+                                                  ,
+                                                  is_same<T, ulong>
+#endif
+#if defined(__HAVE_ATOMIC_FLOAT__)
+                                                  ,
+                                                  is_same<T, float>
+#endif
+                                                  >::value>::type>
+{
+  _atomic() threadgroup = default;
+  _atomic() device = delete;
+  _atomic(const threadgroup _atomic &) threadgroup = delete;
+  _atomic(const device _atomic &) threadgroup = delete;
+  _atomic(const threadgroup _atomic &) device = delete;
+  _atomic(const device _atomic &) device = delete;
+  threadgroup _atomic &operator=(const threadgroup _atomic &) threadgroup = delete;
+  threadgroup _atomic &operator=(const device _atomic &) threadgroup = delete;
+  device _atomic &operator=(const threadgroup _atomic &) device = delete;
+  device _atomic &operator=(const device _atomic &) device = delete;
+
+  T __s;
+};
+typedef _atomic<int> atomic_int;
+typedef _atomic<uint> atomic_uint;
+#if defined(__HAVE_ATOMIC_ULONG__)
+typedef _atomic<ulong> atomic_ulong;
+#endif
+#if defined(__HAVE_ATOMIC_FLOAT__)
+typedef _atomic<float> atomic_float;
+#endif
+
+#if defined(__HAVE_ATOMIC_BOOL__)
+template <>
+struct _atomic<bool>
+{
+  _atomic() threadgroup = default;
+  _atomic() device = delete;
+  _atomic(const threadgroup _atomic &) threadgroup = delete;
+  _atomic(const device _atomic &) threadgroup = delete;
+  _atomic(const threadgroup _atomic &) device = delete;
+  _atomic(const device _atomic &) device = delete;
+  threadgroup _atomic &operator=(const threadgroup _atomic &) threadgroup = delete;
+  threadgroup _atomic &operator=(const device _atomic &) threadgroup = delete;
+  device _atomic &operator=(const threadgroup _atomic &) device = delete;
+  device _atomic &operator=(const device _atomic &) device = delete;
+
+  uint __s;
+};
+typedef _atomic<bool> atomic_bool;
+#endif
+
+
+
+// Metal 1.1 s5.12.1: Atomic Store Functions.
+
+#pragma METAL internals : enable
+template <typename T, typename _E = void>
+struct _valid_store_type : false_type
+{
+};
+
+template <typename T>
+struct _valid_store_type<T, typename enable_if<_disjunction<is_same<T, device int *>,
+                                                            is_same<T, threadgroup int *>,
+                                                            is_same<T, device uint *>,
+                                                            is_same<T, threadgroup uint *>
+#if defined(__HAVE_ATOMIC_FLOAT__)
+                                                            ,
+                                                            is_same<T, device float *>
+#endif
+#if defined(__HAVE_ATOMIC_BOOL__)
+                                                            ,
+                                                            is_same<T, device bool *>,
+                                                            is_same<T, threadgroup bool *>
+#endif
+                                                            >::value>::type> : true_type
+{
+};
+#pragma METAL internals : disable
+
+#if defined(__HAVE_RELAXED_ORDER_ATOMIC__)
+#define METAL_VALID_STORE_ORDER(O)
+#endif
+
+template <typename T, typename U, typename _E = typename enable_if<_valid_store_type<threadgroup T *>::value && is_convertible<T, U>::value>::type>
+METAL_FUNC void atomic_store_explicit(volatile threadgroup _atomic<T> * object, U desired, memory_order order) METAL_CONST_ARG(order) METAL_VALID_STORE_ORDER(order)
+{
+  __metal_atomic_store_explicit(&object->__s, decltype(object->__s)(desired), int(order), __METAL_MEMORY_SCOPE_THREADGROUP__);
+}
+template <typename T, typename U, typename _E = typename enable_if<_valid_store_type<device T *>::value && is_convertible<T, U>::value>::type>
+METAL_FUNC void atomic_store_explicit(volatile device _atomic<T> *object, U desired, memory_order order) METAL_CONST_ARG(order) METAL_VALID_STORE_ORDER(order)
+{
+  __metal_atomic_store_explicit(&object->__s, decltype(object->__s)(desired), int(order), __METAL_MEMORY_SCOPE_DEVICE__);
+}
+
+// Metal 1.1 s5.12.2: Atomic Load Functions.
+
+#pragma METAL internals : enable
+template <typename T, typename _E = void>
+struct _valid_load_type : false_type
+{
+};
+
+template <typename T>
+struct _valid_load_type<T, typename enable_if<_disjunction<is_same<T, device int *>,
+                                                           is_same<T, threadgroup int *>,
+                                                           is_same<T, device uint *>,
+                                                           is_same<T, threadgroup uint *>
+#if defined(__HAVE_ATOMIC_FLOAT__)
+                                                           ,
+                                                           is_same<T, device float *>
+#endif
+#if defined(__HAVE_ATOMIC_BOOL__)
+                                                           ,
+                                                           is_same<T, device bool *>,
+                                                           is_same<T, threadgroup bool *>
+#endif
+                                                            >::value>::type> : true_type
+{
+};
+#pragma METAL internals : disable
+
+#if defined(__HAVE_RELAXED_ORDER_ATOMIC__)
+#define METAL_VALID_LOAD_ORDER(O)
+#endif
+
+template <typename T, typename _E = typename enable_if<_valid_load_type<threadgroup T *>::value>::type>
+METAL_FUNC T atomic_load_explicit(const volatile threadgroup _atomic<T> *object, memory_order order) METAL_CONST_ARG(order) METAL_VALID_LOAD_ORDER(order)
+{
+  return T(__metal_atomic_load_explicit(&object->__s, int(order), __METAL_MEMORY_SCOPE_THREADGROUP__));
+}
+template <typename T, typename _E = typename enable_if<_valid_load_type<device T *>::value>::type>
+METAL_FUNC T atomic_load_explicit(const volatile device _atomic<T> *object, memory_order order) METAL_CONST_ARG(order) METAL_VALID_LOAD_ORDER(order)
+{
+  return T(__metal_atomic_load_explicit(&object->__s, int(order), __METAL_MEMORY_SCOPE_DEVICE__));
+}
+
+// Metal 1.1 s5.12.3: Atomic Exchange Functions.
+
+#pragma METAL internals : enable
+template <typename T, typename _E = void>
+struct _valid_exchange_type : false_type
+{
+};
+
+template <typename T>
+struct _valid_exchange_type<T, typename enable_if<_disjunction<is_same<T, device int *>,
+                                                               is_same<T, threadgroup int *>,
+                                                               is_same<T, device uint *>,
+                                                               is_same<T, threadgroup uint *>
+#if defined(__HAVE_ATOMIC_FLOAT__)
+                                                               ,
+                                                               is_same<T, device float *>
+#endif
+#if defined(__HAVE_ATOMIC_BOOL__)
+                                                               ,
+                                                               is_same<T, device bool *>,
+                                                               is_same<T, threadgroup bool *>
+#endif
+                                                               >::value>::type> : true_type
+{
+};
+#pragma METAL internals : disable
+
+template <typename T, typename U, typename _E = typename enable_if<_valid_exchange_type<threadgroup T *>::value && is_convertible<T, U>::value>::type>
+METAL_FUNC T atomic_exchange_explicit(volatile threadgroup _atomic<T> *object, U desired, memory_order order) METAL_CONST_ARG(order)
+{
+  return T(__metal_atomic_exchange_explicit(&object->__s, decltype(object->__s)(desired), int(order), __METAL_MEMORY_SCOPE_THREADGROUP__));
+}
+template <typename T, typename U, typename _E = typename enable_if<_valid_exchange_type<device T *>::value && is_convertible<T, U>::value>::type>
+METAL_FUNC T atomic_exchange_explicit(volatile device _atomic<T> *object, U desired, memory_order order) METAL_CONST_ARG(order)
+{
+  return T(__metal_atomic_exchange_explicit(&object->__s , decltype(object->__s)(desired), int(order), __METAL_MEMORY_SCOPE_DEVICE__));
+}
+
+// Metal 1.1 s5.12.4: Atomic Compare and Exchange Functions.
+
+#pragma METAL internals : enable
+template <typename T, typename _E = void>
+struct _valid_compare_exchange_type : false_type
+{
+};
+
+template <typename T>
+struct _valid_compare_exchange_type<T, typename enable_if<_disjunction<is_same<T, device int *>,
+                                                                       is_same<T, threadgroup int *>,
+                                                                       is_same<T, device uint *>,
+                                                                       is_same<T, threadgroup uint *>
+#if defined(__HAVE_ATOMIC_FLOAT__)
+                                                                       ,
+                                                                       is_same<T, device float *>
+#endif
+#if defined(__HAVE_ATOMIC_BOOL__)
+                                                                       ,
+                                                                       is_same<T, device bool *>,
+                                                                       is_same<T, threadgroup bool *>
+#endif
+                                                                       >::value>::type> : true_type
+{
+};
+#pragma METAL internals : disable
+
+#if defined(__HAVE_RELAXED_ORDER_ATOMIC__)
+#define METAL_VALID_COMPARE_EXCHANGE_FAILURE_ORDER(O)
+#define METAL_COMPATIBLE_COMPARE_EXCHANGE_ORDERS(S, F)
+#endif
+
+template <typename T, typename U, typename _E = typename enable_if<_valid_compare_exchange_type<threadgroup T *>::value && is_convertible<T, U>::value>::type>
+METAL_FUNC bool atomic_compare_exchange_weak_explicit(volatile threadgroup _atomic<T> *object, thread T *expected, U desired, memory_order success, memory_order failure) METAL_CONST_ARG(success) METAL_CONST_ARG(failure) METAL_VALID_COMPARE_EXCHANGE_FAILURE_ORDER(failure) METAL_COMPATIBLE_COMPARE_EXCHANGE_ORDERS(success, failure)
+{
+  decltype(object->__s) next_expected(*expected);
+  bool swapped = __metal_atomic_compare_exchange_weak_explicit(&object->__s, &next_expected, decltype(object->__s)(desired), int(success), int(failure), __METAL_MEMORY_SCOPE_THREADGROUP__);
+  *expected = T(next_expected);
+  return swapped;
+}
+template <typename T, typename U, typename _E = typename enable_if<_valid_compare_exchange_type<device T *>::value && is_convertible<T, U>::value>::type>
+METAL_FUNC bool atomic_compare_exchange_weak_explicit(volatile device _atomic<T> *object, thread T *expected, U desired, memory_order success, memory_order failure) METAL_CONST_ARG(success) METAL_CONST_ARG(failure) METAL_VALID_COMPARE_EXCHANGE_FAILURE_ORDER(failure) METAL_COMPATIBLE_COMPARE_EXCHANGE_ORDERS(success, failure)
+{
+  decltype(object->__s) next_expected(*expected);
+  bool swapped = __metal_atomic_compare_exchange_weak_explicit(&object->__s, &next_expected, decltype(object->__s)(desired), int(success), int(failure), __METAL_MEMORY_SCOPE_DEVICE__);
+  *expected = T(next_expected);
+  return swapped;
+}
+
+// Metal 1.1 s5.12.5: Atomic Fetch and Modify Functions.
+
+#pragma METAL internals : enable
+template <typename T, typename _E = void>
+struct _valid_fetch_add_type : false_type
+{
+};
+
+template <typename T>
+struct _valid_fetch_add_type<T, typename enable_if<_disjunction<is_same<T, device int *>,
+                                                                  is_same<T, threadgroup int *>,
+                                                                  is_same<T, device uint *>,
+                                                                  is_same<T, threadgroup uint *>
+#if defined(__HAVE_ATOMIC_FLOAT__)
+                                                                  ,
+                                                                  is_same<T, device float *>
+#endif
+#if defined(__HAVE_ATOMIC_BOOL__)
+                                                                  ,
+                                                                  is_same<T, device bool *>,
+                                                                  is_same<T, threadgroup bool *>
+#endif
+                                                                  >::value>::type> : true_type
+{
+};
+#pragma METAL internals : disable
+#pragma METAL internals : enable
+template <typename T, typename _E = void>
+struct _valid_fetch_sub_type : false_type
+{
+};
+
+template <typename T>
+struct _valid_fetch_sub_type<T, typename enable_if<_disjunction<is_same<T, device int *>,
+                                                                  is_same<T, threadgroup int *>,
+                                                                  is_same<T, device uint *>,
+                                                                  is_same<T, threadgroup uint *>
+#if defined(__HAVE_ATOMIC_FLOAT__)
+                                                                  ,
+                                                                  is_same<T, device float *>
+#endif
+#if defined(__HAVE_ATOMIC_BOOL__)
+                                                                  ,
+                                                                  is_same<T, device bool *>,
+                                                                  is_same<T, threadgroup bool *>
+#endif
+                                                                  >::value>::type> : true_type
+{
+};
+#pragma METAL internals : disable
+
+#pragma METAL internals : enable
+template <typename T, typename _E = void>
+struct _valid_fetch_and_type : false_type
+{
+};
+
+template <typename T>
+struct _valid_fetch_and_type<T, typename enable_if<_disjunction<is_same<T, device int *>,
+                                                                  is_same<T, threadgroup int *>,
+                                                                  is_same<T, device uint *>,
+                                                                  is_same<T, threadgroup uint *>
+#if defined(__HAVE_ATOMIC_BOOL__)
+                                                                  ,
+                                                                  is_same<T, device bool *>,
+                                                                  is_same<T, threadgroup bool *>
+#endif
+                                                                  >::value>::type> : true_type
+{
+};
+#pragma METAL internals : disable
+#pragma METAL internals : enable
+template <typename T, typename _E = void>
+struct _valid_fetch_max_type : false_type
+{
+};
+
+template <typename T>
+struct _valid_fetch_max_type<T, typename enable_if<_disjunction<is_same<T, device int *>,
+                                                                  is_same<T, threadgroup int *>,
+                                                                  is_same<T, device uint *>,
+                                                                  is_same<T, threadgroup uint *>
+#if defined(__HAVE_ATOMIC_BOOL__)
+                                                                  ,
+                                                                  is_same<T, device bool *>,
+                                                                  is_same<T, threadgroup bool *>
+#endif
+                                                                  >::value>::type> : true_type
+{
+};
+#pragma METAL internals : disable
+#pragma METAL internals : enable
+template <typename T, typename _E = void>
+struct _valid_fetch_min_type : false_type
+{
+};
+
+template <typename T>
+struct _valid_fetch_min_type<T, typename enable_if<_disjunction<is_same<T, device int *>,
+                                                                  is_same<T, threadgroup int *>,
+                                                                  is_same<T, device uint *>,
+                                                                  is_same<T, threadgroup uint *>
+#if defined(__HAVE_ATOMIC_BOOL__)
+                                                                  ,
+                                                                  is_same<T, device bool *>,
+                                                                  is_same<T, threadgroup bool *>
+#endif
+                                                                  >::value>::type> : true_type
+{
+};
+#pragma METAL internals : disable
+#pragma METAL internals : enable
+template <typename T, typename _E = void>
+struct _valid_fetch_or_type : false_type
+{
+};
+
+template <typename T>
+struct _valid_fetch_or_type<T, typename enable_if<_disjunction<is_same<T, device int *>,
+                                                                  is_same<T, threadgroup int *>,
+                                                                  is_same<T, device uint *>,
+                                                                  is_same<T, threadgroup uint *>
+#if defined(__HAVE_ATOMIC_BOOL__)
+                                                                  ,
+                                                                  is_same<T, device bool *>,
+                                                                  is_same<T, threadgroup bool *>
+#endif
+                                                                  >::value>::type> : true_type
+{
+};
+#pragma METAL internals : disable
+#pragma METAL internals : enable
+template <typename T, typename _E = void>
+struct _valid_fetch_xor_type : false_type
+{
+};
+
+template <typename T>
+struct _valid_fetch_xor_type<T, typename enable_if<_disjunction<is_same<T, device int *>,
+                                                                  is_same<T, threadgroup int *>,
+                                                                  is_same<T, device uint *>,
+                                                                  is_same<T, threadgroup uint *>
+#if defined(__HAVE_ATOMIC_BOOL__)
+                                                                  ,
+                                                                  is_same<T, device bool *>,
+                                                                  is_same<T, threadgroup bool *>
+#endif
+                                                                  >::value>::type> : true_type
+{
+};
+#pragma METAL internals : disable
+
+template <typename T, typename U, typename _E = typename enable_if<_valid_fetch_add_type<threadgroup T *>::value && is_convertible<T, U>::value>::type>
+METAL_FUNC T atomic_fetch_add_explicit(volatile threadgroup _atomic<T> *object, U operand, memory_order order) METAL_CONST_ARG(order)
+{
+  return __metal_atomic_fetch_add_explicit(&object->__s, T(operand), int(order), __METAL_MEMORY_SCOPE_THREADGROUP__);
+}
+template <typename T, typename U, typename _E = typename enable_if<_valid_fetch_add_type<device T *>::value && is_convertible<T, U>::value>::type>
+METAL_FUNC T atomic_fetch_add_explicit(volatile device _atomic<T>* object, U operand, memory_order order) METAL_CONST_ARG(order)
+{
+  return __metal_atomic_fetch_add_explicit(&object->__s, T(operand), int(order), __METAL_MEMORY_SCOPE_DEVICE__);
+}
+template <typename T, typename U, typename _E = typename enable_if<_valid_fetch_and_type<threadgroup T *>::value && is_convertible<T, U>::value>::type>
+METAL_FUNC T atomic_fetch_and_explicit(volatile threadgroup _atomic<T> *object, U operand, memory_order order) METAL_CONST_ARG(order)
+{
+  return __metal_atomic_fetch_and_explicit(&object->__s, T(operand), int(order), __METAL_MEMORY_SCOPE_THREADGROUP__);
+}
+template <typename T, typename U, typename _E = typename enable_if<_valid_fetch_and_type<device T *>::value && is_convertible<T, U>::value>::type>
+METAL_FUNC T atomic_fetch_and_explicit(volatile device _atomic<T>* object, U operand, memory_order order) METAL_CONST_ARG(order)
+{
+  return __metal_atomic_fetch_and_explicit(&object->__s, T(operand), int(order), __METAL_MEMORY_SCOPE_DEVICE__);
+}
+template <typename T, typename U, typename _E = typename enable_if<_valid_fetch_max_type<threadgroup T *>::value && is_convertible<T, U>::value>::type>
+METAL_FUNC T atomic_fetch_max_explicit(volatile threadgroup _atomic<T> *object, U operand, memory_order order) METAL_CONST_ARG(order)
+{
+  return __metal_atomic_fetch_max_explicit(&object->__s, T(operand), int(order), __METAL_MEMORY_SCOPE_THREADGROUP__);
+}
+template <typename T, typename U, typename _E = typename enable_if<_valid_fetch_max_type<device T *>::value && is_convertible<T, U>::value>::type>
+METAL_FUNC T atomic_fetch_max_explicit(volatile device _atomic<T>* object, U operand, memory_order order) METAL_CONST_ARG(order)
+{
+  return __metal_atomic_fetch_max_explicit(&object->__s, T(operand), int(order), __METAL_MEMORY_SCOPE_DEVICE__);
+}
+template <typename T, typename U, typename _E = typename enable_if<_valid_fetch_min_type<threadgroup T *>::value && is_convertible<T, U>::value>::type>
+METAL_FUNC T atomic_fetch_min_explicit(volatile threadgroup _atomic<T> *object, U operand, memory_order order) METAL_CONST_ARG(order)
+{
+  return __metal_atomic_fetch_min_explicit(&object->__s, T(operand), int(order), __METAL_MEMORY_SCOPE_THREADGROUP__);
+}
+template <typename T, typename U, typename _E = typename enable_if<_valid_fetch_min_type<device T *>::value && is_convertible<T, U>::value>::type>
+METAL_FUNC T atomic_fetch_min_explicit(volatile device _atomic<T>* object, U operand, memory_order order) METAL_CONST_ARG(order)
+{
+  return __metal_atomic_fetch_min_explicit(&object->__s, T(operand), int(order), __METAL_MEMORY_SCOPE_DEVICE__);
+}
+template <typename T, typename U, typename _E = typename enable_if<_valid_fetch_or_type<threadgroup T *>::value && is_convertible<T, U>::value>::type>
+METAL_FUNC T atomic_fetch_or_explicit(volatile threadgroup _atomic<T> *object, U operand, memory_order order) METAL_CONST_ARG(order)
+{
+  return __metal_atomic_fetch_or_explicit(&object->__s, T(operand), int(order), __METAL_MEMORY_SCOPE_THREADGROUP__);
+}
+template <typename T, typename U, typename _E = typename enable_if<_valid_fetch_or_type<device T *>::value && is_convertible<T, U>::value>::type>
+METAL_FUNC T atomic_fetch_or_explicit(volatile device _atomic<T>* object, U operand, memory_order order) METAL_CONST_ARG(order)
+{
+  return __metal_atomic_fetch_or_explicit(&object->__s, T(operand), int(order), __METAL_MEMORY_SCOPE_DEVICE__);
+}
+template <typename T, typename U, typename _E = typename enable_if<_valid_fetch_sub_type<threadgroup T *>::value && is_convertible<T, U>::value>::type>
+METAL_FUNC T atomic_fetch_sub_explicit(volatile threadgroup _atomic<T> *object, U operand, memory_order order) METAL_CONST_ARG(order)
+{
+  return __metal_atomic_fetch_sub_explicit(&object->__s, T(operand), int(order), __METAL_MEMORY_SCOPE_THREADGROUP__);
+}
+template <typename T, typename U, typename _E = typename enable_if<_valid_fetch_sub_type<device T *>::value && is_convertible<T, U>::value>::type>
+METAL_FUNC T atomic_fetch_sub_explicit(volatile device _atomic<T>* object, U operand, memory_order order) METAL_CONST_ARG(order)
+{
+  return __metal_atomic_fetch_sub_explicit(&object->__s, T(operand), int(order), __METAL_MEMORY_SCOPE_DEVICE__);
+}
+template <typename T, typename U, typename _E = typename enable_if<_valid_fetch_xor_type<threadgroup T *>::value && is_convertible<T, U>::value>::type>
+METAL_FUNC T atomic_fetch_xor_explicit(volatile threadgroup _atomic<T> *object, U operand, memory_order order) METAL_CONST_ARG(order)
+{
+  return __metal_atomic_fetch_xor_explicit(&object->__s, T(operand), int(order), __METAL_MEMORY_SCOPE_THREADGROUP__);
+}
+template <typename T, typename U, typename _E = typename enable_if<_valid_fetch_xor_type<device T *>::value && is_convertible<T, U>::value>::type>
+METAL_FUNC T atomic_fetch_xor_explicit(volatile device _atomic<T>* object, U operand, memory_order order) METAL_CONST_ARG(order)
+{
+  return __metal_atomic_fetch_xor_explicit(&object->__s, T(operand), int(order), __METAL_MEMORY_SCOPE_DEVICE__);
+}
+
+
+#if defined(__HAVE_ATOMIC_ULONG_MIN_MAX__)
+#pragma METAL internals : enable
+template <typename T, typename _E = void>
+struct _valid_max_type : false_type
+{
+};
+
+template <typename T>
+struct _valid_max_type<T, typename enable_if<_disjunction<is_same<T, device ulong *>>::value>::type> : true_type
+{
+};
+#pragma METAL internals : disable
+
+template <typename T, typename U, typename _E = typename enable_if<_valid_max_type<device T *>::value && is_convertible<T, U>::value>::type>
+METAL_FUNC void atomic_max_explicit(volatile device _atomic<T> *object, U operand, memory_order order) METAL_CONST_ARG(order)
+{
+  __metal_atomic_max_explicit(&object->__s, T(operand), int(order), __METAL_MEMORY_SCOPE_DEVICE__);
+}
+#pragma METAL internals : enable
+template <typename T, typename _E = void>
+struct _valid_min_type : false_type
+{
+};
+
+template <typename T>
+struct _valid_min_type<T, typename enable_if<_disjunction<is_same<T, device ulong *>>::value>::type> : true_type
+{
+};
+#pragma METAL internals : disable
+
+template <typename T, typename U, typename _E = typename enable_if<_valid_min_type<device T *>::value && is_convertible<T, U>::value>::type>
+METAL_FUNC void atomic_min_explicit(volatile device _atomic<T> *object, U operand, memory_order order) METAL_CONST_ARG(order)
+{
+  __metal_atomic_min_explicit(&object->__s, T(operand), int(order), __METAL_MEMORY_SCOPE_DEVICE__);
+}
+#endif
+} // namespace metal
+
+#endif // __METAL_ATOMIC

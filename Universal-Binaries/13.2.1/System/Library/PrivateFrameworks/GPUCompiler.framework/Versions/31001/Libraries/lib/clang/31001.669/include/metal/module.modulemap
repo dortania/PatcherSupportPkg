@@ -1,0 +1,10 @@
+//===-- monolithic_metal.modulemap ----------------------------------------===//
+// Copyright (c) 2021 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+module monolithic_metal [system] {
+  requires metal
+  header "metal_stdlib"
+  header "metal_types"
+  export *
+}

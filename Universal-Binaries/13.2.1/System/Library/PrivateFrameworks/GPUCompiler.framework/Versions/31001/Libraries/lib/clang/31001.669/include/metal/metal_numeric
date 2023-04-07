@@ -1,0 +1,23 @@
+// -*- Metal -*-
+//===-- metal_numeric -----------------------------------------------------===//
+// Copyright (c) 2014-2018 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_NUMERIC
+#define __METAL_NUMERIC
+
+namespace metal
+{
+template <typename T>
+METAL_FUNC T _make_accumulation(T val)
+{
+  return val;
+}
+template <typename T, typename... U>
+METAL_FUNC T _make_accumulation(T acc, T val, U... vals)
+{
+  return _make_accumulation(acc + val, vals...);
+}
+} // namespace metal
+
+#endif // __METAL_NUMERIC

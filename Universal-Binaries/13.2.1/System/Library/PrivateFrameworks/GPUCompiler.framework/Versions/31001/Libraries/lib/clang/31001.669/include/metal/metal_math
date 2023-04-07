@@ -1,0 +1,7382 @@
+// -*- Metal -*-
+//===-- metal_math --------------------------------------------------------===//
+// Copyright (c) 2014-2018 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_MATH
+#define __METAL_MATH
+
+#include <metal_limits>
+#include <metal_relational>
+
+#if defined(__FAST_MATH__) || defined(__RELAXED_MATH__)
+#define __METAL_MAYBE_FAST_MATH__ __METAL_FAST_MATH__
+#else
+#define __METAL_MAYBE_FAST_MATH__ __METAL_PRECISE_MATH__
+#endif
+
+namespace metal
+{
+// Metal 1.1 s5.5: Math Functions.
+
+namespace fast
+{
+METAL_FUNC float abs(float x)
+{
+  return __metal_fabs(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float acos(float x)
+{
+  return __metal_acos(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float acosh(float x)
+{
+  return __metal_acosh(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float asin(float x)
+{
+  return __metal_asin(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float asinh(float x)
+{
+  return __metal_asinh(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float atan(float y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float atan2(float y, float x)
+{
+  return __metal_atan2(y, x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float atanh(float x)
+{
+  return __metal_atanh(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float ceil(float x)
+{
+  return __metal_ceil(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float copysign(float x, float y)
+{
+  typedef _fp_encoding_traits<float> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<float>(res_bits);
+}
+METAL_FUNC float cos(float x)
+{
+  return __metal_cos(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float cosh(float x)
+{
+  return __metal_cosh(x, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float cospi(float x)
+{
+  return __metal_cospi(x, __METAL_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC float divide(float x, float y)
+{
+  return __metal_divide(x, y, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float exp(float x)
+{
+  return __metal_exp(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float exp10(float x)
+{
+  return __metal_exp10(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float exp2(float x)
+{
+  return __metal_exp2(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float fabs(float x)
+{
+  return __metal_fabs(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float fdim(float x, float y)
+{
+  float t = x - y;
+  return select(t, float(0), t < float(0) || x == y);
+}
+METAL_FUNC float floor(float x)
+{
+  return __metal_floor(x, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC float fma(float x, float y, float z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC float fmax(float x, float y)
+{
+  return __metal_fmax(x, y, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC float fmax3(float x, float y, float z)
+{
+  return __metal_fmax3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC float fmedian3(float x, float y, float z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float fmin(float x, float y)
+{
+  return __metal_fmin(x, y, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC float fmin3(float x, float y, float z)
+{
+  return __metal_fmin3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float fmod(float x, float y)
+{
+  return __metal_fmod(x, y, __METAL_FAST_MATH__);
+}
+METAL_FUNC float fract(float x)
+{
+  return __metal_fract(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float frexp(float x, thread int &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int ilogb(float x)
+{
+  return __metal_ilogb(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float ldexp(float x, int k)
+{
+  return __metal_ldexp(x, k, __METAL_FAST_MATH__);
+}
+METAL_FUNC float log(float x)
+{
+  return __metal_log(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float log10(float x)
+{
+  return __metal_log10(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float log2(float x)
+{
+  return __metal_log2(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float max(float x, float y)
+{
+  return __metal_fmax(x, y, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC float max3(float x, float y, float z)
+{
+  return __metal_fmax3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC float median3(float x, float y, float z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float min(float x, float y)
+{
+  return __metal_fmin(x, y, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC float min3(float x, float y, float z)
+{
+  return __metal_fmin3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float modf(float x, thread float &intval)
+{
+  intval = __metal_trunc(x, __METAL_FAST_MATH__);
+  return copysign(select(x - intval, float(0), isinf(x)), x);
+}
+METAL_FUNC float pow(float x, float y)
+{
+  return __metal_pow(x, y, __METAL_FAST_MATH__);
+}
+METAL_FUNC float powr(float x, float y)
+{
+  return __metal_powr(x, y, __METAL_FAST_MATH__);
+}
+METAL_FUNC float rint(float x)
+{
+  return __metal_rint(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float round(float x)
+{
+  return __metal_round(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float rsqrt(float x)
+{
+  return __metal_rsqrt(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float sin(float x)
+{
+  return __metal_sin(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float sincos(float x, thread float &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_FAST_MATH__);
+}
+METAL_FUNC float sinh(float x)
+{
+  return __metal_sinh(x, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float sinpi(float x)
+{
+  return __metal_sinpi(x, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float sqrt(float x)
+{
+  return __metal_sqrt(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float tan(float x)
+{
+  return __metal_tan(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float tanh(float x)
+{
+  return __metal_tanh(x, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float tanpi(float x)
+{
+  return __metal_tanpi(x, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float trunc(float x)
+{
+  return __metal_trunc(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 abs(float2 x)
+{
+  return __metal_fabs(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 acos(float2 x)
+{
+  return __metal_acos(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 acosh(float2 x)
+{
+  return __metal_acosh(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 asin(float2 x)
+{
+  return __metal_asin(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 asinh(float2 x)
+{
+  return __metal_asinh(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 atan(float2 y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 atan2(float2 y, float2 x)
+{
+  return __metal_atan2(y, x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 atanh(float2 x)
+{
+  return __metal_atanh(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 ceil(float2 x)
+{
+  return __metal_ceil(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 copysign(float2 x, float2 y)
+{
+  typedef _fp_encoding_traits<float2> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<float2>(res_bits);
+}
+METAL_FUNC float2 cos(float2 x)
+{
+  return __metal_cos(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 cosh(float2 x)
+{
+  return __metal_cosh(x, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float2 cospi(float2 x)
+{
+  return __metal_cospi(x, __METAL_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC float2 divide(float2 x, float2 y)
+{
+  return __metal_divide(x, y, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float2 exp(float2 x)
+{
+  return __metal_exp(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 exp10(float2 x)
+{
+  return __metal_exp10(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 exp2(float2 x)
+{
+  return __metal_exp2(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 fabs(float2 x)
+{
+  return __metal_fabs(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 fdim(float2 x, float2 y)
+{
+  float2 t = x - y;
+  return select(t, float2(0), t < float2(0) || x == y);
+}
+METAL_FUNC float2 floor(float2 x)
+{
+  return __metal_floor(x, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC float2 fma(float2 x, float2 y, float2 z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC float2 fmax(float2 x, float2 y)
+{
+  return __metal_fmax(x, y, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC float2 fmax3(float2 x, float2 y, float2 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC float2 fmedian3(float2 x, float2 y, float2 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float2 fmin(float2 x, float2 y)
+{
+  return __metal_fmin(x, y, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC float2 fmin3(float2 x, float2 y, float2 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float2 fmod(float2 x, float2 y)
+{
+  return __metal_fmod(x, y, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 fract(float2 x)
+{
+  return __metal_fract(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 frexp(float2 x, thread int2 &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int2 ilogb(float2 x)
+{
+  return __metal_ilogb(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 ldexp(float2 x, int2 k)
+{
+  return __metal_ldexp(x, k, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 log(float2 x)
+{
+  return __metal_log(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 log10(float2 x)
+{
+  return __metal_log10(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 log2(float2 x)
+{
+  return __metal_log2(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 max(float2 x, float2 y)
+{
+  return __metal_fmax(x, y, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC float2 max3(float2 x, float2 y, float2 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC float2 median3(float2 x, float2 y, float2 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float2 min(float2 x, float2 y)
+{
+  return __metal_fmin(x, y, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC float2 min3(float2 x, float2 y, float2 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float2 modf(float2 x, thread float2 &intval)
+{
+  intval = __metal_trunc(x, __METAL_FAST_MATH__);
+  return copysign(select(x - intval, float2(0), isinf(x)), x);
+}
+METAL_FUNC float2 pow(float2 x, float2 y)
+{
+  return __metal_pow(x, y, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 powr(float2 x, float2 y)
+{
+  return __metal_powr(x, y, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 rint(float2 x)
+{
+  return __metal_rint(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 round(float2 x)
+{
+  return __metal_round(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 rsqrt(float2 x)
+{
+  return __metal_rsqrt(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 sin(float2 x)
+{
+  return __metal_sin(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 sincos(float2 x, thread float2 &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 sinh(float2 x)
+{
+  return __metal_sinh(x, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float2 sinpi(float2 x)
+{
+  return __metal_sinpi(x, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float2 sqrt(float2 x)
+{
+  return __metal_sqrt(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 tan(float2 x)
+{
+  return __metal_tan(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 tanh(float2 x)
+{
+  return __metal_tanh(x, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float2 tanpi(float2 x)
+{
+  return __metal_tanpi(x, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float2 trunc(float2 x)
+{
+  return __metal_trunc(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 abs(float3 x)
+{
+  return __metal_fabs(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 acos(float3 x)
+{
+  return __metal_acos(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 acosh(float3 x)
+{
+  return __metal_acosh(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 asin(float3 x)
+{
+  return __metal_asin(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 asinh(float3 x)
+{
+  return __metal_asinh(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 atan(float3 y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 atan2(float3 y, float3 x)
+{
+  return __metal_atan2(y, x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 atanh(float3 x)
+{
+  return __metal_atanh(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 ceil(float3 x)
+{
+  return __metal_ceil(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 copysign(float3 x, float3 y)
+{
+  typedef _fp_encoding_traits<float3> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<float3>(res_bits);
+}
+METAL_FUNC float3 cos(float3 x)
+{
+  return __metal_cos(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 cosh(float3 x)
+{
+  return __metal_cosh(x, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float3 cospi(float3 x)
+{
+  return __metal_cospi(x, __METAL_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC float3 divide(float3 x, float3 y)
+{
+  return __metal_divide(x, y, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float3 exp(float3 x)
+{
+  return __metal_exp(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 exp10(float3 x)
+{
+  return __metal_exp10(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 exp2(float3 x)
+{
+  return __metal_exp2(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 fabs(float3 x)
+{
+  return __metal_fabs(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 fdim(float3 x, float3 y)
+{
+  float3 t = x - y;
+  return select(t, float3(0), t < float3(0) || x == y);
+}
+METAL_FUNC float3 floor(float3 x)
+{
+  return __metal_floor(x, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC float3 fma(float3 x, float3 y, float3 z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC float3 fmax(float3 x, float3 y)
+{
+  return __metal_fmax(x, y, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC float3 fmax3(float3 x, float3 y, float3 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC float3 fmedian3(float3 x, float3 y, float3 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float3 fmin(float3 x, float3 y)
+{
+  return __metal_fmin(x, y, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC float3 fmin3(float3 x, float3 y, float3 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float3 fmod(float3 x, float3 y)
+{
+  return __metal_fmod(x, y, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 fract(float3 x)
+{
+  return __metal_fract(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 frexp(float3 x, thread int3 &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int3 ilogb(float3 x)
+{
+  return __metal_ilogb(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 ldexp(float3 x, int3 k)
+{
+  return __metal_ldexp(x, k, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 log(float3 x)
+{
+  return __metal_log(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 log10(float3 x)
+{
+  return __metal_log10(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 log2(float3 x)
+{
+  return __metal_log2(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 max(float3 x, float3 y)
+{
+  return __metal_fmax(x, y, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC float3 max3(float3 x, float3 y, float3 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC float3 median3(float3 x, float3 y, float3 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float3 min(float3 x, float3 y)
+{
+  return __metal_fmin(x, y, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC float3 min3(float3 x, float3 y, float3 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float3 modf(float3 x, thread float3 &intval)
+{
+  intval = __metal_trunc(x, __METAL_FAST_MATH__);
+  return copysign(select(x - intval, float3(0), isinf(x)), x);
+}
+METAL_FUNC float3 pow(float3 x, float3 y)
+{
+  return __metal_pow(x, y, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 powr(float3 x, float3 y)
+{
+  return __metal_powr(x, y, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 rint(float3 x)
+{
+  return __metal_rint(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 round(float3 x)
+{
+  return __metal_round(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 rsqrt(float3 x)
+{
+  return __metal_rsqrt(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 sin(float3 x)
+{
+  return __metal_sin(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 sincos(float3 x, thread float3 &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 sinh(float3 x)
+{
+  return __metal_sinh(x, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float3 sinpi(float3 x)
+{
+  return __metal_sinpi(x, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float3 sqrt(float3 x)
+{
+  return __metal_sqrt(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 tan(float3 x)
+{
+  return __metal_tan(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 tanh(float3 x)
+{
+  return __metal_tanh(x, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float3 tanpi(float3 x)
+{
+  return __metal_tanpi(x, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float3 trunc(float3 x)
+{
+  return __metal_trunc(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 abs(float4 x)
+{
+  return __metal_fabs(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 acos(float4 x)
+{
+  return __metal_acos(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 acosh(float4 x)
+{
+  return __metal_acosh(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 asin(float4 x)
+{
+  return __metal_asin(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 asinh(float4 x)
+{
+  return __metal_asinh(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 atan(float4 y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 atan2(float4 y, float4 x)
+{
+  return __metal_atan2(y, x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 atanh(float4 x)
+{
+  return __metal_atanh(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 ceil(float4 x)
+{
+  return __metal_ceil(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 copysign(float4 x, float4 y)
+{
+  typedef _fp_encoding_traits<float4> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<float4>(res_bits);
+}
+METAL_FUNC float4 cos(float4 x)
+{
+  return __metal_cos(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 cosh(float4 x)
+{
+  return __metal_cosh(x, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float4 cospi(float4 x)
+{
+  return __metal_cospi(x, __METAL_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC float4 divide(float4 x, float4 y)
+{
+  return __metal_divide(x, y, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float4 exp(float4 x)
+{
+  return __metal_exp(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 exp10(float4 x)
+{
+  return __metal_exp10(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 exp2(float4 x)
+{
+  return __metal_exp2(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 fabs(float4 x)
+{
+  return __metal_fabs(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 fdim(float4 x, float4 y)
+{
+  float4 t = x - y;
+  return select(t, float4(0), t < float4(0) || x == y);
+}
+METAL_FUNC float4 floor(float4 x)
+{
+  return __metal_floor(x, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC float4 fma(float4 x, float4 y, float4 z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC float4 fmax(float4 x, float4 y)
+{
+  return __metal_fmax(x, y, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC float4 fmax3(float4 x, float4 y, float4 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC float4 fmedian3(float4 x, float4 y, float4 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float4 fmin(float4 x, float4 y)
+{
+  return __metal_fmin(x, y, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC float4 fmin3(float4 x, float4 y, float4 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float4 fmod(float4 x, float4 y)
+{
+  return __metal_fmod(x, y, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 fract(float4 x)
+{
+  return __metal_fract(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 frexp(float4 x, thread int4 &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int4 ilogb(float4 x)
+{
+  return __metal_ilogb(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 ldexp(float4 x, int4 k)
+{
+  return __metal_ldexp(x, k, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 log(float4 x)
+{
+  return __metal_log(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 log10(float4 x)
+{
+  return __metal_log10(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 log2(float4 x)
+{
+  return __metal_log2(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 max(float4 x, float4 y)
+{
+  return __metal_fmax(x, y, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC float4 max3(float4 x, float4 y, float4 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC float4 median3(float4 x, float4 y, float4 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float4 min(float4 x, float4 y)
+{
+  return __metal_fmin(x, y, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC float4 min3(float4 x, float4 y, float4 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float4 modf(float4 x, thread float4 &intval)
+{
+  intval = __metal_trunc(x, __METAL_FAST_MATH__);
+  return copysign(select(x - intval, float4(0), isinf(x)), x);
+}
+METAL_FUNC float4 pow(float4 x, float4 y)
+{
+  return __metal_pow(x, y, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 powr(float4 x, float4 y)
+{
+  return __metal_powr(x, y, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 rint(float4 x)
+{
+  return __metal_rint(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 round(float4 x)
+{
+  return __metal_round(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 rsqrt(float4 x)
+{
+  return __metal_rsqrt(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 sin(float4 x)
+{
+  return __metal_sin(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 sincos(float4 x, thread float4 &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 sinh(float4 x)
+{
+  return __metal_sinh(x, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float4 sinpi(float4 x)
+{
+  return __metal_sinpi(x, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float4 sqrt(float4 x)
+{
+  return __metal_sqrt(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 tan(float4 x)
+{
+  return __metal_tan(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 tanh(float4 x)
+{
+  return __metal_tanh(x, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float4 tanpi(float4 x)
+{
+  return __metal_tanpi(x, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float4 trunc(float4 x)
+{
+  return __metal_trunc(x, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC float8 abs(float8 x)
+{
+  return __metal_fabs(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 acos(float8 x)
+{
+  return __metal_acos(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 acosh(float8 x)
+{
+  return __metal_acosh(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 asin(float8 x)
+{
+  return __metal_asin(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 asinh(float8 x)
+{
+  return __metal_asinh(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 atan(float8 y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 atan2(float8 y, float8 x)
+{
+  return __metal_atan2(y, x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 atanh(float8 x)
+{
+  return __metal_atanh(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 ceil(float8 x)
+{
+  return __metal_ceil(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 copysign(float8 x, float8 y)
+{
+  typedef _fp_encoding_traits<float8> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<float8>(res_bits);
+}
+METAL_FUNC float8 cos(float8 x)
+{
+  return __metal_cos(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 cosh(float8 x)
+{
+  return __metal_cosh(x, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float8 cospi(float8 x)
+{
+  return __metal_cospi(x, __METAL_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC float8 divide(float8 x, float8 y)
+{
+  return __metal_divide(x, y, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float8 exp(float8 x)
+{
+  return __metal_exp(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 exp10(float8 x)
+{
+  return __metal_exp10(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 exp2(float8 x)
+{
+  return __metal_exp2(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 fabs(float8 x)
+{
+  return __metal_fabs(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 fdim(float8 x, float8 y)
+{
+  float8 t = x - y;
+  return select(t, float8(0), t < float8(0) || x == y);
+}
+METAL_FUNC float8 floor(float8 x)
+{
+  return __metal_floor(x, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC float8 fma(float8 x, float8 y, float8 z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC float8 fmax(float8 x, float8 y)
+{
+  return __metal_fmax(x, y, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC float8 fmax3(float8 x, float8 y, float8 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC float8 fmedian3(float8 x, float8 y, float8 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float8 fmin(float8 x, float8 y)
+{
+  return __metal_fmin(x, y, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC float8 fmin3(float8 x, float8 y, float8 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float8 fmod(float8 x, float8 y)
+{
+  return __metal_fmod(x, y, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 fract(float8 x)
+{
+  return __metal_fract(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 frexp(float8 x, thread int8 &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int8 ilogb(float8 x)
+{
+  return __metal_ilogb(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 ldexp(float8 x, int8 k)
+{
+  return __metal_ldexp(x, k, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 log(float8 x)
+{
+  return __metal_log(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 log10(float8 x)
+{
+  return __metal_log10(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 log2(float8 x)
+{
+  return __metal_log2(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 max(float8 x, float8 y)
+{
+  return __metal_fmax(x, y, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC float8 max3(float8 x, float8 y, float8 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC float8 median3(float8 x, float8 y, float8 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float8 min(float8 x, float8 y)
+{
+  return __metal_fmin(x, y, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC float8 min3(float8 x, float8 y, float8 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float8 modf(float8 x, thread float8 &intval)
+{
+  intval = __metal_trunc(x, __METAL_FAST_MATH__);
+  return copysign(select(x - intval, float8(0), isinf(x)), x);
+}
+METAL_FUNC float8 pow(float8 x, float8 y)
+{
+  return __metal_pow(x, y, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 powr(float8 x, float8 y)
+{
+  return __metal_powr(x, y, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 rint(float8 x)
+{
+  return __metal_rint(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 round(float8 x)
+{
+  return __metal_round(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 rsqrt(float8 x)
+{
+  return __metal_rsqrt(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 sin(float8 x)
+{
+  return __metal_sin(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 sincos(float8 x, thread float8 &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 sinh(float8 x)
+{
+  return __metal_sinh(x, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float8 sinpi(float8 x)
+{
+  return __metal_sinpi(x, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float8 sqrt(float8 x)
+{
+  return __metal_sqrt(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 tan(float8 x)
+{
+  return __metal_tan(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 tanh(float8 x)
+{
+  return __metal_tanh(x, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float8 tanpi(float8 x)
+{
+  return __metal_tanpi(x, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float8 trunc(float8 x)
+{
+  return __metal_trunc(x, __METAL_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC float16 abs(float16 x)
+{
+  return __metal_fabs(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 acos(float16 x)
+{
+  return __metal_acos(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 acosh(float16 x)
+{
+  return __metal_acosh(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 asin(float16 x)
+{
+  return __metal_asin(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 asinh(float16 x)
+{
+  return __metal_asinh(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 atan(float16 y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 atan2(float16 y, float16 x)
+{
+  return __metal_atan2(y, x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 atanh(float16 x)
+{
+  return __metal_atanh(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 ceil(float16 x)
+{
+  return __metal_ceil(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 copysign(float16 x, float16 y)
+{
+  typedef _fp_encoding_traits<float16> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<float16>(res_bits);
+}
+METAL_FUNC float16 cos(float16 x)
+{
+  return __metal_cos(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 cosh(float16 x)
+{
+  return __metal_cosh(x, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float16 cospi(float16 x)
+{
+  return __metal_cospi(x, __METAL_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC float16 divide(float16 x, float16 y)
+{
+  return __metal_divide(x, y, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float16 exp(float16 x)
+{
+  return __metal_exp(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 exp10(float16 x)
+{
+  return __metal_exp10(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 exp2(float16 x)
+{
+  return __metal_exp2(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 fabs(float16 x)
+{
+  return __metal_fabs(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 fdim(float16 x, float16 y)
+{
+  float16 t = x - y;
+  return select(t, float16(0), t < float16(0) || x == y);
+}
+METAL_FUNC float16 floor(float16 x)
+{
+  return __metal_floor(x, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC float16 fma(float16 x, float16 y, float16 z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC float16 fmax(float16 x, float16 y)
+{
+  return __metal_fmax(x, y, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC float16 fmax3(float16 x, float16 y, float16 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC float16 fmedian3(float16 x, float16 y, float16 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float16 fmin(float16 x, float16 y)
+{
+  return __metal_fmin(x, y, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC float16 fmin3(float16 x, float16 y, float16 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float16 fmod(float16 x, float16 y)
+{
+  return __metal_fmod(x, y, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 fract(float16 x)
+{
+  return __metal_fract(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 frexp(float16 x, thread int16 &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int16 ilogb(float16 x)
+{
+  return __metal_ilogb(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 ldexp(float16 x, int16 k)
+{
+  return __metal_ldexp(x, k, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 log(float16 x)
+{
+  return __metal_log(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 log10(float16 x)
+{
+  return __metal_log10(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 log2(float16 x)
+{
+  return __metal_log2(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 max(float16 x, float16 y)
+{
+  return __metal_fmax(x, y, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC float16 max3(float16 x, float16 y, float16 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC float16 median3(float16 x, float16 y, float16 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float16 min(float16 x, float16 y)
+{
+  return __metal_fmin(x, y, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC float16 min3(float16 x, float16 y, float16 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float16 modf(float16 x, thread float16 &intval)
+{
+  intval = __metal_trunc(x, __METAL_FAST_MATH__);
+  return copysign(select(x - intval, float16(0), isinf(x)), x);
+}
+METAL_FUNC float16 pow(float16 x, float16 y)
+{
+  return __metal_pow(x, y, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 powr(float16 x, float16 y)
+{
+  return __metal_powr(x, y, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 rint(float16 x)
+{
+  return __metal_rint(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 round(float16 x)
+{
+  return __metal_round(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 rsqrt(float16 x)
+{
+  return __metal_rsqrt(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 sin(float16 x)
+{
+  return __metal_sin(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 sincos(float16 x, thread float16 &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 sinh(float16 x)
+{
+  return __metal_sinh(x, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float16 sinpi(float16 x)
+{
+  return __metal_sinpi(x, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float16 sqrt(float16 x)
+{
+  return __metal_sqrt(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 tan(float16 x)
+{
+  return __metal_tan(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 tanh(float16 x)
+{
+  return __metal_tanh(x, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float16 tanpi(float16 x)
+{
+  return __metal_tanpi(x, __METAL_FAST_MATH__);
+}
+#endif
+METAL_FUNC float16 trunc(float16 x)
+{
+  return __metal_trunc(x, __METAL_FAST_MATH__);
+}
+#endif
+} // namespace fast
+namespace precise
+{
+METAL_FUNC float abs(float x)
+{
+  return __metal_fabs(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float acos(float x)
+{
+  return __metal_acos(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float acosh(float x)
+{
+  return __metal_acosh(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float asin(float x)
+{
+  return __metal_asin(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float asinh(float x)
+{
+  return __metal_asinh(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float atan(float y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float atan2(float y, float x)
+{
+  return __metal_atan2(y, x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float atanh(float x)
+{
+  return __metal_atanh(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float ceil(float x)
+{
+  return __metal_ceil(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float copysign(float x, float y)
+{
+  typedef _fp_encoding_traits<float> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<float>(res_bits);
+}
+METAL_FUNC float cos(float x)
+{
+  return __metal_cos(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float cosh(float x)
+{
+  return __metal_cosh(x, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float cospi(float x)
+{
+  return __metal_cospi(x, __METAL_PRECISE_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC float divide(float x, float y)
+{
+  return __metal_divide(x, y, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float exp(float x)
+{
+  return __metal_exp(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float exp10(float x)
+{
+  return __metal_exp10(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float exp2(float x)
+{
+  return __metal_exp2(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float fabs(float x)
+{
+  return __metal_fabs(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float fdim(float x, float y)
+{
+  float t = x - y;
+  return select(t, float(0), t < float(0) || x == y);
+}
+METAL_FUNC float floor(float x)
+{
+  return __metal_floor(x, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC float fma(float x, float y, float z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC float fmax(float x, float y)
+{
+  return __metal_fmax(x, y, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC float fmax3(float x, float y, float z)
+{
+  return __metal_fmax3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC float fmedian3(float x, float y, float z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float fmin(float x, float y)
+{
+  return __metal_fmin(x, y, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC float fmin3(float x, float y, float z)
+{
+  return __metal_fmin3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float fmod(float x, float y)
+{
+  return __metal_fmod(x, y, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float fract(float x)
+{
+  return __metal_fract(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float frexp(float x, thread int &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int ilogb(float x)
+{
+  return __metal_ilogb(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float ldexp(float x, int k)
+{
+  return __metal_ldexp(x, k, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float log(float x)
+{
+  return __metal_log(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float log10(float x)
+{
+  return __metal_log10(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float log2(float x)
+{
+  return __metal_log2(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float max(float x, float y)
+{
+  return __metal_fmax(x, y, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC float max3(float x, float y, float z)
+{
+  return __metal_fmax3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC float median3(float x, float y, float z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float min(float x, float y)
+{
+  return __metal_fmin(x, y, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC float min3(float x, float y, float z)
+{
+  return __metal_fmin3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float modf(float x, thread float &intval)
+{
+  intval = __metal_trunc(x, __METAL_PRECISE_MATH__);
+  return copysign(select(x - intval, float(0), isinf(x)), x);
+}
+METAL_FUNC float pow(float x, float y)
+{
+  return __metal_pow(x, y, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float powr(float x, float y)
+{
+  return __metal_powr(x, y, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float rint(float x)
+{
+  return __metal_rint(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float round(float x)
+{
+  return __metal_round(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float rsqrt(float x)
+{
+  return __metal_rsqrt(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float sin(float x)
+{
+  return __metal_sin(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float sincos(float x, thread float &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float sinh(float x)
+{
+  return __metal_sinh(x, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float sinpi(float x)
+{
+  return __metal_sinpi(x, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float sqrt(float x)
+{
+  return __metal_sqrt(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float tan(float x)
+{
+  return __metal_tan(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float tanh(float x)
+{
+  return __metal_tanh(x, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float tanpi(float x)
+{
+  return __metal_tanpi(x, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float trunc(float x)
+{
+  return __metal_trunc(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 abs(float2 x)
+{
+  return __metal_fabs(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 acos(float2 x)
+{
+  return __metal_acos(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 acosh(float2 x)
+{
+  return __metal_acosh(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 asin(float2 x)
+{
+  return __metal_asin(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 asinh(float2 x)
+{
+  return __metal_asinh(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 atan(float2 y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 atan2(float2 y, float2 x)
+{
+  return __metal_atan2(y, x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 atanh(float2 x)
+{
+  return __metal_atanh(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 ceil(float2 x)
+{
+  return __metal_ceil(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 copysign(float2 x, float2 y)
+{
+  typedef _fp_encoding_traits<float2> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<float2>(res_bits);
+}
+METAL_FUNC float2 cos(float2 x)
+{
+  return __metal_cos(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 cosh(float2 x)
+{
+  return __metal_cosh(x, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float2 cospi(float2 x)
+{
+  return __metal_cospi(x, __METAL_PRECISE_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC float2 divide(float2 x, float2 y)
+{
+  return __metal_divide(x, y, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float2 exp(float2 x)
+{
+  return __metal_exp(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 exp10(float2 x)
+{
+  return __metal_exp10(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 exp2(float2 x)
+{
+  return __metal_exp2(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 fabs(float2 x)
+{
+  return __metal_fabs(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 fdim(float2 x, float2 y)
+{
+  float2 t = x - y;
+  return select(t, float2(0), t < float2(0) || x == y);
+}
+METAL_FUNC float2 floor(float2 x)
+{
+  return __metal_floor(x, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC float2 fma(float2 x, float2 y, float2 z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC float2 fmax(float2 x, float2 y)
+{
+  return __metal_fmax(x, y, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC float2 fmax3(float2 x, float2 y, float2 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC float2 fmedian3(float2 x, float2 y, float2 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float2 fmin(float2 x, float2 y)
+{
+  return __metal_fmin(x, y, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC float2 fmin3(float2 x, float2 y, float2 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float2 fmod(float2 x, float2 y)
+{
+  return __metal_fmod(x, y, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 fract(float2 x)
+{
+  return __metal_fract(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 frexp(float2 x, thread int2 &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int2 ilogb(float2 x)
+{
+  return __metal_ilogb(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 ldexp(float2 x, int2 k)
+{
+  return __metal_ldexp(x, k, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 log(float2 x)
+{
+  return __metal_log(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 log10(float2 x)
+{
+  return __metal_log10(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 log2(float2 x)
+{
+  return __metal_log2(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 max(float2 x, float2 y)
+{
+  return __metal_fmax(x, y, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC float2 max3(float2 x, float2 y, float2 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC float2 median3(float2 x, float2 y, float2 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float2 min(float2 x, float2 y)
+{
+  return __metal_fmin(x, y, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC float2 min3(float2 x, float2 y, float2 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float2 modf(float2 x, thread float2 &intval)
+{
+  intval = __metal_trunc(x, __METAL_PRECISE_MATH__);
+  return copysign(select(x - intval, float2(0), isinf(x)), x);
+}
+METAL_FUNC float2 pow(float2 x, float2 y)
+{
+  return __metal_pow(x, y, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 powr(float2 x, float2 y)
+{
+  return __metal_powr(x, y, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 rint(float2 x)
+{
+  return __metal_rint(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 round(float2 x)
+{
+  return __metal_round(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 rsqrt(float2 x)
+{
+  return __metal_rsqrt(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 sin(float2 x)
+{
+  return __metal_sin(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 sincos(float2 x, thread float2 &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 sinh(float2 x)
+{
+  return __metal_sinh(x, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float2 sinpi(float2 x)
+{
+  return __metal_sinpi(x, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float2 sqrt(float2 x)
+{
+  return __metal_sqrt(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 tan(float2 x)
+{
+  return __metal_tan(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 tanh(float2 x)
+{
+  return __metal_tanh(x, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float2 tanpi(float2 x)
+{
+  return __metal_tanpi(x, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float2 trunc(float2 x)
+{
+  return __metal_trunc(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 abs(float3 x)
+{
+  return __metal_fabs(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 acos(float3 x)
+{
+  return __metal_acos(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 acosh(float3 x)
+{
+  return __metal_acosh(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 asin(float3 x)
+{
+  return __metal_asin(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 asinh(float3 x)
+{
+  return __metal_asinh(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 atan(float3 y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 atan2(float3 y, float3 x)
+{
+  return __metal_atan2(y, x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 atanh(float3 x)
+{
+  return __metal_atanh(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 ceil(float3 x)
+{
+  return __metal_ceil(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 copysign(float3 x, float3 y)
+{
+  typedef _fp_encoding_traits<float3> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<float3>(res_bits);
+}
+METAL_FUNC float3 cos(float3 x)
+{
+  return __metal_cos(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 cosh(float3 x)
+{
+  return __metal_cosh(x, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float3 cospi(float3 x)
+{
+  return __metal_cospi(x, __METAL_PRECISE_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC float3 divide(float3 x, float3 y)
+{
+  return __metal_divide(x, y, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float3 exp(float3 x)
+{
+  return __metal_exp(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 exp10(float3 x)
+{
+  return __metal_exp10(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 exp2(float3 x)
+{
+  return __metal_exp2(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 fabs(float3 x)
+{
+  return __metal_fabs(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 fdim(float3 x, float3 y)
+{
+  float3 t = x - y;
+  return select(t, float3(0), t < float3(0) || x == y);
+}
+METAL_FUNC float3 floor(float3 x)
+{
+  return __metal_floor(x, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC float3 fma(float3 x, float3 y, float3 z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC float3 fmax(float3 x, float3 y)
+{
+  return __metal_fmax(x, y, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC float3 fmax3(float3 x, float3 y, float3 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC float3 fmedian3(float3 x, float3 y, float3 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float3 fmin(float3 x, float3 y)
+{
+  return __metal_fmin(x, y, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC float3 fmin3(float3 x, float3 y, float3 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float3 fmod(float3 x, float3 y)
+{
+  return __metal_fmod(x, y, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 fract(float3 x)
+{
+  return __metal_fract(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 frexp(float3 x, thread int3 &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int3 ilogb(float3 x)
+{
+  return __metal_ilogb(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 ldexp(float3 x, int3 k)
+{
+  return __metal_ldexp(x, k, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 log(float3 x)
+{
+  return __metal_log(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 log10(float3 x)
+{
+  return __metal_log10(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 log2(float3 x)
+{
+  return __metal_log2(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 max(float3 x, float3 y)
+{
+  return __metal_fmax(x, y, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC float3 max3(float3 x, float3 y, float3 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC float3 median3(float3 x, float3 y, float3 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float3 min(float3 x, float3 y)
+{
+  return __metal_fmin(x, y, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC float3 min3(float3 x, float3 y, float3 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float3 modf(float3 x, thread float3 &intval)
+{
+  intval = __metal_trunc(x, __METAL_PRECISE_MATH__);
+  return copysign(select(x - intval, float3(0), isinf(x)), x);
+}
+METAL_FUNC float3 pow(float3 x, float3 y)
+{
+  return __metal_pow(x, y, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 powr(float3 x, float3 y)
+{
+  return __metal_powr(x, y, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 rint(float3 x)
+{
+  return __metal_rint(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 round(float3 x)
+{
+  return __metal_round(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 rsqrt(float3 x)
+{
+  return __metal_rsqrt(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 sin(float3 x)
+{
+  return __metal_sin(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 sincos(float3 x, thread float3 &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 sinh(float3 x)
+{
+  return __metal_sinh(x, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float3 sinpi(float3 x)
+{
+  return __metal_sinpi(x, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float3 sqrt(float3 x)
+{
+  return __metal_sqrt(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 tan(float3 x)
+{
+  return __metal_tan(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 tanh(float3 x)
+{
+  return __metal_tanh(x, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float3 tanpi(float3 x)
+{
+  return __metal_tanpi(x, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float3 trunc(float3 x)
+{
+  return __metal_trunc(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 abs(float4 x)
+{
+  return __metal_fabs(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 acos(float4 x)
+{
+  return __metal_acos(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 acosh(float4 x)
+{
+  return __metal_acosh(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 asin(float4 x)
+{
+  return __metal_asin(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 asinh(float4 x)
+{
+  return __metal_asinh(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 atan(float4 y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 atan2(float4 y, float4 x)
+{
+  return __metal_atan2(y, x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 atanh(float4 x)
+{
+  return __metal_atanh(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 ceil(float4 x)
+{
+  return __metal_ceil(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 copysign(float4 x, float4 y)
+{
+  typedef _fp_encoding_traits<float4> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<float4>(res_bits);
+}
+METAL_FUNC float4 cos(float4 x)
+{
+  return __metal_cos(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 cosh(float4 x)
+{
+  return __metal_cosh(x, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float4 cospi(float4 x)
+{
+  return __metal_cospi(x, __METAL_PRECISE_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC float4 divide(float4 x, float4 y)
+{
+  return __metal_divide(x, y, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float4 exp(float4 x)
+{
+  return __metal_exp(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 exp10(float4 x)
+{
+  return __metal_exp10(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 exp2(float4 x)
+{
+  return __metal_exp2(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 fabs(float4 x)
+{
+  return __metal_fabs(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 fdim(float4 x, float4 y)
+{
+  float4 t = x - y;
+  return select(t, float4(0), t < float4(0) || x == y);
+}
+METAL_FUNC float4 floor(float4 x)
+{
+  return __metal_floor(x, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC float4 fma(float4 x, float4 y, float4 z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC float4 fmax(float4 x, float4 y)
+{
+  return __metal_fmax(x, y, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC float4 fmax3(float4 x, float4 y, float4 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC float4 fmedian3(float4 x, float4 y, float4 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float4 fmin(float4 x, float4 y)
+{
+  return __metal_fmin(x, y, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC float4 fmin3(float4 x, float4 y, float4 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float4 fmod(float4 x, float4 y)
+{
+  return __metal_fmod(x, y, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 fract(float4 x)
+{
+  return __metal_fract(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 frexp(float4 x, thread int4 &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int4 ilogb(float4 x)
+{
+  return __metal_ilogb(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 ldexp(float4 x, int4 k)
+{
+  return __metal_ldexp(x, k, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 log(float4 x)
+{
+  return __metal_log(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 log10(float4 x)
+{
+  return __metal_log10(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 log2(float4 x)
+{
+  return __metal_log2(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 max(float4 x, float4 y)
+{
+  return __metal_fmax(x, y, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC float4 max3(float4 x, float4 y, float4 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC float4 median3(float4 x, float4 y, float4 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float4 min(float4 x, float4 y)
+{
+  return __metal_fmin(x, y, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC float4 min3(float4 x, float4 y, float4 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float4 modf(float4 x, thread float4 &intval)
+{
+  intval = __metal_trunc(x, __METAL_PRECISE_MATH__);
+  return copysign(select(x - intval, float4(0), isinf(x)), x);
+}
+METAL_FUNC float4 pow(float4 x, float4 y)
+{
+  return __metal_pow(x, y, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 powr(float4 x, float4 y)
+{
+  return __metal_powr(x, y, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 rint(float4 x)
+{
+  return __metal_rint(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 round(float4 x)
+{
+  return __metal_round(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 rsqrt(float4 x)
+{
+  return __metal_rsqrt(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 sin(float4 x)
+{
+  return __metal_sin(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 sincos(float4 x, thread float4 &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 sinh(float4 x)
+{
+  return __metal_sinh(x, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float4 sinpi(float4 x)
+{
+  return __metal_sinpi(x, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float4 sqrt(float4 x)
+{
+  return __metal_sqrt(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 tan(float4 x)
+{
+  return __metal_tan(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 tanh(float4 x)
+{
+  return __metal_tanh(x, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float4 tanpi(float4 x)
+{
+  return __metal_tanpi(x, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float4 trunc(float4 x)
+{
+  return __metal_trunc(x, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC float8 abs(float8 x)
+{
+  return __metal_fabs(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 acos(float8 x)
+{
+  return __metal_acos(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 acosh(float8 x)
+{
+  return __metal_acosh(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 asin(float8 x)
+{
+  return __metal_asin(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 asinh(float8 x)
+{
+  return __metal_asinh(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 atan(float8 y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 atan2(float8 y, float8 x)
+{
+  return __metal_atan2(y, x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 atanh(float8 x)
+{
+  return __metal_atanh(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 ceil(float8 x)
+{
+  return __metal_ceil(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 copysign(float8 x, float8 y)
+{
+  typedef _fp_encoding_traits<float8> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<float8>(res_bits);
+}
+METAL_FUNC float8 cos(float8 x)
+{
+  return __metal_cos(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 cosh(float8 x)
+{
+  return __metal_cosh(x, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float8 cospi(float8 x)
+{
+  return __metal_cospi(x, __METAL_PRECISE_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC float8 divide(float8 x, float8 y)
+{
+  return __metal_divide(x, y, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float8 exp(float8 x)
+{
+  return __metal_exp(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 exp10(float8 x)
+{
+  return __metal_exp10(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 exp2(float8 x)
+{
+  return __metal_exp2(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 fabs(float8 x)
+{
+  return __metal_fabs(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 fdim(float8 x, float8 y)
+{
+  float8 t = x - y;
+  return select(t, float8(0), t < float8(0) || x == y);
+}
+METAL_FUNC float8 floor(float8 x)
+{
+  return __metal_floor(x, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC float8 fma(float8 x, float8 y, float8 z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC float8 fmax(float8 x, float8 y)
+{
+  return __metal_fmax(x, y, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC float8 fmax3(float8 x, float8 y, float8 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC float8 fmedian3(float8 x, float8 y, float8 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float8 fmin(float8 x, float8 y)
+{
+  return __metal_fmin(x, y, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC float8 fmin3(float8 x, float8 y, float8 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float8 fmod(float8 x, float8 y)
+{
+  return __metal_fmod(x, y, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 fract(float8 x)
+{
+  return __metal_fract(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 frexp(float8 x, thread int8 &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int8 ilogb(float8 x)
+{
+  return __metal_ilogb(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 ldexp(float8 x, int8 k)
+{
+  return __metal_ldexp(x, k, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 log(float8 x)
+{
+  return __metal_log(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 log10(float8 x)
+{
+  return __metal_log10(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 log2(float8 x)
+{
+  return __metal_log2(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 max(float8 x, float8 y)
+{
+  return __metal_fmax(x, y, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC float8 max3(float8 x, float8 y, float8 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC float8 median3(float8 x, float8 y, float8 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float8 min(float8 x, float8 y)
+{
+  return __metal_fmin(x, y, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC float8 min3(float8 x, float8 y, float8 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float8 modf(float8 x, thread float8 &intval)
+{
+  intval = __metal_trunc(x, __METAL_PRECISE_MATH__);
+  return copysign(select(x - intval, float8(0), isinf(x)), x);
+}
+METAL_FUNC float8 pow(float8 x, float8 y)
+{
+  return __metal_pow(x, y, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 powr(float8 x, float8 y)
+{
+  return __metal_powr(x, y, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 rint(float8 x)
+{
+  return __metal_rint(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 round(float8 x)
+{
+  return __metal_round(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 rsqrt(float8 x)
+{
+  return __metal_rsqrt(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 sin(float8 x)
+{
+  return __metal_sin(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 sincos(float8 x, thread float8 &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 sinh(float8 x)
+{
+  return __metal_sinh(x, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float8 sinpi(float8 x)
+{
+  return __metal_sinpi(x, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float8 sqrt(float8 x)
+{
+  return __metal_sqrt(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 tan(float8 x)
+{
+  return __metal_tan(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 tanh(float8 x)
+{
+  return __metal_tanh(x, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float8 tanpi(float8 x)
+{
+  return __metal_tanpi(x, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float8 trunc(float8 x)
+{
+  return __metal_trunc(x, __METAL_PRECISE_MATH__);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC float16 abs(float16 x)
+{
+  return __metal_fabs(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 acos(float16 x)
+{
+  return __metal_acos(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 acosh(float16 x)
+{
+  return __metal_acosh(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 asin(float16 x)
+{
+  return __metal_asin(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 asinh(float16 x)
+{
+  return __metal_asinh(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 atan(float16 y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 atan2(float16 y, float16 x)
+{
+  return __metal_atan2(y, x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 atanh(float16 x)
+{
+  return __metal_atanh(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 ceil(float16 x)
+{
+  return __metal_ceil(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 copysign(float16 x, float16 y)
+{
+  typedef _fp_encoding_traits<float16> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<float16>(res_bits);
+}
+METAL_FUNC float16 cos(float16 x)
+{
+  return __metal_cos(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 cosh(float16 x)
+{
+  return __metal_cosh(x, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float16 cospi(float16 x)
+{
+  return __metal_cospi(x, __METAL_PRECISE_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC float16 divide(float16 x, float16 y)
+{
+  return __metal_divide(x, y, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float16 exp(float16 x)
+{
+  return __metal_exp(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 exp10(float16 x)
+{
+  return __metal_exp10(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 exp2(float16 x)
+{
+  return __metal_exp2(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 fabs(float16 x)
+{
+  return __metal_fabs(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 fdim(float16 x, float16 y)
+{
+  float16 t = x - y;
+  return select(t, float16(0), t < float16(0) || x == y);
+}
+METAL_FUNC float16 floor(float16 x)
+{
+  return __metal_floor(x, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC float16 fma(float16 x, float16 y, float16 z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC float16 fmax(float16 x, float16 y)
+{
+  return __metal_fmax(x, y, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC float16 fmax3(float16 x, float16 y, float16 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC float16 fmedian3(float16 x, float16 y, float16 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float16 fmin(float16 x, float16 y)
+{
+  return __metal_fmin(x, y, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC float16 fmin3(float16 x, float16 y, float16 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float16 fmod(float16 x, float16 y)
+{
+  return __metal_fmod(x, y, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 fract(float16 x)
+{
+  return __metal_fract(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 frexp(float16 x, thread int16 &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int16 ilogb(float16 x)
+{
+  return __metal_ilogb(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 ldexp(float16 x, int16 k)
+{
+  return __metal_ldexp(x, k, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 log(float16 x)
+{
+  return __metal_log(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 log10(float16 x)
+{
+  return __metal_log10(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 log2(float16 x)
+{
+  return __metal_log2(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 max(float16 x, float16 y)
+{
+  return __metal_fmax(x, y, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC float16 max3(float16 x, float16 y, float16 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC float16 median3(float16 x, float16 y, float16 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float16 min(float16 x, float16 y)
+{
+  return __metal_fmin(x, y, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC float16 min3(float16 x, float16 y, float16 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float16 modf(float16 x, thread float16 &intval)
+{
+  intval = __metal_trunc(x, __METAL_PRECISE_MATH__);
+  return copysign(select(x - intval, float16(0), isinf(x)), x);
+}
+METAL_FUNC float16 pow(float16 x, float16 y)
+{
+  return __metal_pow(x, y, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 powr(float16 x, float16 y)
+{
+  return __metal_powr(x, y, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 rint(float16 x)
+{
+  return __metal_rint(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 round(float16 x)
+{
+  return __metal_round(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 rsqrt(float16 x)
+{
+  return __metal_rsqrt(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 sin(float16 x)
+{
+  return __metal_sin(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 sincos(float16 x, thread float16 &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 sinh(float16 x)
+{
+  return __metal_sinh(x, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float16 sinpi(float16 x)
+{
+  return __metal_sinpi(x, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float16 sqrt(float16 x)
+{
+  return __metal_sqrt(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 tan(float16 x)
+{
+  return __metal_tan(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 tanh(float16 x)
+{
+  return __metal_tanh(x, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float16 tanpi(float16 x)
+{
+  return __metal_tanpi(x, __METAL_PRECISE_MATH__);
+}
+#endif
+METAL_FUNC float16 trunc(float16 x)
+{
+  return __metal_trunc(x, __METAL_PRECISE_MATH__);
+}
+#endif
+} // namespace precise
+METAL_FUNC half abs(half x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half acos(half x)
+{
+  return __metal_acos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half acosh(half x)
+{
+  return __metal_acosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half asin(half x)
+{
+  return __metal_asin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half asinh(half x)
+{
+  return __metal_asinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half atan(half y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half atan2(half y, half x)
+{
+  return __metal_atan2(y, x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half atanh(half x)
+{
+  return __metal_atanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half ceil(half x)
+{
+  return __metal_ceil(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half copysign(half x, half y)
+{
+  typedef _fp_encoding_traits<half> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<half>(res_bits);
+}
+METAL_FUNC half cos(half x)
+{
+  return __metal_cos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half cosh(half x)
+{
+  return __metal_cosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC half cospi(half x)
+{
+  return __metal_cospi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC half divide(half x, half y)
+{
+  return __metal_divide(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half exp(half x)
+{
+  return __metal_exp(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half exp10(half x)
+{
+  return __metal_exp10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half exp2(half x)
+{
+  return __metal_exp2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half fabs(half x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half fdim(half x, half y)
+{
+  half t = x - y;
+  return select(t, half(0), t < half(0) || x == y);
+}
+METAL_FUNC half floor(half x)
+{
+  return __metal_floor(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC half fma(half x, half y, half z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC half fmax(half x, half y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC half fmax3(half x, half y, half z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC half fmedian3(half x, half y, half z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half fmin(half x, half y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC half fmin3(half x, half y, half z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half fmod(half x, half y)
+{
+  return __metal_fmod(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half fract(half x)
+{
+  return __metal_fract(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half frexp(half x, thread int &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int ilogb(half x)
+{
+  return __metal_ilogb(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half ldexp(half x, int k)
+{
+  return __metal_ldexp(x, k, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half log(half x)
+{
+  return __metal_log(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half log10(half x)
+{
+  return __metal_log10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half log2(half x)
+{
+  return __metal_log2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half max(half x, half y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC half max3(half x, half y, half z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC half median3(half x, half y, half z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half min(half x, half y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC half min3(half x, half y, half z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half modf(half x, thread half &intval)
+{
+  intval = __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+  return copysign(select(x - intval, half(0), isinf(x)), x);
+}
+METAL_FUNC half pow(half x, half y)
+{
+  return __metal_pow(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half powr(half x, half y)
+{
+  return __metal_powr(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half rint(half x)
+{
+  return __metal_rint(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half round(half x)
+{
+  return __metal_round(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half rsqrt(half x)
+{
+  return __metal_rsqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half sin(half x)
+{
+  return __metal_sin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half sincos(half x, thread half &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half sinh(half x)
+{
+  return __metal_sinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC half sinpi(half x)
+{
+  return __metal_sinpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half sqrt(half x)
+{
+  return __metal_sqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half tan(half x)
+{
+  return __metal_tan(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half tanh(half x)
+{
+  return __metal_tanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC half tanpi(half x)
+{
+  return __metal_tanpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half trunc(half x)
+{
+  return __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 abs(half2 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 acos(half2 x)
+{
+  return __metal_acos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 acosh(half2 x)
+{
+  return __metal_acosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 asin(half2 x)
+{
+  return __metal_asin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 asinh(half2 x)
+{
+  return __metal_asinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 atan(half2 y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 atan2(half2 y, half2 x)
+{
+  return __metal_atan2(y, x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 atanh(half2 x)
+{
+  return __metal_atanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 ceil(half2 x)
+{
+  return __metal_ceil(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 copysign(half2 x, half2 y)
+{
+  typedef _fp_encoding_traits<half2> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<half2>(res_bits);
+}
+METAL_FUNC half2 cos(half2 x)
+{
+  return __metal_cos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 cosh(half2 x)
+{
+  return __metal_cosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC half2 cospi(half2 x)
+{
+  return __metal_cospi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC half2 divide(half2 x, half2 y)
+{
+  return __metal_divide(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half2 exp(half2 x)
+{
+  return __metal_exp(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 exp10(half2 x)
+{
+  return __metal_exp10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 exp2(half2 x)
+{
+  return __metal_exp2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 fabs(half2 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 fdim(half2 x, half2 y)
+{
+  half2 t = x - y;
+  return select(t, half2(0), t < half2(0) || x == y);
+}
+METAL_FUNC half2 floor(half2 x)
+{
+  return __metal_floor(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC half2 fma(half2 x, half2 y, half2 z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC half2 fmax(half2 x, half2 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC half2 fmax3(half2 x, half2 y, half2 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC half2 fmedian3(half2 x, half2 y, half2 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half2 fmin(half2 x, half2 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC half2 fmin3(half2 x, half2 y, half2 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half2 fmod(half2 x, half2 y)
+{
+  return __metal_fmod(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 fract(half2 x)
+{
+  return __metal_fract(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 frexp(half2 x, thread int2 &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int2 ilogb(half2 x)
+{
+  return __metal_ilogb(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 ldexp(half2 x, int2 k)
+{
+  return __metal_ldexp(x, k, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 log(half2 x)
+{
+  return __metal_log(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 log10(half2 x)
+{
+  return __metal_log10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 log2(half2 x)
+{
+  return __metal_log2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 max(half2 x, half2 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC half2 max3(half2 x, half2 y, half2 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC half2 median3(half2 x, half2 y, half2 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half2 min(half2 x, half2 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC half2 min3(half2 x, half2 y, half2 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half2 modf(half2 x, thread half2 &intval)
+{
+  intval = __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+  return copysign(select(x - intval, half2(0), isinf(x)), x);
+}
+METAL_FUNC half2 pow(half2 x, half2 y)
+{
+  return __metal_pow(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 powr(half2 x, half2 y)
+{
+  return __metal_powr(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 rint(half2 x)
+{
+  return __metal_rint(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 round(half2 x)
+{
+  return __metal_round(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 rsqrt(half2 x)
+{
+  return __metal_rsqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 sin(half2 x)
+{
+  return __metal_sin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 sincos(half2 x, thread half2 &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 sinh(half2 x)
+{
+  return __metal_sinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC half2 sinpi(half2 x)
+{
+  return __metal_sinpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half2 sqrt(half2 x)
+{
+  return __metal_sqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 tan(half2 x)
+{
+  return __metal_tan(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 tanh(half2 x)
+{
+  return __metal_tanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC half2 tanpi(half2 x)
+{
+  return __metal_tanpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half2 trunc(half2 x)
+{
+  return __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 abs(half3 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 acos(half3 x)
+{
+  return __metal_acos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 acosh(half3 x)
+{
+  return __metal_acosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 asin(half3 x)
+{
+  return __metal_asin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 asinh(half3 x)
+{
+  return __metal_asinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 atan(half3 y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 atan2(half3 y, half3 x)
+{
+  return __metal_atan2(y, x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 atanh(half3 x)
+{
+  return __metal_atanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 ceil(half3 x)
+{
+  return __metal_ceil(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 copysign(half3 x, half3 y)
+{
+  typedef _fp_encoding_traits<half3> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<half3>(res_bits);
+}
+METAL_FUNC half3 cos(half3 x)
+{
+  return __metal_cos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 cosh(half3 x)
+{
+  return __metal_cosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC half3 cospi(half3 x)
+{
+  return __metal_cospi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC half3 divide(half3 x, half3 y)
+{
+  return __metal_divide(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half3 exp(half3 x)
+{
+  return __metal_exp(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 exp10(half3 x)
+{
+  return __metal_exp10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 exp2(half3 x)
+{
+  return __metal_exp2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 fabs(half3 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 fdim(half3 x, half3 y)
+{
+  half3 t = x - y;
+  return select(t, half3(0), t < half3(0) || x == y);
+}
+METAL_FUNC half3 floor(half3 x)
+{
+  return __metal_floor(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC half3 fma(half3 x, half3 y, half3 z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC half3 fmax(half3 x, half3 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC half3 fmax3(half3 x, half3 y, half3 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC half3 fmedian3(half3 x, half3 y, half3 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half3 fmin(half3 x, half3 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC half3 fmin3(half3 x, half3 y, half3 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half3 fmod(half3 x, half3 y)
+{
+  return __metal_fmod(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 fract(half3 x)
+{
+  return __metal_fract(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 frexp(half3 x, thread int3 &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int3 ilogb(half3 x)
+{
+  return __metal_ilogb(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 ldexp(half3 x, int3 k)
+{
+  return __metal_ldexp(x, k, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 log(half3 x)
+{
+  return __metal_log(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 log10(half3 x)
+{
+  return __metal_log10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 log2(half3 x)
+{
+  return __metal_log2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 max(half3 x, half3 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC half3 max3(half3 x, half3 y, half3 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC half3 median3(half3 x, half3 y, half3 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half3 min(half3 x, half3 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC half3 min3(half3 x, half3 y, half3 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half3 modf(half3 x, thread half3 &intval)
+{
+  intval = __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+  return copysign(select(x - intval, half3(0), isinf(x)), x);
+}
+METAL_FUNC half3 pow(half3 x, half3 y)
+{
+  return __metal_pow(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 powr(half3 x, half3 y)
+{
+  return __metal_powr(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 rint(half3 x)
+{
+  return __metal_rint(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 round(half3 x)
+{
+  return __metal_round(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 rsqrt(half3 x)
+{
+  return __metal_rsqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 sin(half3 x)
+{
+  return __metal_sin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 sincos(half3 x, thread half3 &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 sinh(half3 x)
+{
+  return __metal_sinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC half3 sinpi(half3 x)
+{
+  return __metal_sinpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half3 sqrt(half3 x)
+{
+  return __metal_sqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 tan(half3 x)
+{
+  return __metal_tan(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 tanh(half3 x)
+{
+  return __metal_tanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC half3 tanpi(half3 x)
+{
+  return __metal_tanpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half3 trunc(half3 x)
+{
+  return __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 abs(half4 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 acos(half4 x)
+{
+  return __metal_acos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 acosh(half4 x)
+{
+  return __metal_acosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 asin(half4 x)
+{
+  return __metal_asin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 asinh(half4 x)
+{
+  return __metal_asinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 atan(half4 y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 atan2(half4 y, half4 x)
+{
+  return __metal_atan2(y, x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 atanh(half4 x)
+{
+  return __metal_atanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 ceil(half4 x)
+{
+  return __metal_ceil(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 copysign(half4 x, half4 y)
+{
+  typedef _fp_encoding_traits<half4> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<half4>(res_bits);
+}
+METAL_FUNC half4 cos(half4 x)
+{
+  return __metal_cos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 cosh(half4 x)
+{
+  return __metal_cosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC half4 cospi(half4 x)
+{
+  return __metal_cospi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC half4 divide(half4 x, half4 y)
+{
+  return __metal_divide(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half4 exp(half4 x)
+{
+  return __metal_exp(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 exp10(half4 x)
+{
+  return __metal_exp10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 exp2(half4 x)
+{
+  return __metal_exp2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 fabs(half4 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 fdim(half4 x, half4 y)
+{
+  half4 t = x - y;
+  return select(t, half4(0), t < half4(0) || x == y);
+}
+METAL_FUNC half4 floor(half4 x)
+{
+  return __metal_floor(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC half4 fma(half4 x, half4 y, half4 z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC half4 fmax(half4 x, half4 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC half4 fmax3(half4 x, half4 y, half4 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC half4 fmedian3(half4 x, half4 y, half4 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half4 fmin(half4 x, half4 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC half4 fmin3(half4 x, half4 y, half4 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half4 fmod(half4 x, half4 y)
+{
+  return __metal_fmod(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 fract(half4 x)
+{
+  return __metal_fract(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 frexp(half4 x, thread int4 &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int4 ilogb(half4 x)
+{
+  return __metal_ilogb(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 ldexp(half4 x, int4 k)
+{
+  return __metal_ldexp(x, k, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 log(half4 x)
+{
+  return __metal_log(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 log10(half4 x)
+{
+  return __metal_log10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 log2(half4 x)
+{
+  return __metal_log2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 max(half4 x, half4 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC half4 max3(half4 x, half4 y, half4 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC half4 median3(half4 x, half4 y, half4 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half4 min(half4 x, half4 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC half4 min3(half4 x, half4 y, half4 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half4 modf(half4 x, thread half4 &intval)
+{
+  intval = __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+  return copysign(select(x - intval, half4(0), isinf(x)), x);
+}
+METAL_FUNC half4 pow(half4 x, half4 y)
+{
+  return __metal_pow(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 powr(half4 x, half4 y)
+{
+  return __metal_powr(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 rint(half4 x)
+{
+  return __metal_rint(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 round(half4 x)
+{
+  return __metal_round(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 rsqrt(half4 x)
+{
+  return __metal_rsqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 sin(half4 x)
+{
+  return __metal_sin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 sincos(half4 x, thread half4 &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 sinh(half4 x)
+{
+  return __metal_sinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC half4 sinpi(half4 x)
+{
+  return __metal_sinpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half4 sqrt(half4 x)
+{
+  return __metal_sqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 tan(half4 x)
+{
+  return __metal_tan(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 tanh(half4 x)
+{
+  return __metal_tanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC half4 tanpi(half4 x)
+{
+  return __metal_tanpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half4 trunc(half4 x)
+{
+  return __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC half8 abs(half8 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 acos(half8 x)
+{
+  return __metal_acos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 acosh(half8 x)
+{
+  return __metal_acosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 asin(half8 x)
+{
+  return __metal_asin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 asinh(half8 x)
+{
+  return __metal_asinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 atan(half8 y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 atan2(half8 y, half8 x)
+{
+  return __metal_atan2(y, x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 atanh(half8 x)
+{
+  return __metal_atanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 ceil(half8 x)
+{
+  return __metal_ceil(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 copysign(half8 x, half8 y)
+{
+  typedef _fp_encoding_traits<half8> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<half8>(res_bits);
+}
+METAL_FUNC half8 cos(half8 x)
+{
+  return __metal_cos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 cosh(half8 x)
+{
+  return __metal_cosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC half8 cospi(half8 x)
+{
+  return __metal_cospi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC half8 divide(half8 x, half8 y)
+{
+  return __metal_divide(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half8 exp(half8 x)
+{
+  return __metal_exp(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 exp10(half8 x)
+{
+  return __metal_exp10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 exp2(half8 x)
+{
+  return __metal_exp2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 fabs(half8 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 fdim(half8 x, half8 y)
+{
+  half8 t = x - y;
+  return select(t, half8(0), t < half8(0) || x == y);
+}
+METAL_FUNC half8 floor(half8 x)
+{
+  return __metal_floor(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC half8 fma(half8 x, half8 y, half8 z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC half8 fmax(half8 x, half8 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC half8 fmax3(half8 x, half8 y, half8 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC half8 fmedian3(half8 x, half8 y, half8 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half8 fmin(half8 x, half8 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC half8 fmin3(half8 x, half8 y, half8 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half8 fmod(half8 x, half8 y)
+{
+  return __metal_fmod(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 fract(half8 x)
+{
+  return __metal_fract(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 frexp(half8 x, thread int8 &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int8 ilogb(half8 x)
+{
+  return __metal_ilogb(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 ldexp(half8 x, int8 k)
+{
+  return __metal_ldexp(x, k, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 log(half8 x)
+{
+  return __metal_log(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 log10(half8 x)
+{
+  return __metal_log10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 log2(half8 x)
+{
+  return __metal_log2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 max(half8 x, half8 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC half8 max3(half8 x, half8 y, half8 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC half8 median3(half8 x, half8 y, half8 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half8 min(half8 x, half8 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC half8 min3(half8 x, half8 y, half8 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half8 modf(half8 x, thread half8 &intval)
+{
+  intval = __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+  return copysign(select(x - intval, half8(0), isinf(x)), x);
+}
+METAL_FUNC half8 pow(half8 x, half8 y)
+{
+  return __metal_pow(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 powr(half8 x, half8 y)
+{
+  return __metal_powr(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 rint(half8 x)
+{
+  return __metal_rint(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 round(half8 x)
+{
+  return __metal_round(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 rsqrt(half8 x)
+{
+  return __metal_rsqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 sin(half8 x)
+{
+  return __metal_sin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 sincos(half8 x, thread half8 &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 sinh(half8 x)
+{
+  return __metal_sinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC half8 sinpi(half8 x)
+{
+  return __metal_sinpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half8 sqrt(half8 x)
+{
+  return __metal_sqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 tan(half8 x)
+{
+  return __metal_tan(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 tanh(half8 x)
+{
+  return __metal_tanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC half8 tanpi(half8 x)
+{
+  return __metal_tanpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half8 trunc(half8 x)
+{
+  return __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC half16 abs(half16 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 acos(half16 x)
+{
+  return __metal_acos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 acosh(half16 x)
+{
+  return __metal_acosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 asin(half16 x)
+{
+  return __metal_asin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 asinh(half16 x)
+{
+  return __metal_asinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 atan(half16 y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 atan2(half16 y, half16 x)
+{
+  return __metal_atan2(y, x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 atanh(half16 x)
+{
+  return __metal_atanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 ceil(half16 x)
+{
+  return __metal_ceil(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 copysign(half16 x, half16 y)
+{
+  typedef _fp_encoding_traits<half16> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<half16>(res_bits);
+}
+METAL_FUNC half16 cos(half16 x)
+{
+  return __metal_cos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 cosh(half16 x)
+{
+  return __metal_cosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC half16 cospi(half16 x)
+{
+  return __metal_cospi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC half16 divide(half16 x, half16 y)
+{
+  return __metal_divide(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half16 exp(half16 x)
+{
+  return __metal_exp(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 exp10(half16 x)
+{
+  return __metal_exp10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 exp2(half16 x)
+{
+  return __metal_exp2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 fabs(half16 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 fdim(half16 x, half16 y)
+{
+  half16 t = x - y;
+  return select(t, half16(0), t < half16(0) || x == y);
+}
+METAL_FUNC half16 floor(half16 x)
+{
+  return __metal_floor(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC half16 fma(half16 x, half16 y, half16 z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC half16 fmax(half16 x, half16 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC half16 fmax3(half16 x, half16 y, half16 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC half16 fmedian3(half16 x, half16 y, half16 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half16 fmin(half16 x, half16 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC half16 fmin3(half16 x, half16 y, half16 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half16 fmod(half16 x, half16 y)
+{
+  return __metal_fmod(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 fract(half16 x)
+{
+  return __metal_fract(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 frexp(half16 x, thread int16 &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int16 ilogb(half16 x)
+{
+  return __metal_ilogb(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 ldexp(half16 x, int16 k)
+{
+  return __metal_ldexp(x, k, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 log(half16 x)
+{
+  return __metal_log(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 log10(half16 x)
+{
+  return __metal_log10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 log2(half16 x)
+{
+  return __metal_log2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 max(half16 x, half16 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC half16 max3(half16 x, half16 y, half16 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC half16 median3(half16 x, half16 y, half16 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half16 min(half16 x, half16 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC half16 min3(half16 x, half16 y, half16 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half16 modf(half16 x, thread half16 &intval)
+{
+  intval = __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+  return copysign(select(x - intval, half16(0), isinf(x)), x);
+}
+METAL_FUNC half16 pow(half16 x, half16 y)
+{
+  return __metal_pow(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 powr(half16 x, half16 y)
+{
+  return __metal_powr(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 rint(half16 x)
+{
+  return __metal_rint(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 round(half16 x)
+{
+  return __metal_round(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 rsqrt(half16 x)
+{
+  return __metal_rsqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 sin(half16 x)
+{
+  return __metal_sin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 sincos(half16 x, thread half16 &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 sinh(half16 x)
+{
+  return __metal_sinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC half16 sinpi(half16 x)
+{
+  return __metal_sinpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half16 sqrt(half16 x)
+{
+  return __metal_sqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 tan(half16 x)
+{
+  return __metal_tan(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 tanh(half16 x)
+{
+  return __metal_tanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC half16 tanpi(half16 x)
+{
+  return __metal_tanpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC half16 trunc(half16 x)
+{
+  return __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float abs(float x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float acos(float x)
+{
+  return __metal_acos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float acosh(float x)
+{
+  return __metal_acosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float asin(float x)
+{
+  return __metal_asin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float asinh(float x)
+{
+  return __metal_asinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float atan(float y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float atan2(float y, float x)
+{
+  return __metal_atan2(y, x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float atanh(float x)
+{
+  return __metal_atanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float ceil(float x)
+{
+  return __metal_ceil(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float copysign(float x, float y)
+{
+  typedef _fp_encoding_traits<float> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<float>(res_bits);
+}
+METAL_FUNC float cos(float x)
+{
+  return __metal_cos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float cosh(float x)
+{
+  return __metal_cosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float cospi(float x)
+{
+  return __metal_cospi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC float divide(float x, float y)
+{
+  return __metal_divide(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float exp(float x)
+{
+  return __metal_exp(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float exp10(float x)
+{
+  return __metal_exp10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float exp2(float x)
+{
+  return __metal_exp2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float fabs(float x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float fdim(float x, float y)
+{
+  float t = x - y;
+  return select(t, float(0), t < float(0) || x == y);
+}
+METAL_FUNC float floor(float x)
+{
+  return __metal_floor(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC float fma(float x, float y, float z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC float fmax(float x, float y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC float fmax3(float x, float y, float z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC float fmedian3(float x, float y, float z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float fmin(float x, float y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC float fmin3(float x, float y, float z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float fmod(float x, float y)
+{
+  return __metal_fmod(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float fract(float x)
+{
+  return __metal_fract(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float frexp(float x, thread int &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int ilogb(float x)
+{
+  return __metal_ilogb(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float ldexp(float x, int k)
+{
+  return __metal_ldexp(x, k, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float log(float x)
+{
+  return __metal_log(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float log10(float x)
+{
+  return __metal_log10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float log2(float x)
+{
+  return __metal_log2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float max(float x, float y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC float max3(float x, float y, float z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC float median3(float x, float y, float z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float min(float x, float y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC float min3(float x, float y, float z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float modf(float x, thread float &intval)
+{
+  intval = __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+  return copysign(select(x - intval, float(0), isinf(x)), x);
+}
+METAL_FUNC float pow(float x, float y)
+{
+  return __metal_pow(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float powr(float x, float y)
+{
+  return __metal_powr(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float rint(float x)
+{
+  return __metal_rint(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float round(float x)
+{
+  return __metal_round(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float rsqrt(float x)
+{
+  return __metal_rsqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float sin(float x)
+{
+  return __metal_sin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float sincos(float x, thread float &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float sinh(float x)
+{
+  return __metal_sinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float sinpi(float x)
+{
+  return __metal_sinpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float sqrt(float x)
+{
+  return __metal_sqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float tan(float x)
+{
+  return __metal_tan(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float tanh(float x)
+{
+  return __metal_tanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float tanpi(float x)
+{
+  return __metal_tanpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float trunc(float x)
+{
+  return __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 abs(float2 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 acos(float2 x)
+{
+  return __metal_acos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 acosh(float2 x)
+{
+  return __metal_acosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 asin(float2 x)
+{
+  return __metal_asin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 asinh(float2 x)
+{
+  return __metal_asinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 atan(float2 y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 atan2(float2 y, float2 x)
+{
+  return __metal_atan2(y, x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 atanh(float2 x)
+{
+  return __metal_atanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 ceil(float2 x)
+{
+  return __metal_ceil(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 copysign(float2 x, float2 y)
+{
+  typedef _fp_encoding_traits<float2> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<float2>(res_bits);
+}
+METAL_FUNC float2 cos(float2 x)
+{
+  return __metal_cos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 cosh(float2 x)
+{
+  return __metal_cosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float2 cospi(float2 x)
+{
+  return __metal_cospi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC float2 divide(float2 x, float2 y)
+{
+  return __metal_divide(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float2 exp(float2 x)
+{
+  return __metal_exp(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 exp10(float2 x)
+{
+  return __metal_exp10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 exp2(float2 x)
+{
+  return __metal_exp2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 fabs(float2 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 fdim(float2 x, float2 y)
+{
+  float2 t = x - y;
+  return select(t, float2(0), t < float2(0) || x == y);
+}
+METAL_FUNC float2 floor(float2 x)
+{
+  return __metal_floor(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC float2 fma(float2 x, float2 y, float2 z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC float2 fmax(float2 x, float2 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC float2 fmax3(float2 x, float2 y, float2 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC float2 fmedian3(float2 x, float2 y, float2 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float2 fmin(float2 x, float2 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC float2 fmin3(float2 x, float2 y, float2 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float2 fmod(float2 x, float2 y)
+{
+  return __metal_fmod(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 fract(float2 x)
+{
+  return __metal_fract(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 frexp(float2 x, thread int2 &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int2 ilogb(float2 x)
+{
+  return __metal_ilogb(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 ldexp(float2 x, int2 k)
+{
+  return __metal_ldexp(x, k, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 log(float2 x)
+{
+  return __metal_log(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 log10(float2 x)
+{
+  return __metal_log10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 log2(float2 x)
+{
+  return __metal_log2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 max(float2 x, float2 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC float2 max3(float2 x, float2 y, float2 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC float2 median3(float2 x, float2 y, float2 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float2 min(float2 x, float2 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC float2 min3(float2 x, float2 y, float2 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float2 modf(float2 x, thread float2 &intval)
+{
+  intval = __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+  return copysign(select(x - intval, float2(0), isinf(x)), x);
+}
+METAL_FUNC float2 pow(float2 x, float2 y)
+{
+  return __metal_pow(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 powr(float2 x, float2 y)
+{
+  return __metal_powr(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 rint(float2 x)
+{
+  return __metal_rint(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 round(float2 x)
+{
+  return __metal_round(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 rsqrt(float2 x)
+{
+  return __metal_rsqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 sin(float2 x)
+{
+  return __metal_sin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 sincos(float2 x, thread float2 &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 sinh(float2 x)
+{
+  return __metal_sinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float2 sinpi(float2 x)
+{
+  return __metal_sinpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float2 sqrt(float2 x)
+{
+  return __metal_sqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 tan(float2 x)
+{
+  return __metal_tan(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 tanh(float2 x)
+{
+  return __metal_tanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float2 tanpi(float2 x)
+{
+  return __metal_tanpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float2 trunc(float2 x)
+{
+  return __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 abs(float3 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 acos(float3 x)
+{
+  return __metal_acos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 acosh(float3 x)
+{
+  return __metal_acosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 asin(float3 x)
+{
+  return __metal_asin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 asinh(float3 x)
+{
+  return __metal_asinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 atan(float3 y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 atan2(float3 y, float3 x)
+{
+  return __metal_atan2(y, x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 atanh(float3 x)
+{
+  return __metal_atanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 ceil(float3 x)
+{
+  return __metal_ceil(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 copysign(float3 x, float3 y)
+{
+  typedef _fp_encoding_traits<float3> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<float3>(res_bits);
+}
+METAL_FUNC float3 cos(float3 x)
+{
+  return __metal_cos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 cosh(float3 x)
+{
+  return __metal_cosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float3 cospi(float3 x)
+{
+  return __metal_cospi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC float3 divide(float3 x, float3 y)
+{
+  return __metal_divide(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float3 exp(float3 x)
+{
+  return __metal_exp(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 exp10(float3 x)
+{
+  return __metal_exp10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 exp2(float3 x)
+{
+  return __metal_exp2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 fabs(float3 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 fdim(float3 x, float3 y)
+{
+  float3 t = x - y;
+  return select(t, float3(0), t < float3(0) || x == y);
+}
+METAL_FUNC float3 floor(float3 x)
+{
+  return __metal_floor(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC float3 fma(float3 x, float3 y, float3 z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC float3 fmax(float3 x, float3 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC float3 fmax3(float3 x, float3 y, float3 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC float3 fmedian3(float3 x, float3 y, float3 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float3 fmin(float3 x, float3 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC float3 fmin3(float3 x, float3 y, float3 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float3 fmod(float3 x, float3 y)
+{
+  return __metal_fmod(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 fract(float3 x)
+{
+  return __metal_fract(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 frexp(float3 x, thread int3 &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int3 ilogb(float3 x)
+{
+  return __metal_ilogb(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 ldexp(float3 x, int3 k)
+{
+  return __metal_ldexp(x, k, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 log(float3 x)
+{
+  return __metal_log(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 log10(float3 x)
+{
+  return __metal_log10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 log2(float3 x)
+{
+  return __metal_log2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 max(float3 x, float3 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC float3 max3(float3 x, float3 y, float3 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC float3 median3(float3 x, float3 y, float3 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float3 min(float3 x, float3 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC float3 min3(float3 x, float3 y, float3 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float3 modf(float3 x, thread float3 &intval)
+{
+  intval = __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+  return copysign(select(x - intval, float3(0), isinf(x)), x);
+}
+METAL_FUNC float3 pow(float3 x, float3 y)
+{
+  return __metal_pow(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 powr(float3 x, float3 y)
+{
+  return __metal_powr(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 rint(float3 x)
+{
+  return __metal_rint(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 round(float3 x)
+{
+  return __metal_round(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 rsqrt(float3 x)
+{
+  return __metal_rsqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 sin(float3 x)
+{
+  return __metal_sin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 sincos(float3 x, thread float3 &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 sinh(float3 x)
+{
+  return __metal_sinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float3 sinpi(float3 x)
+{
+  return __metal_sinpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float3 sqrt(float3 x)
+{
+  return __metal_sqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 tan(float3 x)
+{
+  return __metal_tan(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 tanh(float3 x)
+{
+  return __metal_tanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float3 tanpi(float3 x)
+{
+  return __metal_tanpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float3 trunc(float3 x)
+{
+  return __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 abs(float4 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 acos(float4 x)
+{
+  return __metal_acos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 acosh(float4 x)
+{
+  return __metal_acosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 asin(float4 x)
+{
+  return __metal_asin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 asinh(float4 x)
+{
+  return __metal_asinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 atan(float4 y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 atan2(float4 y, float4 x)
+{
+  return __metal_atan2(y, x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 atanh(float4 x)
+{
+  return __metal_atanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 ceil(float4 x)
+{
+  return __metal_ceil(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 copysign(float4 x, float4 y)
+{
+  typedef _fp_encoding_traits<float4> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<float4>(res_bits);
+}
+METAL_FUNC float4 cos(float4 x)
+{
+  return __metal_cos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 cosh(float4 x)
+{
+  return __metal_cosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float4 cospi(float4 x)
+{
+  return __metal_cospi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC float4 divide(float4 x, float4 y)
+{
+  return __metal_divide(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float4 exp(float4 x)
+{
+  return __metal_exp(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 exp10(float4 x)
+{
+  return __metal_exp10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 exp2(float4 x)
+{
+  return __metal_exp2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 fabs(float4 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 fdim(float4 x, float4 y)
+{
+  float4 t = x - y;
+  return select(t, float4(0), t < float4(0) || x == y);
+}
+METAL_FUNC float4 floor(float4 x)
+{
+  return __metal_floor(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC float4 fma(float4 x, float4 y, float4 z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC float4 fmax(float4 x, float4 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC float4 fmax3(float4 x, float4 y, float4 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC float4 fmedian3(float4 x, float4 y, float4 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float4 fmin(float4 x, float4 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC float4 fmin3(float4 x, float4 y, float4 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float4 fmod(float4 x, float4 y)
+{
+  return __metal_fmod(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 fract(float4 x)
+{
+  return __metal_fract(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 frexp(float4 x, thread int4 &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int4 ilogb(float4 x)
+{
+  return __metal_ilogb(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 ldexp(float4 x, int4 k)
+{
+  return __metal_ldexp(x, k, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 log(float4 x)
+{
+  return __metal_log(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 log10(float4 x)
+{
+  return __metal_log10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 log2(float4 x)
+{
+  return __metal_log2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 max(float4 x, float4 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC float4 max3(float4 x, float4 y, float4 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC float4 median3(float4 x, float4 y, float4 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float4 min(float4 x, float4 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC float4 min3(float4 x, float4 y, float4 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float4 modf(float4 x, thread float4 &intval)
+{
+  intval = __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+  return copysign(select(x - intval, float4(0), isinf(x)), x);
+}
+METAL_FUNC float4 pow(float4 x, float4 y)
+{
+  return __metal_pow(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 powr(float4 x, float4 y)
+{
+  return __metal_powr(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 rint(float4 x)
+{
+  return __metal_rint(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 round(float4 x)
+{
+  return __metal_round(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 rsqrt(float4 x)
+{
+  return __metal_rsqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 sin(float4 x)
+{
+  return __metal_sin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 sincos(float4 x, thread float4 &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 sinh(float4 x)
+{
+  return __metal_sinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float4 sinpi(float4 x)
+{
+  return __metal_sinpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float4 sqrt(float4 x)
+{
+  return __metal_sqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 tan(float4 x)
+{
+  return __metal_tan(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 tanh(float4 x)
+{
+  return __metal_tanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float4 tanpi(float4 x)
+{
+  return __metal_tanpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float4 trunc(float4 x)
+{
+  return __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC float8 abs(float8 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 acos(float8 x)
+{
+  return __metal_acos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 acosh(float8 x)
+{
+  return __metal_acosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 asin(float8 x)
+{
+  return __metal_asin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 asinh(float8 x)
+{
+  return __metal_asinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 atan(float8 y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 atan2(float8 y, float8 x)
+{
+  return __metal_atan2(y, x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 atanh(float8 x)
+{
+  return __metal_atanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 ceil(float8 x)
+{
+  return __metal_ceil(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 copysign(float8 x, float8 y)
+{
+  typedef _fp_encoding_traits<float8> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<float8>(res_bits);
+}
+METAL_FUNC float8 cos(float8 x)
+{
+  return __metal_cos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 cosh(float8 x)
+{
+  return __metal_cosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float8 cospi(float8 x)
+{
+  return __metal_cospi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC float8 divide(float8 x, float8 y)
+{
+  return __metal_divide(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float8 exp(float8 x)
+{
+  return __metal_exp(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 exp10(float8 x)
+{
+  return __metal_exp10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 exp2(float8 x)
+{
+  return __metal_exp2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 fabs(float8 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 fdim(float8 x, float8 y)
+{
+  float8 t = x - y;
+  return select(t, float8(0), t < float8(0) || x == y);
+}
+METAL_FUNC float8 floor(float8 x)
+{
+  return __metal_floor(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC float8 fma(float8 x, float8 y, float8 z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC float8 fmax(float8 x, float8 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC float8 fmax3(float8 x, float8 y, float8 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC float8 fmedian3(float8 x, float8 y, float8 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float8 fmin(float8 x, float8 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC float8 fmin3(float8 x, float8 y, float8 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float8 fmod(float8 x, float8 y)
+{
+  return __metal_fmod(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 fract(float8 x)
+{
+  return __metal_fract(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 frexp(float8 x, thread int8 &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int8 ilogb(float8 x)
+{
+  return __metal_ilogb(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 ldexp(float8 x, int8 k)
+{
+  return __metal_ldexp(x, k, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 log(float8 x)
+{
+  return __metal_log(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 log10(float8 x)
+{
+  return __metal_log10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 log2(float8 x)
+{
+  return __metal_log2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 max(float8 x, float8 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC float8 max3(float8 x, float8 y, float8 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC float8 median3(float8 x, float8 y, float8 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float8 min(float8 x, float8 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC float8 min3(float8 x, float8 y, float8 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float8 modf(float8 x, thread float8 &intval)
+{
+  intval = __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+  return copysign(select(x - intval, float8(0), isinf(x)), x);
+}
+METAL_FUNC float8 pow(float8 x, float8 y)
+{
+  return __metal_pow(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 powr(float8 x, float8 y)
+{
+  return __metal_powr(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 rint(float8 x)
+{
+  return __metal_rint(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 round(float8 x)
+{
+  return __metal_round(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 rsqrt(float8 x)
+{
+  return __metal_rsqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 sin(float8 x)
+{
+  return __metal_sin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 sincos(float8 x, thread float8 &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 sinh(float8 x)
+{
+  return __metal_sinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float8 sinpi(float8 x)
+{
+  return __metal_sinpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float8 sqrt(float8 x)
+{
+  return __metal_sqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 tan(float8 x)
+{
+  return __metal_tan(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 tanh(float8 x)
+{
+  return __metal_tanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float8 tanpi(float8 x)
+{
+  return __metal_tanpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float8 trunc(float8 x)
+{
+  return __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC float16 abs(float16 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 acos(float16 x)
+{
+  return __metal_acos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 acosh(float16 x)
+{
+  return __metal_acosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 asin(float16 x)
+{
+  return __metal_asin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 asinh(float16 x)
+{
+  return __metal_asinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 atan(float16 y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 atan2(float16 y, float16 x)
+{
+  return __metal_atan2(y, x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 atanh(float16 x)
+{
+  return __metal_atanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 ceil(float16 x)
+{
+  return __metal_ceil(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 copysign(float16 x, float16 y)
+{
+  typedef _fp_encoding_traits<float16> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<float16>(res_bits);
+}
+METAL_FUNC float16 cos(float16 x)
+{
+  return __metal_cos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 cosh(float16 x)
+{
+  return __metal_cosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float16 cospi(float16 x)
+{
+  return __metal_cospi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC float16 divide(float16 x, float16 y)
+{
+  return __metal_divide(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float16 exp(float16 x)
+{
+  return __metal_exp(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 exp10(float16 x)
+{
+  return __metal_exp10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 exp2(float16 x)
+{
+  return __metal_exp2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 fabs(float16 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 fdim(float16 x, float16 y)
+{
+  float16 t = x - y;
+  return select(t, float16(0), t < float16(0) || x == y);
+}
+METAL_FUNC float16 floor(float16 x)
+{
+  return __metal_floor(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC float16 fma(float16 x, float16 y, float16 z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC float16 fmax(float16 x, float16 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC float16 fmax3(float16 x, float16 y, float16 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC float16 fmedian3(float16 x, float16 y, float16 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float16 fmin(float16 x, float16 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC float16 fmin3(float16 x, float16 y, float16 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float16 fmod(float16 x, float16 y)
+{
+  return __metal_fmod(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 fract(float16 x)
+{
+  return __metal_fract(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 frexp(float16 x, thread int16 &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int16 ilogb(float16 x)
+{
+  return __metal_ilogb(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 ldexp(float16 x, int16 k)
+{
+  return __metal_ldexp(x, k, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 log(float16 x)
+{
+  return __metal_log(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 log10(float16 x)
+{
+  return __metal_log10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 log2(float16 x)
+{
+  return __metal_log2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 max(float16 x, float16 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC float16 max3(float16 x, float16 y, float16 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC float16 median3(float16 x, float16 y, float16 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float16 min(float16 x, float16 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC float16 min3(float16 x, float16 y, float16 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float16 modf(float16 x, thread float16 &intval)
+{
+  intval = __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+  return copysign(select(x - intval, float16(0), isinf(x)), x);
+}
+METAL_FUNC float16 pow(float16 x, float16 y)
+{
+  return __metal_pow(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 powr(float16 x, float16 y)
+{
+  return __metal_powr(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 rint(float16 x)
+{
+  return __metal_rint(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 round(float16 x)
+{
+  return __metal_round(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 rsqrt(float16 x)
+{
+  return __metal_rsqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 sin(float16 x)
+{
+  return __metal_sin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 sincos(float16 x, thread float16 &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 sinh(float16 x)
+{
+  return __metal_sinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float16 sinpi(float16 x)
+{
+  return __metal_sinpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float16 sqrt(float16 x)
+{
+  return __metal_sqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 tan(float16 x)
+{
+  return __metal_tan(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 tanh(float16 x)
+{
+  return __metal_tanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC float16 tanpi(float16 x)
+{
+  return __metal_tanpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float16 trunc(float16 x)
+{
+  return __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double abs(double x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double acos(double x)
+{
+  return __metal_acos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double acosh(double x)
+{
+  return __metal_acosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double asin(double x)
+{
+  return __metal_asin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double asinh(double x)
+{
+  return __metal_asinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double atan(double y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double atan2(double y, double x)
+{
+  return __metal_atan2(y, x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double atanh(double x)
+{
+  return __metal_atanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double ceil(double x)
+{
+  return __metal_ceil(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double copysign(double x, double y)
+{
+  typedef _fp_encoding_traits<double> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<double>(res_bits);
+}
+METAL_FUNC double cos(double x)
+{
+  return __metal_cos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double cosh(double x)
+{
+  return __metal_cosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC double cospi(double x)
+{
+  return __metal_cospi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC double divide(double x, double y)
+{
+  return __metal_divide(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double exp(double x)
+{
+  return __metal_exp(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double exp10(double x)
+{
+  return __metal_exp10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double exp2(double x)
+{
+  return __metal_exp2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double fabs(double x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double fdim(double x, double y)
+{
+  double t = x - y;
+  return select(t, double(0), t < double(0) || x == y);
+}
+METAL_FUNC double floor(double x)
+{
+  return __metal_floor(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC double fma(double x, double y, double z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC double fmax(double x, double y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC double fmax3(double x, double y, double z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC double fmedian3(double x, double y, double z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double fmin(double x, double y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC double fmin3(double x, double y, double z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double fmod(double x, double y)
+{
+  return __metal_fmod(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double fract(double x)
+{
+  return __metal_fract(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double frexp(double x, thread int &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int ilogb(double x)
+{
+  return __metal_ilogb(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double ldexp(double x, int k)
+{
+  return __metal_ldexp(x, k, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double log(double x)
+{
+  return __metal_log(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double log10(double x)
+{
+  return __metal_log10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double log2(double x)
+{
+  return __metal_log2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double max(double x, double y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC double max3(double x, double y, double z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC double median3(double x, double y, double z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double min(double x, double y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC double min3(double x, double y, double z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double modf(double x, thread double &intval)
+{
+  intval = __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+  return copysign(select(x - intval, double(0), isinf(x)), x);
+}
+METAL_FUNC double pow(double x, double y)
+{
+  return __metal_pow(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double powr(double x, double y)
+{
+  return __metal_powr(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double rint(double x)
+{
+  return __metal_rint(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double round(double x)
+{
+  return __metal_round(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double rsqrt(double x)
+{
+  return __metal_rsqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double sin(double x)
+{
+  return __metal_sin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double sincos(double x, thread double &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double sinh(double x)
+{
+  return __metal_sinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC double sinpi(double x)
+{
+  return __metal_sinpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double sqrt(double x)
+{
+  return __metal_sqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double tan(double x)
+{
+  return __metal_tan(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double tanh(double x)
+{
+  return __metal_tanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC double tanpi(double x)
+{
+  return __metal_tanpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double trunc(double x)
+{
+  return __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double2 abs(double2 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 acos(double2 x)
+{
+  return __metal_acos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 acosh(double2 x)
+{
+  return __metal_acosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 asin(double2 x)
+{
+  return __metal_asin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 asinh(double2 x)
+{
+  return __metal_asinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 atan(double2 y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 atan2(double2 y, double2 x)
+{
+  return __metal_atan2(y, x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 atanh(double2 x)
+{
+  return __metal_atanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 ceil(double2 x)
+{
+  return __metal_ceil(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 copysign(double2 x, double2 y)
+{
+  typedef _fp_encoding_traits<double2> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<double2>(res_bits);
+}
+METAL_FUNC double2 cos(double2 x)
+{
+  return __metal_cos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 cosh(double2 x)
+{
+  return __metal_cosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC double2 cospi(double2 x)
+{
+  return __metal_cospi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC double2 divide(double2 x, double2 y)
+{
+  return __metal_divide(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double2 exp(double2 x)
+{
+  return __metal_exp(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 exp10(double2 x)
+{
+  return __metal_exp10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 exp2(double2 x)
+{
+  return __metal_exp2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 fabs(double2 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 fdim(double2 x, double2 y)
+{
+  double2 t = x - y;
+  return select(t, double2(0), t < double2(0) || x == y);
+}
+METAL_FUNC double2 floor(double2 x)
+{
+  return __metal_floor(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC double2 fma(double2 x, double2 y, double2 z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC double2 fmax(double2 x, double2 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC double2 fmax3(double2 x, double2 y, double2 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC double2 fmedian3(double2 x, double2 y, double2 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double2 fmin(double2 x, double2 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC double2 fmin3(double2 x, double2 y, double2 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double2 fmod(double2 x, double2 y)
+{
+  return __metal_fmod(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 fract(double2 x)
+{
+  return __metal_fract(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 frexp(double2 x, thread int2 &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int2 ilogb(double2 x)
+{
+  return __metal_ilogb(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 ldexp(double2 x, int2 k)
+{
+  return __metal_ldexp(x, k, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 log(double2 x)
+{
+  return __metal_log(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 log10(double2 x)
+{
+  return __metal_log10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 log2(double2 x)
+{
+  return __metal_log2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 max(double2 x, double2 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC double2 max3(double2 x, double2 y, double2 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC double2 median3(double2 x, double2 y, double2 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double2 min(double2 x, double2 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC double2 min3(double2 x, double2 y, double2 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double2 modf(double2 x, thread double2 &intval)
+{
+  intval = __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+  return copysign(select(x - intval, double2(0), isinf(x)), x);
+}
+METAL_FUNC double2 pow(double2 x, double2 y)
+{
+  return __metal_pow(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 powr(double2 x, double2 y)
+{
+  return __metal_powr(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 rint(double2 x)
+{
+  return __metal_rint(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 round(double2 x)
+{
+  return __metal_round(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 rsqrt(double2 x)
+{
+  return __metal_rsqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 sin(double2 x)
+{
+  return __metal_sin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 sincos(double2 x, thread double2 &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 sinh(double2 x)
+{
+  return __metal_sinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC double2 sinpi(double2 x)
+{
+  return __metal_sinpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double2 sqrt(double2 x)
+{
+  return __metal_sqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 tan(double2 x)
+{
+  return __metal_tan(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 tanh(double2 x)
+{
+  return __metal_tanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC double2 tanpi(double2 x)
+{
+  return __metal_tanpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double2 trunc(double2 x)
+{
+  return __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double3 abs(double3 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 acos(double3 x)
+{
+  return __metal_acos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 acosh(double3 x)
+{
+  return __metal_acosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 asin(double3 x)
+{
+  return __metal_asin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 asinh(double3 x)
+{
+  return __metal_asinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 atan(double3 y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 atan2(double3 y, double3 x)
+{
+  return __metal_atan2(y, x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 atanh(double3 x)
+{
+  return __metal_atanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 ceil(double3 x)
+{
+  return __metal_ceil(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 copysign(double3 x, double3 y)
+{
+  typedef _fp_encoding_traits<double3> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<double3>(res_bits);
+}
+METAL_FUNC double3 cos(double3 x)
+{
+  return __metal_cos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 cosh(double3 x)
+{
+  return __metal_cosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC double3 cospi(double3 x)
+{
+  return __metal_cospi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC double3 divide(double3 x, double3 y)
+{
+  return __metal_divide(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double3 exp(double3 x)
+{
+  return __metal_exp(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 exp10(double3 x)
+{
+  return __metal_exp10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 exp2(double3 x)
+{
+  return __metal_exp2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 fabs(double3 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 fdim(double3 x, double3 y)
+{
+  double3 t = x - y;
+  return select(t, double3(0), t < double3(0) || x == y);
+}
+METAL_FUNC double3 floor(double3 x)
+{
+  return __metal_floor(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC double3 fma(double3 x, double3 y, double3 z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC double3 fmax(double3 x, double3 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC double3 fmax3(double3 x, double3 y, double3 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC double3 fmedian3(double3 x, double3 y, double3 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double3 fmin(double3 x, double3 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC double3 fmin3(double3 x, double3 y, double3 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double3 fmod(double3 x, double3 y)
+{
+  return __metal_fmod(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 fract(double3 x)
+{
+  return __metal_fract(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 frexp(double3 x, thread int3 &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int3 ilogb(double3 x)
+{
+  return __metal_ilogb(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 ldexp(double3 x, int3 k)
+{
+  return __metal_ldexp(x, k, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 log(double3 x)
+{
+  return __metal_log(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 log10(double3 x)
+{
+  return __metal_log10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 log2(double3 x)
+{
+  return __metal_log2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 max(double3 x, double3 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC double3 max3(double3 x, double3 y, double3 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC double3 median3(double3 x, double3 y, double3 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double3 min(double3 x, double3 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC double3 min3(double3 x, double3 y, double3 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double3 modf(double3 x, thread double3 &intval)
+{
+  intval = __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+  return copysign(select(x - intval, double3(0), isinf(x)), x);
+}
+METAL_FUNC double3 pow(double3 x, double3 y)
+{
+  return __metal_pow(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 powr(double3 x, double3 y)
+{
+  return __metal_powr(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 rint(double3 x)
+{
+  return __metal_rint(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 round(double3 x)
+{
+  return __metal_round(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 rsqrt(double3 x)
+{
+  return __metal_rsqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 sin(double3 x)
+{
+  return __metal_sin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 sincos(double3 x, thread double3 &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 sinh(double3 x)
+{
+  return __metal_sinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC double3 sinpi(double3 x)
+{
+  return __metal_sinpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double3 sqrt(double3 x)
+{
+  return __metal_sqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 tan(double3 x)
+{
+  return __metal_tan(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 tanh(double3 x)
+{
+  return __metal_tanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC double3 tanpi(double3 x)
+{
+  return __metal_tanpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double3 trunc(double3 x)
+{
+  return __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double4 abs(double4 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 acos(double4 x)
+{
+  return __metal_acos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 acosh(double4 x)
+{
+  return __metal_acosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 asin(double4 x)
+{
+  return __metal_asin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 asinh(double4 x)
+{
+  return __metal_asinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 atan(double4 y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 atan2(double4 y, double4 x)
+{
+  return __metal_atan2(y, x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 atanh(double4 x)
+{
+  return __metal_atanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 ceil(double4 x)
+{
+  return __metal_ceil(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 copysign(double4 x, double4 y)
+{
+  typedef _fp_encoding_traits<double4> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<double4>(res_bits);
+}
+METAL_FUNC double4 cos(double4 x)
+{
+  return __metal_cos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 cosh(double4 x)
+{
+  return __metal_cosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC double4 cospi(double4 x)
+{
+  return __metal_cospi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC double4 divide(double4 x, double4 y)
+{
+  return __metal_divide(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double4 exp(double4 x)
+{
+  return __metal_exp(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 exp10(double4 x)
+{
+  return __metal_exp10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 exp2(double4 x)
+{
+  return __metal_exp2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 fabs(double4 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 fdim(double4 x, double4 y)
+{
+  double4 t = x - y;
+  return select(t, double4(0), t < double4(0) || x == y);
+}
+METAL_FUNC double4 floor(double4 x)
+{
+  return __metal_floor(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC double4 fma(double4 x, double4 y, double4 z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC double4 fmax(double4 x, double4 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC double4 fmax3(double4 x, double4 y, double4 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC double4 fmedian3(double4 x, double4 y, double4 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double4 fmin(double4 x, double4 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC double4 fmin3(double4 x, double4 y, double4 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double4 fmod(double4 x, double4 y)
+{
+  return __metal_fmod(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 fract(double4 x)
+{
+  return __metal_fract(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 frexp(double4 x, thread int4 &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int4 ilogb(double4 x)
+{
+  return __metal_ilogb(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 ldexp(double4 x, int4 k)
+{
+  return __metal_ldexp(x, k, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 log(double4 x)
+{
+  return __metal_log(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 log10(double4 x)
+{
+  return __metal_log10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 log2(double4 x)
+{
+  return __metal_log2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 max(double4 x, double4 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC double4 max3(double4 x, double4 y, double4 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC double4 median3(double4 x, double4 y, double4 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double4 min(double4 x, double4 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC double4 min3(double4 x, double4 y, double4 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double4 modf(double4 x, thread double4 &intval)
+{
+  intval = __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+  return copysign(select(x - intval, double4(0), isinf(x)), x);
+}
+METAL_FUNC double4 pow(double4 x, double4 y)
+{
+  return __metal_pow(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 powr(double4 x, double4 y)
+{
+  return __metal_powr(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 rint(double4 x)
+{
+  return __metal_rint(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 round(double4 x)
+{
+  return __metal_round(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 rsqrt(double4 x)
+{
+  return __metal_rsqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 sin(double4 x)
+{
+  return __metal_sin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 sincos(double4 x, thread double4 &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 sinh(double4 x)
+{
+  return __metal_sinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC double4 sinpi(double4 x)
+{
+  return __metal_sinpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double4 sqrt(double4 x)
+{
+  return __metal_sqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 tan(double4 x)
+{
+  return __metal_tan(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 tanh(double4 x)
+{
+  return __metal_tanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC double4 tanpi(double4 x)
+{
+  return __metal_tanpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double4 trunc(double4 x)
+{
+  return __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double8 abs(double8 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 acos(double8 x)
+{
+  return __metal_acos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 acosh(double8 x)
+{
+  return __metal_acosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 asin(double8 x)
+{
+  return __metal_asin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 asinh(double8 x)
+{
+  return __metal_asinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 atan(double8 y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 atan2(double8 y, double8 x)
+{
+  return __metal_atan2(y, x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 atanh(double8 x)
+{
+  return __metal_atanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 ceil(double8 x)
+{
+  return __metal_ceil(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 copysign(double8 x, double8 y)
+{
+  typedef _fp_encoding_traits<double8> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<double8>(res_bits);
+}
+METAL_FUNC double8 cos(double8 x)
+{
+  return __metal_cos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 cosh(double8 x)
+{
+  return __metal_cosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC double8 cospi(double8 x)
+{
+  return __metal_cospi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC double8 divide(double8 x, double8 y)
+{
+  return __metal_divide(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double8 exp(double8 x)
+{
+  return __metal_exp(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 exp10(double8 x)
+{
+  return __metal_exp10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 exp2(double8 x)
+{
+  return __metal_exp2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 fabs(double8 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 fdim(double8 x, double8 y)
+{
+  double8 t = x - y;
+  return select(t, double8(0), t < double8(0) || x == y);
+}
+METAL_FUNC double8 floor(double8 x)
+{
+  return __metal_floor(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC double8 fma(double8 x, double8 y, double8 z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC double8 fmax(double8 x, double8 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC double8 fmax3(double8 x, double8 y, double8 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC double8 fmedian3(double8 x, double8 y, double8 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double8 fmin(double8 x, double8 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC double8 fmin3(double8 x, double8 y, double8 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double8 fmod(double8 x, double8 y)
+{
+  return __metal_fmod(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 fract(double8 x)
+{
+  return __metal_fract(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 frexp(double8 x, thread int8 &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int8 ilogb(double8 x)
+{
+  return __metal_ilogb(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 ldexp(double8 x, int8 k)
+{
+  return __metal_ldexp(x, k, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 log(double8 x)
+{
+  return __metal_log(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 log10(double8 x)
+{
+  return __metal_log10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 log2(double8 x)
+{
+  return __metal_log2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 max(double8 x, double8 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC double8 max3(double8 x, double8 y, double8 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC double8 median3(double8 x, double8 y, double8 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double8 min(double8 x, double8 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC double8 min3(double8 x, double8 y, double8 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double8 modf(double8 x, thread double8 &intval)
+{
+  intval = __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+  return copysign(select(x - intval, double8(0), isinf(x)), x);
+}
+METAL_FUNC double8 pow(double8 x, double8 y)
+{
+  return __metal_pow(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 powr(double8 x, double8 y)
+{
+  return __metal_powr(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 rint(double8 x)
+{
+  return __metal_rint(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 round(double8 x)
+{
+  return __metal_round(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 rsqrt(double8 x)
+{
+  return __metal_rsqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 sin(double8 x)
+{
+  return __metal_sin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 sincos(double8 x, thread double8 &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 sinh(double8 x)
+{
+  return __metal_sinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC double8 sinpi(double8 x)
+{
+  return __metal_sinpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double8 sqrt(double8 x)
+{
+  return __metal_sqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 tan(double8 x)
+{
+  return __metal_tan(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 tanh(double8 x)
+{
+  return __metal_tanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC double8 tanpi(double8 x)
+{
+  return __metal_tanpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double8 trunc(double8 x)
+{
+  return __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double16 abs(double16 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 acos(double16 x)
+{
+  return __metal_acos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 acosh(double16 x)
+{
+  return __metal_acosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 asin(double16 x)
+{
+  return __metal_asin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 asinh(double16 x)
+{
+  return __metal_asinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 atan(double16 y_over_x)
+{
+  return __metal_atan(y_over_x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 atan2(double16 y, double16 x)
+{
+  return __metal_atan2(y, x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 atanh(double16 x)
+{
+  return __metal_atanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 ceil(double16 x)
+{
+  return __metal_ceil(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 copysign(double16 x, double16 y)
+{
+  typedef _fp_encoding_traits<double16> traits;
+  typedef typename traits::encoding_type bits;
+  bits y_signbit = as_type<bits>(y) & traits::sign_mask;
+  bits res_bits = (as_type<bits>(x) & ~traits::sign_mask) | y_signbit;
+  return as_type<double16>(res_bits);
+}
+METAL_FUNC double16 cos(double16 x)
+{
+  return __metal_cos(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 cosh(double16 x)
+{
+  return __metal_cosh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC double16 cospi(double16 x)
+{
+  return __metal_cospi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_DIVIDE__)
+METAL_FUNC double16 divide(double16 x, double16 y)
+{
+  return __metal_divide(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double16 exp(double16 x)
+{
+  return __metal_exp(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 exp10(double16 x)
+{
+  return __metal_exp10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 exp2(double16 x)
+{
+  return __metal_exp2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 fabs(double16 x)
+{
+  return __metal_fabs(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 fdim(double16 x, double16 y)
+{
+  double16 t = x - y;
+  return select(t, double16(0), t < double16(0) || x == y);
+}
+METAL_FUNC double16 floor(double16 x)
+{
+  return __metal_floor(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMA__)
+METAL_FUNC double16 fma(double16 x, double16 y, double16 z)
+{
+  return __metal_fma(x, y, z);
+}
+#endif
+METAL_FUNC double16 fmax(double16 x, double16 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMAX3__)
+METAL_FUNC double16 fmax3(double16 x, double16 y, double16 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+METAL_FUNC double16 fmedian3(double16 x, double16 y, double16 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double16 fmin(double16 x, double16 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_FMIN3__)
+METAL_FUNC double16 fmin3(double16 x, double16 y, double16 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double16 fmod(double16 x, double16 y)
+{
+  return __metal_fmod(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 fract(double16 x)
+{
+  return __metal_fract(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 frexp(double16 x, thread int16 &exp)
+{
+  return __metal_frexp(x, &exp);
+}
+METAL_FUNC int16 ilogb(double16 x)
+{
+  return __metal_ilogb(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 ldexp(double16 x, int16 k)
+{
+  return __metal_ldexp(x, k, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 log(double16 x)
+{
+  return __metal_log(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 log10(double16 x)
+{
+  return __metal_log10(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 log2(double16 x)
+{
+  return __metal_log2(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 max(double16 x, double16 y)
+{
+  return __metal_fmax(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC double16 max3(double16 x, double16 y, double16 z)
+{
+  return __metal_fmax3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC double16 median3(double16 x, double16 y, double16 z)
+{
+  return __metal_fmedian3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double16 min(double16 x, double16 y)
+{
+  return __metal_fmin(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC double16 min3(double16 x, double16 y, double16 z)
+{
+  return __metal_fmin3(x, y, z, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double16 modf(double16 x, thread double16 &intval)
+{
+  intval = __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+  return copysign(select(x - intval, double16(0), isinf(x)), x);
+}
+METAL_FUNC double16 pow(double16 x, double16 y)
+{
+  return __metal_pow(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 powr(double16 x, double16 y)
+{
+  return __metal_powr(x, y, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 rint(double16 x)
+{
+  return __metal_rint(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 round(double16 x)
+{
+  return __metal_round(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 rsqrt(double16 x)
+{
+  return __metal_rsqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 sin(double16 x)
+{
+  return __metal_sin(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 sincos(double16 x, thread double16 &cosval)
+{
+  return __metal_sincos(x, &cosval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 sinh(double16 x)
+{
+  return __metal_sinh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC double16 sinpi(double16 x)
+{
+  return __metal_sinpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double16 sqrt(double16 x)
+{
+  return __metal_sqrt(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 tan(double16 x)
+{
+  return __metal_tan(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 tanh(double16 x)
+{
+  return __metal_tanh(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_TRIG_PI__)
+METAL_FUNC double16 tanpi(double16 x)
+{
+  return __metal_tanpi(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC double16 trunc(double16 x)
+{
+  return __metal_trunc(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#endif
+} // namespace metal
+
+#endif // __METAL_MATH

@@ -1,0 +1,258 @@
+// -*- Metal -*-
+//===-- metal_graphics ----------------------------------------------------===//
+// Copyright (c) 2014-2020 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_GRAPHICS
+#define __METAL_GRAPHICS
+
+namespace metal
+{
+// Metal 1.1 s5.9: Graphics Functions.
+
+// Metal 1.1 s5.9.1.1: Fragment Functions -- Derivatives.
+
+METAL_FUNC half dfdx(half p)
+{
+  return __metal_dfdx(p);
+}
+METAL_FUNC half dfdy(half p)
+{
+  return __metal_dfdy(p);
+}
+METAL_FUNC half fwidth(half p)
+{
+  return __metal_fwidth(p);
+}
+METAL_FUNC half2 dfdx(half2 p)
+{
+  return __metal_dfdx(p);
+}
+METAL_FUNC half2 dfdy(half2 p)
+{
+  return __metal_dfdy(p);
+}
+METAL_FUNC half2 fwidth(half2 p)
+{
+  return __metal_fwidth(p);
+}
+METAL_FUNC half3 dfdx(half3 p)
+{
+  return __metal_dfdx(p);
+}
+METAL_FUNC half3 dfdy(half3 p)
+{
+  return __metal_dfdy(p);
+}
+METAL_FUNC half3 fwidth(half3 p)
+{
+  return __metal_fwidth(p);
+}
+METAL_FUNC half4 dfdx(half4 p)
+{
+  return __metal_dfdx(p);
+}
+METAL_FUNC half4 dfdy(half4 p)
+{
+  return __metal_dfdy(p);
+}
+METAL_FUNC half4 fwidth(half4 p)
+{
+  return __metal_fwidth(p);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC half8 dfdx(half8 p)
+{
+  return __metal_dfdx(p);
+}
+METAL_FUNC half8 dfdy(half8 p)
+{
+  return __metal_dfdy(p);
+}
+METAL_FUNC half8 fwidth(half8 p)
+{
+  return __metal_fwidth(p);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC half16 dfdx(half16 p)
+{
+  return __metal_dfdx(p);
+}
+METAL_FUNC half16 dfdy(half16 p)
+{
+  return __metal_dfdy(p);
+}
+METAL_FUNC half16 fwidth(half16 p)
+{
+  return __metal_fwidth(p);
+}
+#endif
+METAL_FUNC float dfdx(float p)
+{
+  return __metal_dfdx(p);
+}
+METAL_FUNC float dfdy(float p)
+{
+  return __metal_dfdy(p);
+}
+METAL_FUNC float fwidth(float p)
+{
+  return __metal_fwidth(p);
+}
+METAL_FUNC float2 dfdx(float2 p)
+{
+  return __metal_dfdx(p);
+}
+METAL_FUNC float2 dfdy(float2 p)
+{
+  return __metal_dfdy(p);
+}
+METAL_FUNC float2 fwidth(float2 p)
+{
+  return __metal_fwidth(p);
+}
+METAL_FUNC float3 dfdx(float3 p)
+{
+  return __metal_dfdx(p);
+}
+METAL_FUNC float3 dfdy(float3 p)
+{
+  return __metal_dfdy(p);
+}
+METAL_FUNC float3 fwidth(float3 p)
+{
+  return __metal_fwidth(p);
+}
+METAL_FUNC float4 dfdx(float4 p)
+{
+  return __metal_dfdx(p);
+}
+METAL_FUNC float4 dfdy(float4 p)
+{
+  return __metal_dfdy(p);
+}
+METAL_FUNC float4 fwidth(float4 p)
+{
+  return __metal_fwidth(p);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC float8 dfdx(float8 p)
+{
+  return __metal_dfdx(p);
+}
+METAL_FUNC float8 dfdy(float8 p)
+{
+  return __metal_dfdy(p);
+}
+METAL_FUNC float8 fwidth(float8 p)
+{
+  return __metal_fwidth(p);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC float16 dfdx(float16 p)
+{
+  return __metal_dfdx(p);
+}
+METAL_FUNC float16 dfdy(float16 p)
+{
+  return __metal_dfdy(p);
+}
+METAL_FUNC float16 fwidth(float16 p)
+{
+  return __metal_fwidth(p);
+}
+#endif
+
+// Metal 1.1 s5.9.1.2 Fragment Functions – Samples.
+
+METAL_FUNC uint get_num_samples()
+{
+  return __metal_get_num_samples(0);
+}
+
+METAL_FUNC float2 get_sample_position(uint indx)
+{
+  return __metal_get_sample_position(indx, 0);
+}
+
+// Metal 1.1 s5.9.1.3: Fragment Functions -- Flow Control.
+
+METAL_FUNC void discard_fragment()
+{
+  __metal_discard_fragment();
+}
+
+#if defined(__HAVE_DRAW_INDIRECT__)
+struct MTLDrawPrimitivesIndirectArguments
+{
+  uint vertexCount;
+  uint instanceCount;
+  uint vertexStart;
+  uint baseInstance;
+};
+
+struct MTLDrawIndexedPrimitivesIndirectArguments
+{
+  uint indexCount;
+  uint instanceCount;
+  uint indexStart;
+  uint baseVertex;
+  uint baseInstance;
+};
+#endif
+
+#if defined (__HAVE_RASTERIZATION_RATE__)
+// Metal 2.2 s6.15: Variable Rasterization Rate -- Mapping of Per-Layer Rasterization Rate Data.
+
+struct rasterization_rate_map_decoder
+{
+  METAL_FUNC explicit rasterization_rate_map_decoder(constant rasterization_rate_map_data &data) thread : data(data)
+  {
+  }
+
+  METAL_FUNC float2 map_physical_to_screen_coordinates(float2 coords, uint layer_index = 0) const thread
+  {
+    return __metal_map_physical_to_screen_coordinates(coords, reinterpret_cast<constant void *>(&data), layer_index);
+  }
+
+  METAL_FUNC uint2 map_physical_to_screen_coordinates(uint2 coords, uint layer_index = 0) const thread
+  {
+    return __metal_map_physical_to_screen_coordinates(coords, reinterpret_cast<constant void *>(&data), layer_index);
+  }
+
+  METAL_FUNC float2 map_screen_to_physical_coordinates(float2 coords, uint layer_index = 0) const thread
+  {
+    return __metal_map_screen_to_physical_coordinates(coords, reinterpret_cast<constant void *>(&data), layer_index);
+  }
+
+  METAL_FUNC uint2 map_screen_to_physical_coordinates(uint2 coords, uint layer_index = 0) const thread
+  {
+    return __metal_map_screen_to_physical_coordinates(coords, reinterpret_cast<constant void *>(&data), layer_index);
+  }
+
+private:
+  constant rasterization_rate_map_data &data;
+};
+#endif
+
+#if defined(__HAVE_RAYTRACING__)
+enum class winding
+{
+  clockwise = __METAL_WINDING_CLOCKWISE__,
+  counterclockwise = __METAL_WINDING_COUNTERCLOCKWISE__
+};
+#endif
+
+#if defined(__HAVE_MESH__)
+enum class topology
+{
+  point = __METAL_TOPOLOGY_POINT__,
+  line = __METAL_TOPOLOGY_LINE__,
+  triangle = __METAL_TOPOLOGY_TRIANGLE__
+};
+#endif
+} // namespace metal
+
+#endif // __METAL_GRAPHICS

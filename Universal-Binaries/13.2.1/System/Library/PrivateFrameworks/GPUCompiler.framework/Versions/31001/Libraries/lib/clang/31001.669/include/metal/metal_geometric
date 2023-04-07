@@ -1,0 +1,1037 @@
+// -*- Metal -*-
+//===-- metal_geometric ---------------------------------------------------===//
+// Copyright (c) 2014-2018 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_GEOMETRIC
+#define __METAL_GEOMETRIC
+
+#include <metal_limits>
+#include <metal_math>
+
+#pragma METAL internals : enable
+namespace metal
+{
+// Metal 1.1 s5.7: Geometric Functions.
+
+template <typename T>
+struct _fp_range_traits_impl;
+
+template <>
+struct _fp_range_traits_impl<half>
+{
+  constexpr static constant half scale_down = 0x1.0p-10h;
+  constexpr static constant half scale_down_inv = 0x1.0p+10h;
+  constexpr static constant half scale_up = 0x1.0p+8h;
+  constexpr static constant half scale_up_inv = 0x1.0p-8h;
+};
+template <>
+struct _fp_range_traits_impl<float>
+{
+  constexpr static constant float scale_down = 0x1.0p-66f;
+  constexpr static constant float scale_down_inv = 0x1.0p+66f;
+  constexpr static constant float scale_up = 0x1.0p+64f;
+  constexpr static constant float scale_up_inv = 0x1.0p-64f;
+};
+#if defined(__HAVE_NATIVE_DOUBLE__)
+template <>
+struct _fp_range_traits_impl<double>
+{
+  constexpr static constant double scale_down = 0x1.0p-514;
+  constexpr static constant double scale_down_inv = 0x1.0p+514;
+  constexpr static constant double scale_up = 0x1.0p+512;
+  constexpr static constant double scale_up_inv = 0x1.0p-512;
+};
+#endif
+
+template <typename T>
+struct _fp_range_traits : _fp_range_traits_impl<remove_cv_t<T>>
+{
+};
+
+METAL_FUNC half dot(half2 x, half2 y)
+{
+  return __metal_dot(x, y);
+}
+METAL_FUNC half length_squared(half2 x)
+{
+  return dot(x, x);
+}
+METAL_FUNC half dot(half3 x, half3 y)
+{
+  return __metal_dot(x, y);
+}
+METAL_FUNC half length_squared(half3 x)
+{
+  return dot(x, x);
+}
+METAL_FUNC half dot(half4 x, half4 y)
+{
+  return __metal_dot(x, y);
+}
+METAL_FUNC half length_squared(half4 x)
+{
+  return dot(x, x);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC half dot(half8 x, half8 y)
+{
+  return __metal_dot(x, y);
+}
+METAL_FUNC half length_squared(half8 x)
+{
+  return dot(x, x);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC half dot(half16 x, half16 y)
+{
+  return __metal_dot(x, y);
+}
+METAL_FUNC half length_squared(half16 x)
+{
+  return dot(x, x);
+}
+#endif
+METAL_FUNC float dot(float2 x, float2 y)
+{
+  return __metal_dot(x, y);
+}
+METAL_FUNC float length_squared(float2 x)
+{
+  return dot(x, x);
+}
+METAL_FUNC float dot(float3 x, float3 y)
+{
+  return __metal_dot(x, y);
+}
+METAL_FUNC float length_squared(float3 x)
+{
+  return dot(x, x);
+}
+METAL_FUNC float dot(float4 x, float4 y)
+{
+  return __metal_dot(x, y);
+}
+METAL_FUNC float length_squared(float4 x)
+{
+  return dot(x, x);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC float dot(float8 x, float8 y)
+{
+  return __metal_dot(x, y);
+}
+METAL_FUNC float length_squared(float8 x)
+{
+  return dot(x, x);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC float dot(float16 x, float16 y)
+{
+  return __metal_dot(x, y);
+}
+METAL_FUNC float length_squared(float16 x)
+{
+  return dot(x, x);
+}
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double dot(double2 x, double2 y)
+{
+  return __metal_dot(x, y);
+}
+METAL_FUNC double length_squared(double2 x)
+{
+  return dot(x, x);
+}
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double dot(double3 x, double3 y)
+{
+  return __metal_dot(x, y);
+}
+METAL_FUNC double length_squared(double3 x)
+{
+  return dot(x, x);
+}
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double dot(double4 x, double4 y)
+{
+  return __metal_dot(x, y);
+}
+METAL_FUNC double length_squared(double4 x)
+{
+  return dot(x, x);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double dot(double8 x, double8 y)
+{
+  return __metal_dot(x, y);
+}
+METAL_FUNC double length_squared(double8 x)
+{
+  return dot(x, x);
+}
+#endif
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double dot(double16 x, double16 y)
+{
+  return __metal_dot(x, y);
+}
+METAL_FUNC double length_squared(double16 x)
+{
+  return dot(x, x);
+}
+#endif
+#endif
+namespace fast
+{
+METAL_FUNC float length(float2 x)
+{
+  return fast::sqrt(length_squared(x));
+}
+METAL_FUNC float2 normalize(float2 x)
+{
+  return x * fast::rsqrt(length_squared(x));
+}
+METAL_FUNC float distance(float2 x, float2 y)
+{
+  return fast::length(x - y);
+}
+METAL_FUNC float length(float3 x)
+{
+  return fast::sqrt(length_squared(x));
+}
+METAL_FUNC float3 normalize(float3 x)
+{
+  return x * fast::rsqrt(length_squared(x));
+}
+METAL_FUNC float distance(float3 x, float3 y)
+{
+  return fast::length(x - y);
+}
+METAL_FUNC float length(float4 x)
+{
+  return fast::sqrt(length_squared(x));
+}
+METAL_FUNC float4 normalize(float4 x)
+{
+  return x * fast::rsqrt(length_squared(x));
+}
+METAL_FUNC float distance(float4 x, float4 y)
+{
+  return fast::length(x - y);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC float length(float8 x)
+{
+  return fast::sqrt(length_squared(x));
+}
+METAL_FUNC float8 normalize(float8 x)
+{
+  return x * fast::rsqrt(length_squared(x));
+}
+METAL_FUNC float distance(float8 x, float8 y)
+{
+  return fast::length(x - y);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC float length(float16 x)
+{
+  return fast::sqrt(length_squared(x));
+}
+METAL_FUNC float16 normalize(float16 x)
+{
+  return x * fast::rsqrt(length_squared(x));
+}
+METAL_FUNC float distance(float16 x, float16 y)
+{
+  return fast::length(x - y);
+}
+#endif
+} // namespace fast
+namespace precise
+{
+METAL_FUNC float length(float2 x)
+{
+  float len_sq = length_squared(x);
+  if (isinf(len_sq))
+  {
+    len_sq = length_squared(x * _fp_range_traits<float>::scale_down);
+    return _fp_range_traits<float>::scale_down_inv * precise::sqrt(len_sq);
+  }
+  if (len_sq < numeric_limits<float>::min() / numeric_limits<float>::epsilon())
+  {
+    len_sq = length_squared(x * _fp_range_traits<float>::scale_up);
+    return _fp_range_traits<float>::scale_up_inv * precise::sqrt(len_sq);
+  }
+  return precise::sqrt(len_sq);
+}
+METAL_FUNC float2 normalize(float2 x)
+{
+  if (any(isinf(x)))
+    return numeric_limits<float>::quiet_NaN();
+
+  float len_sq = length_squared(x);
+  if (isinf(len_sq))
+  {
+    x *= _fp_range_traits<float>::scale_down;
+    len_sq = length_squared(x);
+    if (isinf(len_sq))
+      return copysign(select(float2(0), float2(1), isinf(x)), x);
+  }
+  else if (len_sq < numeric_limits<float>::min() / numeric_limits<float>::epsilon())
+  {
+    x *= _fp_range_traits<float>::scale_up;
+    len_sq = length_squared(x);
+    if (len_sq == float(0))
+      return x;
+  }
+  return x * precise::rsqrt(len_sq);
+}
+METAL_FUNC float distance(float2 x, float2 y)
+{
+  return precise::length(x - y);
+}
+METAL_FUNC float length(float3 x)
+{
+  float len_sq = length_squared(x);
+  if (isinf(len_sq))
+  {
+    len_sq = length_squared(x * _fp_range_traits<float>::scale_down);
+    return _fp_range_traits<float>::scale_down_inv * precise::sqrt(len_sq);
+  }
+  if (len_sq < numeric_limits<float>::min() / numeric_limits<float>::epsilon())
+  {
+    len_sq = length_squared(x * _fp_range_traits<float>::scale_up);
+    return _fp_range_traits<float>::scale_up_inv * precise::sqrt(len_sq);
+  }
+  return precise::sqrt(len_sq);
+}
+METAL_FUNC float3 normalize(float3 x)
+{
+  if (any(isinf(x)))
+    return numeric_limits<float>::quiet_NaN();
+
+  float len_sq = length_squared(x);
+  if (isinf(len_sq))
+  {
+    x *= _fp_range_traits<float>::scale_down;
+    len_sq = length_squared(x);
+    if (isinf(len_sq))
+      return copysign(select(float3(0), float3(1), isinf(x)), x);
+  }
+  else if (len_sq < numeric_limits<float>::min() / numeric_limits<float>::epsilon())
+  {
+    x *= _fp_range_traits<float>::scale_up;
+    len_sq = length_squared(x);
+    if (len_sq == float(0))
+      return x;
+  }
+  return x * precise::rsqrt(len_sq);
+}
+METAL_FUNC float distance(float3 x, float3 y)
+{
+  return precise::length(x - y);
+}
+METAL_FUNC float length(float4 x)
+{
+  float len_sq = length_squared(x);
+  if (isinf(len_sq))
+  {
+    len_sq = length_squared(x * _fp_range_traits<float>::scale_down);
+    return _fp_range_traits<float>::scale_down_inv * precise::sqrt(len_sq);
+  }
+  if (len_sq < numeric_limits<float>::min() / numeric_limits<float>::epsilon())
+  {
+    len_sq = length_squared(x * _fp_range_traits<float>::scale_up);
+    return _fp_range_traits<float>::scale_up_inv * precise::sqrt(len_sq);
+  }
+  return precise::sqrt(len_sq);
+}
+METAL_FUNC float4 normalize(float4 x)
+{
+  if (any(isinf(x)))
+    return numeric_limits<float>::quiet_NaN();
+
+  float len_sq = length_squared(x);
+  if (isinf(len_sq))
+  {
+    x *= _fp_range_traits<float>::scale_down;
+    len_sq = length_squared(x);
+    if (isinf(len_sq))
+      return copysign(select(float4(0), float4(1), isinf(x)), x);
+  }
+  else if (len_sq < numeric_limits<float>::min() / numeric_limits<float>::epsilon())
+  {
+    x *= _fp_range_traits<float>::scale_up;
+    len_sq = length_squared(x);
+    if (len_sq == float(0))
+      return x;
+  }
+  return x * precise::rsqrt(len_sq);
+}
+METAL_FUNC float distance(float4 x, float4 y)
+{
+  return precise::length(x - y);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC float length(float8 x)
+{
+  float len_sq = length_squared(x);
+  if (isinf(len_sq))
+  {
+    len_sq = length_squared(x * _fp_range_traits<float>::scale_down);
+    return _fp_range_traits<float>::scale_down_inv * precise::sqrt(len_sq);
+  }
+  if (len_sq < numeric_limits<float>::min() / numeric_limits<float>::epsilon())
+  {
+    len_sq = length_squared(x * _fp_range_traits<float>::scale_up);
+    return _fp_range_traits<float>::scale_up_inv * precise::sqrt(len_sq);
+  }
+  return precise::sqrt(len_sq);
+}
+METAL_FUNC float8 normalize(float8 x)
+{
+  if (any(isinf(x)))
+    return numeric_limits<float>::quiet_NaN();
+
+  float len_sq = length_squared(x);
+  if (isinf(len_sq))
+  {
+    x *= _fp_range_traits<float>::scale_down;
+    len_sq = length_squared(x);
+    if (isinf(len_sq))
+      return copysign(select(float8(0), float8(1), isinf(x)), x);
+  }
+  else if (len_sq < numeric_limits<float>::min() / numeric_limits<float>::epsilon())
+  {
+    x *= _fp_range_traits<float>::scale_up;
+    len_sq = length_squared(x);
+    if (len_sq == float(0))
+      return x;
+  }
+  return x * precise::rsqrt(len_sq);
+}
+METAL_FUNC float distance(float8 x, float8 y)
+{
+  return precise::length(x - y);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC float length(float16 x)
+{
+  float len_sq = length_squared(x);
+  if (isinf(len_sq))
+  {
+    len_sq = length_squared(x * _fp_range_traits<float>::scale_down);
+    return _fp_range_traits<float>::scale_down_inv * precise::sqrt(len_sq);
+  }
+  if (len_sq < numeric_limits<float>::min() / numeric_limits<float>::epsilon())
+  {
+    len_sq = length_squared(x * _fp_range_traits<float>::scale_up);
+    return _fp_range_traits<float>::scale_up_inv * precise::sqrt(len_sq);
+  }
+  return precise::sqrt(len_sq);
+}
+METAL_FUNC float16 normalize(float16 x)
+{
+  if (any(isinf(x)))
+    return numeric_limits<float>::quiet_NaN();
+
+  float len_sq = length_squared(x);
+  if (isinf(len_sq))
+  {
+    x *= _fp_range_traits<float>::scale_down;
+    len_sq = length_squared(x);
+    if (isinf(len_sq))
+      return copysign(select(float16(0), float16(1), isinf(x)), x);
+  }
+  else if (len_sq < numeric_limits<float>::min() / numeric_limits<float>::epsilon())
+  {
+    x *= _fp_range_traits<float>::scale_up;
+    len_sq = length_squared(x);
+    if (len_sq == float(0))
+      return x;
+  }
+  return x * precise::rsqrt(len_sq);
+}
+METAL_FUNC float distance(float16 x, float16 y)
+{
+  return precise::length(x - y);
+}
+#endif
+} // namespace precise
+METAL_FUNC half length(half2 x)
+{
+    return sqrt(length_squared(x));
+}
+METAL_FUNC half2 normalize(half2 x)
+{
+    return x * rsqrt(length_squared(x));
+}
+METAL_FUNC half distance(half2 x, half2 y)
+{
+    return length(x - y);
+}
+METAL_FUNC half distance_squared(half2 x, half2 y)
+{
+  return length_squared(x - y);
+}
+METAL_FUNC half2 faceforward(half2 n, half2 i, half2 nref)
+{
+  return dot(nref, i) < half(0) ? n : -n;
+}
+METAL_FUNC half2 reflect(half2 i, half2 n)
+{
+  return i - half(2) * dot(n, i) * n;
+}
+METAL_FUNC half2 refract(half2 i, half2 n, half eta)
+{
+  half k = half(1) - eta * eta * (half(1) - dot(n, i) * dot(n, i));
+  if (k < half(0))
+    return half2(0);
+  return eta * i - (eta * dot(n, i) + sqrt(k)) * n;
+}
+METAL_FUNC half length(half3 x)
+{
+    return sqrt(length_squared(x));
+}
+METAL_FUNC half3 normalize(half3 x)
+{
+    return x * rsqrt(length_squared(x));
+}
+METAL_FUNC half distance(half3 x, half3 y)
+{
+    return length(x - y);
+}
+METAL_FUNC half distance_squared(half3 x, half3 y)
+{
+  return length_squared(x - y);
+}
+METAL_FUNC half3 faceforward(half3 n, half3 i, half3 nref)
+{
+  return dot(nref, i) < half(0) ? n : -n;
+}
+METAL_FUNC half3 reflect(half3 i, half3 n)
+{
+  return i - half(2) * dot(n, i) * n;
+}
+METAL_FUNC half3 refract(half3 i, half3 n, half eta)
+{
+  half k = half(1) - eta * eta * (half(1) - dot(n, i) * dot(n, i));
+  if (k < half(0))
+    return half3(0);
+  return eta * i - (eta * dot(n, i) + sqrt(k)) * n;
+}
+METAL_FUNC half length(half4 x)
+{
+    return sqrt(length_squared(x));
+}
+METAL_FUNC half4 normalize(half4 x)
+{
+    return x * rsqrt(length_squared(x));
+}
+METAL_FUNC half distance(half4 x, half4 y)
+{
+    return length(x - y);
+}
+METAL_FUNC half distance_squared(half4 x, half4 y)
+{
+  return length_squared(x - y);
+}
+METAL_FUNC half4 faceforward(half4 n, half4 i, half4 nref)
+{
+  return dot(nref, i) < half(0) ? n : -n;
+}
+METAL_FUNC half4 reflect(half4 i, half4 n)
+{
+  return i - half(2) * dot(n, i) * n;
+}
+METAL_FUNC half4 refract(half4 i, half4 n, half eta)
+{
+  half k = half(1) - eta * eta * (half(1) - dot(n, i) * dot(n, i));
+  if (k < half(0))
+    return half4(0);
+  return eta * i - (eta * dot(n, i) + sqrt(k)) * n;
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC half length(half8 x)
+{
+    return sqrt(length_squared(x));
+}
+METAL_FUNC half8 normalize(half8 x)
+{
+    return x * rsqrt(length_squared(x));
+}
+METAL_FUNC half distance(half8 x, half8 y)
+{
+    return length(x - y);
+}
+METAL_FUNC half distance_squared(half8 x, half8 y)
+{
+  return length_squared(x - y);
+}
+METAL_FUNC half8 faceforward(half8 n, half8 i, half8 nref)
+{
+  return dot(nref, i) < half(0) ? n : -n;
+}
+METAL_FUNC half8 reflect(half8 i, half8 n)
+{
+  return i - half(2) * dot(n, i) * n;
+}
+METAL_FUNC half8 refract(half8 i, half8 n, half eta)
+{
+  half k = half(1) - eta * eta * (half(1) - dot(n, i) * dot(n, i));
+  if (k < half(0))
+    return half8(0);
+  return eta * i - (eta * dot(n, i) + sqrt(k)) * n;
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC half length(half16 x)
+{
+    return sqrt(length_squared(x));
+}
+METAL_FUNC half16 normalize(half16 x)
+{
+    return x * rsqrt(length_squared(x));
+}
+METAL_FUNC half distance(half16 x, half16 y)
+{
+    return length(x - y);
+}
+METAL_FUNC half distance_squared(half16 x, half16 y)
+{
+  return length_squared(x - y);
+}
+METAL_FUNC half16 faceforward(half16 n, half16 i, half16 nref)
+{
+  return dot(nref, i) < half(0) ? n : -n;
+}
+METAL_FUNC half16 reflect(half16 i, half16 n)
+{
+  return i - half(2) * dot(n, i) * n;
+}
+METAL_FUNC half16 refract(half16 i, half16 n, half eta)
+{
+  half k = half(1) - eta * eta * (half(1) - dot(n, i) * dot(n, i));
+  if (k < half(0))
+    return half16(0);
+  return eta * i - (eta * dot(n, i) + sqrt(k)) * n;
+}
+#endif
+METAL_FUNC float length(float2 x)
+{
+#if defined(__FAST_MATH__)
+    return fast::length(x);
+#else
+    return precise::length(x);
+#endif
+}
+METAL_FUNC float2 normalize(float2 x)
+{
+#if defined(__FAST_MATH__)
+    return fast::normalize(x);
+#else
+    return precise::normalize(x);
+#endif
+}
+METAL_FUNC float distance(float2 x, float2 y)
+{
+#if defined(__FAST_MATH__)
+    return fast::distance(x, y);
+#else
+    return precise::distance(x, y);
+#endif
+}
+METAL_FUNC float distance_squared(float2 x, float2 y)
+{
+  return length_squared(x - y);
+}
+METAL_FUNC float2 faceforward(float2 n, float2 i, float2 nref)
+{
+  return dot(nref, i) < float(0) ? n : -n;
+}
+METAL_FUNC float2 reflect(float2 i, float2 n)
+{
+  return i - float(2) * dot(n, i) * n;
+}
+METAL_FUNC float2 refract(float2 i, float2 n, float eta)
+{
+  float k = float(1) - eta * eta * (float(1) - dot(n, i) * dot(n, i));
+  if (k < float(0))
+    return float2(0);
+  return eta * i - (eta * dot(n, i) + sqrt(k)) * n;
+}
+METAL_FUNC float length(float3 x)
+{
+#if defined(__FAST_MATH__)
+    return fast::length(x);
+#else
+    return precise::length(x);
+#endif
+}
+METAL_FUNC float3 normalize(float3 x)
+{
+#if defined(__FAST_MATH__)
+    return fast::normalize(x);
+#else
+    return precise::normalize(x);
+#endif
+}
+METAL_FUNC float distance(float3 x, float3 y)
+{
+#if defined(__FAST_MATH__)
+    return fast::distance(x, y);
+#else
+    return precise::distance(x, y);
+#endif
+}
+METAL_FUNC float distance_squared(float3 x, float3 y)
+{
+  return length_squared(x - y);
+}
+METAL_FUNC float3 faceforward(float3 n, float3 i, float3 nref)
+{
+  return dot(nref, i) < float(0) ? n : -n;
+}
+METAL_FUNC float3 reflect(float3 i, float3 n)
+{
+  return i - float(2) * dot(n, i) * n;
+}
+METAL_FUNC float3 refract(float3 i, float3 n, float eta)
+{
+  float k = float(1) - eta * eta * (float(1) - dot(n, i) * dot(n, i));
+  if (k < float(0))
+    return float3(0);
+  return eta * i - (eta * dot(n, i) + sqrt(k)) * n;
+}
+METAL_FUNC float length(float4 x)
+{
+#if defined(__FAST_MATH__)
+    return fast::length(x);
+#else
+    return precise::length(x);
+#endif
+}
+METAL_FUNC float4 normalize(float4 x)
+{
+#if defined(__FAST_MATH__)
+    return fast::normalize(x);
+#else
+    return precise::normalize(x);
+#endif
+}
+METAL_FUNC float distance(float4 x, float4 y)
+{
+#if defined(__FAST_MATH__)
+    return fast::distance(x, y);
+#else
+    return precise::distance(x, y);
+#endif
+}
+METAL_FUNC float distance_squared(float4 x, float4 y)
+{
+  return length_squared(x - y);
+}
+METAL_FUNC float4 faceforward(float4 n, float4 i, float4 nref)
+{
+  return dot(nref, i) < float(0) ? n : -n;
+}
+METAL_FUNC float4 reflect(float4 i, float4 n)
+{
+  return i - float(2) * dot(n, i) * n;
+}
+METAL_FUNC float4 refract(float4 i, float4 n, float eta)
+{
+  float k = float(1) - eta * eta * (float(1) - dot(n, i) * dot(n, i));
+  if (k < float(0))
+    return float4(0);
+  return eta * i - (eta * dot(n, i) + sqrt(k)) * n;
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC float length(float8 x)
+{
+#if defined(__FAST_MATH__)
+    return fast::length(x);
+#else
+    return precise::length(x);
+#endif
+}
+METAL_FUNC float8 normalize(float8 x)
+{
+#if defined(__FAST_MATH__)
+    return fast::normalize(x);
+#else
+    return precise::normalize(x);
+#endif
+}
+METAL_FUNC float distance(float8 x, float8 y)
+{
+#if defined(__FAST_MATH__)
+    return fast::distance(x, y);
+#else
+    return precise::distance(x, y);
+#endif
+}
+METAL_FUNC float distance_squared(float8 x, float8 y)
+{
+  return length_squared(x - y);
+}
+METAL_FUNC float8 faceforward(float8 n, float8 i, float8 nref)
+{
+  return dot(nref, i) < float(0) ? n : -n;
+}
+METAL_FUNC float8 reflect(float8 i, float8 n)
+{
+  return i - float(2) * dot(n, i) * n;
+}
+METAL_FUNC float8 refract(float8 i, float8 n, float eta)
+{
+  float k = float(1) - eta * eta * (float(1) - dot(n, i) * dot(n, i));
+  if (k < float(0))
+    return float8(0);
+  return eta * i - (eta * dot(n, i) + sqrt(k)) * n;
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC float length(float16 x)
+{
+#if defined(__FAST_MATH__)
+    return fast::length(x);
+#else
+    return precise::length(x);
+#endif
+}
+METAL_FUNC float16 normalize(float16 x)
+{
+#if defined(__FAST_MATH__)
+    return fast::normalize(x);
+#else
+    return precise::normalize(x);
+#endif
+}
+METAL_FUNC float distance(float16 x, float16 y)
+{
+#if defined(__FAST_MATH__)
+    return fast::distance(x, y);
+#else
+    return precise::distance(x, y);
+#endif
+}
+METAL_FUNC float distance_squared(float16 x, float16 y)
+{
+  return length_squared(x - y);
+}
+METAL_FUNC float16 faceforward(float16 n, float16 i, float16 nref)
+{
+  return dot(nref, i) < float(0) ? n : -n;
+}
+METAL_FUNC float16 reflect(float16 i, float16 n)
+{
+  return i - float(2) * dot(n, i) * n;
+}
+METAL_FUNC float16 refract(float16 i, float16 n, float eta)
+{
+  float k = float(1) - eta * eta * (float(1) - dot(n, i) * dot(n, i));
+  if (k < float(0))
+    return float16(0);
+  return eta * i - (eta * dot(n, i) + sqrt(k)) * n;
+}
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double length(double2 x)
+{
+    return sqrt(length_squared(x));
+}
+METAL_FUNC double2 normalize(double2 x)
+{
+    return x * rsqrt(length_squared(x));
+}
+METAL_FUNC double distance(double2 x, double2 y)
+{
+    return length(x - y);
+}
+METAL_FUNC double distance_squared(double2 x, double2 y)
+{
+  return length_squared(x - y);
+}
+METAL_FUNC double2 faceforward(double2 n, double2 i, double2 nref)
+{
+  return dot(nref, i) < double(0) ? n : -n;
+}
+METAL_FUNC double2 reflect(double2 i, double2 n)
+{
+  return i - double(2) * dot(n, i) * n;
+}
+METAL_FUNC double2 refract(double2 i, double2 n, double eta)
+{
+  double k = double(1) - eta * eta * (double(1) - dot(n, i) * dot(n, i));
+  if (k < double(0))
+    return double2(0);
+  return eta * i - (eta * dot(n, i) + sqrt(k)) * n;
+}
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double length(double3 x)
+{
+    return sqrt(length_squared(x));
+}
+METAL_FUNC double3 normalize(double3 x)
+{
+    return x * rsqrt(length_squared(x));
+}
+METAL_FUNC double distance(double3 x, double3 y)
+{
+    return length(x - y);
+}
+METAL_FUNC double distance_squared(double3 x, double3 y)
+{
+  return length_squared(x - y);
+}
+METAL_FUNC double3 faceforward(double3 n, double3 i, double3 nref)
+{
+  return dot(nref, i) < double(0) ? n : -n;
+}
+METAL_FUNC double3 reflect(double3 i, double3 n)
+{
+  return i - double(2) * dot(n, i) * n;
+}
+METAL_FUNC double3 refract(double3 i, double3 n, double eta)
+{
+  double k = double(1) - eta * eta * (double(1) - dot(n, i) * dot(n, i));
+  if (k < double(0))
+    return double3(0);
+  return eta * i - (eta * dot(n, i) + sqrt(k)) * n;
+}
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double length(double4 x)
+{
+    return sqrt(length_squared(x));
+}
+METAL_FUNC double4 normalize(double4 x)
+{
+    return x * rsqrt(length_squared(x));
+}
+METAL_FUNC double distance(double4 x, double4 y)
+{
+    return length(x - y);
+}
+METAL_FUNC double distance_squared(double4 x, double4 y)
+{
+  return length_squared(x - y);
+}
+METAL_FUNC double4 faceforward(double4 n, double4 i, double4 nref)
+{
+  return dot(nref, i) < double(0) ? n : -n;
+}
+METAL_FUNC double4 reflect(double4 i, double4 n)
+{
+  return i - double(2) * dot(n, i) * n;
+}
+METAL_FUNC double4 refract(double4 i, double4 n, double eta)
+{
+  double k = double(1) - eta * eta * (double(1) - dot(n, i) * dot(n, i));
+  if (k < double(0))
+    return double4(0);
+  return eta * i - (eta * dot(n, i) + sqrt(k)) * n;
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double length(double8 x)
+{
+    return sqrt(length_squared(x));
+}
+METAL_FUNC double8 normalize(double8 x)
+{
+    return x * rsqrt(length_squared(x));
+}
+METAL_FUNC double distance(double8 x, double8 y)
+{
+    return length(x - y);
+}
+METAL_FUNC double distance_squared(double8 x, double8 y)
+{
+  return length_squared(x - y);
+}
+METAL_FUNC double8 faceforward(double8 n, double8 i, double8 nref)
+{
+  return dot(nref, i) < double(0) ? n : -n;
+}
+METAL_FUNC double8 reflect(double8 i, double8 n)
+{
+  return i - double(2) * dot(n, i) * n;
+}
+METAL_FUNC double8 refract(double8 i, double8 n, double eta)
+{
+  double k = double(1) - eta * eta * (double(1) - dot(n, i) * dot(n, i));
+  if (k < double(0))
+    return double8(0);
+  return eta * i - (eta * dot(n, i) + sqrt(k)) * n;
+}
+#endif
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double length(double16 x)
+{
+    return sqrt(length_squared(x));
+}
+METAL_FUNC double16 normalize(double16 x)
+{
+    return x * rsqrt(length_squared(x));
+}
+METAL_FUNC double distance(double16 x, double16 y)
+{
+    return length(x - y);
+}
+METAL_FUNC double distance_squared(double16 x, double16 y)
+{
+  return length_squared(x - y);
+}
+METAL_FUNC double16 faceforward(double16 n, double16 i, double16 nref)
+{
+  return dot(nref, i) < double(0) ? n : -n;
+}
+METAL_FUNC double16 reflect(double16 i, double16 n)
+{
+  return i - double(2) * dot(n, i) * n;
+}
+METAL_FUNC double16 refract(double16 i, double16 n, double eta)
+{
+  double k = double(1) - eta * eta * (double(1) - dot(n, i) * dot(n, i));
+  if (k < double(0))
+    return double16(0);
+  return eta * i - (eta * dot(n, i) + sqrt(k)) * n;
+}
+#endif
+#endif
+METAL_FUNC half3 cross(half3 x, half3 y)
+{
+  return {(x[1] * y[2]) - (y[1] * x[2]), (x[2] * y[0]) - (y[2] * x[0]), (x[0] * y[1]) - (y[0] * x[1])};
+}
+METAL_FUNC float3 cross(float3 x, float3 y)
+{
+  return {(x[1] * y[2]) - (y[1] * x[2]), (x[2] * y[0]) - (y[2] * x[0]), (x[0] * y[1]) - (y[0] * x[1])};
+}
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double3 cross(double3 x, double3 y)
+{
+  return {(x[1] * y[2]) - (y[1] * x[2]), (x[2] * y[0]) - (y[2] * x[0]), (x[0] * y[1]) - (y[0] * x[1])};
+}
+#endif
+} // namespace metal
+#pragma METAL internals : disable
+
+#endif // __METAL_GEOMETRIC
