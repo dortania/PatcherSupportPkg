@@ -21,7 +21,7 @@ jobs:
       - name: Build DMG
         run: ./build-dmg.sh
       - name: Generate Checksums
-        run: sha256sum Universal-Binaries.dmg > sha256sum.txt
+        run: shasum -a 256 Universal-Binaries.dmg > sha256sum.txt
       - name: Upload Universal Binaries to Artifacts
         uses: actions/upload-artifact@v2
         with:
