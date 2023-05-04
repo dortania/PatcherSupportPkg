@@ -9,13 +9,13 @@ on:
 jobs:
   build_mojave:
     name: Zip and Upload Binaries
-    runs-on: x86_64_monterey
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v3
-      # - uses: apple-actions/import-codesign-certs@8f3fb608891dd2244cdab3d69cd68c0d37a7fe93
-      #   with:
-      #     p12-file-base64: ${{ secrets.CERTIFICATES_P12 }}
-      #     p12-password: ${{ secrets.CERTIFICATES_P12_PASSWORD }}
+      - uses: apple-actions/import-codesign-certs@8f3fb608891dd2244cdab3d69cd68c0d37a7fe93
+        with:
+          p12-file-base64: ${{ secrets.CERTIFICATES_P12 }}
+          p12-password: ${{ secrets.CERTIFICATES_P12_PASSWORD }}
       - name: Clean, strip, and sign binaries
         run: python3 ci.py
       - name: Build DMG
