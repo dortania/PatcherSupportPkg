@@ -9,20 +9,24 @@ on:
 jobs:
   build_mojave:
     name: Zip and Upload Binaries
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v2
-      - name: Pre-flight cleaning
-        run: sudo python3 clean.py
-      - name: Zip Binaries
-        run: zip -r --symlinks Universal-Binaries.zip Universal-Binaries
+      - uses: actions/checkout@v3
+      - uses: apple-actions/import-codesign-certs@8f3fb608891dd2244cdab3d69cd68c0d37a7fe93
+        with:
+          p12-file-base64: ${{ secrets.CERTIFICATES_P12 }}
+          p12-password: ${{ secrets.CERTIFICATES_P12_PASSWORD }}
+      - name: Clean, strip, and sign binaries
+        run: python3 ci.py
+      - name: Build DMG
+        run: ./build-dmg.sh
       - name: Generate Checksums
-        run: sha256sum *.zip > sha256sum.txt
+        run: shasum -a 256 Universal-Binaries.dmg > sha256sum.txt
       - name: Upload Universal Binaries to Artifacts
         uses: actions/upload-artifact@v2
         with:
-          name: Universal-Binaries
-          path: Universal-Binaries.zip
+          name: Universal Binaries
+          path: Universal-Binaries.dmg
       - name: Upload Checksums to Artifacts
         uses: actions/upload-artifact@v2
         with:
@@ -30,7 +34,7 @@ jobs:
           path: sha256sum.txt
       - run: |
           mkdir deploy
-          mv *.zip sha256sum.txt deploy/
+          mv *.dmg sha256sum.txt deploy/
       - name: Upload to Release
         if: github.event_name == 'release'
         uses: svenstaro/upload-release-action@e74ff71f7d8a4c4745b560a485cc5fdb9b5b999d
