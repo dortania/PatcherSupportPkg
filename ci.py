@@ -47,7 +47,7 @@ def clean_unused():
         path = TARGET_DIR / path
         if path.exists():
             print(f"Removing: {path}")
-            subprocess.run(["rm", "-rf", path], check=True)
+            subprocess.check_output(["rm", "-rf", path])
 
     for path in TARGET_DIR.rglob(".DS_Store"):
         print(f"Removing: {path}")
@@ -154,12 +154,7 @@ def sign_macho(file: Path):
     """
 
     print(f"Signing: {file}")
-    subprocess.run(
-        ["codesign", "-f", "-s", IDENTITY, "--preserve-metadata=entitlements", "--generate-entitlement-der", file],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=True,
-    )
+    subprocess.check_output(["codesign", "-f", "-s", IDENTITY, "--preserve-metadata=entitlements", "--generate-entitlement-der", file])
 
 
 if __name__ == "__main__":
