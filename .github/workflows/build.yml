@@ -6,6 +6,10 @@ on:
   release:
     types: [published]
 
+concurrency:  
+    cancel-in-progress: true
+    group: ${{ github.workflow }}-${{ github.ref }}
+
 jobs:
   build_mojave:
     name: Zip and Upload Binaries
