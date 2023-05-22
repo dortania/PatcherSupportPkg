@@ -1,0 +1,198 @@
+<?xml version="1.0" encoding="utf-8"?>
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+  <asset>
+    <contributor>
+      <author>melon</author>
+      <authoring_tool>OpenCOLLADA for 3ds Max;  Version: 1.2.5;  Revision: 673;  Platform: Win32;  Configuration: Release Max2010</authoring_tool>
+      <source_data>file:///C:/Users/melon/Desktop/photobooth/ipadLike_AR.max</source_data>
+    </contributor>
+    <created>2011-05-26T16:17:58</created>
+    <modified>2011-05-26T16:17:58</modified>
+    <unit name="inch" meter="0.0254"/>
+    <up_axis>Z_UP</up_axis>
+  </asset>
+  <library_effects>
+    <effect id="_1_-_Default">
+      <profile_COMMON>
+        <technique sid="common">
+          <blinn>
+            <emission>
+              <color>0 0 0 1</color>
+            </emission>
+            <ambient>
+              <color>1 1 1 1</color>
+            </ambient>
+            <diffuse>
+              <color>1 1 1 1</color>
+            </diffuse>
+            <specular>
+              <color>0.9 0.9 0.9 1</color>
+            </specular>
+            <shininess>
+              <float>9.999999</float>
+            </shininess>
+            <reflective>
+              <color>0 0 0 1</color>
+            </reflective>
+            <transparent opaque="A_ONE">
+              <color>1 1 1 1</color>
+            </transparent>
+            <transparency>
+              <float>1</float>
+            </transparency>
+          </blinn>
+        </technique>
+      </profile_COMMON>
+      <extra>
+        <technique profile="OpenCOLLADA3dsMax">
+          <extended_shader>
+            <apply_reflection_dimming>0</apply_reflection_dimming>
+            <dim_level>0</dim_level>
+            <falloff_type>0</falloff_type>
+            <index_of_refraction>1.5</index_of_refraction>
+            <opacity_type>0</opacity_type>
+            <reflection_level>3</reflection_level>
+            <wire_size>1</wire_size>
+            <wire_units>0</wire_units>
+          </extended_shader>
+          <shader>
+            <ambient_diffuse_lock>1</ambient_diffuse_lock>
+            <ambient_diffuse_texture_lock>1</ambient_diffuse_texture_lock>
+            <diffuse_specular_lock>0</diffuse_specular_lock>
+            <soften>0.1</soften>
+            <use_self_illum_color>0</use_self_illum_color>
+          </shader>
+        </technique>
+      </extra>
+    </effect>
+  </library_effects>
+  <library_materials>
+    <material id="_1_-_Default-material" name="_1_-_Default">
+      <instance_effect url="#_1_-_Default"/>
+    </material>
+  </library_materials>
+  <library_geometries>
+    <geometry id="geom-photo" name="photo">
+      <mesh>
+        <source id="geom-photo-positions">
+          <float_array id="geom-photo-positions-array" count="363">-50 -50 0 -40 -50 0 -30 -50 0 -20 -50 0 -10 -50 0 0 -50 0 10 -50 0 20 -50 0 30 -50 0 40 -50 0 50 -50 0 -50 -40 0 -40 -40 0 -30 -40 0 -20 -40 0 -10 -40 0 0 -40 0 10 -40 0 20 -40 0 30 -40 0 40 -40 0 50 -40 0 -50 -30 0 -40 -30 0 -30 -30 0 -20 -30 0 -10 -30 0 0 -30 0 10 -30 0 20 -30 0 30 -30 0 40 -30 0 50 -30 0 -50 -20 0 -40 -20 0 -30 -20 0 -20 -20 0 -10 -20 0 0 -20 0 10 -20 0 20 -20 0 30 -20 0 40 -20 0 50 -20 0 -50 -10 0 -40 -10 0 -30 -10 0 -20 -10 0 -10 -10 0 0 -10 0 10 -10 0 20 -10 0 30 -10 0 40 -10 0 50 -10 0 -50 0 0 -40 0 0 -30 0 0 -20 0 0 -10 0 0 0 0 0 10 0 0 20 0 0 30 0 0 40 0 0 50 0 0 -50 10 0 -40 10 0 -30 10 0 -20 10 0 -10 10 0 0 10 0 10 10 0 20 10 0 30 10 0 40 10 0 50 10 0 -50 20 0 -40 20 0 -30 20 0 -20 20 0 -10 20 0 0 20 0 10 20 0 20 20 0 30 20 0 40 20 0 50 20 0 -50 30 0 -40 30 0 -30 30 0 -20 30 0 -10 30 0 0 30 0 10 30 0 20 30 0 30 30 0 40 30 0 50 30 0 -50 40 0 -40 40 0 -30 40 0 -20 40 0 -10 40 0 0 40 0 10 40 0 20 40 0 30 40 0 40 40 0 50 40 0 -50 50 0 -40 50 0 -30 50 0 -20 50 0 -10 50 0 0 50 0 10 50 0 20 50 0 30 50 0 40 50 0 50 50 0</float_array>
+          <technique_common>
+            <accessor source="#geom-photo-positions-array" count="121" stride="3">
+              <param name="X" type="float"/>
+              <param name="Y" type="float"/>
+              <param name="Z" type="float"/>
+            </accessor>
+          </technique_common>
+        </source>
+        <source id="geom-photo-normals">
+          <float_array id="geom-photo-normals-array" count="363">0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1</float_array>
+          <technique_common>
+            <accessor source="#geom-photo-normals-array" count="121" stride="3">
+              <param name="X" type="float"/>
+              <param name="Y" type="float"/>
+              <param name="Z" type="float"/>
+            </accessor>
+          </technique_common>
+        </source>
+        <source id="geom-photo-map1">
+          <float_array id="geom-photo-map1-array" count="429">0 0 0 0.1 0 0 0.2 0 0 0.3 0 0 0.4 0 0 0.5 0 0 0.6 0 0 0.7 0 0 0.8000001 0 0 0.9000001 0 0 1 0 0 0 0 0 0.1 0 0 0.2 0 0 0.3 0 0 0.4 0 0 0.5 0 0 0.6 0 0 0.7 0 0 0.8000001 0 0 0.9000001 0 0 1 0 0 0 0 0 0.1 0 0 0.2 0 0 0.3 0 0 0.4 0 0 0.5 0 0 0.6 0 0 0.7 0 0 0.8000001 0 0 0.9000001 0 0 1 0 0 0 0.1 0 0.1 0.1 0 0.2 0.1 0 0.3 0.1 0 0.4 0.1 0 0.5 0.1 0 0.6 0.1 0 0.7 0.1 0 0.8000001 0.1 0 0.9000001 0.1 0 1 0.1 0 0 0.2 0 0.1 0.2 0 0.2 0.2 0 0.3 0.2 0 0.4 0.2 0 0.5 0.2 0 0.6 0.2 0 0.7 0.2 0 0.8000001 0.2 0 0.9000001 0.2 0 1 0.2 0 0 0.3 0 0.1 0.3 0 0.2 0.3 0 0.3 0.3 0 0.4 0.3 0 0.5 0.3 0 0.6 0.3 0 0.7 0.3 0 0.8000001 0.3 0 0.9000001 0.3 0 1 0.3 0 0 0.4 0 0.1 0.4 0 0.2 0.4 0 0.3 0.4 0 0.4 0.4 0 0.5 0.4 0 0.6 0.4 0 0.7 0.4 0 0.8000001 0.4 0 0.9000001 0.4 0 1 0.4 0 0 0.5 0 0.1 0.5 0 0.2 0.5 0 0.3 0.5 0 0.4 0.5 0 0.5 0.5 0 0.6 0.5 0 0.7 0.5 0 0.8000001 0.5 0 0.9000001 0.5 0 1 0.5 0 0 0.6 0 0.1 0.6 0 0.2 0.6 0 0.3 0.6 0 0.4 0.6 0 0.5 0.6 0 0.6 0.6 0 0.7 0.6 0 0.8000001 0.6 0 0.9000001 0.6 0 1 0.6 0 0 0.7 0 0.1 0.7 0 0.2 0.7 0 0.3 0.7 0 0.4 0.7 0 0.5 0.7 0 0.6 0.7 0 0.7 0.7 0 0.8000001 0.7 0 0.9000001 0.7 0 1 0.7 0 0 0.8000001 0 0.1 0.8000001 0 0.2 0.8000001 0 0.3 0.8000001 0 0.4 0.8000001 0 0.5 0.8000001 0 0.6 0.8000001 0 0.7 0.8000001 0 0.8000001 0.8000001 0 0.9000001 0.8000001 0 1 0.8000001 0 0 0.9000001 0 0.1 0.9000001 0 0.2 0.9000001 0 0.3 0.9000001 0 0.4 0.9000001 0 0.5 0.9000001 0 0.6 0.9000001 0 0.7 0.9000001 0 0.8000001 0.9000001 0 0.9000001 0.9000001 0 1 0.9000001 0 0 1 0 0.1 1 0 0.2 1 0 0.3 1 0 0.4 1 0 0.5 1 0 0.6 1 0 0.7 1 0 0.8000001 1 0 0.9000001 1 0 1 1 0</float_array>
+          <technique_common>
+            <accessor source="#geom-photo-map1-array" count="143" stride="3">
+              <param name="S" type="float"/>
+              <param name="T" type="float"/>
+              <param name="P" type="float"/>
+            </accessor>
+          </technique_common>
+        </source>
+        <vertices id="geom-photo-vertices">
+          <input semantic="POSITION" source="#geom-photo-positions"/>
+        </vertices>
+        <triangles material="_1_-_Default_1" count="200">
+          <input semantic="VERTEX" source="#geom-photo-vertices" offset="0"/>
+          <input semantic="NORMAL" source="#geom-photo-normals" offset="1"/>
+          <input semantic="TEXCOORD" source="#geom-photo-map1" offset="2" set="1"/>
+          <p>11 0 33 0 1 22 12 2 34 1 3 23 12 2 34 0 1 22 12 2 34 1 3 23 13 4 35 2 5 24 13 4 35 1 3 23 13 4 35 2 5 24 14 6 36 3 7 25 14 6 36 2 5 24 14 6 36 3 7 25 15 8 37 4 9 26 15 8 37 3 7 25 15 8 37 4 9 26 16 10 38 5 11 27 16 10 38 4 9 26 16 10 38 5 11 27 17 12 39 6 13 28 17 12 39 5 11 27 17 12 39 6 13 28 18 14 40 7 15 29 18 14 40 6 13 28 18 14 40 7 15 29 19 16 41 8 17 30 19 16 41 7 15 29 19 16 41 8 17 30 20 18 42 9 19 31 20 18 42 8 17 30 20 18 42 9 19 31 21 20 43 10 21 32 21 20 43 9 19 31 22 22 44 11 0 33 23 23 45 12 2 34 23 23 45 11 0 33 23 23 45 12 2 34 24 24 46 13 4 35 24 24 46 12 2 34 24 24 46 13 4 35 25 25 47 14 6 36 25 25 47 13 4 35 25 25 47 14 6 36 26 26 48 15 8 37 26 26 48 14 6 36 26 26 48 15 8 37 27 27 49 16 10 38 27 27 49 15 8 37 27 27 49 16 10 38 28 28 50 17 12 39 28 28 50 16 10 38 28 28 50 17 12 39 29 29 51 18 14 40 29 29 51 17 12 39 29 29 51 18 14 40 30 30 52 19 16 41 30 30 52 18 14 40 30 30 52 19 16 41 31 31 53 20 18 42 31 31 53 19 16 41 31 31 53 20 18 42 32 32 54 21 20 43 32 32 54 20 18 42 33 33 55 22 22 44 34 34 56 23 23 45 34 34 56 22 22 44 34 34 56 23 23 45 35 35 57 24 24 46 35 35 57 23 23 45 35 35 57 24 24 46 36 36 58 25 25 47 36 36 58 24 24 46 36 36 58 25 25 47 37 37 59 26 26 48 37 37 59 25 25 47 37 37 59 26 26 48 38 38 60 27 27 49 38 38 60 26 26 48 38 38 60 27 27 49 39 39 61 28 28 50 39 39 61 27 27 49 39 39 61 28 28 50 40 40 62 29 29 51 40 40 62 28 28 50 40 40 62 29 29 51 41 41 63 30 30 52 41 41 63 29 29 51 41 41 63 30 30 52 42 42 64 31 31 53 42 42 64 30 30 52 42 42 64 31 31 53 43 43 65 32 32 54 43 43 65 31 31 53 44 44 66 33 33 55 45 45 67 34 34 56 45 45 67 33 33 55 45 45 67 34 34 56 46 46 68 35 35 57 46 46 68 34 34 56 46 46 68 35 35 57 47 47 69 36 36 58 47 47 69 35 35 57 47 47 69 36 36 58 48 48 70 37 37 59 48 48 70 36 36 58 48 48 70 37 37 59 49 49 71 38 38 60 49 49 71 37 37 59 49 49 71 38 38 60 50 50 72 39 39 61 50 50 72 38 38 60 50 50 72 39 39 61 51 51 73 40 40 62 51 51 73 39 39 61 51 51 73 40 40 62 52 52 74 41 41 63 52 52 74 40 40 62 52 52 74 41 41 63 53 53 75 42 42 64 53 53 75 41 41 63 53 53 75 42 42 64 54 54 76 43 43 65 54 54 76 42 42 64 55 55 77 44 44 66 56 56 78 45 45 67 56 56 78 44 44 66 56 56 78 45 45 67 57 57 79 46 46 68 57 57 79 45 45 67 57 57 79 46 46 68 58 58 80 47 47 69 58 58 80 46 46 68 58 58 80 47 47 69 59 59 81 48 48 70 59 59 81 47 47 69 59 59 81 48 48 70 60 60 82 49 49 71 60 60 82 48 48 70 60 60 82 49 49 71 61 61 83 50 50 72 61 61 83 49 49 71 61 61 83 50 50 72 62 62 84 51 51 73 62 62 84 50 50 72 62 62 84 51 51 73 63 63 85 52 52 74 63 63 85 51 51 73 63 63 85 52 52 74 64 64 86 53 53 75 64 64 86 52 52 74 64 64 86 53 53 75 65 65 87 54 54 76 65 65 87 53 53 75 66 66 88 55 55 77 67 67 89 56 56 78 67 67 89 55 55 77 67 67 89 56 56 78 68 68 90 57 57 79 68 68 90 56 56 78 68 68 90 57 57 79 69 69 91 58 58 80 69 69 91 57 57 79 69 69 91 58 58 80 70 70 92 59 59 81 70 70 92 58 58 80 70 70 92 59 59 81 71 71 93 60 60 82 71 71 93 59 59 81 71 71 93 60 60 82 72 72 94 61 61 83 72 72 94 60 60 82 72 72 94 61 61 83 73 73 95 62 62 84 73 73 95 61 61 83 73 73 95 62 62 84 74 74 96 63 63 85 74 74 96 62 62 84 74 74 96 63 63 85 75 75 97 64 64 86 75 75 97 63 63 85 75 75 97 64 64 86 76 76 98 65 65 87 76 76 98 64 64 86 77 77 99 66 66 88 78 78 100 67 67 89 78 78 100 66 66 88 78 78 100 67 67 89 79 79 101 68 68 90 79 79 101 67 67 89 79 79 101 68 68 90 80 80 102 69 69 91 80 80 102 68 68 90 80 80 102 69 69 91 81 81 103 70 70 92 81 81 103 69 69 91 81 81 103 70 70 92 82 82 104 71 71 93 82 82 104 70 70 92 82 82 104 71 71 93 83 83 105 72 72 94 83 83 105 71 71 93 83 83 105 72 72 94 84 84 106 73 73 95 84 84 106 72 72 94 84 84 106 73 73 95 85 85 107 74 74 96 85 85 107 73 73 95 85 85 107 74 74 96 86 86 108 75 75 97 86 86 108 74 74 96 86 86 108 75 75 97 87 87 109 76 76 98 87 87 109 75 75 97 88 88 110 77 77 99 89 89 111 78 78 100 89 89 111 77 77 99 89 89 111 78 78 100 90 90 112 79 79 101 90 90 112 78 78 100 90 90 112 79 79 101 91 91 113 80 80 102 91 91 113 79 79 101 91 91 113 80 80 102 92 92 114 81 81 103 92 92 114 80 80 102 92 92 114 81 81 103 93 93 115 82 82 104 93 93 115 81 81 103 93 93 115 82 82 104 94 94 116 83 83 105 94 94 116 82 82 104 94 94 116 83 83 105 95 95 117 84 84 106 95 95 117 83 83 105 95 95 117 84 84 106 96 96 118 85 85 107 96 96 118 84 84 106 96 96 118 85 85 107 97 97 119 86 86 108 97 97 119 85 85 107 97 97 119 86 86 108 98 98 120 87 87 109 98 98 120 86 86 108 99 99 121 88 88 110 100 100 122 89 89 111 100 100 122 88 88 110 100 100 122 89 89 111 101 101 123 90 90 112 101 101 123 89 89 111 101 101 123 90 90 112 102 102 124 91 91 113 102 102 124 90 90 112 102 102 124 91 91 113 103 103 125 92 92 114 103 103 125 91 91 113 103 103 125 92 92 114 104 104 126 93 93 115 104 104 126 92 92 114 104 104 126 93 93 115 105 105 127 94 94 116 105 105 127 93 93 115 105 105 127 94 94 116 106 106 128 95 95 117 106 106 128 94 94 116 106 106 128 95 95 117 107 107 129 96 96 118 107 107 129 95 95 117 107 107 129 96 96 118 108 108 130 97 97 119 108 108 130 96 96 118 108 108 130 97 97 119 109 109 131 98 98 120 109 109 131 97 97 119 110 110 132 99 99 121 111 111 133 100 100 122 111 111 133 99 99 121 111 111 133 100 100 122 112 112 134 101 101 123 112 112 134 100 100 122 112 112 134 101 101 123 113 113 135 102 102 124 113 113 135 101 101 123 113 113 135 102 102 124 114 114 136 103 103 125 114 114 136 102 102 124 114 114 136 103 103 125 115 115 137 104 104 126 115 115 137 103 103 125 115 115 137 104 104 126 116 116 138 105 105 127 116 116 138 104 104 126 116 116 138 105 105 127 117 117 139 106 106 128 117 117 139 105 105 127 117 117 139 106 106 128 118 118 140 107 107 129 118 118 140 106 106 128 118 118 140 107 107 129 119 119 141 108 108 130 119 119 141 107 107 129 119 119 141 108 108 130 120 120 142 109 109 131 120 120 142 108 108 130</p>
+        </triangles>
+      </mesh>
+    </geometry>
+  </library_geometries>
+  <library_cameras>
+    <camera id="Camera01-camera" name="Camera01">
+      <optics>
+        <technique_common>
+          <perspective>
+            <xfov>45</xfov>
+            <znear>100</znear>
+            <zfar>230</zfar>
+          </perspective>
+        </technique_common>
+      </optics>
+    </camera>
+  </library_cameras>
+  <library_lights>
+    <light id="EnvironmentAmbientLight" name="EnvironmentAmbientLight">
+      <technique_common>
+        <ambient>
+          <color>1 1 1</color>
+        </ambient>
+      </technique_common>
+    </light>
+  </library_lights>
+  <library_visual_scenes>
+    <visual_scene id="MaxScene">
+      <node id="node-Camera01" name="Camera01">
+        <translate>-2.46522e-6 -120.726 -6.59582e-7</translate>
+        <rotate>-1 0 0 -90</rotate>
+        <instance_camera url="#Camera01-camera"/>
+      </node>
+      <node id="node-photo" name="photo">
+        <translate sid="translation">-8.73115e-11 3.15859e-5 89.92953</translate>
+        <rotate>-1 4.38677e-5 -4.3869e-5 -90.00168</rotate>
+        <instance_geometry url="#geom-photo">
+          <bind_material>
+            <technique_common>
+              <instance_material symbol="_1_-_Default_1" target="#_1_-_Default-material"/>
+            </technique_common>
+          </bind_material>
+        </instance_geometry>
+      </node>
+    </visual_scene>
+  </library_visual_scenes>
+  <library_animations>
+    <animation>
+      <source id="node-photo_translation.Z-input">
+        <float_array id="node-photo_translation.Z-input-array" count="51">0 0.03333333 0.06666667 0.1 0.1333333 0.1666667 0.2 0.2333333 0.2666667 0.3 0.3333333 0.3666667 0.4 0.4333333 0.4666667 0.5 0.5333333 0.5666667 0.6 0.6333333 0.6666667 0.7 0.7333333 0.7666667 0.8 0.8333333 0.8666667 0.9 0.9333333 0.9666667 1 1.033333 1.066667 1.1 1.133333 1.166667 1.2 1.233333 1.266667 1.3 1.333333 1.366667 1.4 1.433333 1.466667 1.5 1.533333 1.566667 1.6 1.633333 1.666667</float_array>
+        <technique_common>
+          <accessor source="#node-photo_translation.Z-input-array" count="51" stride="1">
+            <param name="TIME" type="float"/>
+          </accessor>
+        </technique_common>
+      </source>
+      <source id="node-photo_translation.Z-output">
+        <float_array id="node-photo_translation.Z-output-array" count="51">89.92953 84.8015 80.53265 77.06767 74.32381 72.1521 70.20586 68.7671 67.45341 66.17801 64.92162 63.67604 62.43676 61.20096 59.96666 58.73235 57.4968 56.25894 55.0178 53.77241 52.52182 51.26502 50.00089 48.72821 47.44552 46.15113 44.84294 43.51832 42.17384 40.80488 39.40487 35.90552 31.08177 24.73867 15.98857 0 4.02225 6.445704 7.471805 6.533218 3.986136 0 1.860837 2.881869 1.875389 0 0 0 0 0 0</float_array>
+        <technique_common>
+          <accessor source="#node-photo_translation.Z-output-array" count="51" stride="1">
+            <param name="Z" type="float"/>
+          </accessor>
+        </technique_common>
+      </source>
+      <source id="node-photo_translation.Z-interpolation">
+        <Name_array id="node-photo_translation.Z-interpolation-array" count="51">LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR</Name_array>
+        <technique_common>
+          <accessor source="#node-photo_translation.Z-interpolation-array" count="51" stride="1">
+            <param name="INTERPOLATION" type="name"/>
+          </accessor>
+        </technique_common>
+      </source>
+      <sampler id="node-photo_translation.Z-sampler">
+        <input semantic="INPUT" source="#node-photo_translation.Z-input"/>
+        <input semantic="OUTPUT" source="#node-photo_translation.Z-output"/>
+        <input semantic="INTERPOLATION" source="#node-photo_translation.Z-interpolation"/>
+      </sampler>
+      <channel source="#node-photo_translation.Z-sampler" target="node-photo/translation.Z"/>
+    </animation>
+  </library_animations>
+  <scene>
+    <instance_visual_scene url="#MaxScene"/>
+  </scene>
+</COLLADA>
