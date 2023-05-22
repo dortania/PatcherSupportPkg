@@ -111,5 +111,7 @@
 			</dict>
 		</dict>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Photo Booth needs access to your camera.</string>
 </dict>
 </plist>
