@@ -105,7 +105,7 @@ def signing_sanity_checks(file: Path) -> tuple[bool, bool]:  # (valid, needs_sig
     )
     if result.returncode != 0:
         error_reason = result.stderr.decode().replace(f"{file}: ", "").splitlines()[0].strip()
-        if "Signature=adhoc" in binary_details or "Authority=OCLP Signing" in binary_details:
+        if "Signature=adhoc" in binary_details or "Authority=OCLP Signing" in binary_details or "Dortania Root CA" in binary_details:
             # We will just resign it anyway
             pass
         # elif error_reason == "resource envelope is obsolete (custom omit rules)":

@@ -1,0 +1,19 @@
+[tool.isort]
+profile = "black"
+line_length = 140
+
+[tool.black]
+line-length = 140
+
+[tool.pylint.MASTER]
+init-hook = "import os, sys; sys.path.append(os.path.dirname('.'))"
+
+[tool.pylint.format]
+max-line-length = "140"
+
+[tool.pylint.'MESSAGES CONTROL']
+disable="logging-fstring-interpolation, missing-function-docstring"
+
+# If ruff is your fancy. I haven't completely tested it yet though
+[tool.ruff]
+line-length = 140
