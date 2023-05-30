@@ -100,10 +100,16 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if not args.input:
-        print("Missing arguments:")
-        print("  --input")
-        exit(1)
-
-    MoraeaBinaryMerging(input_folder=args.input, version=args.version)
+        print("No arguments provided, merging binaries from ./Files-To-Merge")
+        for folder in Path("./Files-To-Merge").iterdir():
+            if folder.is_dir():
+                print("#" * 80)
+                print(f"# Merging binaries from {folder}")
+                print("#" * 80)
+                MoraeaBinaryMerging(input_folder=folder)
+                print("- Removing input folder")
+                subprocess.run(["rm", "-rf", folder])
+    else:
+        MoraeaBinaryMerging(input_folder=args.input, version=args.version)
 
     print("- Done")
