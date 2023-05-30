@@ -1,9 +1,14 @@
+#!/usr/bin/env python3
+
 # Merge Moraea's generated binaries with PatcherSupportPkg format
 # Usage: python merge.py --version <OS version> --input <input folder>
 
+import os
 import argparse
 import subprocess
+
 from pathlib import Path
+
 
 class MoraeaBinaryMerging:
 
@@ -100,6 +105,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if not args.input:
+        os.chdir(os.path.dirname(os.path.realpath(__file__)))
         print("No arguments provided, merging binaries from ./Files-To-Merge")
         for folder in Path("./Files-To-Merge").iterdir():
             if folder.is_dir():
