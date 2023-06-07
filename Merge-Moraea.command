@@ -65,6 +65,7 @@ class MoraeaBinaryMerging:
                 "QuartzCoreOld.dylib":  f"Universal-Binaries/10.15.7-{version}/System/Library/Frameworks/QuartzCore.framework/Versions/A/QuartzCoreOld.dylib",
                 "SkyLight":             f"Universal-Binaries/10.14.6-{version}/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/SkyLight",
                 "SkyLightOld.dylib":    f"Universal-Binaries/10.14.6-{version}/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/SkyLightOld.dylib",
+                **({ "FakeLibSystem.dylib": f"Universal-Binaries/10.14.6-{version}/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/FakeLibSystem.dylib"} if int(version) >= 23 else {}),
             },
             "Zoe": {
                 "IOSurface":          f"Universal-Binaries/10.15.7-{version}/System/Library/Frameworks/IOSurface.framework/Versions/A/IOSurface",
@@ -92,6 +93,9 @@ class MoraeaBinaryMerging:
 
                 # Copy binary to destination location
                 print("    - Copying binary to destination location")
+                if not Path(self.file_map[folder][binary]).parent.exists():
+                    print("    - Creating parent folder")
+                    subprocess.run(["mkdir", "-p", Path(self.file_map[folder][binary]).parent])
                 subprocess.run(["cp", self.input_folder / f"{folder}/{binary}", self.file_map[folder][binary]])
 
 
