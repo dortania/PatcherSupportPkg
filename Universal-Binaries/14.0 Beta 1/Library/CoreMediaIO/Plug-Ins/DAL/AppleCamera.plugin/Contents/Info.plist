@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>BuildMachineOSBuild</key>
+	<string>22A380010</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>English</string>
+	<key>CFBundleExecutable</key>
+	<string>AppleCamera</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.apple.cmio.DAL.AppleCamera</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Apple Camera</string>
+	<key>CFBundlePackageType</key>
+	<string>BNDL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>400.7.13</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleSupportedPlatforms</key>
+	<array>
+		<string>MacOSX</string>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>AppleCameraDeviceAbstractionLayer-7.13.0</string>
+	<key>CFPlugInFactories</key>
+	<dict>
+		<key>3A06A710-6A71-48F1-93CE-1521DC01C0E7</key>
+		<string>AppleCameraNewPlugIn</string>
+	</dict>
+	<key>CFPlugInTypes</key>
+	<dict>
+		<key>30010C1C-93BF-11D8-8B5B-000A95AF9C6A</key>
+		<array>
+			<string>3A06A710-6A71-48F1-93CE-1521DC01C0E7</string>
+		</array>
+	</dict>
+	<key>CMIOHardwareAssistantServiceNames</key>
+	<array>
+		<string>com.apple.cmio.AppleCameraAssistant</string>
+	</array>
+	<key>CMIOHardwarePlugInLazyLoadingInfo</key>
+	<array>
+		<dict>
+			<key>IOClass</key>
+			<string>AppleCamIn</string>
+			<key>IOPCIMatch</key>
+			<string>0x157014E4</string>
+			<key>IOPCITunnelCompatible</key>
+			<true/>
+			<key>IOProviderClass</key>
+			<string>IOPCIDevice</string>
+		</dict>
+	</array>
+	<key>DTCompiler</key>
+	<string>com.apple.compilers.llvm.clang.1_0</string>
+	<key>DTPlatformBuild</key>
+	<string>22F80</string>
+	<key>DTPlatformName</key>
+	<string>macosx</string>
+	<key>DTPlatformVersion</key>
+	<string>13.4</string>
+	<key>DTSDKBuild</key>
+	<string>22F80</string>
+	<key>DTSDKName</key>
+	<string>macosx13.4.internal</string>
+	<key>DTXcode</key>
+	<string>1430</string>
+	<key>DTXcodeBuild</key>
+	<string>14E6097d</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.4</string>
+</dict>
+</plist>
