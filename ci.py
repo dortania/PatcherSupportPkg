@@ -105,7 +105,10 @@ def signing_sanity_checks(file: Path) -> tuple[bool, bool]:  # (valid, needs_sig
     )
     if result.returncode != 0:
         error_reason = result.stderr.decode().replace(f"{file}: ", "").splitlines()[0].strip()
-        if "Signature=adhoc" in binary_details or "Authority=OCLP Signing" in binary_details or "Dortania Root CA" in binary_details:
+        if result.returncode == 3:
+            # We don't care about requirements
+            pass
+        elif "Signature=adhoc" in binary_details:
             # We will just resign it anyway
             pass
         # elif error_reason == "resource envelope is obsolete (custom omit rules)":
@@ -134,12 +137,17 @@ def signing_sanity_checks(file: Path) -> tuple[bool, bool]:  # (valid, needs_sig
         print()
         return False, False
 
+    if "Authority=Dortania Root CA" in binary_details:
+        # We have pushed a signed binary already to the repo.
+        # This means that CI signing cannot handle this binary. Do not resign, use as is.
+        return True, False
+
     if "Authority=Apple Root CA" in binary_details:
         # File is signed by Apple, and we have already checked that it is valid
         return True, False
 
-    # Anything past here should be adhoc or OCLP signed
-    if not (f"Authority={IDENTITY}" in binary_details or "Signature=adhoc" in binary_details):
+    # Anything past here should be adhoc signed
+    if "Signature=adhoc" not in binary_details:
         raise RuntimeError(f"Unknown signing authority: {binary_details}")
 
     if entitlements.strip():
@@ -166,15 +174,16 @@ if __name__ == "__main__":
         sys.exit(1)
     machos_to_sign = []
     all_valid = True
-    for macho, magic in machos.items():
-        thin_macho(macho, magic)
-
+    for macho, _ in machos.items():
         valid, needs_signing = signing_sanity_checks(macho)
         all_valid &= valid
         if needs_signing:
             machos_to_sign.append(macho)
     if not all_valid:
         sys.exit(1)
+
+    for macho, magic in machos.items():
+        thin_macho(macho, magic)
 
     for macho in machos_to_sign:
         sign_macho(macho)
