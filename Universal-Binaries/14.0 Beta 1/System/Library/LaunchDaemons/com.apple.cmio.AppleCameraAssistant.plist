@@ -11,10 +11,7 @@
 	</dict>
 	<key>ProgramArguments</key>
 	<array>
-		<!-- Original Path: -->
-		<!--  /System/Library/Frameworks/CoreMediaIO.framework/Versions/A/Resources/AppleCamera.plugin/Contents/Resources/AppleCameraAssistant -->
-		<!-- Moved to avoid editing root -->
-		<string>/Library/CoreMediaIO/Plug-Ins/DAL/AppleCamera.plugin/Contents/Resources/AppleCameraAssistant</string>
+		<string>/System/Library/Frameworks/CoreMediaIO.framework/Versions/A/Resources/AppleCamera.plugin/Contents/Resources/AppleCameraAssistant</string>
 	</array>
 	<key>ThrottleInterval</key>
 	<integer>1</integer>
