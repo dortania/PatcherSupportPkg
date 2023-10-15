@@ -1,0 +1,12 @@
+0x2be30028		kEOSTraceCodeServiceStart
+0x2be30050		kEOSTraceCodeServiceAcceptConnection
+0x2be30078		kEOSTraceCodeShouldHealStart
+0x2be300a0		kEOSTraceCodeWaitForBootStart
+0x2be300c8		kEOSTraceCodeReceivedConnectedNotification
+0x2be300d0      kEOSTraceCodeReceivedUnresponsiveNotification
+0x2be300d8      kEOSTraceCodeInitialGestaltQueryStart
+0x2be300e0      kEOSTraceCodeInitialGestaltQueryEnd
+0x2be300f0		kEOSTraceCodeWaitForBootEnd
+0x2be30118		kEOSTraceCodeVersionCheckStart
+0x2be30140		kEOSTraceCodeVersionCheckEnd
+0x2be30168		kEOSTraceCodeShouldHealEnd
