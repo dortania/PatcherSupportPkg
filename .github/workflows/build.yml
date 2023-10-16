@@ -15,12 +15,13 @@ jobs:
   build_mojave:
     name: Zip and Upload Binaries
     strategy:
+      fail-fast: false
       matrix:
         os: [macos-11, macos-12, macos-13]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v3
-      - uses: dhinakg/import-codesign-certs@v4
+      - uses: dhinakg/import-codesign-certs@test
         with:
           p12-file-base64: ${{ secrets.CERTIFICATES_P12 }}
           p12-password: ${{ secrets.CERTIFICATES_P12_PASSWORD }}
