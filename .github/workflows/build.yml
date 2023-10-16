@@ -10,13 +10,17 @@ concurrency:
     cancel-in-progress: true
     group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
 
+
 jobs:
   build_mojave:
     name: Zip and Upload Binaries
-    runs-on: macos-13
+    strategy:
+      matrix:
+        os: [macos-11, macos-12, macos-13]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v3
-      - uses: apple-actions/import-codesign-certs@8f3fb608891dd2244cdab3d69cd68c0d37a7fe93
+      - uses: dhinakg/import-codesign-certs@v4
         with:
           p12-file-base64: ${{ secrets.CERTIFICATES_P12 }}
           p12-password: ${{ secrets.CERTIFICATES_P12_PASSWORD }}
@@ -42,7 +46,7 @@ jobs:
           mkdir deploy
           mv *.dmg sha256sum.txt deploy/
       - name: Upload to Release
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' && matrix.os == 'macos-13'
         uses: svenstaro/upload-release-action@1beeb572c19a9242f4361f4cee78f8e0d9aec5df
         with:
           file: deploy/*
