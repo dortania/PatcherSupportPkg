@@ -6,7 +6,7 @@ on:
   release:
     types: [published]
 
-concurrency:  
+concurrency:
     cancel-in-progress: true
     group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
 
@@ -25,7 +25,7 @@ jobs:
       - name: Tag folder
         run: touch Universal-Binaries/.signed
       - name: Build DMG
-        run: ./build-dmg.sh
+        run: python3 Generate-DMG.command
       - name: Generate Checksums
         run: shasum -a 256 Universal-Binaries.dmg > sha256sum.txt
       - name: Upload Universal Binaries to Artifacts
