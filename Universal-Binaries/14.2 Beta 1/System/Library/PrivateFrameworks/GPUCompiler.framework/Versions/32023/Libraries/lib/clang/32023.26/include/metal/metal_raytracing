@@ -1,0 +1,2791 @@
+// -*- Metal -*-
+//===-- metal_raytracing --------------------------------------------------===//
+// Copyright (c) 2020-2021 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_RAYTRACING
+#define __METAL_RAYTRACING
+
+#if defined(__HAVE_RAYTRACING__)
+#include <metal_graphics>
+#include <metal_visible_function_table>
+#if defined(__HAVE_RAYTRACING_INTERSECTION_QUERY__)
+#include <metal_matrix>
+#endif
+
+#pragma METAL internals : enable
+namespace metal
+{
+namespace raytracing
+{
+template <typename... Ts>
+struct _typelist
+{
+};
+
+template <typename T, typename List>
+struct _typelist_prepend;
+
+template <template <typename...> class List, typename T, typename... Ts>
+struct _typelist_prepend<T, List<Ts...>>
+{
+  using type = List<T, Ts...>;
+};
+
+template <typename List, typename T>
+struct _typelist_contains;
+
+template <template <typename...> class List, typename T, typename... Ts>
+struct _typelist_contains<List<Ts...>, T>
+    : disjunction<is_same<Ts, T>...>
+{
+};
+
+template <typename TargetList, typename AllowedList>
+struct _typelist_filter;
+
+template <template <typename...> class TargetList, typename AllowedList>
+struct _typelist_filter<TargetList<>, AllowedList>
+{
+  using type = TargetList<>;
+};
+
+template <template <typename...> class TargetList, typename AllowedList, typename T, typename... Ts>
+struct _typelist_filter<TargetList<T, Ts...>, AllowedList>
+{
+  using __tail_type = typename _typelist_filter<
+      TargetList<Ts...>,
+      AllowedList>::type;
+
+  using type = typename conditional<
+      _typelist_contains<AllowedList, T>::value,
+      typename _typelist_prepend<T, __tail_type>::type,
+      __tail_type>
+      ::type;
+};
+
+enum class triangle_cull_mode
+{
+  none = __METAL_RAYTRACING_TRIANGLE_CULL_MODE_NONE__,
+  front = __METAL_RAYTRACING_TRIANGLE_CULL_MODE_FRONT__,
+  back = __METAL_RAYTRACING_TRIANGLE_CULL_MODE_BACK__
+};
+
+enum class geometry_cull_mode
+{
+  none = __METAL_RAYTRACING_GEOMETRY_CULL_MODE_NONE__,
+  triangle = __METAL_RAYTRACING_GEOMETRY_CULL_MODE_TRIANGLE__,
+#if defined(__HAVE_RAYTRACING_CURVES__)
+  curve = __METAL_RAYTRACING_GEOMETRY_CULL_MODE_CURVE__,
+#endif
+  bounding_box = __METAL_RAYTRACING_GEOMETRY_CULL_MODE_BOUNDING_BOX__
+};
+
+#if defined(__HAVE_RAYTRACING_CURVES__)
+METAL_FUNC constexpr geometry_cull_mode operator|(geometry_cull_mode x, geometry_cull_mode y)
+{
+  using storage_type = underlying_type<geometry_cull_mode>::type;
+  return static_cast<geometry_cull_mode>(static_cast<storage_type>(x) | static_cast<storage_type>(y));
+}
+METAL_FUNC constexpr geometry_cull_mode operator&(geometry_cull_mode x, geometry_cull_mode y)
+{
+  using storage_type = underlying_type<geometry_cull_mode>::type;
+  return static_cast<geometry_cull_mode>(static_cast<storage_type>(x) & static_cast<storage_type>(y));
+}
+METAL_FUNC constexpr geometry_cull_mode operator^(geometry_cull_mode x, geometry_cull_mode y)
+{
+  using storage_type = underlying_type<geometry_cull_mode>::type;
+  constexpr const auto all = static_cast<storage_type>(geometry_cull_mode::triangle | geometry_cull_mode::bounding_box | geometry_cull_mode::curve);
+  return static_cast<geometry_cull_mode>((static_cast<storage_type>(x) ^ static_cast<storage_type>(y)) & all);
+}
+METAL_FUNC constexpr geometry_cull_mode operator~(geometry_cull_mode y)
+{
+  using storage_type = underlying_type<geometry_cull_mode>::type;
+  constexpr const auto all = static_cast<storage_type>(geometry_cull_mode::triangle | geometry_cull_mode::bounding_box | geometry_cull_mode::curve);
+  return static_cast<geometry_cull_mode>((~static_cast<storage_type>(y)) & all);
+}
+METAL_FUNC constexpr thread geometry_cull_mode &operator|=(thread geometry_cull_mode &x, geometry_cull_mode y)
+{
+  return x = x | y;
+}
+METAL_FUNC constexpr thread geometry_cull_mode &operator&=(thread geometry_cull_mode &x, geometry_cull_mode y)
+{
+  return x = x & y;
+}
+METAL_FUNC constexpr thread geometry_cull_mode &operator^=(thread geometry_cull_mode &x, geometry_cull_mode y)
+{
+  return x = x ^ y;
+}
+#endif
+
+enum class opacity_cull_mode
+{
+  none = __METAL_RAYTRACING_OPACITY_CULL_MODE_NONE__,
+  opaque = __METAL_RAYTRACING_OPACITY_CULL_MODE_OPAQUE__,
+  non_opaque = __METAL_RAYTRACING_OPACITY_CULL_MODE_NON_OPAQUE__
+};
+
+enum class forced_opacity
+{
+  none = __METAL_RAYTRACING_FORCED_OPACITY_NONE__,
+  opaque = __METAL_RAYTRACING_FORCED_OPACITY_OPAQUE__,
+  non_opaque = __METAL_RAYTRACING_FORCED_OPACITY_NON_OPAQUE__
+};
+
+enum class geometry_type
+{
+  none = __METAL_RAYTRACING_GEOMETRY_TYPE_NONE__,
+  triangle = __METAL_RAYTRACING_GEOMETRY_TYPE_TRIANGLE__,
+  bounding_box = __METAL_RAYTRACING_GEOMETRY_TYPE_BOUNDING_BOX__,
+#if defined(__HAVE_RAYTRACING_CURVES__)
+  curve = __METAL_RAYTRACING_GEOMETRY_TYPE_CURVE__,
+#endif
+  all = __METAL_RAYTRACING_GEOMETRY_TYPE_TRIANGLE__ | __METAL_RAYTRACING_GEOMETRY_TYPE_BOUNDING_BOX__
+#if defined(__HAVE_RAYTRACING_CURVES__)
+    | __METAL_RAYTRACING_GEOMETRY_TYPE_CURVE__
+#endif
+};
+
+METAL_FUNC constexpr geometry_type operator|(geometry_type x, geometry_type y)
+{
+  using storage_type = underlying_type<geometry_type>::type;
+  return static_cast<geometry_type>(static_cast<storage_type>(x) | static_cast<storage_type>(y));
+}
+METAL_FUNC constexpr geometry_type operator&(geometry_type x, geometry_type y)
+{
+  using storage_type = underlying_type<geometry_type>::type;
+  return static_cast<geometry_type>(static_cast<storage_type>(x) & static_cast<storage_type>(y));
+}
+METAL_FUNC constexpr geometry_type operator^(geometry_type x, geometry_type y)
+{
+  using storage_type = underlying_type<geometry_type>::type;
+  return static_cast<geometry_type>((static_cast<storage_type>(x) ^ static_cast<storage_type>(y)) & static_cast<storage_type>(geometry_type::all));
+}
+METAL_FUNC constexpr geometry_type operator~(geometry_type y)
+{
+  using storage_type = underlying_type<geometry_type>::type;
+  return static_cast<geometry_type>((~static_cast<storage_type>(y)) & static_cast<storage_type>(geometry_type::all));
+}
+METAL_FUNC constexpr thread geometry_type &operator|=(thread geometry_type &x, geometry_type y)
+{
+  return x = x | y;
+}
+METAL_FUNC constexpr thread geometry_type &operator&=(thread geometry_type &x, geometry_type y)
+{
+  return x = x & y;
+}
+METAL_FUNC constexpr thread geometry_type &operator^=(thread geometry_type &x, geometry_type y)
+{
+  return x = x ^ y;
+}
+
+#if defined(__HAVE_RAYTRACING_CURVES__)
+enum class curve_basis : uint
+{
+  bspline = __METAL_RAYTRACING_CURVE_BASIS_BSPLINE__,
+  catmull_rom = __METAL_RAYTRACING_CURVE_BASIS_CATMULL_ROM__,
+  linear = __METAL_RAYTRACING_CURVE_BASIS_LINEAR__,
+  bezier = __METAL_RAYTRACING_CURVE_BASIS_BEZIER__,
+  all = __METAL_RAYTRACING_CURVE_BASIS_ALL__,
+};
+
+enum class curve_type : uint
+{
+  round = __METAL_RAYTRACING_CURVE_TYPE_ROUND__,
+  flat = __METAL_RAYTRACING_CURVE_TYPE_FLAT__,
+  all = __METAL_RAYTRACING_CURVE_TYPE_ALL__,
+};
+#endif
+
+enum class intersection_type
+{
+  none = __METAL_RAYTRACING_INTERSECTION_TYPE_NONE__,
+  triangle = __METAL_RAYTRACING_INTERSECTION_TYPE_TRIANGLE__,
+  bounding_box = __METAL_RAYTRACING_INTERSECTION_TYPE_BOUNDING_BOX__
+#if defined(__HAVE_RAYTRACING_CURVES__)
+  , curve = __METAL_RAYTRACING_INTERSECTION_TYPE_CURVE__
+#endif
+};
+
+
+struct instancing
+{
+};
+#if defined(__HAVE_RAYTRACING_MULTI_LEVEL_INSTANCING__)
+template <uint Count>
+struct max_levels
+{
+};
+#endif
+struct triangle_data
+{
+};
+#if defined(__HAVE_RAYTRACING_CURVES__)
+struct curve_data
+{
+};
+#endif
+struct world_space_data
+{
+};
+#if defined(__HAVE_RAYTRACING_MOTION__)
+struct primitive_motion
+{
+};
+struct instance_motion
+{
+};
+#endif
+#if defined(__HAVE_RAYTRACING_EXTENDED_LIMITS__)
+struct extended_limits
+{
+};
+#endif
+
+#if defined(__HAVE_RAYTRACING_MULTI_LEVEL_INSTANCING__)
+template <template <uint N> class Templated, typename T>
+struct _instantiated_from : false_type {};
+
+template <template <uint N> class Templated, int N>
+struct _instantiated_from< Templated, Templated< N > > : true_type {};
+
+template <typename T>
+struct _is_max_levels : _instantiated_from<max_levels, T> {};
+#endif
+
+template <typename>
+struct _intersection_tag_to_flag : integral_constant<uint, 0>
+{
+};
+template <>
+struct _intersection_tag_to_flag<instancing> : integral_constant<uint, __METAL_RAYTRACING_INTERSECTION_TAG_INSTANCING__>
+{
+};
+#if defined(__HAVE_RAYTRACING_MULTI_LEVEL_INSTANCING__)
+template <uint Count>
+struct _intersection_tag_to_flag<max_levels<Count>> : integral_constant<uint, Count == 2 ? 0 : __METAL_RAYTRACING_INTERSECTION_TAG_MAX_LEVELS__>
+{
+};
+#endif
+template <>
+struct _intersection_tag_to_flag<triangle_data> : integral_constant<uint, __METAL_RAYTRACING_INTERSECTION_TAG_TRIANGLE_DATA__>
+{
+};
+#if defined(__HAVE_RAYTRACING_CURVES__)
+template <>
+struct _intersection_tag_to_flag<curve_data> : integral_constant<uint, __METAL_RAYTRACING_INTERSECTION_TAG_CURVE_DATA__>
+{
+};
+#endif
+template <>
+struct _intersection_tag_to_flag<world_space_data> : integral_constant<uint, __METAL_RAYTRACING_INTERSECTION_TAG_WORLD_SPACE_DATA__>
+{
+};
+#if defined(__HAVE_RAYTRACING_MOTION__)
+template <>
+struct _intersection_tag_to_flag<primitive_motion> : integral_constant<uint, __METAL_RAYTRACING_INTERSECTION_TAG_PRIMITIVE_MOTION__>
+{
+};
+template <>
+struct _intersection_tag_to_flag<instance_motion> : integral_constant<uint, __METAL_RAYTRACING_INTERSECTION_TAG_INSTANCE_MOTION__>
+{
+};
+#endif
+#if defined(__HAVE_RAYTRACING_EXTENDED_LIMITS__)
+template <>
+struct _intersection_tag_to_flag<extended_limits> : integral_constant<uint, __METAL_RAYTRACING_INTERSECTION_TAG_EXTENDED_LIMITS__>
+{
+};
+#endif
+
+METAL_FUNC constexpr uint _build_intersection_flags()
+{
+  return 0;
+}
+template <typename Tag, typename... Tags>
+METAL_FUNC constexpr uint _build_intersection_flags(Tag, Tags... tags)
+{
+  return _intersection_tag_to_flag<Tag>::value | _build_intersection_flags(tags...);
+}
+
+template <typename Tag>
+struct _is_intersection_tag : bool_constant<__is_metal_intersection_tag(Tag)>
+{
+};
+
+template <typename... Tags>
+struct _is_intersection_tag_sequence : conjunction<_is_intersection_tag<Tags>...>
+{
+};
+
+#if defined(__HAVE_RAYTRACING_MULTI_LEVEL_INSTANCING__)
+METAL_FUNC constexpr bool __has_max_levels()
+{
+  return false;
+}
+template <typename... Tags>
+METAL_FUNC constexpr bool __has_max_levels(instancing, Tags... tags)
+{
+  return __has_max_levels(tags...);
+}
+template <uint Count, typename... Tags>
+METAL_FUNC constexpr bool __has_max_levels(max_levels<Count>, Tags... tags)
+{
+  return true;
+}
+template <typename... Tags>
+METAL_FUNC constexpr bool __has_max_levels(triangle_data, Tags... tags)
+{
+  return __has_max_levels(tags...);
+}
+template <typename... Tags>
+METAL_FUNC constexpr bool __has_max_levels(curve_data, Tags... tags)
+{
+  return __has_max_levels(tags...);
+}
+template <typename... Tags>
+METAL_FUNC constexpr bool __has_max_levels(world_space_data, Tags... tags)
+{
+  return __has_max_levels(tags...);
+}
+template <typename... Tags>
+METAL_FUNC constexpr bool __has_max_levels(primitive_motion, Tags... tags)
+{
+  return __has_max_levels(tags...);
+}
+template <typename... Tags>
+METAL_FUNC constexpr bool __has_max_levels(instance_motion, Tags... tags)
+{
+  return __has_max_levels(tags...);
+}
+template <typename... Tags>
+METAL_FUNC constexpr bool __has_max_levels(extended_limits, Tags... tags)
+{
+  return __has_max_levels(tags...);
+}
+
+METAL_FUNC constexpr uint __get_max_levels()
+{
+  return 0;
+}
+template <typename... Tags>
+METAL_FUNC constexpr uint __get_max_levels(instancing, Tags... tags)
+{
+  return __get_max_levels(tags...);
+}
+template <uint Count, typename... Tags>
+METAL_FUNC constexpr uint __get_max_levels(max_levels<Count>, Tags... tags)
+{
+  return Count;
+}
+template <typename... Tags>
+METAL_FUNC constexpr uint __get_max_levels(triangle_data, Tags... tags)
+{
+  return __get_max_levels(tags...);
+}
+template <typename... Tags>
+METAL_FUNC constexpr uint __get_max_levels(curve_data, Tags... tags)
+{
+  return __get_max_levels(tags...);
+}
+template <typename... Tags>
+METAL_FUNC constexpr uint __get_max_levels(world_space_data, Tags... tags)
+{
+  return __get_max_levels(tags...);
+}
+template <typename... Tags>
+METAL_FUNC constexpr uint __get_max_levels(primitive_motion, Tags... tags)
+{
+  return __get_max_levels(tags...);
+}
+template <typename... Tags>
+METAL_FUNC constexpr uint __get_max_levels(instance_motion, Tags... tags)
+{
+  return __get_max_levels(tags...);
+}
+template <typename... Tags>
+METAL_FUNC constexpr uint __get_max_levels(extended_limits, Tags... tags)
+{
+  return __get_max_levels(tags...);
+}
+
+METAL_FUNC constexpr bool __has_different_max_levels(uint ml)
+{
+  return false;
+}
+template <uint Count, typename... Tags>
+METAL_FUNC constexpr bool __has_different_max_levels(uint ml, max_levels<Count>, Tags... tags)
+{
+  return Count != ml || __has_different_max_levels(ml, tags...);
+}
+template <typename... Tags>
+METAL_FUNC constexpr bool __has_different_max_levels(uint ml, instancing, Tags... tags)
+{
+  return __has_different_max_levels(ml, tags...);
+}
+template <typename... Tags>
+METAL_FUNC constexpr bool __has_different_max_levels(uint ml, triangle_data, Tags... tags)
+{
+  return __has_different_max_levels(ml, tags...);
+}
+template <typename... Tags>
+METAL_FUNC constexpr bool __has_different_max_levels(uint ml, curve_data, Tags... tags)
+{
+  return __has_different_max_levels(ml, tags...);
+}
+template <typename... Tags>
+METAL_FUNC constexpr bool __has_different_max_levels(uint ml, world_space_data, Tags... tags)
+{
+  return __has_different_max_levels(ml, tags...);
+}
+template <typename... Tags>
+METAL_FUNC constexpr bool __has_different_max_levels(uint ml, primitive_motion, Tags... tags)
+{
+  return __has_different_max_levels(ml, tags...);
+}
+template <typename... Tags>
+METAL_FUNC constexpr bool __has_different_max_levels(uint ml, instance_motion, Tags... tags)
+{
+  return __has_different_max_levels(ml, tags...);
+}
+template <typename... Tags>
+METAL_FUNC constexpr bool __has_different_max_levels(uint ml, extended_limits, Tags... tags)
+{
+  return __has_different_max_levels(ml, tags...);
+}
+
+template <typename... Tags>
+METAL_FUNC constexpr bool __is_max_levels_unique()
+{
+  return !__has_different_max_levels(__get_max_levels(Tags{}...), Tags{}...);
+}
+#endif
+
+template <typename... Tags>
+struct _is_intersection_tag_sequence_for_primitive_intersector
+    : bool_constant<
+          _is_intersection_tag_sequence<Tags...>::value &&
+          !disjunction<is_same<Tags, instancing>...>::value &&
+#if defined(__HAVE_RAYTRACING_MULTI_LEVEL_INSTANCING__)
+          !disjunction<_is_max_levels<Tags>...>::value &&
+#endif
+          !disjunction<is_same<Tags, world_space_data>...>::value &&
+#if defined(__HAVE_RAYTRACING_MOTION__)
+          !disjunction<is_same<Tags, instance_motion>...>::value &&
+          !disjunction<is_same<Tags, primitive_motion>...>::value &&
+#endif
+          true>
+{
+};
+
+#if defined(__HAVE_RAYTRACING_MOTION__)
+template <typename... Tags>
+struct _is_intersection_tag_sequence_for_primitive_intersector_with_motion
+    : bool_constant<
+          _is_intersection_tag_sequence<Tags...>::value &&
+          !disjunction<is_same<Tags, instancing>...>::value &&
+#if defined(__HAVE_RAYTRACING_MULTI_LEVEL_INSTANCING__)
+          !disjunction<_is_max_levels<Tags>...>::value &&
+#endif
+          !disjunction<is_same<Tags, world_space_data>...>::value &&
+          disjunction<is_same<Tags, primitive_motion>...>::value &&
+          !disjunction<is_same<Tags, instance_motion>...>::value>
+{
+};
+#endif
+
+template <typename... Tags>
+struct _is_intersection_tag_sequence_for_instance_intersector
+    : bool_constant<
+          _is_intersection_tag_sequence<Tags...>::value &&
+          disjunction<is_same<Tags, instancing>...>::value &&
+#if defined(__HAVE_RAYTRACING_MOTION__)
+          !disjunction<is_same<Tags, instance_motion>...>::value &&
+          !disjunction<is_same<Tags, primitive_motion>...>::value &&
+#endif
+          true>
+{
+};
+
+#if defined(__HAVE_RAYTRACING_MOTION__)
+template <typename... Tags>
+struct _is_intersection_tag_sequence_for_instance_intersector_primitive_motion
+    : bool_constant<
+          _is_intersection_tag_sequence<Tags...>::value &&
+          disjunction<is_same<Tags, instancing>...>::value &&
+          !disjunction<is_same<Tags, instance_motion>...>::value &&
+          disjunction<is_same<Tags, primitive_motion>...>::value>
+{
+};
+
+template <typename... Tags>
+struct _is_intersection_tag_sequence_for_instance_intersector_instance_motion
+    : bool_constant<
+          _is_intersection_tag_sequence<Tags...>::value &&
+          disjunction<is_same<Tags, instancing>...>::value &&
+          disjunction<is_same<Tags, instance_motion>...>::value>
+{
+};
+#endif
+
+template <typename... Tags>
+struct _is_intersection_function_table_tag_sequence
+    : bool_constant<
+          _is_intersection_tag_sequence<Tags...>::value &&
+          true>
+{
+};
+
+using _acceleration_structure_tags = _typelist<instancing
+#if defined(__HAVE_RAYTRACING_MOTION__)
+    , primitive_motion, instance_motion
+#endif
+    >;
+
+template <typename AllowedTags, typename... Tags>
+struct _is_tag_sequence : conjunction<_typelist_contains<AllowedTags, Tags>...>
+{
+};
+
+template <typename... Tags>
+struct _is_acceleration_structure_tag_sequence : _is_tag_sequence<_acceleration_structure_tags, Tags...>
+{
+};
+
+struct ray
+{
+  METAL_FUNC ray(float3 origin = 0.0f, float3 direction = 0.0f, float min_distance = 0.0f, float max_distance = INFINITY) thread
+      : origin(origin),
+        direction(direction),
+        min_distance(min_distance),
+        max_distance(max_distance)
+  {
+  }
+  METAL_FUNC ray(const thread ray &) thread = default;
+  METAL_FUNC thread ray &operator=(const thread ray &) thread = default;
+
+  float3 origin;
+  float3 direction;
+  float min_distance;
+  float max_distance;
+};
+
+struct _intersector_base_ift;
+
+template <typename, typename>
+struct _intersector_impl;
+
+#if defined(__HAVE_RAYTRACING_INTERSECTION_QUERY__)
+struct _intersection_query_ctor_reset_ext_base;
+#endif
+
+template <template <typename...> class Derived, typename Enable, typename... Tags>
+struct _acceleration_structure_base;
+
+template <template <typename...> class Derived, typename... Tags>
+struct _acceleration_structure_base<Derived, typename enable_if<!disjunction<is_same<Tags, instancing>...>::value>::type, Tags...>
+{
+protected:
+  using handle_type = __metal_primitive_acceleration_structure_t;
+  METAL_FUNC static handle_type __get_null_handle()
+  {
+    return __metal_get_null_primitive_acceleration_structure();
+  }
+  METAL_FUNC static bool __is_null_handle(handle_type as)
+  {
+    return __metal_is_null_primitive_acceleration_structure(as);
+  }
+#if defined(__HAVE_RAYTRACING_INDIRECT_INSTANCE_BUILD__)
+  METAL_FUNC static MTLResourceID __get_resource_id(handle_type as)
+  {
+    return {__metal_get_resource_id_primitive_acceleration_structure(as)};
+  }
+#endif
+};
+
+template <template <typename...> class Derived, typename... Tags>
+struct _acceleration_structure_base<Derived, typename enable_if<disjunction<is_same<Tags, instancing>...>::value>::type, Tags...>
+{
+protected:
+  using handle_type = __metal_instance_acceleration_structure_t;
+  METAL_FUNC static handle_type __get_null_handle()
+  {
+    return __metal_get_null_instance_acceleration_structure();
+  }
+  METAL_FUNC static bool __is_null_handle(handle_type as)
+  {
+    return __metal_is_null_instance_acceleration_structure(as);
+  }
+#if defined(__HAVE_RAYTRACING_INDIRECT_INSTANCE_BUILD__)
+  METAL_FUNC static MTLResourceID __get_resource_id(handle_type as)
+  {
+    return {__metal_get_resource_id_instance_acceleration_structure(as)};
+  }
+#endif
+
+public:
+#if __HAVE_RAYTRACING_INSTANCE_RANDOM_ACCESS__
+  METAL_FUNC uint get_instance_count() thread const {
+    const thread auto &derived = static_cast<const thread Derived<Tags...> &>(*this);
+    return __metal_get_instance_count_instance_acceleration_structure(derived.as);
+  }
+  METAL_FUNC uint get_instance_count() device const {
+    const device auto &derived = static_cast<const device Derived<Tags...> &>(*this);
+    return __metal_get_instance_count_instance_acceleration_structure(derived.as);
+  }
+  METAL_FUNC uint get_instance_count() constant const {
+    const constant auto &derived = static_cast<const constant Derived<Tags...> &>(*this);
+    return __metal_get_instance_count_instance_acceleration_structure(derived.as);
+  }
+  METAL_FUNC uint get_instance_count() ray_data const {
+    const ray_data auto &derived = static_cast<const ray_data Derived<Tags...> &>(*this);
+    return __metal_get_instance_count_instance_acceleration_structure(derived.as);
+  }
+  METAL_FUNC uint get_instance_count() object_data const {
+    const object_data auto &derived = static_cast<const object_data Derived<Tags...> &>(*this);
+    return __metal_get_instance_count_instance_acceleration_structure(derived.as);
+  }
+
+  template <typename... ResultTags>
+  METAL_FUNC typename enable_if<disjunction_v<is_same<instancing, ResultTags>...>, Derived<ResultTags...> >::type get_acceleration_structure(uint instance_id) thread const
+  {
+    const thread auto &derived = static_cast<const thread Derived<Tags...> &>(*this);
+    return Derived<ResultTags...>(__metal_get_instance_acceleration_structure_instance_acceleration_structure(derived.as, instance_id));
+  }
+
+  template <typename... ResultTags>
+  METAL_FUNC typename enable_if<!disjunction_v<is_same<instancing, ResultTags>...>, Derived<ResultTags...> >::type get_acceleration_structure(uint instance_id) thread const
+  {
+    const thread auto &derived = static_cast<const thread Derived<Tags...> &>(*this);
+    return Derived<ResultTags...>(__metal_get_primitive_acceleration_structure_instance_acceleration_structure(derived.as, instance_id));
+  }
+  template <typename... ResultTags>
+  METAL_FUNC typename enable_if<disjunction_v<is_same<instancing, ResultTags>...>, Derived<ResultTags...> >::type get_acceleration_structure(uint instance_id) device const
+  {
+    const device auto &derived = static_cast<const device Derived<Tags...> &>(*this);
+    return Derived<ResultTags...>(__metal_get_instance_acceleration_structure_instance_acceleration_structure(derived.as, instance_id));
+  }
+
+  template <typename... ResultTags>
+  METAL_FUNC typename enable_if<!disjunction_v<is_same<instancing, ResultTags>...>, Derived<ResultTags...> >::type get_acceleration_structure(uint instance_id) device const
+  {
+    const device auto &derived = static_cast<const device Derived<Tags...> &>(*this);
+    return Derived<ResultTags...>(__metal_get_primitive_acceleration_structure_instance_acceleration_structure(derived.as, instance_id));
+  }
+  template <typename... ResultTags>
+  METAL_FUNC typename enable_if<disjunction_v<is_same<instancing, ResultTags>...>, Derived<ResultTags...> >::type get_acceleration_structure(uint instance_id) constant const
+  {
+    const constant auto &derived = static_cast<const constant Derived<Tags...> &>(*this);
+    return Derived<ResultTags...>(__metal_get_instance_acceleration_structure_instance_acceleration_structure(derived.as, instance_id));
+  }
+
+  template <typename... ResultTags>
+  METAL_FUNC typename enable_if<!disjunction_v<is_same<instancing, ResultTags>...>, Derived<ResultTags...> >::type get_acceleration_structure(uint instance_id) constant const
+  {
+    const constant auto &derived = static_cast<const constant Derived<Tags...> &>(*this);
+    return Derived<ResultTags...>(__metal_get_primitive_acceleration_structure_instance_acceleration_structure(derived.as, instance_id));
+  }
+  template <typename... ResultTags>
+  METAL_FUNC typename enable_if<disjunction_v<is_same<instancing, ResultTags>...>, Derived<ResultTags...> >::type get_acceleration_structure(uint instance_id) ray_data const
+  {
+    const ray_data auto &derived = static_cast<const ray_data Derived<Tags...> &>(*this);
+    return Derived<ResultTags...>(__metal_get_instance_acceleration_structure_instance_acceleration_structure(derived.as, instance_id));
+  }
+
+  template <typename... ResultTags>
+  METAL_FUNC typename enable_if<!disjunction_v<is_same<instancing, ResultTags>...>, Derived<ResultTags...> >::type get_acceleration_structure(uint instance_id) ray_data const
+  {
+    const ray_data auto &derived = static_cast<const ray_data Derived<Tags...> &>(*this);
+    return Derived<ResultTags...>(__metal_get_primitive_acceleration_structure_instance_acceleration_structure(derived.as, instance_id));
+  }
+  template <typename... ResultTags>
+  METAL_FUNC typename enable_if<disjunction_v<is_same<instancing, ResultTags>...>, Derived<ResultTags...> >::type get_acceleration_structure(uint instance_id) object_data const
+  {
+    const object_data auto &derived = static_cast<const object_data Derived<Tags...> &>(*this);
+    return Derived<ResultTags...>(__metal_get_instance_acceleration_structure_instance_acceleration_structure(derived.as, instance_id));
+  }
+
+  template <typename... ResultTags>
+  METAL_FUNC typename enable_if<!disjunction_v<is_same<instancing, ResultTags>...>, Derived<ResultTags...> >::type get_acceleration_structure(uint instance_id) object_data const
+  {
+    const object_data auto &derived = static_cast<const object_data Derived<Tags...> &>(*this);
+    return Derived<ResultTags...>(__metal_get_primitive_acceleration_structure_instance_acceleration_structure(derived.as, instance_id));
+  }
+#endif
+};
+
+template <typename... Tags> struct _acceleration_structure;
+
+template <typename... Tags>
+METAL_FUNC bool __is_null_acceleration_structure(_acceleration_structure<Tags...>);
+
+template <typename... Tags>
+struct _acceleration_structure : _acceleration_structure_base<_acceleration_structure, void, Tags...>
+{
+private:
+  static_assert(_is_acceleration_structure_tag_sequence<Tags...>::value, "invalid acceleration_structure template argument tag");
+  using super = _acceleration_structure_base<_acceleration_structure, void, Tags...>;
+  using handle_type = typename super::handle_type;
+
+public:
+  METAL_FUNC _acceleration_structure() thread : as(super::__get_null_handle()) {}
+  METAL_FUNC _acceleration_structure() constant : as(super::__get_null_handle()) {}
+  METAL_FUNC _acceleration_structure() ray_data : as(super::__get_null_handle()) {}
+
+  METAL_FUNC _acceleration_structure(const thread _acceleration_structure &) thread = default;
+  METAL_FUNC _acceleration_structure(const device _acceleration_structure &) thread = default;
+  METAL_FUNC _acceleration_structure(const constant _acceleration_structure &) thread = default;
+  METAL_FUNC _acceleration_structure(const ray_data _acceleration_structure &) thread = default;
+#if defined(__HAVE_MESH__)
+  METAL_FUNC _acceleration_structure(const object_data _acceleration_structure &) thread = default;
+#endif
+  METAL_FUNC _acceleration_structure(const thread _acceleration_structure &) constant = default;
+  METAL_FUNC _acceleration_structure(const device _acceleration_structure &) constant = default;
+  METAL_FUNC _acceleration_structure(const constant _acceleration_structure &) constant = default;
+  METAL_FUNC _acceleration_structure(const ray_data _acceleration_structure &) constant = default;
+#if defined(__HAVE_MESH__)
+  METAL_FUNC _acceleration_structure(const object_data _acceleration_structure &) constant = default;
+#endif
+  METAL_FUNC _acceleration_structure(const thread _acceleration_structure &) ray_data = default;
+  METAL_FUNC _acceleration_structure(const device _acceleration_structure &) ray_data = default;
+  METAL_FUNC _acceleration_structure(const constant _acceleration_structure &) ray_data = default;
+  METAL_FUNC _acceleration_structure(const ray_data _acceleration_structure &) ray_data = default;
+#if defined(__HAVE_MESH__)
+  METAL_FUNC _acceleration_structure(const object_data _acceleration_structure &) ray_data = default;
+#endif
+
+  METAL_FUNC thread _acceleration_structure &operator=(const thread _acceleration_structure &) thread = default;
+  METAL_FUNC thread _acceleration_structure &operator=(const device _acceleration_structure &) thread = default;
+  METAL_FUNC thread _acceleration_structure &operator=(const constant _acceleration_structure &) thread = default;
+  METAL_FUNC thread _acceleration_structure &operator=(const ray_data _acceleration_structure &) thread = default;
+#if defined(__HAVE_MESH__)
+  METAL_FUNC thread _acceleration_structure &operator=(const object_data _acceleration_structure &) thread = default;
+#endif
+  METAL_FUNC device _acceleration_structure &operator=(const thread _acceleration_structure &) device = default;
+  METAL_FUNC device _acceleration_structure &operator=(const device _acceleration_structure &) device = default;
+  METAL_FUNC device _acceleration_structure &operator=(const constant _acceleration_structure &) device = default;
+  METAL_FUNC device _acceleration_structure &operator=(const ray_data _acceleration_structure &) device = default;
+#if defined(__HAVE_MESH__)
+  METAL_FUNC device _acceleration_structure &operator=(const object_data _acceleration_structure &) device = default;
+#endif
+  METAL_FUNC ray_data _acceleration_structure &operator=(const thread _acceleration_structure &) ray_data = default;
+  METAL_FUNC ray_data _acceleration_structure &operator=(const device _acceleration_structure &) ray_data = default;
+  METAL_FUNC ray_data _acceleration_structure &operator=(const constant _acceleration_structure &) ray_data = default;
+  METAL_FUNC ray_data _acceleration_structure &operator=(const ray_data _acceleration_structure &) ray_data = default;
+#if defined(__HAVE_MESH__)
+  METAL_FUNC ray_data _acceleration_structure &operator=(const object_data _acceleration_structure &) ray_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data _acceleration_structure &operator=(const thread _acceleration_structure &) object_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data _acceleration_structure &operator=(const device _acceleration_structure &) object_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data _acceleration_structure &operator=(const constant _acceleration_structure &) object_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data _acceleration_structure &operator=(const ray_data _acceleration_structure &) object_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data _acceleration_structure &operator=(const object_data _acceleration_structure &) object_data = default;
+#endif
+
+#if __HAVE_RAYTRACING_INDIRECT_INSTANCE_BUILD__
+  operator MTLResourceID() thread const {
+    return super::__get_resource_id(as);
+  }
+  operator MTLResourceID() constant const {
+    return super::__get_resource_id(as);
+  }
+  operator MTLResourceID() ray_data const {
+    return super::__get_resource_id(as);
+  }
+#endif
+
+private:
+  METAL_FUNC _acceleration_structure(handle_type as) thread : as(as) {}
+  METAL_FUNC _acceleration_structure(handle_type as) constant : as(as) {}
+  METAL_FUNC _acceleration_structure(handle_type as) ray_data : as(as) {}
+
+private:
+  handle_type as;
+
+  friend struct _intersector_base_ift;
+#if defined(__HAVE_RAYTRACING_INTERSECTION_QUERY__)
+  friend struct _intersection_query_ctor_reset_ext_base;
+#endif
+  friend bool __is_null_acceleration_structure<Tags...>(_acceleration_structure<Tags...>);
+  template <template <typename...> class Derived, typename Enable, typename... OtherTags>
+  friend struct _acceleration_structure_base;
+};
+
+template <typename... Tags>
+METAL_FUNC bool __is_null_acceleration_structure(_acceleration_structure<Tags...> as)
+{
+  return _acceleration_structure<Tags...>::__is_null_handle(as.as);
+}
+
+#if defined(__HAVE_RAYTRACING_MOTION__)
+template <typename... Tags>
+using acceleration_structure = _acceleration_structure<Tags...>;
+
+using primitive_acceleration_structure = acceleration_structure<>;
+using instance_acceleration_structure = acceleration_structure<instancing>;
+
+template <typename... Tags>
+METAL_FUNC bool is_null_acceleration_structure(acceleration_structure<Tags...> as)
+{
+  return __is_null_acceleration_structure(as);
+}
+
+template <typename... Tags>
+using _filtered_acceleration_structure = typename _typelist_filter<
+    acceleration_structure<Tags...>,
+    _acceleration_structure_tags>
+    ::type;
+#else
+using primitive_acceleration_structure = _acceleration_structure<>;
+using instance_acceleration_structure = _acceleration_structure<instancing>;
+#endif
+
+METAL_FUNC bool is_null_primitive_acceleration_structure(primitive_acceleration_structure as)
+{
+  return __is_null_acceleration_structure(as);
+}
+METAL_FUNC bool is_null_instance_acceleration_structure(instance_acceleration_structure as)
+{
+  return __is_null_acceleration_structure(as);
+}
+
+struct _intersection_result_base
+{
+  METAL_FUNC _intersection_result_base() thread
+      : type(intersection_type::none), distance(0.0f), primitive_id(0), geometry_id(0)
+#if defined(__HAVE_RAYTRACING_PRIMITIVE_DATA__)
+      , primitive_data(nullptr)
+#endif
+  {
+  }
+  METAL_FUNC _intersection_result_base(const thread _intersection_result_base &) thread = default;
+  METAL_FUNC thread _intersection_result_base &operator=(const thread _intersection_result_base &) thread = default;
+
+private:
+  METAL_FUNC thread uint *__get_type_ptr() thread
+  {
+    return reinterpret_cast<thread uint *>(&type);
+  }
+
+  METAL_FUNC thread float *__get_distance_ptr() thread
+  {
+    return &distance;
+  }
+
+  METAL_FUNC thread uint *__get_primitive_id_ptr() thread
+  {
+    return &primitive_id;
+  }
+
+  METAL_FUNC thread uint *__get_geometry_id_ptr() thread
+  {
+    return &geometry_id;
+  }
+
+  METAL_FUNC void const device * thread *__get_primitive_data_ptr() thread
+  {
+#if defined(__HAVE_RAYTRACING_PRIMITIVE_DATA__)
+    return &primitive_data;
+#else
+    return nullptr;
+#endif
+  }
+
+public:
+  intersection_type type;
+  float distance;
+  uint primitive_id;
+  uint geometry_id;
+#if defined(__HAVE_RAYTRACING_PRIMITIVE_DATA__)
+  const device void *primitive_data;
+#endif
+
+  friend struct _intersector_base_ift;
+};
+
+template <typename, typename... Tags>
+struct _intersection_result_instancing_ext
+{
+  METAL_FUNC _intersection_result_instancing_ext() thread = default;
+  METAL_FUNC _intersection_result_instancing_ext(const thread _intersection_result_instancing_ext &) thread = default;
+  METAL_FUNC thread _intersection_result_instancing_ext &operator=(const thread _intersection_result_instancing_ext &) thread = default;
+
+private:
+  METAL_FUNC thread uint *__get_instance_id_ptr() thread
+  {
+    return nullptr;
+  }
+
+  METAL_FUNC thread uint *__get_user_instance_id_ptr() thread
+  {
+    return nullptr;
+  }
+
+#if defined(__HAVE_RAYTRACING_MULTI_LEVEL_INSTANCING__)
+  METAL_FUNC thread uint *__get_instance_count_ptr() thread
+  {
+    return nullptr;
+  }
+#endif
+
+private:
+  friend struct _intersector_base_ift;
+};
+
+template <typename... Tags>
+struct _intersection_result_instancing_ext<typename enable_if<disjunction_v<is_same<Tags, instancing>...>
+#if defined(__HAVE_RAYTRACING_MULTI_LEVEL_INSTANCING__)
+                                                              && !disjunction_v<_is_max_levels<Tags>...>
+#endif
+                                                              >::type,
+                                           Tags...>
+{
+  METAL_FUNC _intersection_result_instancing_ext() thread
+      : instance_id(0)
+#if defined(__HAVE_RAYTRACING_USER_INSTANCE_ID__)
+      , user_instance_id(0)
+#endif
+  {
+  }
+  METAL_FUNC _intersection_result_instancing_ext(const thread _intersection_result_instancing_ext &) thread = default;
+  METAL_FUNC thread _intersection_result_instancing_ext &operator=(const thread _intersection_result_instancing_ext &) thread = default;
+
+private:
+  METAL_FUNC thread uint *__get_instance_id_ptr() thread
+  {
+    return &instance_id;
+  }
+
+  METAL_FUNC thread uint *__get_user_instance_id_ptr() thread
+  {
+#if defined(__HAVE_RAYTRACING_USER_INSTANCE_ID__)
+    return &user_instance_id;
+#else
+    return nullptr;
+#endif
+  }
+
+#if defined(__HAVE_RAYTRACING_MULTI_LEVEL_INSTANCING__)
+  METAL_FUNC thread uint *__get_instance_count_ptr() thread
+  {
+    return nullptr;
+  }
+#endif
+
+public:
+  uint instance_id;
+#if defined(__HAVE_RAYTRACING_USER_INSTANCE_ID__)
+  uint user_instance_id;
+#endif
+
+private:
+  friend struct _intersector_base_ift;
+};
+
+#if defined(__HAVE_RAYTRACING_MULTI_LEVEL_INSTANCING__)
+template <typename... Tags>
+struct _intersection_result_instancing_ext<typename enable_if<disjunction_v<is_same<Tags, instancing>...> && disjunction_v<_is_max_levels<Tags>...> >::type, Tags...>
+{
+  METAL_FUNC _intersection_result_instancing_ext() thread
+      : instance_count(0)
+  {
+  }
+  METAL_FUNC _intersection_result_instancing_ext(const thread _intersection_result_instancing_ext &) thread = default;
+  METAL_FUNC thread _intersection_result_instancing_ext &operator=(const thread _intersection_result_instancing_ext &) thread = default;
+
+private:
+  METAL_FUNC thread uint *__get_instance_id_ptr() thread
+  {
+    return instance_id;
+  }
+
+  METAL_FUNC thread uint *__get_user_instance_id_ptr() thread
+  {
+    return user_instance_id;
+  }
+
+  METAL_FUNC thread uint *__get_instance_count_ptr() thread
+  {
+    return &instance_count;
+  }
+
+public:
+  uint instance_count;
+  uint instance_id[__get_max_levels(Tags{}...) - 1];
+  uint user_instance_id[__get_max_levels(Tags{}...) - 1];
+
+private:
+  friend struct _intersector_base_ift;
+};
+#endif
+
+template <typename, typename... Tags>
+struct _intersection_result_triangle_data_ext
+{
+  METAL_FUNC _intersection_result_triangle_data_ext() thread = default;
+  METAL_FUNC _intersection_result_triangle_data_ext(const thread _intersection_result_triangle_data_ext &) thread = default;
+  METAL_FUNC thread _intersection_result_triangle_data_ext &operator=(const thread _intersection_result_triangle_data_ext &) thread = default;
+
+private:
+  METAL_FUNC thread float2 *__get_triangle_barycentric_coord_ptr() thread
+  {
+    return nullptr;
+  }
+
+  METAL_FUNC thread bool *__get_triangle_front_facing_ptr() thread
+  {
+    return nullptr;
+  }
+
+private:
+  friend struct _intersector_base_ift;
+};
+
+template <typename... Tags>
+struct _intersection_result_triangle_data_ext<typename enable_if<disjunction<is_same<Tags, triangle_data>...>::value>::type, Tags...>
+{
+  METAL_FUNC _intersection_result_triangle_data_ext() thread
+      : triangle_barycentric_coord(0.0f),
+        triangle_front_facing(false)
+  {
+  }
+  METAL_FUNC _intersection_result_triangle_data_ext(const thread _intersection_result_triangle_data_ext &) thread = default;
+  METAL_FUNC thread _intersection_result_triangle_data_ext &operator=(const thread _intersection_result_triangle_data_ext &) thread = default;
+
+private:
+  METAL_FUNC thread float2 *__get_triangle_barycentric_coord_ptr() thread
+  {
+    return &triangle_barycentric_coord;
+  }
+
+  METAL_FUNC thread bool *__get_triangle_front_facing_ptr() thread
+  {
+    return &triangle_front_facing;
+  }
+
+public:
+  float2 triangle_barycentric_coord;
+  bool triangle_front_facing;
+
+private:
+  friend struct _intersector_base_ift;
+};
+
+#if defined(__HAVE_RAYTRACING_CURVES__)
+template <typename, typename... Tags>
+struct _intersection_result_curve_data_ext
+{
+  METAL_FUNC _intersection_result_curve_data_ext() thread = default;
+  METAL_FUNC _intersection_result_curve_data_ext(const thread _intersection_result_curve_data_ext &) thread = default;
+  METAL_FUNC thread _intersection_result_curve_data_ext &operator=(const thread _intersection_result_curve_data_ext &) thread = default;
+
+private:
+  METAL_FUNC thread float *__get_curve_parameter_ptr() thread
+  {
+    return nullptr;
+  }
+
+private:
+  friend struct _intersector_base_ift;
+};
+
+template <typename... Tags>
+struct _intersection_result_curve_data_ext<typename enable_if<disjunction<is_same<Tags, curve_data>...>::value>::type, Tags...>
+{
+  METAL_FUNC _intersection_result_curve_data_ext() thread
+      : curve_parameter(0.0f)
+  {
+  }
+  METAL_FUNC _intersection_result_curve_data_ext(const thread _intersection_result_curve_data_ext &) thread = default;
+  METAL_FUNC thread _intersection_result_curve_data_ext &operator=(const thread _intersection_result_curve_data_ext &) thread = default;
+
+private:
+  METAL_FUNC thread float *__get_curve_parameter_ptr() thread
+  {
+    return &curve_parameter;
+  }
+
+public:
+  float curve_parameter;
+
+private:
+  friend struct _intersector_base_ift;
+};
+#endif
+
+template <typename, typename... Tags>
+struct _intersection_result_world_space_data_ext
+{
+  METAL_FUNC _intersection_result_world_space_data_ext() thread = default;
+  METAL_FUNC _intersection_result_world_space_data_ext(const thread _intersection_result_world_space_data_ext &) thread = default;
+  METAL_FUNC thread _intersection_result_world_space_data_ext &operator=(const thread _intersection_result_world_space_data_ext &) thread = default;
+
+private:
+  METAL_FUNC thread float3 *__get_world_to_object_transform_ptr() thread
+  {
+    return nullptr;
+  }
+
+  METAL_FUNC thread float3 *__get_object_to_world_transform_ptr() thread
+  {
+    return nullptr;
+  }
+
+private:
+  friend struct _intersector_base_ift;
+};
+
+#if defined(__HAVE_RAYTRACING_INSTANCE_TRANSFORMS__)
+template <typename... Tags>
+struct _intersection_result_world_space_data_ext<typename enable_if<disjunction<is_same<Tags, world_space_data>...>::value>::type, Tags...>
+{
+  METAL_FUNC _intersection_result_world_space_data_ext() thread
+      : object_to_world_transform(),
+        world_to_object_transform()
+  {
+  }
+  METAL_FUNC _intersection_result_world_space_data_ext(const thread _intersection_result_world_space_data_ext &) thread = default;
+  METAL_FUNC thread _intersection_result_world_space_data_ext &operator=(const thread _intersection_result_world_space_data_ext &) thread = default;
+
+private:
+  METAL_FUNC thread float3 *__get_world_to_object_transform_ptr() thread
+  {
+    return &world_to_object_transform[0];
+  }
+
+  METAL_FUNC thread float3 *__get_object_to_world_transform_ptr() thread
+  {
+    return &object_to_world_transform[0];
+  }
+
+public:
+  float4x3 world_to_object_transform;
+  float4x3 object_to_world_transform;
+
+private:
+  friend struct _intersector_base_ift;
+};
+#endif
+
+template <typename... Tags>
+struct intersection_result : _intersection_result_base, _intersection_result_instancing_ext<void, Tags...>, _intersection_result_triangle_data_ext<void, Tags...>,
+#if defined(__HAVE_RAYTRACING_CURVES__)
+  _intersection_result_curve_data_ext<void, Tags...>,
+#endif
+  _intersection_result_world_space_data_ext<void, Tags...>
+{
+  METAL_FUNC intersection_result() thread = default;
+  METAL_FUNC intersection_result(const thread intersection_result &) thread = default;
+  METAL_FUNC thread intersection_result &operator=(const thread intersection_result &) thread = default;
+};
+
+template <typename... Tags>
+struct intersection_function_table;
+
+template <typename... Tags>
+METAL_FUNC bool is_null_intersection_function_table(intersection_function_table<Tags...>);
+
+
+template <typename... Tags>
+struct intersection_function_table
+{
+  static_assert(_is_intersection_function_table_tag_sequence<Tags...>::value, "invalid intersection_function_table template argument tag");
+#if defined(__HAVE_RAYTRACING_MULTI_LEVEL_INSTANCING__)
+  static_assert(!__has_max_levels(Tags{}...) || (__get_max_levels(Tags{}...) >= 2 && __get_max_levels(Tags{}...) <= 32), "invalid value for max_levels intersection tag for intersection_function_table");
+  static_assert(__is_max_levels_unique<Tags...>(), "intersection tag max_levels can not be duplicated with different values");
+#endif
+
+  METAL_FUNC intersection_function_table() thread : t(__metal_get_null_intersection_function_table())
+  {
+  }
+  METAL_FUNC intersection_function_table() constant : t(__metal_get_null_intersection_function_table())
+  {
+  }
+  METAL_FUNC intersection_function_table() ray_data : t(__metal_get_null_intersection_function_table())
+  {
+  }
+
+  METAL_FUNC intersection_function_table(const thread intersection_function_table &) thread = default;
+  METAL_FUNC intersection_function_table(const device intersection_function_table &) thread = default;
+  METAL_FUNC intersection_function_table(const constant intersection_function_table &) thread = default;
+  METAL_FUNC intersection_function_table(const ray_data intersection_function_table &) thread = default;
+#if defined(__HAVE_MESH__)
+  METAL_FUNC intersection_function_table(const object_data intersection_function_table &) thread = default;
+#endif
+  METAL_FUNC intersection_function_table(const thread intersection_function_table &) constant = default;
+  METAL_FUNC intersection_function_table(const device intersection_function_table &) constant = default;
+  METAL_FUNC intersection_function_table(const constant intersection_function_table &) constant = default;
+  METAL_FUNC intersection_function_table(const ray_data intersection_function_table &) constant = default;
+#if defined(__HAVE_MESH__)
+  METAL_FUNC intersection_function_table(const object_data intersection_function_table &) constant = default;
+#endif
+  METAL_FUNC intersection_function_table(const thread intersection_function_table &) ray_data = default;
+  METAL_FUNC intersection_function_table(const device intersection_function_table &) ray_data = default;
+  METAL_FUNC intersection_function_table(const constant intersection_function_table &) ray_data = default;
+  METAL_FUNC intersection_function_table(const ray_data intersection_function_table &) ray_data = default;
+#if defined(__HAVE_MESH__)
+  METAL_FUNC intersection_function_table(const object_data intersection_function_table &) ray_data = default;
+#endif
+
+  METAL_FUNC thread intersection_function_table &operator=(const thread intersection_function_table &) thread = default;
+  METAL_FUNC thread intersection_function_table &operator=(const device intersection_function_table &) thread = default;
+  METAL_FUNC thread intersection_function_table &operator=(const constant intersection_function_table &) thread = default;
+  METAL_FUNC thread intersection_function_table &operator=(const ray_data intersection_function_table &) thread = default;
+#if defined(__HAVE_MESH__)
+  METAL_FUNC thread intersection_function_table &operator=(const object_data intersection_function_table &) thread = default;
+#endif
+  METAL_FUNC device intersection_function_table &operator=(const thread intersection_function_table &) device = default;
+  METAL_FUNC device intersection_function_table &operator=(const device intersection_function_table &) device = default;
+  METAL_FUNC device intersection_function_table &operator=(const constant intersection_function_table &) device = default;
+  METAL_FUNC device intersection_function_table &operator=(const ray_data intersection_function_table &) device = default;
+#if defined(__HAVE_MESH__)
+  METAL_FUNC device intersection_function_table &operator=(const object_data intersection_function_table &) device = default;
+#endif
+  METAL_FUNC ray_data intersection_function_table &operator=(const thread intersection_function_table &) ray_data = default;
+  METAL_FUNC ray_data intersection_function_table &operator=(const device intersection_function_table &) ray_data = default;
+  METAL_FUNC ray_data intersection_function_table &operator=(const constant intersection_function_table &) ray_data = default;
+  METAL_FUNC ray_data intersection_function_table &operator=(const ray_data intersection_function_table &) ray_data = default;
+#if defined(__HAVE_MESH__)
+  METAL_FUNC ray_data intersection_function_table &operator=(const object_data intersection_function_table &) ray_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data intersection_function_table &operator=(const thread intersection_function_table &) object_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data intersection_function_table &operator=(const device intersection_function_table &) object_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data intersection_function_table &operator=(const constant intersection_function_table &) object_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data intersection_function_table &operator=(const ray_data intersection_function_table &) object_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data intersection_function_table &operator=(const object_data intersection_function_table &) object_data = default;
+#endif
+
+  METAL_FUNC bool empty() const thread
+  {
+    return size() == 0;
+  }
+  METAL_FUNC bool empty() const device
+  {
+    return size() == 0;
+  }
+  METAL_FUNC bool empty() const constant
+  {
+    return size() == 0;
+  }
+  METAL_FUNC bool empty() const ray_data
+  {
+    return size() == 0;
+  }
+#if defined(__HAVE_MESH__)
+  METAL_FUNC bool empty() const object_data
+  {
+    return size() == 0;
+  }
+#endif
+
+  METAL_FUNC uint size() const thread
+  {
+    return __metal_get_size_intersection_function_table(t);
+  }
+  METAL_FUNC uint size() const device
+  {
+    return __metal_get_size_intersection_function_table(t);
+  }
+  METAL_FUNC uint size() const constant
+  {
+    return __metal_get_size_intersection_function_table(t);
+  }
+  METAL_FUNC uint size() const ray_data
+  {
+    return __metal_get_size_intersection_function_table(t);
+  }
+#if defined(__HAVE_MESH__)
+  METAL_FUNC uint size() const object_data
+  {
+    return __metal_get_size_intersection_function_table(t);
+  }
+#endif
+
+#if defined(__HAVE_RAYTRACING_TABLE_GET_BUFFERS__)
+  template<typename T>
+  METAL_FUNC typename enable_if<conjunction<is_metal_buffer<T>, is_pointer<T>>::value, T>::type
+  get_buffer(uint index) const thread {
+    return __metal_get_buffer_intersection_function_table(t, index, T());
+  }
+
+  template<typename T>
+  METAL_FUNC typename enable_if<conjunction<is_metal_buffer<T>, is_lvalue_reference<T>>::value, T>::type
+  get_buffer(uint index) const thread {
+    using Tptr = decltype(&declval<T>());
+    return *__metal_get_buffer_intersection_function_table(t, index, Tptr());
+  }
+
+  template <typename T>
+  METAL_FUNC typename enable_if<is_function<T>::value, visible_function_table<T>>::type
+  get_visible_function_table(uint index) const thread
+  {
+    return visible_function_table<T>::__get_from_opaque_handle(
+      __metal_get_visible_function_table_intersection_function_table(t, index)
+    );
+  }
+  template<typename T>
+  METAL_FUNC typename enable_if<conjunction<is_metal_buffer<T>, is_pointer<T>>::value, T>::type
+  get_buffer(uint index) const device {
+    return __metal_get_buffer_intersection_function_table(t, index, T());
+  }
+
+  template<typename T>
+  METAL_FUNC typename enable_if<conjunction<is_metal_buffer<T>, is_lvalue_reference<T>>::value, T>::type
+  get_buffer(uint index) const device {
+    using Tptr = decltype(&declval<T>());
+    return *__metal_get_buffer_intersection_function_table(t, index, Tptr());
+  }
+
+  template <typename T>
+  METAL_FUNC typename enable_if<is_function<T>::value, visible_function_table<T>>::type
+  get_visible_function_table(uint index) const device
+  {
+    return visible_function_table<T>::__get_from_opaque_handle(
+      __metal_get_visible_function_table_intersection_function_table(t, index)
+    );
+  }
+  template<typename T>
+  METAL_FUNC typename enable_if<conjunction<is_metal_buffer<T>, is_pointer<T>>::value, T>::type
+  get_buffer(uint index) const constant {
+    return __metal_get_buffer_intersection_function_table(t, index, T());
+  }
+
+  template<typename T>
+  METAL_FUNC typename enable_if<conjunction<is_metal_buffer<T>, is_lvalue_reference<T>>::value, T>::type
+  get_buffer(uint index) const constant {
+    using Tptr = decltype(&declval<T>());
+    return *__metal_get_buffer_intersection_function_table(t, index, Tptr());
+  }
+
+  template <typename T>
+  METAL_FUNC typename enable_if<is_function<T>::value, visible_function_table<T>>::type
+  get_visible_function_table(uint index) const constant
+  {
+    return visible_function_table<T>::__get_from_opaque_handle(
+      __metal_get_visible_function_table_intersection_function_table(t, index)
+    );
+  }
+  template<typename T>
+  METAL_FUNC typename enable_if<conjunction<is_metal_buffer<T>, is_pointer<T>>::value, T>::type
+  get_buffer(uint index) const ray_data {
+    return __metal_get_buffer_intersection_function_table(t, index, T());
+  }
+
+  template<typename T>
+  METAL_FUNC typename enable_if<conjunction<is_metal_buffer<T>, is_lvalue_reference<T>>::value, T>::type
+  get_buffer(uint index) const ray_data {
+    using Tptr = decltype(&declval<T>());
+    return *__metal_get_buffer_intersection_function_table(t, index, Tptr());
+  }
+
+  template <typename T>
+  METAL_FUNC typename enable_if<is_function<T>::value, visible_function_table<T>>::type
+  get_visible_function_table(uint index) const ray_data
+  {
+    return visible_function_table<T>::__get_from_opaque_handle(
+      __metal_get_visible_function_table_intersection_function_table(t, index)
+    );
+  }
+#if defined(__HAVE_MESH__)
+  template<typename T>
+  METAL_FUNC typename enable_if<conjunction<is_metal_buffer<T>, is_pointer<T>>::value, T>::type
+  get_buffer(uint index) const object_data {
+    return __metal_get_buffer_intersection_function_table(t, index, T());
+  }
+
+  template<typename T>
+  METAL_FUNC typename enable_if<conjunction<is_metal_buffer<T>, is_lvalue_reference<T>>::value, T>::type
+  get_buffer(uint index) const object_data {
+    using Tptr = decltype(&declval<T>());
+    return *__metal_get_buffer_intersection_function_table(t, index, Tptr());
+  }
+
+  template <typename T>
+  METAL_FUNC typename enable_if<is_function<T>::value, visible_function_table<T>>::type
+  get_visible_function_table(uint index) const object_data
+  {
+    return visible_function_table<T>::__get_from_opaque_handle(
+      __metal_get_visible_function_table_intersection_function_table(t, index)
+    );
+  }
+#endif
+#endif
+
+#if defined(__HAVE_RAYTRACING_TABLE_SET_BUFFERS__)
+  METAL_FUNC void set_buffer(const device void *buf, uint index) thread
+  {
+    __metal_set_buffer_intersection_function_table(t, buf, index);
+  }
+
+  METAL_FUNC void set_buffer(constant void *buf, uint index) thread
+  {
+    __metal_set_buffer_intersection_function_table(t, buf, index);
+  }
+
+  template <typename T>
+  METAL_FUNC void set_visible_function_table(visible_function_table<T> vft, uint index) thread
+  {
+    __metal_set_visible_function_table_intersection_function_table(t, vft.__get_opaque_handle(), index);
+  }
+  METAL_FUNC void set_buffer(const device void *buf, uint index) device
+  {
+    __metal_set_buffer_intersection_function_table(t, buf, index);
+  }
+
+  METAL_FUNC void set_buffer(constant void *buf, uint index) device
+  {
+    __metal_set_buffer_intersection_function_table(t, buf, index);
+  }
+
+  template <typename T>
+  METAL_FUNC void set_visible_function_table(visible_function_table<T> vft, uint index) device
+  {
+    __metal_set_visible_function_table_intersection_function_table(t, vft.__get_opaque_handle(), index);
+  }
+  METAL_FUNC void set_buffer(const device void *buf, uint index) constant
+  {
+    __metal_set_buffer_intersection_function_table(t, buf, index);
+  }
+
+  METAL_FUNC void set_buffer(constant void *buf, uint index) constant
+  {
+    __metal_set_buffer_intersection_function_table(t, buf, index);
+  }
+
+  template <typename T>
+  METAL_FUNC void set_visible_function_table(visible_function_table<T> vft, uint index) constant
+  {
+    __metal_set_visible_function_table_intersection_function_table(t, vft.__get_opaque_handle(), index);
+  }
+  METAL_FUNC void set_buffer(const device void *buf, uint index) ray_data
+  {
+    __metal_set_buffer_intersection_function_table(t, buf, index);
+  }
+
+  METAL_FUNC void set_buffer(constant void *buf, uint index) ray_data
+  {
+    __metal_set_buffer_intersection_function_table(t, buf, index);
+  }
+
+  template <typename T>
+  METAL_FUNC void set_visible_function_table(visible_function_table<T> vft, uint index) ray_data
+  {
+    __metal_set_visible_function_table_intersection_function_table(t, vft.__get_opaque_handle(), index);
+  }
+  METAL_FUNC void set_buffer(const device void *buf, uint index) object_data
+  {
+    __metal_set_buffer_intersection_function_table(t, buf, index);
+  }
+
+  METAL_FUNC void set_buffer(constant void *buf, uint index) object_data
+  {
+    __metal_set_buffer_intersection_function_table(t, buf, index);
+  }
+
+  template <typename T>
+  METAL_FUNC void set_visible_function_table(visible_function_table<T> vft, uint index) object_data
+  {
+    __metal_set_visible_function_table_intersection_function_table(t, vft.__get_opaque_handle(), index);
+  }
+#endif
+
+
+private:
+  __metal_intersection_function_table_t t;
+
+  template <typename, typename>
+  friend struct _intersector_impl;
+
+  friend bool metal::raytracing::is_null_intersection_function_table<Tags...>(intersection_function_table<Tags...>);
+};
+
+template <typename... Tags>
+METAL_FUNC bool is_null_intersection_function_table(intersection_function_table<Tags...> t)
+{
+  return __metal_is_null_intersection_function_table(t.t);
+}
+
+
+#if defined(__HAVE_RAYTRACING_INTERSECTION_QUERY__)
+template <typename...>
+struct intersection_query;
+#endif
+
+struct _intersection_params
+{
+  METAL_FUNC constexpr _intersection_params() thread
+      : _triangle_front_facing_winding(winding::clockwise),
+        _triangle_cull_mode(triangle_cull_mode::none),
+        _geometry_cull_mode(geometry_cull_mode::none),
+        _opacity_cull_mode(opacity_cull_mode::none),
+        _forced_opacity(forced_opacity::none),
+        _assume_geometry_type(geometry_type::triangle | geometry_type::bounding_box),
+#if defined(__HAVE_RAYTRACING_CURVES__)
+        _assume_curve_basis(curve_basis::all),
+        _assume_curve_type(curve_type::all),
+        _assume_curve_control_point_count(0),
+#endif
+        _assume_identity_transforms(false),
+        _accept_any_intersection(false)
+  {
+  }
+  METAL_FUNC constexpr _intersection_params(const thread _intersection_params &) thread = default;
+  METAL_FUNC constexpr thread _intersection_params &operator=(const thread _intersection_params &) thread = default;
+
+  METAL_FUNC constexpr winding get_triangle_front_facing_winding() const thread
+  {
+    return _triangle_front_facing_winding;
+  }
+
+  METAL_FUNC constexpr triangle_cull_mode get_triangle_cull_mode() const thread
+  {
+    return _triangle_cull_mode;
+  }
+
+  METAL_FUNC constexpr geometry_cull_mode get_geometry_cull_mode() const thread
+  {
+    return _geometry_cull_mode;
+  }
+
+  METAL_FUNC constexpr opacity_cull_mode get_opacity_cull_mode() const thread
+  {
+    return _opacity_cull_mode;
+  }
+
+  METAL_FUNC constexpr forced_opacity get_forced_opacity() const thread
+  {
+    return _forced_opacity;
+  }
+
+  METAL_FUNC constexpr geometry_type get_geometry_type() const thread
+  {
+    return _assume_geometry_type;
+  }
+
+#if defined(__HAVE_RAYTRACING_CURVES__)
+  METAL_FUNC constexpr curve_basis get_curve_basis() const thread
+  {
+    return _assume_curve_basis;
+  }
+
+  METAL_FUNC constexpr curve_type get_curve_type() const thread
+  {
+    return _assume_curve_type;
+  }
+
+  METAL_FUNC constexpr uint get_curve_control_point_count() const thread
+  {
+    return _assume_curve_control_point_count;
+  }
+#endif
+
+  METAL_FUNC constexpr bool should_assume_identity_transforms() const thread
+  {
+    return _assume_identity_transforms;
+  }
+
+  METAL_FUNC constexpr bool should_accept_any_intersection() const thread
+  {
+    return _accept_any_intersection;
+  }
+
+  METAL_FUNC constexpr void set_triangle_front_facing_winding(winding w) thread
+  {
+    _triangle_front_facing_winding = w;
+  }
+
+  METAL_FUNC constexpr void set_triangle_cull_mode(triangle_cull_mode tcm) thread
+  {
+    _triangle_cull_mode = tcm;
+  }
+
+  METAL_FUNC constexpr void set_geometry_cull_mode(geometry_cull_mode gcm) thread
+  {
+    _geometry_cull_mode = gcm;
+  }
+
+  METAL_FUNC constexpr void set_opacity_cull_mode(opacity_cull_mode ocm) thread
+  {
+    _opacity_cull_mode = ocm;
+  }
+
+  METAL_FUNC constexpr void force_opacity(forced_opacity o) thread
+  {
+    _forced_opacity = o;
+  }
+
+  METAL_FUNC constexpr void assume_geometry_type(geometry_type g) thread
+  {
+    _assume_geometry_type = g;
+  }
+
+#if defined(__HAVE_RAYTRACING_CURVES__)
+  METAL_FUNC constexpr void assume_curve_basis(curve_basis cb) thread
+  {
+    _assume_curve_basis = cb;
+  }
+
+  METAL_FUNC constexpr void assume_curve_type(curve_type ct) thread
+  {
+    _assume_curve_type = ct;
+  }
+
+  METAL_FUNC constexpr void assume_curve_control_point_count(uint n) thread
+  {
+    _assume_curve_control_point_count = n;
+  }
+#endif
+
+  METAL_FUNC constexpr void assume_identity_transforms(bool value) thread
+  {
+    _assume_identity_transforms = value;
+  }
+
+  METAL_FUNC constexpr void accept_any_intersection(bool value) thread
+  {
+    _accept_any_intersection = value;
+  }
+
+private:
+  winding _triangle_front_facing_winding;
+  triangle_cull_mode _triangle_cull_mode;
+  geometry_cull_mode _geometry_cull_mode;
+  opacity_cull_mode _opacity_cull_mode;
+  forced_opacity _forced_opacity;
+  geometry_type _assume_geometry_type;
+#if defined(__HAVE_RAYTRACING_CURVES__)
+  curve_basis _assume_curve_basis;
+  curve_type _assume_curve_type;
+  uint _assume_curve_control_point_count;
+#endif
+  bool _assume_identity_transforms;
+  bool _accept_any_intersection;
+
+#if defined(__HAVE_RAYTRACING_INTERSECTION_QUERY__)
+  template <typename...>
+  friend struct intersection_query;
+#endif
+};
+
+struct _intersector_base
+{
+  METAL_FUNC constexpr _intersector_base() thread = default;
+  METAL_FUNC constexpr _intersector_base(const thread _intersector_base &) thread = default;
+  METAL_FUNC constexpr thread _intersector_base &operator=(const thread _intersector_base &) thread = default;
+
+  METAL_FUNC constexpr void set_triangle_front_facing_winding(winding w) thread
+  {
+    params.set_triangle_front_facing_winding(w);
+  }
+
+  METAL_FUNC constexpr void set_triangle_cull_mode(triangle_cull_mode tcm) thread
+  {
+    params.set_triangle_cull_mode(tcm);
+  }
+
+  METAL_FUNC constexpr void set_geometry_cull_mode(geometry_cull_mode gcm) thread
+  {
+    params.set_geometry_cull_mode(gcm);
+  }
+
+  METAL_FUNC constexpr void set_opacity_cull_mode(opacity_cull_mode ocm) thread
+  {
+    params.set_opacity_cull_mode(ocm);
+  }
+
+  METAL_FUNC constexpr void force_opacity(forced_opacity o) thread
+  {
+    params.force_opacity(o);
+  }
+
+  METAL_FUNC constexpr void assume_geometry_type(geometry_type g) thread
+  {
+    params.assume_geometry_type(g);
+  }
+
+#if defined(__HAVE_RAYTRACING_CURVES__)
+  METAL_FUNC constexpr void assume_curve_basis(curve_basis cb) thread
+  {
+    params.assume_curve_basis(cb);
+  }
+
+  METAL_FUNC constexpr void assume_curve_type(curve_type ct) thread
+  {
+    params.assume_curve_type(ct);
+  }
+
+  METAL_FUNC constexpr void assume_curve_control_point_count(uint n) thread
+  {
+    params.assume_curve_control_point_count(n);
+  }
+#endif
+
+  METAL_FUNC constexpr void assume_identity_transforms(bool value) thread
+  {
+    params.assume_identity_transforms(value);
+  }
+
+  METAL_FUNC constexpr void accept_any_intersection(bool value) thread
+  {
+    params.accept_any_intersection(value);
+  }
+
+protected:
+  _intersection_params params;
+};
+
+struct _intersector_base_ift : _intersector_base
+{
+  METAL_FUNC constexpr _intersector_base_ift() thread = default;
+  METAL_FUNC constexpr _intersector_base_ift(const thread _intersector_base_ift &) thread = default;
+  METAL_FUNC constexpr thread _intersector_base_ift &operator=(const thread _intersector_base_ift &) thread = default;
+
+private:
+  template <typename AS, typename P, typename... Tags>
+  METAL_FUNC auto _intersect(ray r, AS as, uint mask, float time, __metal_intersection_function_table_t ft, thread P *payload) const thread
+  {
+#if defined(__HAVE_RAYTRACING_MULTI_LEVEL_INSTANCING__)
+    constexpr const uchar max_levels_val = __get_max_levels(Tags{}...);
+#endif
+    intersection_result<Tags...> result;
+    __metal_intersect(
+        _build_intersection_flags(Tags{}...),
+        r.origin,
+        r.direction,
+        r.min_distance,
+        r.max_distance,
+        as.as,
+        mask,
+        time,
+        ft,
+        nullptr,
+        0,
+        0,
+        nullptr,
+        payload,
+        is_same<P, void>::value ? 0 : sizeof(conditional_t<is_same<P, void>::value, int, P>),
+#if defined(__HAVE_RAYTRACING_MULTI_LEVEL_INSTANCING__)
+        max_levels_val > 2 ? max_levels_val : 0,
+        max_levels_val > 2 ? result.__get_instance_id_ptr() : nullptr,
+        max_levels_val > 2 ? result.__get_user_instance_id_ptr() : nullptr,
+#else
+        0,
+        nullptr,
+        nullptr,
+#endif
+        static_cast<uint>(params.get_triangle_front_facing_winding()),
+        static_cast<uint>(params.get_triangle_cull_mode()),
+        static_cast<uint>(params.get_geometry_cull_mode()),
+        static_cast<uint>(params.get_opacity_cull_mode()),
+        static_cast<uint>(params.get_forced_opacity()),
+        static_cast<uint>(params.get_geometry_type()),
+#if defined(__HAVE_RAYTRACING_CURVES__)
+        static_cast<uint>(params.get_curve_basis()),
+        static_cast<uint>(params.get_curve_type()),
+        params.get_curve_control_point_count(),
+#else
+        0, 0, 0,
+#endif
+        params.should_assume_identity_transforms(),
+        params.should_accept_any_intersection(),
+        0,
+        0,
+        result.__get_type_ptr(),
+        result.__get_distance_ptr(),
+        result.__get_primitive_id_ptr(),
+        result.__get_geometry_id_ptr(),
+        result.__get_primitive_data_ptr(),
+#if defined(__HAVE_RAYTRACING_MULTI_LEVEL_INSTANCING__)
+        max_levels_val > 2 ? result.__get_instance_count_ptr() : nullptr,
+#else
+        nullptr,
+#endif
+        result.__get_instance_id_ptr(),
+        result.__get_user_instance_id_ptr(),
+        result.__get_triangle_barycentric_coord_ptr(),
+        result.__get_triangle_front_facing_ptr(),
+#if defined(__HAVE_RAYTRACING_CURVES__)
+        result.__get_curve_parameter_ptr(),
+#else
+        nullptr,
+#endif
+        result.__get_world_to_object_transform_ptr(),
+        result.__get_object_to_world_transform_ptr());
+
+#if defined(__HAVE_RAYTRACING_MULTI_LEVEL_INSTANCING__)
+    if (max_levels_val == 2)
+      *result.__get_instance_count_ptr() = static_cast<intersection_type>(*result.__get_type_ptr()) != intersection_type::none;
+#endif
+
+    return result;
+  }
+
+private:
+  template <typename, typename>
+  friend struct _intersector_impl;
+};
+
+
+template <template <typename...> class intersector, typename... Tags>
+struct _intersector_impl<
+    intersector<Tags...>,
+    typename enable_if<_is_intersection_tag_sequence_for_primitive_intersector<Tags...>::value
+                       >::type>
+    : _intersector_base_ift
+{
+  using result_type = intersection_result<Tags...>;
+#if defined(__HAVE_RAYTRACING_MOTION__)
+  using acceleration_structure = primitive_acceleration_structure;
+#endif
+
+  METAL_FUNC constexpr _intersector_impl() thread = default;
+  METAL_FUNC constexpr _intersector_impl(const thread _intersector_impl &) thread = default;
+  METAL_FUNC constexpr thread _intersector_impl &operator=(const thread _intersector_impl &) thread = default;
+
+  METAL_FUNC result_type intersect(ray r, primitive_acceleration_structure as) const thread
+  {
+    return _intersect<decltype(as), void, Tags...>(r, as, uint(), float(), __metal_get_null_intersection_function_table(), nullptr);
+  }
+
+  METAL_FUNC result_type intersect(ray r, primitive_acceleration_structure as, intersection_function_table<Tags...> ft) const thread
+  {
+    return _intersect<decltype(as), void, Tags...>(r, as, uint(), float(), ft.t, nullptr);
+  }
+
+  template <typename P>
+  METAL_FUNC result_type intersect(ray r, primitive_acceleration_structure as, intersection_function_table<Tags...> ft, thread P &payload) const thread
+  {
+    return _intersect<decltype(as), P, Tags...>(r, as, uint(), float(), ft.t, &payload);
+  }
+};
+
+
+#if defined(__HAVE_RAYTRACING_MOTION__)
+template <template <typename...> class intersector, typename... Tags>
+struct _intersector_impl<
+    intersector<Tags...>,
+    typename enable_if<_is_intersection_tag_sequence_for_primitive_intersector_with_motion<Tags...>::value
+                       >::type>
+    : _intersector_base_ift
+{
+  using result_type = intersection_result<Tags...>;
+  using acceleration_structure = _filtered_acceleration_structure<Tags...>;
+
+  METAL_FUNC constexpr _intersector_impl() thread = default;
+  METAL_FUNC constexpr _intersector_impl(const thread _intersector_impl &) thread = default;
+  METAL_FUNC constexpr thread _intersector_impl &operator=(const thread _intersector_impl &) thread = default;
+
+  METAL_FUNC result_type intersect(ray r, acceleration_structure as, float time) const thread
+  {
+    return _intersect<decltype(as), void, Tags...>(r, as, uint(), time, __metal_get_null_intersection_function_table(), nullptr);
+  }
+
+  METAL_FUNC result_type intersect(ray r, acceleration_structure as, float time, intersection_function_table<Tags...> ft) const thread
+  {
+    return _intersect<decltype(as), void, Tags...>(r, as, uint(), time, ft.t, nullptr);
+  }
+
+  template <typename P>
+  METAL_FUNC result_type intersect(ray r, acceleration_structure as, float time, intersection_function_table<Tags...> ft, thread P &payload) const thread
+  {
+    return _intersect<decltype(as), P, Tags...>(r, as, uint(), time, ft.t, &payload);
+  }
+};
+
+#endif
+
+template <template <typename...> class intersector, typename... Tags>
+struct _intersector_impl<
+    intersector<Tags...>,
+    typename enable_if<_is_intersection_tag_sequence_for_instance_intersector<Tags...>::value
+                       >::type>
+    : _intersector_base_ift
+{
+  using result_type = intersection_result<Tags...>;
+#if defined(__HAVE_RAYTRACING_MOTION__)
+  using acceleration_structure = instance_acceleration_structure;
+#endif
+
+  METAL_FUNC constexpr _intersector_impl() thread = default;
+  METAL_FUNC constexpr _intersector_impl(const thread _intersector_impl &) thread = default;
+  METAL_FUNC constexpr thread _intersector_impl &operator=(const thread _intersector_impl &) thread = default;
+
+  METAL_FUNC result_type intersect(ray r, instance_acceleration_structure as) const thread
+  {
+    return _intersect<decltype(as), void, Tags...>(r, as, ~0U, float(), __metal_get_null_intersection_function_table(), nullptr);
+  }
+
+  METAL_FUNC result_type intersect(ray r, instance_acceleration_structure as, intersection_function_table<Tags...> ft) const thread
+  {
+    return _intersect<decltype(as), void, Tags...>(r, as, ~0U, float(), ft.t, nullptr);
+  }
+
+  template <typename P>
+  METAL_FUNC result_type intersect(ray r, instance_acceleration_structure as, intersection_function_table<Tags...> ft, thread P &payload) const thread
+  {
+    return _intersect<decltype(as), P, Tags...>(r, as, ~0U, float(), ft.t, &payload);
+  }
+
+  METAL_FUNC result_type intersect(ray r, instance_acceleration_structure as, uint mask) const thread
+  {
+    return _intersect<decltype(as), void, Tags...>(r, as, mask, float(), __metal_get_null_intersection_function_table(), nullptr);
+  }
+
+  METAL_FUNC result_type intersect(ray r, instance_acceleration_structure as, uint mask, intersection_function_table<Tags...> ft) const thread
+  {
+    return _intersect<decltype(as), void, Tags...>(r, as, mask, float(), ft.t, nullptr);
+  }
+
+  template <typename P>
+  METAL_FUNC result_type intersect(ray r, instance_acceleration_structure as, uint mask, intersection_function_table<Tags...> ft, thread P &payload) const thread
+  {
+    return _intersect<decltype(as), P, Tags...>(r, as, mask, float(), ft.t, &payload);
+  }
+};
+
+
+#if defined(__HAVE_RAYTRACING_MOTION__)
+
+template <template <typename...> class intersector, typename... Tags>
+struct _intersector_impl<
+    intersector<Tags...>,
+    typename enable_if<_is_intersection_tag_sequence_for_instance_intersector_primitive_motion<Tags...>::value
+                       >::type>
+    : _intersector_base_ift
+{
+  using result_type = intersection_result<Tags...>;
+  using acceleration_structure = _filtered_acceleration_structure<Tags...>;
+
+  METAL_FUNC constexpr _intersector_impl() thread = default;
+  METAL_FUNC constexpr _intersector_impl(const thread _intersector_impl &) thread = default;
+  METAL_FUNC constexpr thread _intersector_impl &operator=(const thread _intersector_impl &) thread = default;
+
+  METAL_FUNC result_type intersect(ray r, acceleration_structure as, float time) const thread
+  {
+    return _intersect<decltype(as), void, Tags...>(r, as, ~0U, time, __metal_get_null_intersection_function_table(), nullptr);
+  }
+
+  METAL_FUNC result_type intersect(ray r, acceleration_structure as, float time, intersection_function_table<Tags...> ft) const thread
+  {
+    return _intersect<decltype(as), void, Tags...>(r, as, ~0U, time, ft.t, nullptr);
+  }
+
+  template <typename P>
+  METAL_FUNC result_type intersect(ray r, acceleration_structure as, float time, intersection_function_table<Tags...> ft, thread P &payload) const thread
+  {
+    return _intersect<decltype(as), P, Tags...>(r, as, ~0U, time, ft.t, &payload);
+  }
+
+  METAL_FUNC result_type intersect(ray r, acceleration_structure as, uint mask, float time) const thread
+  {
+    return _intersect<decltype(as), void, Tags...>(r, as, mask, time, __metal_get_null_intersection_function_table(), nullptr);
+  }
+
+  METAL_FUNC result_type intersect(ray r, acceleration_structure as, uint mask, float time, intersection_function_table<Tags...> ft) const thread
+  {
+    return _intersect<decltype(as), void, Tags...>(r, as, mask, time, ft.t, nullptr);
+  }
+
+  template <typename P>
+  METAL_FUNC result_type intersect(ray r, acceleration_structure as, uint mask, float time, intersection_function_table<Tags...> ft, thread P &payload) const thread
+  {
+    return _intersect<decltype(as), P, Tags...>(r, as, mask, time, ft.t, &payload);
+  }
+};
+
+
+template <template <typename...> class intersector, typename... Tags>
+struct _intersector_impl<
+    intersector<Tags...>,
+    typename enable_if<_is_intersection_tag_sequence_for_instance_intersector_instance_motion<Tags...>::value
+                       >::type>
+    : _intersector_base_ift
+{
+  using result_type = intersection_result<Tags...>;
+  using acceleration_structure = _filtered_acceleration_structure<Tags...>;
+
+  METAL_FUNC constexpr _intersector_impl() thread = default;
+  METAL_FUNC constexpr _intersector_impl(const thread _intersector_impl &) thread = default;
+  METAL_FUNC constexpr thread _intersector_impl &operator=(const thread _intersector_impl &) thread = default;
+
+  METAL_FUNC result_type intersect(ray r, acceleration_structure as, float time) const thread
+  {
+    return _intersect<decltype(as), void, Tags...>(r, as, ~0U, time, __metal_get_null_intersection_function_table(), nullptr);
+  }
+
+  METAL_FUNC result_type intersect(ray r, acceleration_structure as, float time, intersection_function_table<Tags...> ft) const thread
+  {
+    return _intersect<decltype(as), void, Tags...>(r, as, ~0U, time, ft.t, nullptr);
+  }
+
+  template <typename P>
+  METAL_FUNC result_type intersect(ray r, acceleration_structure as, float time, intersection_function_table<Tags...> ft, thread P &payload) const thread
+  {
+    return _intersect<decltype(as), P, Tags...>(r, as, ~0U, time, ft.t, &payload);
+  }
+
+  METAL_FUNC result_type intersect(ray r, acceleration_structure as, uint mask, float time) const thread
+  {
+    return _intersect<decltype(as), void, Tags...>(r, as, mask, time, __metal_get_null_intersection_function_table(), nullptr);
+  }
+
+  METAL_FUNC result_type intersect(ray r, acceleration_structure as, uint mask, float time, intersection_function_table<Tags...> ft) const thread
+  {
+    return _intersect<decltype(as), void, Tags...>(r, as, mask, time, ft.t, nullptr);
+  }
+
+  template <typename P>
+  METAL_FUNC result_type intersect(ray r, acceleration_structure as, uint mask, float time, intersection_function_table<Tags...> ft, thread P &payload) const thread
+  {
+    return _intersect<decltype(as), P, Tags...>(r, as, mask, time, ft.t, &payload);
+  }
+};
+
+
+#endif
+
+template <typename... Tags>
+struct intersector : _intersector_impl<intersector<Tags...>, void>
+{
+#if defined(__HAVE_RAYTRACING_MULTI_LEVEL_INSTANCING__)
+  static_assert(!__has_max_levels(Tags{}...) || (__get_max_levels(Tags{}...) >= 2 && __get_max_levels(Tags{}...) <= 32), "invalid value for max_levels intersection tag for intersector");
+  static_assert(__is_max_levels_unique<Tags...>(), "intersection tag max_levels can not be duplicated with different values");
+#endif
+
+  METAL_FUNC constexpr intersector() thread = default;
+  METAL_FUNC constexpr intersector(const thread intersector &) thread = default;
+  METAL_FUNC constexpr thread intersector &operator=(const thread intersector &) thread = default;
+};
+
+#if defined(__HAVE_RAYTRACING_INTERSECTION_QUERY__)
+typedef _intersection_params intersection_params;
+
+template <typename T>
+struct _is_intersection_query_tag : bool_constant<is_same<T, instancing>::value || is_same<T, triangle_data>::value
+#if defined(__HAVE_RAYTRACING_MULTI_LEVEL_INSTANCING__)
+  || _is_max_levels<T>::value
+#endif
+#if defined(__HAVE_RAYTRACING_CURVES__)
+  || is_same<T, curve_data>::value
+#endif
+  >
+{
+};
+
+template <typename... Tags>
+struct _is_intersection_query_tag_sequence : conjunction<_is_intersection_query_tag<Tags>...>
+{
+};
+
+template <typename, typename>
+struct _intersection_query_ctor_reset_ext;
+
+struct _intersection_query_ctor_reset_ext_base
+{
+private:
+  template <typename AS, template <typename...> class I, typename... Tags>
+  METAL_FUNC void __reset(ray r, AS as, uint mask, intersection_params params) thread
+  {
+    thread auto *derived = static_cast<const thread I<Tags...> *>(this);
+    __metal_reset_intersection_query(
+        _build_intersection_flags(Tags{}...), derived->q,
+        r.origin, r.direction, r.min_distance, r.max_distance,
+        as.as, mask,
+        static_cast<uint>(params.get_triangle_front_facing_winding()),
+        static_cast<uint>(params.get_triangle_cull_mode()),
+        static_cast<uint>(params.get_geometry_cull_mode()),
+        static_cast<uint>(params.get_opacity_cull_mode()),
+        static_cast<uint>(params.get_forced_opacity()),
+        static_cast<uint>(params.get_geometry_type()),
+#if defined(__HAVE_RAYTRACING_CURVES__)
+        static_cast<uint>(params.get_curve_basis()),
+        static_cast<uint>(params.get_curve_type()),
+        params.get_curve_control_point_count(),
+#else
+        0, 0, 0,
+#endif
+        params.should_assume_identity_transforms(),
+        params.should_accept_any_intersection());
+  }
+
+  template <typename, typename>
+  friend struct _intersection_query_ctor_reset_ext;
+};
+
+template <typename, typename>
+struct _intersection_query_ctor_reset_ext
+{
+};
+
+template <template <typename...> class I, typename... Tags>
+struct _intersection_query_ctor_reset_ext<
+    I<Tags...>,
+    typename enable_if<!disjunction<is_same<Tags, instancing>...>::value>::type>
+    : _intersection_query_ctor_reset_ext_base
+{
+  METAL_FUNC _intersection_query_ctor_reset_ext() thread = default;
+  METAL_FUNC _intersection_query_ctor_reset_ext(const thread _intersection_query_ctor_reset_ext &) thread = default;
+
+  METAL_FUNC _intersection_query_ctor_reset_ext(ray r, primitive_acceleration_structure as) thread
+  {
+    __reset<primitive_acceleration_structure, I, Tags...>(r, as, uint(), intersection_params());
+  }
+
+  METAL_FUNC _intersection_query_ctor_reset_ext(ray r, primitive_acceleration_structure as, intersection_params params) thread
+  {
+    __reset<primitive_acceleration_structure, I, Tags...>(r, as, uint(), params);
+  }
+
+  METAL_FUNC void reset(ray r, primitive_acceleration_structure as) thread
+  {
+    __reset<primitive_acceleration_structure, I, Tags...>(r, as, uint(), intersection_params());
+  }
+
+  METAL_FUNC void reset(ray r, primitive_acceleration_structure as, intersection_params params) thread
+  {
+    __reset<primitive_acceleration_structure, I, Tags...>(r, as, uint(), params);
+  }
+};
+
+
+template <template <typename...> class I, typename... Tags>
+struct _intersection_query_ctor_reset_ext<
+    I<Tags...>,
+    typename enable_if<disjunction<is_same<Tags, instancing>...>::value>::type>
+    : _intersection_query_ctor_reset_ext_base
+{
+  METAL_FUNC _intersection_query_ctor_reset_ext() thread = default;
+  METAL_FUNC _intersection_query_ctor_reset_ext(const thread _intersection_query_ctor_reset_ext &) thread = default;
+
+  METAL_FUNC _intersection_query_ctor_reset_ext(ray r, instance_acceleration_structure as) thread
+  {
+    __reset<instance_acceleration_structure, I, Tags...>(r, as, ~0U, intersection_params());
+  }
+
+  METAL_FUNC _intersection_query_ctor_reset_ext(ray r, instance_acceleration_structure as, intersection_params params) thread
+  {
+    __reset<instance_acceleration_structure, I, Tags...>(r, as, ~0U, params);
+  }
+
+  METAL_FUNC _intersection_query_ctor_reset_ext(ray r, instance_acceleration_structure as, uint mask) thread
+  {
+    __reset<instance_acceleration_structure, I, Tags...>(r, as, mask, intersection_params());
+  }
+
+  METAL_FUNC _intersection_query_ctor_reset_ext(ray r, instance_acceleration_structure as, uint mask, intersection_params params) thread
+  {
+    __reset<instance_acceleration_structure, I, Tags...>(r, as, mask, params);
+  }
+
+  METAL_FUNC void reset(ray r, instance_acceleration_structure as) thread
+  {
+    __reset<instance_acceleration_structure, I, Tags...>(r, as, ~0U, intersection_params());
+  }
+
+  METAL_FUNC void reset(ray r, instance_acceleration_structure as, intersection_params params) thread
+  {
+    __reset<instance_acceleration_structure, I, Tags...>(r, as, ~0U, params);
+  }
+
+  METAL_FUNC void reset(ray r, instance_acceleration_structure as, uint mask) thread
+  {
+    __reset<instance_acceleration_structure, I, Tags...>(r, as, mask, intersection_params());
+  }
+
+  METAL_FUNC void reset(ray r, instance_acceleration_structure as, uint mask, intersection_params params) thread
+  {
+    __reset<instance_acceleration_structure, I, Tags...>(r, as, mask, params);
+  }
+};
+
+template <typename, typename>
+struct _intersection_query_instancing_ext
+{
+};
+
+template <template <typename...> class I, typename... Tags>
+struct _intersection_query_instancing_ext<
+    I<Tags...>,
+    typename enable_if<disjunction<is_same<Tags, instancing>...>::value
+#if defined(__HAVE_RAYTRACING_MULTI_LEVEL_INSTANCING__)
+                      && !disjunction<_is_max_levels<Tags>...>::value
+#endif
+    >::type>
+{
+  METAL_FUNC uint get_candidate_instance_id() const thread
+  {
+    thread auto *derived = static_cast<const thread I<Tags...> *>(this);
+    return __metal_get_candidate_instance_id_intersection_query(
+        _build_intersection_flags(Tags{}...), derived->q, 0);
+  }
+
+  METAL_FUNC uint get_candidate_user_instance_id() const thread
+  {
+    thread auto *derived = static_cast<const thread I<Tags...> *>(this);
+    return __metal_get_candidate_user_instance_id_intersection_query(
+        _build_intersection_flags(Tags{}...), derived->q, 0);
+  }
+
+  METAL_FUNC float4x3 get_candidate_object_to_world_transform() const thread
+  {
+    thread auto *derived = static_cast<const thread I<Tags...> *>(this);
+    float4x3 result;
+    __metal_get_candidate_object_to_world_transform_intersection_query(
+        _build_intersection_flags(Tags{}...), derived->q,
+        &result[0], &result[1], &result[2], &result[3]);
+    return result;
+  }
+
+  METAL_FUNC float4x3 get_candidate_world_to_object_transform() const thread
+  {
+    thread auto *derived = static_cast<const thread I<Tags...> *>(this);
+    float4x3 result;
+    __metal_get_candidate_world_to_object_transform_intersection_query(
+        _build_intersection_flags(Tags{}...), derived->q,
+        &result[0], &result[1], &result[2], &result[3]);
+    return result;
+  }
+
+  METAL_FUNC uint get_committed_instance_id() const thread
+  {
+    thread auto *derived = static_cast<const thread I<Tags...> *>(this);
+    return __metal_get_committed_instance_id_intersection_query(
+        _build_intersection_flags(Tags{}...), derived->q, 0);
+  }
+
+  METAL_FUNC uint get_committed_user_instance_id() const thread
+  {
+    thread auto *derived = static_cast<const thread I<Tags...> *>(this);
+    return __metal_get_committed_user_instance_id_intersection_query(
+        _build_intersection_flags(Tags{}...), derived->q, 0);
+  }
+
+  METAL_FUNC float4x3 get_committed_object_to_world_transform() const thread
+  {
+    thread auto *derived = static_cast<const thread I<Tags...> *>(this);
+    float4x3 result;
+    __metal_get_committed_object_to_world_transform_intersection_query(
+        _build_intersection_flags(Tags{}...), derived->q,
+        &result[0], &result[1], &result[2], &result[3]);
+    return result;
+  }
+
+  METAL_FUNC float4x3 get_committed_world_to_object_transform() const thread
+  {
+    thread auto *derived = static_cast<const thread I<Tags...> *>(this);
+    float4x3 result;
+    __metal_get_committed_world_to_object_transform_intersection_query(
+        _build_intersection_flags(Tags{}...), derived->q,
+        &result[0], &result[1], &result[2], &result[3]);
+    return result;
+  }
+};
+
+#if defined(__HAVE_RAYTRACING_MULTI_LEVEL_INSTANCING__)
+template <template <typename...> class I, typename... Tags>
+struct _intersection_query_instancing_ext<
+    I<Tags...>,
+    typename enable_if<disjunction<is_same<Tags, instancing>...>::value
+                      && disjunction<_is_max_levels<Tags>...>::value
+    >::type>
+{
+  METAL_FUNC uint get_candidate_instance_count() const thread
+  {
+    thread auto *derived = static_cast<const thread I<Tags...> *>(this);
+
+    if (__get_max_levels(Tags{}...) == 2)
+      return derived->get_candidate_intersection_type() != intersection_type::none;
+
+    return __metal_get_candidate_instance_count_intersection_query(
+        _build_intersection_flags(Tags{}...), derived->q);
+  }
+
+  METAL_FUNC uint get_candidate_instance_id(uint depth) const thread
+  {
+    thread auto *derived = static_cast<const thread I<Tags...> *>(this);
+    return __metal_get_candidate_instance_id_intersection_query(
+        _build_intersection_flags(Tags{}...), derived->q, depth);
+  }
+
+  METAL_FUNC uint get_candidate_user_instance_id(uint depth) const thread
+  {
+    thread auto *derived = static_cast<const thread I<Tags...> *>(this);
+    return __metal_get_candidate_user_instance_id_intersection_query(
+        _build_intersection_flags(Tags{}...), derived->q, depth);
+  }
+
+  METAL_FUNC float4x3 get_candidate_object_to_world_transform() const thread
+  {
+    thread auto *derived = static_cast<const thread I<Tags...> *>(this);
+    float4x3 result;
+    __metal_get_candidate_object_to_world_transform_intersection_query(
+        _build_intersection_flags(Tags{}...), derived->q,
+        &result[0], &result[1], &result[2], &result[3]);
+    return result;
+  }
+
+  METAL_FUNC float4x3 get_candidate_world_to_object_transform() const thread
+  {
+    thread auto *derived = static_cast<const thread I<Tags...> *>(this);
+    float4x3 result;
+    __metal_get_candidate_world_to_object_transform_intersection_query(
+        _build_intersection_flags(Tags{}...), derived->q,
+        &result[0], &result[1], &result[2], &result[3]);
+    return result;
+  }
+
+  METAL_FUNC uint get_committed_instance_count() const thread
+  {
+    thread auto *derived = static_cast<const thread I<Tags...> *>(this);
+
+    if (__get_max_levels(Tags{}...) == 2)
+      return derived->get_committed_intersection_type() != intersection_type::none;
+
+    return __metal_get_committed_instance_count_intersection_query(
+        _build_intersection_flags(Tags{}...), derived->q);
+  }
+
+  METAL_FUNC uint get_committed_instance_id(uint depth) const thread
+  {
+    thread auto *derived = static_cast<const thread I<Tags...> *>(this);
+    return __metal_get_committed_instance_id_intersection_query(
+        _build_intersection_flags(Tags{}...), derived->q, depth);
+  }
+
+  METAL_FUNC uint get_committed_user_instance_id(uint depth) const thread
+  {
+    thread auto *derived = static_cast<const thread I<Tags...> *>(this);
+    return __metal_get_committed_user_instance_id_intersection_query(
+        _build_intersection_flags(Tags{}...), derived->q, depth);
+  }
+
+  METAL_FUNC float4x3 get_committed_object_to_world_transform() const thread
+  {
+    thread auto *derived = static_cast<const thread I<Tags...> *>(this);
+    float4x3 result;
+    __metal_get_committed_object_to_world_transform_intersection_query(
+        _build_intersection_flags(Tags{}...), derived->q,
+        &result[0], &result[1], &result[2], &result[3]);
+    return result;
+  }
+
+  METAL_FUNC float4x3 get_committed_world_to_object_transform() const thread
+  {
+    thread auto *derived = static_cast<const thread I<Tags...> *>(this);
+    float4x3 result;
+    __metal_get_committed_world_to_object_transform_intersection_query(
+        _build_intersection_flags(Tags{}...), derived->q,
+        &result[0], &result[1], &result[2], &result[3]);
+    return result;
+  }
+};
+#endif
+
+template <typename, typename>
+struct _intersection_query_triangle_data_ext
+{
+};
+
+template <template <typename...> class I, typename... Tags>
+struct _intersection_query_triangle_data_ext<
+    I<Tags...>,
+    typename enable_if<disjunction<is_same<Tags, triangle_data>...>::value>::type>
+{
+  METAL_FUNC float2 get_candidate_triangle_barycentric_coord() const thread
+  {
+    thread auto *derived = static_cast<const thread I<Tags...> *>(this);
+    return __metal_get_candidate_triangle_barycentric_coord_intersection_query(
+        _build_intersection_flags(Tags{}...), derived->q);
+  }
+
+  METAL_FUNC bool is_candidate_triangle_front_facing() const thread
+  {
+    thread auto *derived = static_cast<const thread I<Tags...> *>(this);
+    return __metal_is_candidate_triangle_front_facing_intersection_query(
+        _build_intersection_flags(Tags{}...), derived->q);
+  }
+
+  METAL_FUNC float2 get_committed_triangle_barycentric_coord() const thread
+  {
+    thread auto *derived = static_cast<const thread I<Tags...> *>(this);
+    return __metal_get_committed_triangle_barycentric_coord_intersection_query(
+        _build_intersection_flags(Tags{}...), derived->q);
+  }
+
+  METAL_FUNC bool is_committed_triangle_front_facing() const thread
+  {
+    thread auto *derived = static_cast<const thread I<Tags...> *>(this);
+    return __metal_is_committed_triangle_front_facing_intersection_query(
+        _build_intersection_flags(Tags{}...), derived->q);
+  }
+};
+
+#if defined(__HAVE_RAYTRACING_CURVES__)
+template <typename, typename>
+struct _intersection_query_curve_data_ext
+{
+};
+
+template <template <typename...> class I, typename... Tags>
+struct _intersection_query_curve_data_ext<
+    I<Tags...>,
+    typename enable_if<disjunction<is_same<Tags, curve_data>...>::value>::type>
+{
+  METAL_FUNC float get_candidate_curve_parameter() const thread
+  {
+    thread auto *derived = static_cast<const thread I<Tags...> *>(this);
+    return __metal_get_candidate_curve_parameter_intersection_query(
+        _build_intersection_flags(Tags{}...), derived->q);
+  }
+
+  METAL_FUNC float get_committed_curve_parameter() const thread
+  {
+    thread auto *derived = static_cast<const thread I<Tags...> *>(this);
+    return __metal_get_committed_curve_parameter_intersection_query(
+        _build_intersection_flags(Tags{}...), derived->q);
+  }
+};
+#endif
+
+template <typename... Tags>
+struct intersection_query : _intersection_query_ctor_reset_ext<intersection_query<Tags...>, void>, _intersection_query_instancing_ext<intersection_query<Tags...>, void>, _intersection_query_triangle_data_ext<intersection_query<Tags...>, void>
+#if defined(__HAVE_RAYTRACING_CURVES__)
+, _intersection_query_curve_data_ext<intersection_query<Tags...>, void>
+#endif
+{
+  static_assert(_is_intersection_query_tag_sequence<Tags...>::value, "invalid 'Tags...' for 'intersection_query'");
+#if defined(__HAVE_RAYTRACING_MULTI_LEVEL_INSTANCING__)
+  static_assert(!__has_max_levels(Tags{}...) || (__get_max_levels(Tags{}...) >= 2 && __get_max_levels(Tags{}...) <= 16), "invalid value for max_levels intersection tag for intersection_query");
+  static_assert(__is_max_levels_unique<Tags...>(), "intersection tag max_levels can not be duplicated with different values");
+#endif
+
+  METAL_FUNC intersection_query() thread
+  {
+  }
+  METAL_FUNC intersection_query(const thread intersection_query &) thread = default;
+  METAL_FUNC thread intersection_query &operator=(const thread intersection_query &) thread = delete;
+
+  using _intersection_query_ctor_reset_ext<intersection_query<Tags...>, void>::_intersection_query_ctor_reset_ext;
+  METAL_FUNC intersection_query(const thread _intersection_query_ctor_reset_ext<intersection_query<Tags...>, void> &) thread = delete;
+
+  METAL_FUNC bool next() thread
+  {
+    return __metal_next_intersection_query(
+        _build_intersection_flags(Tags{}...), q,
+#if defined(__HAVE_RAYTRACING_MULTI_LEVEL_INSTANCING__)
+        __has_max_levels(Tags{}...) ? __get_max_levels(Tags{}...) : 0
+#else
+        0
+#endif
+        );
+  }
+
+  METAL_FUNC void abort() thread
+  {
+    __metal_abort_intersection_query(
+        _build_intersection_flags(Tags{}...), q);
+  }
+
+  METAL_FUNC void commit_triangle_intersection() thread
+  {
+    __metal_commit_triangle_intersection_intersection_query(
+        _build_intersection_flags(Tags{}...), q);
+  }
+
+#if defined(__HAVE_RAYTRACING_CURVES__)
+  METAL_FUNC void commit_curve_intersection() thread
+  {
+    __metal_commit_curve_intersection_intersection_query(
+        _build_intersection_flags(Tags{}...), q);
+  }
+#endif
+
+  METAL_FUNC void commit_bounding_box_intersection(float distance) thread
+  {
+    __metal_commit_bounding_box_intersection_intersection_query(
+        _build_intersection_flags(Tags{}...), q, distance);
+  }
+
+  METAL_FUNC intersection_params get_intersection_params() const thread
+  {
+    intersection_params params;
+    __metal_get_intersection_params_intersection_query(
+        _build_intersection_flags(Tags{}...), q,
+        reinterpret_cast<thread uint *>(&params._triangle_front_facing_winding),
+        reinterpret_cast<thread uint *>(&params._triangle_cull_mode),
+        reinterpret_cast<thread uint *>(&params._geometry_cull_mode),
+        reinterpret_cast<thread uint *>(&params._opacity_cull_mode),
+        reinterpret_cast<thread uint *>(&params._forced_opacity),
+        reinterpret_cast<thread uint *>(&params._assume_geometry_type),
+#if defined(__HAVE_RAYTRACING_CURVES__)
+        reinterpret_cast<thread uint *>(&params._assume_curve_basis),
+        reinterpret_cast<thread uint *>(&params._assume_curve_type),
+        &params._assume_curve_control_point_count,
+#else
+        nullptr, nullptr, nullptr,
+#endif
+        &params._assume_identity_transforms,
+        &params._accept_any_intersection);
+    return params;
+  }
+
+  METAL_FUNC float3 get_world_space_ray_origin() const thread
+  {
+    return __metal_get_world_space_ray_origin_intersection_query(
+        _build_intersection_flags(Tags{}...), q);
+  }
+
+  METAL_FUNC float3 get_world_space_ray_direction() const thread
+  {
+    return __metal_get_world_space_ray_direction_intersection_query(
+        _build_intersection_flags(Tags{}...), q);
+  }
+
+  METAL_FUNC float get_ray_min_distance() const thread
+  {
+    return __metal_get_ray_min_distance_intersection_query(
+        _build_intersection_flags(Tags{}...), q);
+  }
+
+  METAL_FUNC intersection_type get_candidate_intersection_type() const thread
+  {
+    return static_cast<intersection_type>(
+        __metal_get_candidate_intersection_type_intersection_query(
+            _build_intersection_flags(Tags{}...), q));
+  }
+
+  METAL_FUNC float get_candidate_triangle_distance() const thread
+  {
+    return __metal_get_candidate_triangle_distance_intersection_query(
+        _build_intersection_flags(Tags{}...), q);
+  }
+
+#if defined(__HAVE_RAYTRACING_CURVES__)
+  METAL_FUNC float get_candidate_curve_distance() const thread
+  {
+    return __metal_get_candidate_curve_distance_intersection_query(
+        _build_intersection_flags(Tags{}...), q);
+  }
+#endif
+
+  METAL_FUNC bool is_candidate_non_opaque_bounding_box() const thread
+  {
+    return __metal_is_candidate_non_opaque_bounding_box_intersection_query(
+        _build_intersection_flags(Tags{}...), q);
+  }
+
+  METAL_FUNC uint get_candidate_geometry_id() const thread
+  {
+    return __metal_get_candidate_geometry_id_intersection_query(
+        _build_intersection_flags(Tags{}...), q);
+  }
+
+  METAL_FUNC uint get_candidate_primitive_id() const thread
+  {
+    return __metal_get_candidate_primitive_id_intersection_query(
+        _build_intersection_flags(Tags{}...), q);
+  }
+
+#if defined(__HAVE_RAYTRACING_PRIMITIVE_DATA__)
+  METAL_FUNC const device void *get_candidate_primitive_data() const thread
+  {
+    return __metal_get_candidate_primitive_data_intersection_query(
+        _build_intersection_flags(Tags{}...), q);
+  }
+#endif
+
+  METAL_FUNC float3 get_candidate_ray_origin() const thread
+  {
+    return __metal_get_candidate_ray_origin_intersection_query(
+        _build_intersection_flags(Tags{}...), q);
+  }
+
+  METAL_FUNC float3 get_candidate_ray_direction() const thread
+  {
+    return __metal_get_candidate_ray_direction_intersection_query(
+        _build_intersection_flags(Tags{}...), q);
+  }
+
+  METAL_FUNC intersection_type get_committed_intersection_type() const thread
+  {
+    return static_cast<intersection_type>(
+        __metal_get_committed_intersection_type_intersection_query(
+            _build_intersection_flags(Tags{}...), q));
+  }
+
+  METAL_FUNC float get_committed_distance() const thread
+  {
+    return __metal_get_committed_distance_intersection_query(
+        _build_intersection_flags(Tags{}...), q);
+  }
+
+  METAL_FUNC uint get_committed_geometry_id() const thread
+  {
+    return __metal_get_committed_geometry_id_intersection_query(
+        _build_intersection_flags(Tags{}...), q);
+  }
+
+  METAL_FUNC uint get_committed_primitive_id() const thread
+  {
+    return __metal_get_committed_primitive_id_intersection_query(
+        _build_intersection_flags(Tags{}...), q);
+  }
+
+#if defined(__HAVE_RAYTRACING_PRIMITIVE_DATA__)
+  METAL_FUNC const device void *get_committed_primitive_data() const thread
+  {
+    return __metal_get_committed_primitive_data_intersection_query(
+        _build_intersection_flags(Tags{}...), q);
+  }
+#endif
+
+  METAL_FUNC float3 get_committed_ray_origin() const thread
+  {
+    return __metal_get_committed_ray_origin_intersection_query(
+        _build_intersection_flags(Tags{}...), q);
+  }
+
+  METAL_FUNC float3 get_committed_ray_direction() const thread
+  {
+    return __metal_get_committed_ray_direction_intersection_query(
+        _build_intersection_flags(Tags{}...), q);
+  }
+private:
+  __metal_intersection_query_t q;
+
+  friend struct _intersection_query_ctor_reset_ext_base;
+  template <typename, typename>
+  friend struct _intersection_query_instancing_ext;
+  template <typename, typename>
+  friend struct _intersection_query_triangle_data_ext;
+#if defined(__HAVE_RAYTRACING_CURVES__)
+  template <typename, typename>
+  friend struct _intersection_query_curve_data_ext;
+#endif
+};
+#endif
+} // namespace raytracing
+
+#if !defined(__HAVE_MTL_ACCELERATION_STRUCTURE_INSTANCE_OPTIONS__)
+struct MTLAccelerationStructureInstanceDescriptor
+{
+  packed_float3 transformationMatrix[4];
+  uint flags;
+  uint mask;
+  uint intersectionFunctionTableOffset;
+  uint accelerationStructureIndex;
+};
+#else
+enum MTLAccelerationStructureInstanceOptions : uint
+{
+  MTLAccelerationStructureInstanceOptionNone = 0,
+  MTLAccelerationStructureInstanceOptionDisableTriangleCulling = (1 << 0),
+  MTLAccelerationStructureInstanceOptionTriangleFrontFacingWindingCounterClockwise = (1 << 1),
+  MTLAccelerationStructureInstanceOptionOpaque = (1 << 2),
+  MTLAccelerationStructureInstanceOptionNonOpaque = (1 << 3),
+};
+
+typedef packed_float3 MTLPackedFloat3;
+typedef packed_float3 MTLPackedFloat4x3[4];
+
+struct MTLAccelerationStructureInstanceDescriptor
+{
+  MTLPackedFloat4x3 transformationMatrix;
+  MTLAccelerationStructureInstanceOptions options;
+  uint mask;
+  uint intersectionFunctionTableOffset;
+  uint accelerationStructureIndex;
+};
+#endif
+
+#if defined(__HAVE_RAYTRACING_USER_INSTANCE_ID__)
+struct MTLAccelerationStructureUserIDInstanceDescriptor
+{
+  MTLPackedFloat4x3 transformationMatrix;
+  MTLAccelerationStructureInstanceOptions options;
+  uint mask;
+  uint intersectionFunctionTableOffset;
+  uint accelerationStructureIndex;
+  uint userID;
+};
+#endif
+
+#if defined(__HAVE_RAYTRACING_MOTION__)
+enum MTLMotionBorderMode : uint
+{
+  MTLMotionBorderModeClamp = 0,
+  MTLMotionBorderModeVanish = 1
+};
+
+struct MTLAccelerationStructureMotionInstanceDescriptor
+{
+  MTLAccelerationStructureInstanceOptions options;
+  uint mask;
+  uint intersectionFunctionTableOffset;
+  uint accelerationStructureIndex;
+  uint userID;
+  uint motionTransformsStartIndex;
+  uint motionTransformsCount;
+  MTLMotionBorderMode motionStartBorderMode;
+  MTLMotionBorderMode motionEndBorderMode;
+  float motionStartTime;
+  float motionEndTime;
+};
+#endif
+
+#if defined(__HAVE_RAYTRACING_INDIRECT_INSTANCE_BUILD__)
+struct MTLIndirectAccelerationStructureInstanceDescriptor
+{
+  MTLPackedFloat4x3 transformationMatrix;
+  MTLAccelerationStructureInstanceOptions options;
+  uint32_t mask;
+  uint32_t intersectionFunctionTableOffset;
+  uint32_t userID;
+  MTLResourceID accelerationStructureID;
+};
+
+struct MTLIndirectAccelerationStructureMotionInstanceDescriptor
+{
+  MTLAccelerationStructureInstanceOptions options;
+  uint32_t mask;
+  uint32_t intersectionFunctionTableOffset;
+  uint32_t userID;
+  MTLResourceID accelerationStructureID;
+  uint32_t motionTransformsStartIndex;
+  uint32_t motionTransformsCount;
+  MTLMotionBorderMode motionStartBorderMode;
+  MTLMotionBorderMode motionEndBorderMode;
+  float motionStartTime;
+  float motionEndTime;
+};
+
+enum MTLAccelerationStructureInstanceDescriptorType : uint
+{
+  MTLAccelerationStructureInstanceDescriptorTypeIndirect = 3,
+  MTLAccelerationStructureInstanceDescriptorTypeIndirectMotion = 4,
+};
+#endif
+
+} // namespace metal
+#pragma METAL internals : disable
+#endif
+
+#endif // __METAL_RAYTRACING

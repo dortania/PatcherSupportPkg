@@ -1,0 +1,751 @@
+// -*- Metal -*-
+//===-- metal_limits ------------------------------------------------------===//
+// Copyright (c) 2014-2023 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_LIMITS
+#define __METAL_LIMITS
+
+#pragma METAL internals : enable
+namespace metal
+{
+enum float_round_style
+{
+  round_indeterminate = -1,
+  round_toward_zero = 0,
+  round_to_nearest = 1,
+  round_toward_infinity = 2,
+  round_toward_neg_infinity = 3
+};
+
+enum float_denorm_style
+{
+  denorm_indeterminate = -1,
+  denorm_absent = 0,
+  denorm_present = 1
+};
+
+template <typename T>
+struct _numeric_limits_impl
+{
+  static constexpr constant bool is_specialized = false;
+  static constexpr constant bool is_signed = false;
+  static constexpr constant bool is_integer = false;
+  static constexpr constant bool is_exact = false;
+  static constexpr constant bool has_infinity = false;
+  static constexpr constant bool has_quiet_NaN = false;
+  static constexpr constant bool has_signaling_NaN = false;
+  static constexpr constant float_denorm_style has_denorm = denorm_absent;
+  static constexpr constant bool has_denorm_loss = false;
+  static constexpr constant float_round_style round_style = round_toward_zero;
+  static constexpr constant bool is_iec559 = false;
+  static constexpr constant bool is_bounded = false;
+  static constexpr constant bool is_modulo = false;
+  static constexpr constant int digits = 0;
+  static constexpr constant int digits10 = 0;
+  static constexpr constant int max_digits10 = 0;
+  static constexpr constant int radix = 0;
+  static constexpr constant int min_exponent = 0;
+  static constexpr constant int min_exponent10 = 0;
+  static constexpr constant int max_exponent = 0;
+  static constexpr constant int max_exponent10 = 0;
+  static constexpr constant bool traps = false;
+  static constexpr constant bool tinyness_before = false;
+
+  static constexpr T min()
+  {
+    return T();
+  }
+  static constexpr T lowest()
+  {
+    return T();
+  }
+  static constexpr T max()
+  {
+    return T();
+  }
+  static constexpr T epsilon()
+  {
+    return T();
+  }
+  static constexpr T round_error()
+  {
+    return T();
+  }
+  static constexpr T infinity()
+  {
+    return T();
+  }
+  static constexpr T quiet_NaN()
+  {
+    return T();
+  }
+  static constexpr T signaling_NaN()
+  {
+    return T();
+  }
+  static constexpr T denorm_min()
+  {
+    return T();
+  }
+};
+
+template <typename T>
+struct _vec_numeric_limits_impl_base
+{
+  static constexpr constant bool is_specialized = true;
+  static constexpr constant bool is_signed = _numeric_limits_impl<make_scalar_t<T>>::is_signed;
+  static constexpr constant bool is_integer = _numeric_limits_impl<make_scalar_t<T>>::is_integer;
+  static constexpr constant bool is_exact = _numeric_limits_impl<make_scalar_t<T>>::is_exact;
+  static constexpr constant bool has_infinity = _numeric_limits_impl<make_scalar_t<T>>::has_infinity;
+  static constexpr constant bool has_quiet_NaN = _numeric_limits_impl<make_scalar_t<T>>::has_quiet_NaN;
+  static constexpr constant bool has_signaling_NaN = _numeric_limits_impl<make_scalar_t<T>>::has_signaling_NaN;
+  static constexpr constant float_denorm_style has_denorm = _numeric_limits_impl<make_scalar_t<T>>::has_denorm;
+  static constexpr constant bool has_denorm_loss = _numeric_limits_impl<make_scalar_t<T>>::has_denorm_loss;
+  static constexpr constant float_round_style round_style = _numeric_limits_impl<make_scalar_t<T>>::round_style;
+  static constexpr constant bool is_iec559 = _numeric_limits_impl<make_scalar_t<T>>::is_iec559;
+  static constexpr constant bool is_bounded = _numeric_limits_impl<make_scalar_t<T>>::is_bounded;
+  static constexpr constant bool is_modulo = _numeric_limits_impl<make_scalar_t<T>>::is_modulo;
+  static constexpr constant int digits = _numeric_limits_impl<make_scalar_t<T>>::digits;
+  static constexpr constant int digits10 = _numeric_limits_impl<make_scalar_t<T>>::digits10;
+  static constexpr constant int max_digits10 = _numeric_limits_impl<make_scalar_t<T>>::max_digits10;
+  static constexpr constant int radix = _numeric_limits_impl<make_scalar_t<T>>::radix;
+  static constexpr constant int min_exponent = _numeric_limits_impl<make_scalar_t<T>>::min_exponent;
+  static constexpr constant int min_exponent10 = _numeric_limits_impl<make_scalar_t<T>>::min_exponent10;
+  static constexpr constant int max_exponent = _numeric_limits_impl<make_scalar_t<T>>::max_exponent;
+  static constexpr constant int max_exponent10 = _numeric_limits_impl<make_scalar_t<T>>::max_exponent10;
+  static constexpr constant bool traps = _numeric_limits_impl<make_scalar_t<T>>::traps;
+  static constexpr constant bool tinyness_before = _numeric_limits_impl<make_scalar_t<T>>::tinyness_before;
+
+  static constexpr T min()
+  {
+    return _numeric_limits_impl<make_scalar_t<T>>::min();
+  }
+  static constexpr T lowest()
+  {
+    return _numeric_limits_impl<make_scalar_t<T>>::lowest();
+  }
+  static constexpr T max()
+  {
+    return _numeric_limits_impl<make_scalar_t<T>>::max();
+  }
+  static constexpr T epsilon()
+  {
+    return _numeric_limits_impl<make_scalar_t<T>>::epsilon();
+  }
+  static constexpr T round_error()
+  {
+    return _numeric_limits_impl<make_scalar_t<T>>::round_error();
+  }
+  static constexpr T infinity()
+  {
+    return _numeric_limits_impl<make_scalar_t<T>>::infinity();
+  }
+  static constexpr T quiet_NaN()
+  {
+    return _numeric_limits_impl<make_scalar_t<T>>::quiet_NaN();
+  }
+  static constexpr T signaling_NaN()
+  {
+    return _numeric_limits_impl<make_scalar_t<T>>::signaling_NaN();
+  }
+  static constexpr T denorm_min()
+  {
+    return _numeric_limits_impl<make_scalar_t<T>>::denorm_min();
+  }
+};
+
+template <typename T, int N>
+struct _numeric_limits_impl<T __attribute__((ext_vector_type(N)))> : _vec_numeric_limits_impl_base<T __attribute__((ext_vector_type(N)))>
+{
+};
+
+template <typename T, int N>
+struct _numeric_limits_impl<T __attribute__((packed_vector_type(N)))> : _vec_numeric_limits_impl_base<T __attribute__((packed_vector_type(N)))>
+{
+};
+
+template <typename T>
+struct _int_numeric_limits_impl_base
+{
+  static constexpr constant bool is_specialized = true;
+  static constexpr constant bool is_integer = true;
+  static constexpr constant bool is_exact = true;
+  static constexpr constant bool has_infinity = false;
+  static constexpr constant bool has_quiet_NaN = false;
+  static constexpr constant bool has_signaling_NaN = false;
+  static constexpr constant float_denorm_style has_denorm = denorm_absent;
+  static constexpr constant bool has_denorm_loss = false;
+  static constexpr constant float_round_style round_style = round_toward_zero;
+  static constexpr constant bool is_iec559 = false;
+  static constexpr constant bool is_bounded = true;
+  static constexpr constant int max_digits10 = 0;
+  static constexpr constant int radix = 2;
+  static constexpr constant int min_exponent = 0;
+  static constexpr constant int min_exponent10 = 0;
+  static constexpr constant int max_exponent = 0;
+  static constexpr constant int max_exponent10 = 0;
+  static constexpr constant bool traps = false;
+  static constexpr constant bool tinyness_before = false;
+
+  static constexpr T epsilon()
+  {
+    return 0;
+  }
+  static constexpr T round_error()
+  {
+    return 0;
+  }
+  static constexpr T infinity()
+  {
+    return 0;
+  }
+  static constexpr T quiet_NaN()
+  {
+    return 0;
+  }
+  static constexpr T signaling_NaN()
+  {
+    return 0;
+  }
+  static constexpr T denorm_min()
+  {
+    return 0;
+  }
+};
+
+template <>
+struct _numeric_limits_impl<bool> : _int_numeric_limits_impl_base<bool>
+{
+  static constexpr constant bool is_signed = false;
+  static constexpr constant bool is_modulo = false;
+  static constexpr constant int digits = 1;
+  static constexpr constant int digits10 = 0;
+
+  static constexpr bool min()
+  {
+    return false;
+  }
+  static constexpr bool lowest()
+  {
+    return false;
+  }
+  static constexpr bool max()
+  {
+    return true;
+  }
+};
+
+template <>
+struct _numeric_limits_impl<char> : _int_numeric_limits_impl_base<char>
+{
+  static constexpr constant bool is_signed = true;
+  static constexpr constant bool is_modulo = false;
+  static constexpr constant int digits = CHAR_BIT - 1;
+  static constexpr constant int digits10 = digits * (M_LN2_F / M_LN10_F);
+
+  static constexpr char min()
+  {
+    return CHAR_MIN;
+  }
+  static constexpr char lowest()
+  {
+    return CHAR_MIN;
+  }
+  static constexpr char max()
+  {
+    return CHAR_MAX;
+  }
+};
+
+template <>
+struct _numeric_limits_impl<signed char> : _int_numeric_limits_impl_base<signed char>
+{
+  static constexpr constant bool is_signed = true;
+  static constexpr constant bool is_modulo = false;
+  static constexpr constant int digits = CHAR_BIT - 1;
+  static constexpr constant int digits10 = digits * (M_LN2_F / M_LN10_F);
+
+  static constexpr signed char min()
+  {
+    return SCHAR_MIN;
+  }
+  static constexpr signed char lowest()
+  {
+    return SCHAR_MIN;
+  }
+  static constexpr signed char max()
+  {
+    return SCHAR_MAX;
+  }
+};
+template <>
+struct _numeric_limits_impl<unsigned char> : _int_numeric_limits_impl_base<unsigned char>
+{
+  static constexpr constant bool is_signed = false;
+  static constexpr constant bool is_modulo = true;
+  static constexpr constant int digits = CHAR_BIT;
+  static constexpr constant int digits10 = digits * (M_LN2_F / M_LN10_F);
+
+  static constexpr unsigned char min()
+  {
+    return 0;
+  }
+  static constexpr unsigned char lowest()
+  {
+    return 0;
+  }
+  static constexpr unsigned char max()
+  {
+    return UCHAR_MAX;
+  }
+};
+
+template <>
+struct _numeric_limits_impl<signed short> : _int_numeric_limits_impl_base<signed short>
+{
+  static constexpr constant bool is_signed = true;
+  static constexpr constant bool is_modulo = false;
+  static constexpr constant int digits = CHAR_BIT * sizeof(signed short) - 1;
+  static constexpr constant int digits10 = digits * (M_LN2_F / M_LN10_F);
+
+  static constexpr signed short min()
+  {
+    return SHRT_MIN;
+  }
+  static constexpr signed short lowest()
+  {
+    return SHRT_MIN;
+  }
+  static constexpr signed short max()
+  {
+    return SHRT_MAX;
+  }
+};
+template <>
+struct _numeric_limits_impl<unsigned short> : _int_numeric_limits_impl_base<unsigned short>
+{
+  static constexpr constant bool is_signed = false;
+  static constexpr constant bool is_modulo = true;
+  static constexpr constant int digits = CHAR_BIT * sizeof(unsigned short);
+  static constexpr constant int digits10 = digits * (M_LN2_F / M_LN10_F);
+
+  static constexpr unsigned short min()
+  {
+    return 0;
+  }
+  static constexpr unsigned short lowest()
+  {
+    return 0;
+  }
+  static constexpr unsigned short max()
+  {
+    return USHRT_MAX;
+  }
+};
+template <>
+struct _numeric_limits_impl<signed int> : _int_numeric_limits_impl_base<signed int>
+{
+  static constexpr constant bool is_signed = true;
+  static constexpr constant bool is_modulo = false;
+  static constexpr constant int digits = CHAR_BIT * sizeof(signed int) - 1;
+  static constexpr constant int digits10 = digits * (M_LN2_F / M_LN10_F);
+
+  static constexpr signed int min()
+  {
+    return INT_MIN;
+  }
+  static constexpr signed int lowest()
+  {
+    return INT_MIN;
+  }
+  static constexpr signed int max()
+  {
+    return INT_MAX;
+  }
+};
+template <>
+struct _numeric_limits_impl<unsigned int> : _int_numeric_limits_impl_base<unsigned int>
+{
+  static constexpr constant bool is_signed = false;
+  static constexpr constant bool is_modulo = true;
+  static constexpr constant int digits = CHAR_BIT * sizeof(unsigned int);
+  static constexpr constant int digits10 = digits * (M_LN2_F / M_LN10_F);
+
+  static constexpr unsigned int min()
+  {
+    return 0;
+  }
+  static constexpr unsigned int lowest()
+  {
+    return 0;
+  }
+  static constexpr unsigned int max()
+  {
+    return UINT_MAX;
+  }
+};
+template <>
+struct _numeric_limits_impl<signed long> : _int_numeric_limits_impl_base<signed long>
+{
+  static constexpr constant bool is_signed = true;
+  static constexpr constant bool is_modulo = false;
+  static constexpr constant int digits = CHAR_BIT * sizeof(signed long) - 1;
+  static constexpr constant int digits10 = digits * (M_LN2_F / M_LN10_F);
+
+  static constexpr signed long min()
+  {
+    return LONG_MIN;
+  }
+  static constexpr signed long lowest()
+  {
+    return LONG_MIN;
+  }
+  static constexpr signed long max()
+  {
+    return LONG_MAX;
+  }
+};
+template <>
+struct _numeric_limits_impl<unsigned long> : _int_numeric_limits_impl_base<unsigned long>
+{
+  static constexpr constant bool is_signed = false;
+  static constexpr constant bool is_modulo = true;
+  static constexpr constant int digits = CHAR_BIT * sizeof(unsigned long);
+  static constexpr constant int digits10 = digits * (M_LN2_F / M_LN10_F);
+
+  static constexpr unsigned long min()
+  {
+    return 0;
+  }
+  static constexpr unsigned long lowest()
+  {
+    return 0;
+  }
+  static constexpr unsigned long max()
+  {
+    return ULONG_MAX;
+  }
+};
+
+struct _fp_numeric_limits_impl_base
+{
+  static constexpr constant bool is_specialized = true;
+  static constexpr constant bool is_signed = true;
+  static constexpr constant bool is_integer = false;
+  static constexpr constant bool is_exact = false;
+  static constexpr constant bool has_infinity = true;
+  static constexpr constant bool has_quiet_NaN = true;
+  static constexpr constant bool has_signaling_NaN = false;
+  static constexpr constant float_denorm_style has_denorm = denorm_indeterminate;
+  static constexpr constant bool has_denorm_loss = false;
+  static constexpr constant float_round_style round_style = round_indeterminate;
+  static constexpr constant bool is_iec559 = false;
+  static constexpr constant bool is_bounded = true;
+  static constexpr constant bool is_modulo = false;
+  static constexpr constant bool traps = false;
+  static constexpr constant bool tinyness_before = false;
+};
+
+template <>
+struct _numeric_limits_impl<half> : _fp_numeric_limits_impl_base
+{
+  static constexpr constant int digits = HALF_MANT_DIG;
+  static constexpr constant int digits10 = HALF_DIG;
+  static constexpr constant int max_digits10 = HALF_DECIMAL_DIG;
+  static constexpr constant int radix = HALF_RADIX;
+  static constexpr constant int min_exponent = HALF_MIN_EXP;
+  static constexpr constant int min_exponent10 = HALF_MIN_10_EXP;
+  static constexpr constant int max_exponent = HALF_MAX_EXP;
+  static constexpr constant int max_exponent10 = HALF_MAX_10_EXP;
+
+  static constexpr half min()
+  {
+    return HALF_MIN;
+  }
+  static constexpr half lowest()
+  {
+    return -HALF_MAX;
+  }
+  static constexpr half max()
+  {
+    return HALF_MAX;
+  }
+  static constexpr half epsilon()
+  {
+    return HALF_EPSILON;
+  }
+  static constexpr half round_error()
+  {
+    return 1.0h;
+  }
+  static constexpr half infinity()
+  {
+    return __builtin_infh();
+  }
+  static constexpr half quiet_NaN()
+  {
+    return __builtin_nanh("");
+  }
+  static constexpr half signaling_NaN()
+  {
+    return __builtin_nansh("");
+  }
+  static constexpr half denorm_min()
+  {
+    return HALF_MIN;
+  }
+};
+
+#if defined(__HAVE_BFLOAT__)
+template <>
+struct _numeric_limits_impl<bfloat> : _fp_numeric_limits_impl_base
+{
+  static constexpr constant int digits = BFLT_MANT_DIG;
+  static constexpr constant int digits10 = BFLT_DIG;
+  static constexpr constant int max_digits10 = BFLT_DECIMAL_DIG;
+  static constexpr constant int radix = BFLT_RADIX;
+  static constexpr constant int min_exponent = BFLT_MIN_EXP;
+  static constexpr constant int min_exponent10 = BFLT_MIN_10_EXP;
+  static constexpr constant int max_exponent = BFLT_MAX_EXP;
+  static constexpr constant int max_exponent10 = BFLT_MAX_10_EXP;
+
+  static constexpr bfloat min()
+  {
+    return BFLT_MIN;
+  }
+  static constexpr bfloat lowest()
+  {
+    return -BFLT_MAX;
+  }
+  static constexpr bfloat max()
+  {
+    return BFLT_MAX;
+  }
+  static constexpr bfloat epsilon()
+  {
+    return BFLT_EPSILON;
+  }
+  static constexpr bfloat round_error()
+  {
+    return 1.0bf;
+  }
+  static constexpr bfloat infinity()
+  {
+    return __builtin_inff16b();
+  }
+  static constexpr bfloat quiet_NaN()
+  {
+    return __builtin_nanf16b("");
+  }
+  static constexpr bfloat signaling_NaN()
+  {
+    return __builtin_nansf16b("");
+  }
+  static constexpr bfloat denorm_min()
+  {
+    return BFLT_MIN;
+  }
+};
+#endif
+
+template <>
+struct _numeric_limits_impl<float> : _fp_numeric_limits_impl_base
+{
+  static constexpr constant int digits = FLT_MANT_DIG;
+  static constexpr constant int digits10 = FLT_DIG;
+  static constexpr constant int max_digits10 = FLT_DECIMAL_DIG;
+  static constexpr constant int radix = FLT_RADIX;
+  static constexpr constant int min_exponent = FLT_MIN_EXP;
+  static constexpr constant int min_exponent10 = FLT_MIN_10_EXP;
+  static constexpr constant int max_exponent = FLT_MAX_EXP;
+  static constexpr constant int max_exponent10 = FLT_MAX_10_EXP;
+
+  static constexpr float min()
+  {
+    return FLT_MIN;
+  }
+  static constexpr float lowest()
+  {
+    return -FLT_MAX;
+  }
+  static constexpr float max()
+  {
+    return FLT_MAX;
+  }
+  static constexpr float epsilon()
+  {
+    return FLT_EPSILON;
+  }
+  static constexpr float round_error()
+  {
+    return 1.0f;
+  }
+  static constexpr float infinity()
+  {
+    return __builtin_inff();
+  }
+  static constexpr float quiet_NaN()
+  {
+    return __builtin_nanf("");
+  }
+  static constexpr float signaling_NaN()
+  {
+    return __builtin_nansf("");
+  }
+  static constexpr float denorm_min()
+  {
+    return FLT_MIN;
+  }
+};
+
+#if defined(__HAVE_NATIVE_DOUBLE__)
+template <>
+struct _numeric_limits_impl<double> : _fp_numeric_limits_impl_base
+{
+  static constexpr constant int digits = DBL_MANT_DIG;
+  static constexpr constant int digits10 = DBL_DIG;
+  static constexpr constant int max_digits10 = DBL_DECIMAL_DIG;
+  static constexpr constant int radix = DBL_RADIX;
+  static constexpr constant int min_exponent = DBL_MIN_EXP;
+  static constexpr constant int min_exponent10 = DBL_MIN_10_EXP;
+  static constexpr constant int max_exponent = DBL_MAX_EXP;
+  static constexpr constant int max_exponent10 = DBL_MAX_10_EXP;
+
+  static constexpr double min()
+  {
+    return DBL_MIN;
+  }
+  static constexpr double lowest()
+  {
+    return -DBL_MAX;
+  }
+  static constexpr double max()
+  {
+    return DBL_MAX;
+  }
+  static constexpr double epsilon()
+  {
+    return DBL_EPSILON;
+  }
+  static constexpr double round_error()
+  {
+    return 1.0;
+  }
+  static constexpr float infinity()
+  {
+    return __builtin_inf();
+  }
+  static constexpr double quiet_NaN()
+  {
+    return __builtin_nan("");
+  }
+  static constexpr double signaling_NaN()
+  {
+    return __builtin_nans("");
+  }
+  static constexpr double denorm_min()
+  {
+    return DBL_MIN;
+  }
+};
+#endif
+
+template <typename T>
+struct numeric_limits : _numeric_limits_impl<remove_cv_t<T>>
+{
+};
+
+template <typename T>
+struct _fp_encoding_traits_impl;
+
+template <typename T, int N>
+struct _fp_encoding_traits_impl<T __attribute__((ext_vector_type(N)))>
+{
+  typedef typename _fp_encoding_traits_impl<T>::encoding_type __attribute__((ext_vector_type(N))) encoding_type;
+  constexpr static constant encoding_type bit_width = sizeof(encoding_type) * CHAR_BIT;
+  constexpr static constant encoding_type sign_mask = _fp_encoding_traits_impl<T>::sign_mask;
+  constexpr static constant encoding_type inf_mask = _fp_encoding_traits_impl<T>::inf_mask;
+  constexpr static constant encoding_type min_mask = _fp_encoding_traits_impl<T>::min_mask;
+};
+template <>
+struct _fp_encoding_traits_impl<half>
+{
+  typedef unsigned short encoding_type;
+  constexpr static constant encoding_type bit_width = sizeof(encoding_type) * CHAR_BIT;
+  constexpr static constant encoding_type sign_mask = 0x8000;
+  constexpr static constant encoding_type exponent_mask = 0x7c00;
+  constexpr static constant encoding_type mantissa_mask = 0x03ff;
+  constexpr static constant encoding_type inf_mask = 0x7c00;
+  constexpr static constant encoding_type min_mask = 0x0400;
+  constexpr static constant int exponent_shift = 10;
+  constexpr static constant int exponent_bias = 15;
+  constexpr static constant int exponent_max = 31;
+  constexpr static constant encoding_type one_encoding = 0x3c00;
+  constexpr static constant encoding_type point_five_encoding = 0x3800;
+  constexpr static constant half immediately_under_one = 0x1.ffcp-1h;
+};
+#if defined(__HAVE_BFLOAT__)
+template <>
+struct _fp_encoding_traits_impl<bfloat>
+{
+  typedef unsigned short encoding_type;
+  constexpr static constant encoding_type bit_width = sizeof(encoding_type) * CHAR_BIT;
+  constexpr static constant encoding_type sign_mask = 0x8000;
+  constexpr static constant encoding_type exponent_mask = 0x7f80;
+  constexpr static constant encoding_type mantissa_mask = 0x007f;
+  constexpr static constant encoding_type inf_mask = 0x7f80;
+  constexpr static constant encoding_type min_mask = 0x0080;
+  constexpr static constant int exponent_shift = 7;
+  constexpr static constant int exponent_bias = 127;
+  constexpr static constant int exponent_max = 255;
+  constexpr static constant encoding_type one_encoding = 0x3f80;
+  constexpr static constant encoding_type point_five_encoding = 0x3f00;
+  constexpr static constant bfloat immediately_under_one = 0x1.fep-1bf;
+};
+#endif
+template <>
+struct _fp_encoding_traits_impl<float>
+{
+  typedef unsigned int encoding_type;
+  constexpr static constant encoding_type bit_width = sizeof(encoding_type) * CHAR_BIT;
+  constexpr static constant encoding_type sign_mask = 0x80000000;
+  constexpr static constant encoding_type exponent_mask = 0x7f800000;
+  constexpr static constant encoding_type mantissa_mask = 0x007fffff;
+  constexpr static constant encoding_type inf_mask = 0x7f800000;
+  constexpr static constant encoding_type min_mask = 0x00800000;
+  constexpr static constant int exponent_shift = 23;
+  constexpr static constant int exponent_bias = 127;
+  constexpr static constant int exponent_max = 255;
+  constexpr static constant encoding_type one_encoding = 0x3f800000;
+  constexpr static constant encoding_type point_five_encoding = 0x3f000000;
+  constexpr static constant float immediately_under_one = 0x1.fffffep-1f;
+};
+#if defined(__HAVE_NATIVE_DOUBLE__)
+template <>
+struct _fp_encoding_traits_impl<double>
+{
+  typedef unsigned long encoding_type;
+  constexpr static constant encoding_type bit_width = sizeof(encoding_type) * CHAR_BIT;
+  constexpr static constant encoding_type sign_mask = 0x8000000000000000;
+  constexpr static constant encoding_type exponent_mask = 0x7ff0000000000000;
+  constexpr static constant encoding_type mantissa_mask = 0x000fffffffffffff;
+  constexpr static constant encoding_type inf_mask = 0x7ff0000000000000;
+  constexpr static constant encoding_type min_mask = 0x0010000000000000;
+  constexpr static constant int exponent_shift = 52;
+  constexpr static constant int exponent_bias = 1023;
+  constexpr static constant int exponent_max = 2047;
+  constexpr static constant encoding_type one_encoding = 0x3ff0000000000000;
+  constexpr static constant encoding_type point_five_encoding = 0x3fe0000000000000;
+  constexpr static constant double immediately_under_one = 0x1.fffffffffffffp-1;
+};
+#endif
+
+template <typename T>
+struct _fp_encoding_traits : _fp_encoding_traits_impl<remove_cv_t<T>>
+{
+};
+} // namespace metal
+#pragma METAL internals : disable
+
+#endif // __METAL_LIMITS

@@ -1,0 +1,66 @@
+// -*- Metal -*-
+//===-- metal_tessellation ------------------------------------------------===//
+// Copyright (c) 2016-2019 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_TESSELLATION
+#define __METAL_TESSELLATION
+
+#if defined(__HAVE_TESSELLATION__)
+namespace metal
+{
+template <typename T, typename = void>
+class patch_control_point;
+
+template <typename T>
+class patch_control_point<T, typename enable_if<__is_metal_patch_control_point_struct(T)>::type>
+{
+  METAL_FUNC patch_control_point() thread = default;
+
+public:
+  thread patch_control_point &operator=(const thread patch_control_point &) thread = delete;
+  thread patch_control_point &operator=(const constant patch_control_point&) thread = delete;
+#if defined(__HAVE_OPERATOR_ADDRESSOF_DELETED__)
+  thread patch_control_point *operator&() thread = delete;
+  const thread patch_control_point *operator&() const thread = delete;
+#endif
+
+  // Return number of control points.
+  METAL_FUNC size_t size() const thread
+  {
+    return __metal_get_num_patch_control_points();
+  }
+
+  METAL_FUNC T operator[](size_t pos) const thread
+  {
+    return __metal_get_control_point(pcp, static_cast<uint>(pos), T());
+  }
+
+private:
+  __metal_patch_control_point_t pcp;
+};
+
+// Metal Tessellation structures
+struct MTLQuadTessellationFactorsHalf
+{
+  half edgeTessellationFactor[4];
+  half insideTessellationFactor[2];
+};
+
+struct MTLTriangleTessellationFactorsHalf
+{
+  half edgeTessellationFactor[3];
+  half insideTessellationFactor;
+};
+
+struct MTLDrawPatchIndirectArguments
+{
+  uint patchCount;
+  uint instanceCount;
+  uint patchStart;
+  uint baseInstance;
+};
+} // namespace metal
+#endif
+
+#endif // __METAL_TESSELLATION

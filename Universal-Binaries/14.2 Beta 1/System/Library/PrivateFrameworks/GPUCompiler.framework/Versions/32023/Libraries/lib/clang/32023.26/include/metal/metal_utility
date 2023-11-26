@@ -1,0 +1,36 @@
+// -*- Metal -*-
+//===-- metal_utility -----------------------------------------------------===//
+// Copyright (c) 2014-2021 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_UTILITY
+#define __METAL_UTILITY
+
+namespace metal
+{
+template <typename T, T... I>
+struct _integer_sequence
+{
+  typedef T value_type;
+  static constexpr size_t size()
+  {
+    return sizeof...(I);
+  }
+};
+template <typename T, T N>
+using _make_integer_sequence = __make_integer_seq<_integer_sequence, T, N>;
+#ifdef __cpp_variable_templates
+template <typename T, T... I>
+using integer_sequence = _integer_sequence<T, I...>;
+template <typename T, T N>
+using make_integer_sequence = _make_integer_sequence<T, N>;
+#endif
+
+template <typename T>
+constexpr thread typename remove_reference<T>::type &&move(thread T &&t)
+{
+  return static_cast<thread typename remove_reference<T>::type &&>(t);
+}
+} // namespace metal
+
+#endif // __METAL_UTILITY

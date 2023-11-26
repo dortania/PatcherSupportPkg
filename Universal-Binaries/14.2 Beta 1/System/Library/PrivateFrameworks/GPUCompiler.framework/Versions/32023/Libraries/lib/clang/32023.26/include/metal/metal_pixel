@@ -1,0 +1,1299 @@
+// -*- Metal -*-
+//===-- metal_pixel -------------------------------------------------------===//
+// Copyright (c) 2015-2020 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_PIXEL
+#define __METAL_PIXEL
+
+#if defined(__HAVE_PIXEL_DATA_TYPES__)
+#pragma METAL internals : enable
+namespace metal
+{
+// Metal 2.0 s2.4: Pixel Data Types.
+
+// Traits for pixel data type implementation. For any tag type describing a
+// pixel data type, the following members must be defined:
+//
+// typedef (integral type) METAL_ALIGN(...) storage_type;
+//
+// template <typename T> METAL_FUNC static storage_type pack(T);
+// template <typename T> METAL_FUNC static T unpack(storage_type);
+//
+template <typename P>
+struct _pixel_type_traits;
+
+// For any tag type P describing a pixel data type, specialize the following
+// trait to define which ALU types T are allowed in combination.
+template <typename P, typename T>
+struct _is_pixel_type : false_type
+{
+};
+
+// Pixel data types are implicitly convertible to their ALU types -- i.e.
+// either halfN or floatN. Pixel data types with halfN channel type are
+// explicitly convertible to floatN. Pixel data types with floatN types are
+// explicitly convertible to halfN. This trait defines the explicitly
+// convertible to type.
+template <typename T>
+struct _make_pixel_explicit_convert_impl;
+template <>
+struct _make_pixel_explicit_convert_impl<half>
+{
+  typedef float type;
+};
+template <>
+struct _make_pixel_explicit_convert_impl<float>
+{
+  typedef half type;
+};
+template <typename T, int N>
+struct _make_pixel_explicit_convert_impl<vec<T, N>>
+{
+  typedef vec<typename _make_pixel_explicit_convert_impl<T>::type, N> type;
+};
+template <typename T>
+struct _make_pixel_explicit_convert : _make_pixel_explicit_convert_impl<remove_cv_t<T>>
+{
+};
+template <typename T>
+using _make_pixel_explicit_convert_t = typename _make_pixel_explicit_convert<T>::type;
+
+template <typename T, typename P, typename E = void>
+struct _pixel_type;
+template <typename T, typename P>
+struct _pixel_type<T, P, typename enable_if<_is_pixel_type<P, T>::value>::type>
+{
+private:
+  typedef _make_pixel_explicit_convert_t<T> U;
+
+public:
+  METAL_FUNC _pixel_type() thread = default;
+  METAL_FUNC _pixel_type() constant = default;
+  METAL_FUNC _pixel_type() threadgroup = default;
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC _pixel_type() ray_data = default;
+#endif
+
+  METAL_FUNC _pixel_type(const thread _pixel_type &that) thread = default;
+  METAL_FUNC _pixel_type(const device _pixel_type &that) thread = default;
+  METAL_FUNC _pixel_type(const constant _pixel_type &that) thread = default;
+  METAL_FUNC _pixel_type(const threadgroup _pixel_type &that) thread = default;
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC _pixel_type(const threadgroup_imageblock _pixel_type &that) thread = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC _pixel_type(const ray_data _pixel_type &that) thread = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC _pixel_type(const object_data _pixel_type &that) thread = default;
+#endif
+  METAL_FUNC _pixel_type(const thread _pixel_type &that) device = default;
+  METAL_FUNC _pixel_type(const device _pixel_type &that) device = default;
+  METAL_FUNC _pixel_type(const constant _pixel_type &that) device = default;
+  METAL_FUNC _pixel_type(const threadgroup _pixel_type &that) device = default;
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC _pixel_type(const threadgroup_imageblock _pixel_type &that) device = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC _pixel_type(const ray_data _pixel_type &that) device = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC _pixel_type(const object_data _pixel_type &that) device = default;
+#endif
+  METAL_FUNC _pixel_type(const thread _pixel_type &that) constant = default;
+  METAL_FUNC _pixel_type(const device _pixel_type &that) constant = default;
+  METAL_FUNC _pixel_type(const constant _pixel_type &that) constant = default;
+  METAL_FUNC _pixel_type(const threadgroup _pixel_type &that) constant = default;
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC _pixel_type(const threadgroup_imageblock _pixel_type &that) constant = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC _pixel_type(const ray_data _pixel_type &that) constant = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC _pixel_type(const object_data _pixel_type &that) constant = default;
+#endif
+  METAL_FUNC _pixel_type(const thread _pixel_type &that) threadgroup = default;
+  METAL_FUNC _pixel_type(const device _pixel_type &that) threadgroup = default;
+  METAL_FUNC _pixel_type(const constant _pixel_type &that) threadgroup = default;
+  METAL_FUNC _pixel_type(const threadgroup _pixel_type &that) threadgroup = default;
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC _pixel_type(const threadgroup_imageblock _pixel_type &that) threadgroup = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC _pixel_type(const ray_data _pixel_type &that) threadgroup = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC _pixel_type(const object_data _pixel_type &that) threadgroup = default;
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC _pixel_type(const thread _pixel_type &that) threadgroup_imageblock = default;
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC _pixel_type(const device _pixel_type &that) threadgroup_imageblock = default;
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC _pixel_type(const constant _pixel_type &that) threadgroup_imageblock = default;
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC _pixel_type(const threadgroup _pixel_type &that) threadgroup_imageblock = default;
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC _pixel_type(const threadgroup_imageblock _pixel_type &that) threadgroup_imageblock = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC _pixel_type(const ray_data _pixel_type &that) threadgroup_imageblock = default;
+#endif
+#endif
+#if defined(__HAVE_MESH__)
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC _pixel_type(const object_data _pixel_type &that) threadgroup_imageblock = default;
+#endif
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC _pixel_type(const thread _pixel_type &that) ray_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC _pixel_type(const device _pixel_type &that) ray_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC _pixel_type(const constant _pixel_type &that) ray_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC _pixel_type(const threadgroup _pixel_type &that) ray_data = default;
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC _pixel_type(const threadgroup_imageblock _pixel_type &that) ray_data = default;
+#endif
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC _pixel_type(const ray_data _pixel_type &that) ray_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC _pixel_type(const object_data _pixel_type &that) ray_data = default;
+#endif
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC _pixel_type(const thread _pixel_type &that) object_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC _pixel_type(const device _pixel_type &that) object_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC _pixel_type(const constant _pixel_type &that) object_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC _pixel_type(const threadgroup _pixel_type &that) object_data = default;
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+#if defined(__HAVE_MESH__)
+  METAL_FUNC _pixel_type(const threadgroup_imageblock _pixel_type &that) object_data = default;
+#endif
+#endif
+#if defined(__HAVE_RAYTRACING__)
+#if defined(__HAVE_MESH__)
+  METAL_FUNC _pixel_type(const ray_data _pixel_type &that) object_data = default;
+#endif
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC _pixel_type(const object_data _pixel_type &that) object_data = default;
+#endif
+
+  METAL_FUNC _pixel_type(T v) thread : storage(_pixel_type_traits<P>::template pack<T>(v))
+  {
+  }
+  METAL_FUNC _pixel_type(T v) constant : storage(_pixel_type_traits<P>::template pack<T>(v))
+  {
+  }
+  METAL_FUNC _pixel_type(T v) threadgroup : storage(_pixel_type_traits<P>::template pack<T>(v))
+  {
+  }
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC _pixel_type(T v) ray_data : storage(_pixel_type_traits<P>::template pack<T>(v))
+  {
+  }
+#endif
+
+  METAL_FUNC operator T () const thread
+  {
+    return _pixel_type_traits<P>::template unpack<T>(storage);
+  }
+
+  METAL_FUNC explicit operator U () const thread
+  {
+    return static_cast<U>(static_cast<T>(*this));
+  }
+  METAL_FUNC operator T () const device
+  {
+    return _pixel_type_traits<P>::template unpack<T>(storage);
+  }
+
+  METAL_FUNC explicit operator U () const device
+  {
+    return static_cast<U>(static_cast<T>(*this));
+  }
+  METAL_FUNC operator T () const constant
+  {
+    return _pixel_type_traits<P>::template unpack<T>(storage);
+  }
+
+  METAL_FUNC explicit operator U () const constant
+  {
+    return static_cast<U>(static_cast<T>(*this));
+  }
+  METAL_FUNC operator T () const threadgroup
+  {
+    return _pixel_type_traits<P>::template unpack<T>(storage);
+  }
+
+  METAL_FUNC explicit operator U () const threadgroup
+  {
+    return static_cast<U>(static_cast<T>(*this));
+  }
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC operator T () const threadgroup_imageblock
+  {
+    return _pixel_type_traits<P>::template unpack<T>(storage);
+  }
+
+  METAL_FUNC explicit operator U () const threadgroup_imageblock
+  {
+    return static_cast<U>(static_cast<T>(*this));
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC operator T () const ray_data
+  {
+    return _pixel_type_traits<P>::template unpack<T>(storage);
+  }
+
+  METAL_FUNC explicit operator U () const ray_data
+  {
+    return static_cast<U>(static_cast<T>(*this));
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC operator T () const object_data
+  {
+    return _pixel_type_traits<P>::template unpack<T>(storage);
+  }
+
+  METAL_FUNC explicit operator U () const object_data
+  {
+    return static_cast<U>(static_cast<T>(*this));
+  }
+#endif
+
+  METAL_FUNC thread _pixel_type &operator=(T v) thread
+  {
+    storage = _pixel_type_traits<P>::template pack<T>(v);
+    return *this;
+  }
+  METAL_FUNC device _pixel_type &operator=(T v) device
+  {
+    storage = _pixel_type_traits<P>::template pack<T>(v);
+    return *this;
+  }
+  METAL_FUNC threadgroup _pixel_type &operator=(T v) threadgroup
+  {
+    storage = _pixel_type_traits<P>::template pack<T>(v);
+    return *this;
+  }
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC threadgroup_imageblock _pixel_type &operator=(T v) threadgroup_imageblock
+  {
+    storage = _pixel_type_traits<P>::template pack<T>(v);
+    return *this;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC ray_data _pixel_type &operator=(T v) ray_data
+  {
+    storage = _pixel_type_traits<P>::template pack<T>(v);
+    return *this;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data _pixel_type &operator=(T v) object_data
+  {
+    storage = _pixel_type_traits<P>::template pack<T>(v);
+    return *this;
+  }
+#endif
+
+  METAL_FUNC bool operator==(const thread _pixel_type &that) const thread
+  {
+    return storage == that.storage;
+  }
+  METAL_FUNC bool operator==(const device _pixel_type &that) const thread
+  {
+    return storage == that.storage;
+  }
+  METAL_FUNC bool operator==(const constant _pixel_type &that) const thread
+  {
+    return storage == that.storage;
+  }
+  METAL_FUNC bool operator==(const threadgroup _pixel_type &that) const thread
+  {
+    return storage == that.storage;
+  }
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC bool operator==(const threadgroup_imageblock _pixel_type &that) const thread
+  {
+    return storage == that.storage;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC bool operator==(const ray_data _pixel_type &that) const thread
+  {
+    return storage == that.storage;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC bool operator==(const object_data _pixel_type &that) const thread
+  {
+    return storage == that.storage;
+  }
+#endif
+  METAL_FUNC bool operator==(const thread _pixel_type &that) const device
+  {
+    return storage == that.storage;
+  }
+  METAL_FUNC bool operator==(const device _pixel_type &that) const device
+  {
+    return storage == that.storage;
+  }
+  METAL_FUNC bool operator==(const constant _pixel_type &that) const device
+  {
+    return storage == that.storage;
+  }
+  METAL_FUNC bool operator==(const threadgroup _pixel_type &that) const device
+  {
+    return storage == that.storage;
+  }
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC bool operator==(const threadgroup_imageblock _pixel_type &that) const device
+  {
+    return storage == that.storage;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC bool operator==(const ray_data _pixel_type &that) const device
+  {
+    return storage == that.storage;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC bool operator==(const object_data _pixel_type &that) const device
+  {
+    return storage == that.storage;
+  }
+#endif
+  METAL_FUNC bool operator==(const thread _pixel_type &that) const constant
+  {
+    return storage == that.storage;
+  }
+  METAL_FUNC bool operator==(const device _pixel_type &that) const constant
+  {
+    return storage == that.storage;
+  }
+  METAL_FUNC bool operator==(const constant _pixel_type &that) const constant
+  {
+    return storage == that.storage;
+  }
+  METAL_FUNC bool operator==(const threadgroup _pixel_type &that) const constant
+  {
+    return storage == that.storage;
+  }
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC bool operator==(const threadgroup_imageblock _pixel_type &that) const constant
+  {
+    return storage == that.storage;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC bool operator==(const ray_data _pixel_type &that) const constant
+  {
+    return storage == that.storage;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC bool operator==(const object_data _pixel_type &that) const constant
+  {
+    return storage == that.storage;
+  }
+#endif
+  METAL_FUNC bool operator==(const thread _pixel_type &that) const threadgroup
+  {
+    return storage == that.storage;
+  }
+  METAL_FUNC bool operator==(const device _pixel_type &that) const threadgroup
+  {
+    return storage == that.storage;
+  }
+  METAL_FUNC bool operator==(const constant _pixel_type &that) const threadgroup
+  {
+    return storage == that.storage;
+  }
+  METAL_FUNC bool operator==(const threadgroup _pixel_type &that) const threadgroup
+  {
+    return storage == that.storage;
+  }
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC bool operator==(const threadgroup_imageblock _pixel_type &that) const threadgroup
+  {
+    return storage == that.storage;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC bool operator==(const ray_data _pixel_type &that) const threadgroup
+  {
+    return storage == that.storage;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC bool operator==(const object_data _pixel_type &that) const threadgroup
+  {
+    return storage == that.storage;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC bool operator==(const thread _pixel_type &that) const threadgroup_imageblock
+  {
+    return storage == that.storage;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC bool operator==(const device _pixel_type &that) const threadgroup_imageblock
+  {
+    return storage == that.storage;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC bool operator==(const constant _pixel_type &that) const threadgroup_imageblock
+  {
+    return storage == that.storage;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC bool operator==(const threadgroup _pixel_type &that) const threadgroup_imageblock
+  {
+    return storage == that.storage;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC bool operator==(const threadgroup_imageblock _pixel_type &that) const threadgroup_imageblock
+  {
+    return storage == that.storage;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC bool operator==(const ray_data _pixel_type &that) const threadgroup_imageblock
+  {
+    return storage == that.storage;
+  }
+#endif
+#endif
+#if defined(__HAVE_MESH__)
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC bool operator==(const object_data _pixel_type &that) const threadgroup_imageblock
+  {
+    return storage == that.storage;
+  }
+#endif
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC bool operator==(const thread _pixel_type &that) const ray_data
+  {
+    return storage == that.storage;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC bool operator==(const device _pixel_type &that) const ray_data
+  {
+    return storage == that.storage;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC bool operator==(const constant _pixel_type &that) const ray_data
+  {
+    return storage == that.storage;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC bool operator==(const threadgroup _pixel_type &that) const ray_data
+  {
+    return storage == that.storage;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC bool operator==(const threadgroup_imageblock _pixel_type &that) const ray_data
+  {
+    return storage == that.storage;
+  }
+#endif
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC bool operator==(const ray_data _pixel_type &that) const ray_data
+  {
+    return storage == that.storage;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC bool operator==(const object_data _pixel_type &that) const ray_data
+  {
+    return storage == that.storage;
+  }
+#endif
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC bool operator==(const thread _pixel_type &that) const object_data
+  {
+    return storage == that.storage;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC bool operator==(const device _pixel_type &that) const object_data
+  {
+    return storage == that.storage;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC bool operator==(const constant _pixel_type &that) const object_data
+  {
+    return storage == that.storage;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC bool operator==(const threadgroup _pixel_type &that) const object_data
+  {
+    return storage == that.storage;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+#if defined(__HAVE_MESH__)
+  METAL_FUNC bool operator==(const threadgroup_imageblock _pixel_type &that) const object_data
+  {
+    return storage == that.storage;
+  }
+#endif
+#endif
+#if defined(__HAVE_RAYTRACING__)
+#if defined(__HAVE_MESH__)
+  METAL_FUNC bool operator==(const ray_data _pixel_type &that) const object_data
+  {
+    return storage == that.storage;
+  }
+#endif
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC bool operator==(const object_data _pixel_type &that) const object_data
+  {
+    return storage == that.storage;
+  }
+#endif
+
+  METAL_FUNC bool operator!=(const thread _pixel_type &that) const thread
+  {
+    return !(*this == that);
+  }
+  METAL_FUNC bool operator!=(const device _pixel_type &that) const thread
+  {
+    return !(*this == that);
+  }
+  METAL_FUNC bool operator!=(const constant _pixel_type &that) const thread
+  {
+    return !(*this == that);
+  }
+  METAL_FUNC bool operator!=(const threadgroup _pixel_type &that) const thread
+  {
+    return !(*this == that);
+  }
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC bool operator!=(const threadgroup_imageblock _pixel_type &that) const thread
+  {
+    return !(*this == that);
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC bool operator!=(const ray_data _pixel_type &that) const thread
+  {
+    return !(*this == that);
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC bool operator!=(const object_data _pixel_type &that) const thread
+  {
+    return !(*this == that);
+  }
+#endif
+  METAL_FUNC bool operator!=(const thread _pixel_type &that) const device
+  {
+    return !(*this == that);
+  }
+  METAL_FUNC bool operator!=(const device _pixel_type &that) const device
+  {
+    return !(*this == that);
+  }
+  METAL_FUNC bool operator!=(const constant _pixel_type &that) const device
+  {
+    return !(*this == that);
+  }
+  METAL_FUNC bool operator!=(const threadgroup _pixel_type &that) const device
+  {
+    return !(*this == that);
+  }
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC bool operator!=(const threadgroup_imageblock _pixel_type &that) const device
+  {
+    return !(*this == that);
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC bool operator!=(const ray_data _pixel_type &that) const device
+  {
+    return !(*this == that);
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC bool operator!=(const object_data _pixel_type &that) const device
+  {
+    return !(*this == that);
+  }
+#endif
+  METAL_FUNC bool operator!=(const thread _pixel_type &that) const constant
+  {
+    return !(*this == that);
+  }
+  METAL_FUNC bool operator!=(const device _pixel_type &that) const constant
+  {
+    return !(*this == that);
+  }
+  METAL_FUNC bool operator!=(const constant _pixel_type &that) const constant
+  {
+    return !(*this == that);
+  }
+  METAL_FUNC bool operator!=(const threadgroup _pixel_type &that) const constant
+  {
+    return !(*this == that);
+  }
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC bool operator!=(const threadgroup_imageblock _pixel_type &that) const constant
+  {
+    return !(*this == that);
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC bool operator!=(const ray_data _pixel_type &that) const constant
+  {
+    return !(*this == that);
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC bool operator!=(const object_data _pixel_type &that) const constant
+  {
+    return !(*this == that);
+  }
+#endif
+  METAL_FUNC bool operator!=(const thread _pixel_type &that) const threadgroup
+  {
+    return !(*this == that);
+  }
+  METAL_FUNC bool operator!=(const device _pixel_type &that) const threadgroup
+  {
+    return !(*this == that);
+  }
+  METAL_FUNC bool operator!=(const constant _pixel_type &that) const threadgroup
+  {
+    return !(*this == that);
+  }
+  METAL_FUNC bool operator!=(const threadgroup _pixel_type &that) const threadgroup
+  {
+    return !(*this == that);
+  }
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC bool operator!=(const threadgroup_imageblock _pixel_type &that) const threadgroup
+  {
+    return !(*this == that);
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC bool operator!=(const ray_data _pixel_type &that) const threadgroup
+  {
+    return !(*this == that);
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC bool operator!=(const object_data _pixel_type &that) const threadgroup
+  {
+    return !(*this == that);
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC bool operator!=(const thread _pixel_type &that) const threadgroup_imageblock
+  {
+    return !(*this == that);
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC bool operator!=(const device _pixel_type &that) const threadgroup_imageblock
+  {
+    return !(*this == that);
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC bool operator!=(const constant _pixel_type &that) const threadgroup_imageblock
+  {
+    return !(*this == that);
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC bool operator!=(const threadgroup _pixel_type &that) const threadgroup_imageblock
+  {
+    return !(*this == that);
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC bool operator!=(const threadgroup_imageblock _pixel_type &that) const threadgroup_imageblock
+  {
+    return !(*this == that);
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC bool operator!=(const ray_data _pixel_type &that) const threadgroup_imageblock
+  {
+    return !(*this == that);
+  }
+#endif
+#endif
+#if defined(__HAVE_MESH__)
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC bool operator!=(const object_data _pixel_type &that) const threadgroup_imageblock
+  {
+    return !(*this == that);
+  }
+#endif
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC bool operator!=(const thread _pixel_type &that) const ray_data
+  {
+    return !(*this == that);
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC bool operator!=(const device _pixel_type &that) const ray_data
+  {
+    return !(*this == that);
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC bool operator!=(const constant _pixel_type &that) const ray_data
+  {
+    return !(*this == that);
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC bool operator!=(const threadgroup _pixel_type &that) const ray_data
+  {
+    return !(*this == that);
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC bool operator!=(const threadgroup_imageblock _pixel_type &that) const ray_data
+  {
+    return !(*this == that);
+  }
+#endif
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC bool operator!=(const ray_data _pixel_type &that) const ray_data
+  {
+    return !(*this == that);
+  }
+#endif
+#if defined(__HAVE_MESH__)
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC bool operator!=(const object_data _pixel_type &that) const ray_data
+  {
+    return !(*this == that);
+  }
+#endif
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC bool operator!=(const thread _pixel_type &that) const object_data
+  {
+    return !(*this == that);
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC bool operator!=(const device _pixel_type &that) const object_data
+  {
+    return !(*this == that);
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC bool operator!=(const constant _pixel_type &that) const object_data
+  {
+    return !(*this == that);
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC bool operator!=(const threadgroup _pixel_type &that) const object_data
+  {
+    return !(*this == that);
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+#if defined(__HAVE_MESH__)
+  METAL_FUNC bool operator!=(const threadgroup_imageblock _pixel_type &that) const object_data
+  {
+    return !(*this == that);
+  }
+#endif
+#endif
+#if defined(__HAVE_RAYTRACING__)
+#if defined(__HAVE_MESH__)
+  METAL_FUNC bool operator!=(const ray_data _pixel_type &that) const object_data
+  {
+    return !(*this == that);
+  }
+#endif
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC bool operator!=(const object_data _pixel_type &that) const object_data
+  {
+    return !(*this == that);
+  }
+#endif
+
+private:
+  typename _pixel_type_traits<P>::storage_type storage;
+};
+
+struct _r8unorm_tag
+{
+};
+
+template <>
+struct _pixel_type_traits<_r8unorm_tag>
+{
+  typedef uchar METAL_ALIGN(1) storage_type;
+  template <typename T> METAL_FUNC static uchar pack(T data)
+  {
+    return __metal_pack_unorm1x8(data);
+  }
+  template <typename T> METAL_FUNC static T unpack(uchar data)
+  {
+    return __metal_unpack_unorm1x8(data, T());
+  }
+};
+
+template <typename T>
+using r8unorm = _pixel_type<T, _r8unorm_tag>;
+
+template <>
+struct _is_pixel_type<_r8unorm_tag, half> : true_type {};
+template <>
+struct _is_pixel_type<_r8unorm_tag, float> : true_type {};
+
+struct _r8snorm_tag
+{
+};
+
+template <>
+struct _pixel_type_traits<_r8snorm_tag>
+{
+  typedef uchar METAL_ALIGN(1) storage_type;
+  template <typename T> METAL_FUNC static uchar pack(T data)
+  {
+    return __metal_pack_snorm1x8(data);
+  }
+  template <typename T> METAL_FUNC static T unpack(uchar data)
+  {
+    return __metal_unpack_snorm1x8(data, T());
+  }
+};
+
+template <typename T>
+using r8snorm = _pixel_type<T, _r8snorm_tag>;
+
+template <>
+struct _is_pixel_type<_r8snorm_tag, half> : true_type {};
+template <>
+struct _is_pixel_type<_r8snorm_tag, float> : true_type {};
+
+struct _r16unorm_tag
+{
+};
+
+template <>
+struct _pixel_type_traits<_r16unorm_tag>
+{
+  typedef ushort METAL_ALIGN(2) storage_type;
+  template <typename T> METAL_FUNC static ushort pack(T data)
+  {
+    return __metal_pack_unorm1x16(data);
+  }
+  template <typename T> METAL_FUNC static T unpack(ushort data)
+  {
+    return __metal_unpack_unorm1x16(data, T());
+  }
+};
+
+template <typename T>
+using r16unorm = _pixel_type<T, _r16unorm_tag>;
+
+template <>
+struct _is_pixel_type<_r16unorm_tag, float> : true_type {};
+
+struct _r16snorm_tag
+{
+};
+
+template <>
+struct _pixel_type_traits<_r16snorm_tag>
+{
+  typedef ushort METAL_ALIGN(2) storage_type;
+  template <typename T> METAL_FUNC static ushort pack(T data)
+  {
+    return __metal_pack_snorm1x16(data);
+  }
+  template <typename T> METAL_FUNC static T unpack(ushort data)
+  {
+    return __metal_unpack_snorm1x16(data, T());
+  }
+};
+
+template <typename T>
+using r16snorm = _pixel_type<T, _r16snorm_tag>;
+
+template <>
+struct _is_pixel_type<_r16snorm_tag, float> : true_type {};
+
+struct _rg8unorm_tag
+{
+};
+
+template <>
+struct _pixel_type_traits<_rg8unorm_tag>
+{
+  typedef ushort METAL_ALIGN(1) storage_type;
+  template <typename T> METAL_FUNC static ushort pack(T data)
+  {
+    return __metal_pack_unorm2x8(data);
+  }
+  template <typename T> METAL_FUNC static T unpack(ushort data)
+  {
+    return __metal_unpack_unorm2x8(data, T());
+  }
+};
+
+template <typename T>
+using rg8unorm = _pixel_type<T, _rg8unorm_tag>;
+
+template <>
+struct _is_pixel_type<_rg8unorm_tag, half2> : true_type {};
+template <>
+struct _is_pixel_type<_rg8unorm_tag, float2> : true_type {};
+
+struct _rg8snorm_tag
+{
+};
+
+template <>
+struct _pixel_type_traits<_rg8snorm_tag>
+{
+  typedef ushort METAL_ALIGN(1) storage_type;
+  template <typename T> METAL_FUNC static ushort pack(T data)
+  {
+    return __metal_pack_snorm2x8(data);
+  }
+  template <typename T> METAL_FUNC static T unpack(ushort data)
+  {
+    return __metal_unpack_snorm2x8(data, T());
+  }
+};
+
+template <typename T>
+using rg8snorm = _pixel_type<T, _rg8snorm_tag>;
+
+template <>
+struct _is_pixel_type<_rg8snorm_tag, half2> : true_type {};
+template <>
+struct _is_pixel_type<_rg8snorm_tag, float2> : true_type {};
+
+struct _rg16unorm_tag
+{
+};
+
+template <>
+struct _pixel_type_traits<_rg16unorm_tag>
+{
+  typedef uint METAL_ALIGN(2) storage_type;
+  template <typename T> METAL_FUNC static uint pack(T data)
+  {
+    return __metal_pack_unorm2x16(data);
+  }
+  template <typename T> METAL_FUNC static T unpack(uint data)
+  {
+    return __metal_unpack_unorm2x16(data, T());
+  }
+};
+
+template <typename T>
+using rg16unorm = _pixel_type<T, _rg16unorm_tag>;
+
+template <>
+struct _is_pixel_type<_rg16unorm_tag, float2> : true_type {};
+
+struct _rg16snorm_tag
+{
+};
+
+template <>
+struct _pixel_type_traits<_rg16snorm_tag>
+{
+  typedef uint METAL_ALIGN(2) storage_type;
+  template <typename T> METAL_FUNC static uint pack(T data)
+  {
+    return __metal_pack_snorm2x16(data);
+  }
+  template <typename T> METAL_FUNC static T unpack(uint data)
+  {
+    return __metal_unpack_snorm2x16(data, T());
+  }
+};
+
+template <typename T>
+using rg16snorm = _pixel_type<T, _rg16snorm_tag>;
+
+template <>
+struct _is_pixel_type<_rg16snorm_tag, float2> : true_type {};
+
+struct _rgba8unorm_tag
+{
+};
+
+template <>
+struct _pixel_type_traits<_rgba8unorm_tag>
+{
+  typedef uint METAL_ALIGN(1) storage_type;
+  template <typename T> METAL_FUNC static uint pack(T data)
+  {
+    return __metal_pack_unorm4x8(data);
+  }
+  template <typename T> METAL_FUNC static T unpack(uint data)
+  {
+    return __metal_unpack_unorm4x8(data, T());
+  }
+};
+
+template <typename T>
+using rgba8unorm = _pixel_type<T, _rgba8unorm_tag>;
+
+template <>
+struct _is_pixel_type<_rgba8unorm_tag, half4> : true_type {};
+template <>
+struct _is_pixel_type<_rgba8unorm_tag, float4> : true_type {};
+
+struct _srgba8unorm_tag
+{
+};
+
+template <>
+struct _pixel_type_traits<_srgba8unorm_tag>
+{
+  typedef uint METAL_ALIGN(1) storage_type;
+  template <typename T> METAL_FUNC static uint pack(T data)
+  {
+    return __metal_pack_unorm4x8_srgb(data);
+  }
+  template <typename T> METAL_FUNC static T unpack(uint data)
+  {
+    return __metal_unpack_unorm4x8_srgb(data, T());
+  }
+};
+
+template <typename T>
+using srgba8unorm = _pixel_type<T, _srgba8unorm_tag>;
+
+template <>
+struct _is_pixel_type<_srgba8unorm_tag, half4> : true_type {};
+template <>
+struct _is_pixel_type<_srgba8unorm_tag, float4> : true_type {};
+
+struct _rgba8snorm_tag
+{
+};
+
+template <>
+struct _pixel_type_traits<_rgba8snorm_tag>
+{
+  typedef uint METAL_ALIGN(1) storage_type;
+  template <typename T> METAL_FUNC static uint pack(T data)
+  {
+    return __metal_pack_snorm4x8(data);
+  }
+  template <typename T> METAL_FUNC static T unpack(uint data)
+  {
+    return __metal_unpack_snorm4x8(data, T());
+  }
+};
+
+template <typename T>
+using rgba8snorm = _pixel_type<T, _rgba8snorm_tag>;
+
+template <>
+struct _is_pixel_type<_rgba8snorm_tag, half4> : true_type {};
+template <>
+struct _is_pixel_type<_rgba8snorm_tag, float4> : true_type {};
+
+struct _rgba16unorm_tag
+{
+};
+
+template <>
+struct _pixel_type_traits<_rgba16unorm_tag>
+{
+  typedef size_t METAL_ALIGN(2) storage_type;
+  template <typename T> METAL_FUNC static size_t pack(T data)
+  {
+    return __metal_pack_unorm4x16(data);
+  }
+  template <typename T> METAL_FUNC static T unpack(size_t data)
+  {
+    return __metal_unpack_unorm4x16(data, T());
+  }
+};
+
+template <typename T>
+using rgba16unorm = _pixel_type<T, _rgba16unorm_tag>;
+
+template <>
+struct _is_pixel_type<_rgba16unorm_tag, float4> : true_type {};
+
+struct _rgba16snorm_tag
+{
+};
+
+template <>
+struct _pixel_type_traits<_rgba16snorm_tag>
+{
+  typedef size_t METAL_ALIGN(2) storage_type;
+  template <typename T> METAL_FUNC static size_t pack(T data)
+  {
+    return __metal_pack_snorm4x16(data);
+  }
+  template <typename T> METAL_FUNC static T unpack(size_t data)
+  {
+    return __metal_unpack_snorm4x16(data, T());
+  }
+};
+
+template <typename T>
+using rgba16snorm = _pixel_type<T, _rgba16snorm_tag>;
+
+template <>
+struct _is_pixel_type<_rgba16snorm_tag, float4> : true_type {};
+
+struct _rgb10a2_tag
+{
+};
+
+template <>
+struct _pixel_type_traits<_rgb10a2_tag>
+{
+  typedef uint METAL_ALIGN(4) storage_type;
+  template <typename T> METAL_FUNC static uint pack(T data)
+  {
+    return __metal_pack_unorm_rgb10a2(data);
+  }
+  template <typename T> METAL_FUNC static T unpack(uint data)
+  {
+    return __metal_unpack_unorm_rgb10a2(data, T());
+  }
+};
+
+template <typename T>
+using rgb10a2 = _pixel_type<T, _rgb10a2_tag>;
+
+template <>
+struct _is_pixel_type<_rgb10a2_tag, half4> : true_type {};
+template <>
+struct _is_pixel_type<_rgb10a2_tag, float4> : true_type {};
+
+struct _rg11b10f_tag
+{
+};
+
+template <>
+struct _pixel_type_traits<_rg11b10f_tag>
+{
+  typedef uint METAL_ALIGN(4) storage_type;
+  template <typename T> METAL_FUNC static uint pack(T data)
+  {
+    return __metal_pack_unorm_rg11b10f(data);
+  }
+  template <typename T> METAL_FUNC static T unpack(uint data)
+  {
+    return __metal_unpack_unorm_rg11b10f(data, T());
+  }
+};
+
+template <typename T>
+using rg11b10f = _pixel_type<T, _rg11b10f_tag>;
+
+template <>
+struct _is_pixel_type<_rg11b10f_tag, half3> : true_type {};
+template <>
+struct _is_pixel_type<_rg11b10f_tag, float3> : true_type {};
+
+struct _rgb9e5_tag
+{
+};
+
+template <>
+struct _pixel_type_traits<_rgb9e5_tag>
+{
+  typedef uint METAL_ALIGN(4) storage_type;
+  template <typename T> METAL_FUNC static uint pack(T data)
+  {
+    return __metal_pack_unorm_rgb9e5(data);
+  }
+  template <typename T> METAL_FUNC static T unpack(uint data)
+  {
+    return __metal_unpack_unorm_rgb9e5(data, T());
+  }
+};
+
+template <typename T>
+using rgb9e5 = _pixel_type<T, _rgb9e5_tag>;
+
+template <>
+struct _is_pixel_type<_rgb9e5_tag, half3> : true_type {};
+template <>
+struct _is_pixel_type<_rgb9e5_tag, float3> : true_type {};
+
+template <typename P>
+struct _is_pixel_data_impl : false_type {};
+template <typename P, typename T>
+struct _is_pixel_data_impl<_pixel_type<T, P>> : _is_pixel_type<P, T> {};
+
+template <typename P>
+struct is_pixel_data : _is_pixel_data_impl<remove_cv_t<P>> {};
+template <typename P>
+constexpr constant bool is_pixel_data_v = is_pixel_data<P>::value;
+} // namespace metal
+#pragma METAL internals : disable
+#endif
+
+#endif // __METAL_PIXEL

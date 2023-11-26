@@ -1,0 +1,268 @@
+// -*- Metal -*-
+//===-- metal_imageblocks -------------------------------------------------===//
+// Copyright (c) 2015-2019 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_IMAGEBLOCKS
+#define __METAL_IMAGEBLOCKS
+
+#if defined(__HAVE_IMAGEBLOCKS__)
+#define METAL_VALID_RENDER_TARGET(A, E, T) METAL_ENABLE_IF(__metal_struct_has_render_target(index, (thread E *)nullptr, (thread T *)nullptr), "'" #A "' with right type must exist in the layout_implicit imageblock data struct")
+
+#pragma METAL internals : enable
+namespace metal
+{
+template <typename T>
+struct _is_explicit_layout_imageblock_struct_impl : bool_constant<__is_metal_explicit_layout_imageblock_struct(T)>
+{
+};
+
+template <typename T>
+struct is_explicit_layout_imageblock_struct : _is_explicit_layout_imageblock_struct_impl<remove_cv_t<T>>
+{
+};
+template <typename T>
+constexpr constant bool is_explicit_layout_imageblock_struct_v = is_explicit_layout_imageblock_struct<T>::value;
+
+template <typename T>
+struct _is_implicit_layout_imageblock_struct_impl : bool_constant<__is_metal_implicit_layout_imageblock_struct(T)>
+{
+};
+
+template <typename T>
+struct is_implicit_layout_imageblock_struct : _is_implicit_layout_imageblock_struct_impl<remove_cv_t<T>>
+{
+};
+template <typename T>
+constexpr constant bool is_implicit_layout_imageblock_struct_v = is_implicit_layout_imageblock_struct<T>::value;
+
+struct imageblock_layout_explicit
+{
+};
+struct imageblock_layout_implicit
+{
+};
+
+template <typename T, typename = void>
+struct imageblock_layout;
+
+template <typename T>
+struct imageblock_layout<T, typename enable_if<is_explicit_layout_imageblock_struct_v<T>>::type>
+{
+  typedef imageblock_layout_explicit type;
+};
+template <typename T>
+struct imageblock_layout<T, typename enable_if<is_implicit_layout_imageblock_struct_v<T>>::type>
+{
+  typedef imageblock_layout_implicit type;
+};
+template <typename T>
+using imageblock_layout_t = typename imageblock_layout<T>::type;
+
+template <typename T>
+struct _is_explicit_layout_imageblock_slice_storage_impl : bool_constant<__is_metal_explicit_layout_imageblock_slice_storage(T)>
+{
+};
+
+template <typename T>
+struct is_explicit_layout_imageblock_slice_storage : _is_explicit_layout_imageblock_slice_storage_impl<remove_cv_t<T>>
+{
+};
+template <typename T>
+constexpr constant bool is_explicit_layout_imageblock_slice_storage_v = is_explicit_layout_imageblock_slice_storage<T>::value;
+
+template <typename T>
+struct _is_implicit_layout_imageblock_slice_storage_impl : bool_constant<__is_metal_implicit_layout_imageblock_slice_storage(T)>
+{
+};
+
+template <typename T>
+struct is_implicit_layout_imageblock_slice_storage : _is_implicit_layout_imageblock_slice_storage_impl<remove_cv_t<T>>
+{
+};
+template <typename T>
+constexpr constant bool is_implicit_layout_imageblock_slice_storage_v = is_implicit_layout_imageblock_slice_storage<T>::value;
+
+enum class imageblock_data_rate
+{
+  color = 1,
+  sample = 2,
+};
+
+enum class access;
+
+template <typename E>
+struct _imageblock_slice_base
+{
+protected:
+  METAL_FUNC _imageblock_slice_base() thread = delete;
+
+  METAL_FUNC _imageblock_slice_base(const threadgroup_imageblock E *e) thread : _imgblkptr(e), _size_valid(false)
+  {
+  }
+
+  METAL_FUNC _imageblock_slice_base(const threadgroup_imageblock E *e, ushort2 size) thread : _imgblkptr(e), _size_valid(true), _size(size)
+  {
+  }
+
+protected:
+  const E threadgroup_imageblock *_imgblkptr;
+  ushort2 _size;
+  bool _size_valid;
+};
+
+template <typename E, typename L, typename = void>
+struct imageblock_slice;
+
+template <typename E, typename L>
+struct imageblock_slice<E, L,
+                        typename enable_if<(is_same_v<L, imageblock_layout_explicit> && is_explicit_layout_imageblock_slice_storage_v<E>) || (is_same_v<L, imageblock_layout_implicit> && is_implicit_layout_imageblock_slice_storage_v<E>)>::type>
+    : private _imageblock_slice_base<E>
+{
+  using _imageblock_slice_base<E>::_imageblock_slice_base;
+
+  template <typename T, typename, typename>
+  friend struct imageblock;
+
+  template <typename T, access, typename>
+  friend struct _texture1d_write;
+  template <typename T, access, typename>
+  friend struct _texture1d_array_write;
+  template <typename T, access, typename>
+  friend struct _texture2d_write;
+  template <typename T, access, typename>
+  friend struct _texture2d_array_write;
+  template <typename T, access, typename>
+  friend struct _texture3d_write;
+  template <typename T, access, typename>
+  friend struct _texturecube_write;
+#if defined(__HAVE_TEXTURE_CUBE_ARRAY__)
+  template <typename T, access, typename>
+  friend struct _texturecube_array_write;
+#endif
+};
+
+struct _imageblock_base
+{
+  METAL_FUNC ushort get_width() const thread
+  {
+    return __metal_get_imageblock_width(_imgblock);
+  }
+
+  METAL_FUNC ushort get_height() const thread
+  {
+    return __metal_get_imageblock_height(_imgblock);
+  }
+
+  METAL_FUNC ushort get_num_samples() const thread
+  {
+    return __metal_get_imageblock_samples(_imgblock);
+  }
+
+  METAL_FUNC ushort get_num_colors(ushort2 coord) const thread
+  {
+    return __metal_get_imageblock_num_colors(_imgblock, coord);
+  }
+
+  METAL_FUNC ushort get_color_coverage_mask(ushort2 coord, ushort color_index) const thread
+  {
+    return __metal_get_imageblock_color_coverage_mask(_imgblock, coord, color_index);
+  }
+
+protected:
+  __metal_imageblock_t _imgblock;
+};
+
+template <typename T, typename = imageblock_layout_t<T>, typename = void>
+struct imageblock;
+
+template <typename T>
+struct imageblock<T, imageblock_layout_explicit, typename enable_if<is_explicit_layout_imageblock_struct_v<T>>::type> : _imageblock_base
+{
+  METAL_FUNC threadgroup_imageblock T *data(ushort2 coord) thread
+  {
+    return __metal_imageblock_explicit_data(_imgblock, uint(0), coord, ushort(0), T());
+  }
+
+  METAL_FUNC const threadgroup_imageblock T *data(ushort2 coord) const thread
+  {
+    return __metal_imageblock_explicit_data(_imgblock, uint(0), coord, ushort(0), T());
+  }
+
+  METAL_FUNC threadgroup_imageblock T *data(ushort2 coord, ushort index, imageblock_data_rate rate) thread METAL_CONST_ARG(rate)
+  {
+    return __metal_imageblock_explicit_data(_imgblock, uint(rate), coord, index, T());
+  }
+
+  METAL_FUNC const threadgroup_imageblock T *data(ushort2 coord, ushort index, imageblock_data_rate rate) const thread METAL_CONST_ARG(rate)
+  {
+    return __metal_imageblock_explicit_data(_imgblock, uint(rate), coord, index, T());
+  }
+
+  template <typename E>
+  METAL_FUNC imageblock_slice<remove_volatile_t<E>, imageblock_layout_explicit> slice(const threadgroup_imageblock E &e) const thread
+  {
+    return imageblock_slice<remove_volatile_t<E>, imageblock_layout_explicit>(const_cast<const threadgroup_imageblock remove_volatile_t<E> *>(&e));
+  }
+
+  template <typename E>
+  METAL_FUNC imageblock_slice<remove_volatile_t<E>, imageblock_layout_explicit> slice(const threadgroup_imageblock E &e, ushort2 size) const thread
+  {
+    return imageblock_slice<E, imageblock_layout_explicit>(const_cast<const threadgroup_imageblock remove_volatile_t<E> *>(&e), size);
+  }
+
+  METAL_FUNC void write(T t, ushort2 coord, ushort color_coverage_mask) thread
+  {
+    __metal_imageblock_explicit_mask_write(data(coord), color_coverage_mask, &t);
+  }
+};
+
+template <typename T>
+struct imageblock<T, imageblock_layout_implicit, typename enable_if<is_implicit_layout_imageblock_struct_v<T>>::type> : _imageblock_base
+{
+  METAL_FUNC T read(ushort2 coord) const thread
+  {
+    T data;
+    __metal_imageblock_implicit_read(_imgblock, uint(0), coord, ushort(0), &data);
+    return data;
+  }
+
+  METAL_FUNC T read(ushort2 coord, ushort index, imageblock_data_rate rate) const thread METAL_CONST_ARG(rate)
+  {
+    T data;
+    __metal_imageblock_implicit_read(_imgblock, uint(rate), coord, index, &data);
+    return data;
+  }
+
+  METAL_FUNC void write(T data, ushort2 coord) thread
+  {
+    __metal_imageblock_implicit_write(_imgblock, uint(0), coord, ushort(0), &data);
+  }
+
+  METAL_FUNC void write(T data, ushort2 coord, ushort index, imageblock_data_rate rate) thread METAL_CONST_ARG(rate)
+  {
+    __metal_imageblock_implicit_write(_imgblock, uint(rate), coord, index, &data);
+  }
+
+  METAL_FUNC void write(T data, ushort2 coord, ushort color_coverage_mask) thread
+  {
+    __metal_imageblock_implicit_mask_write(_imgblock, coord, color_coverage_mask, &data);
+  }
+
+  template <typename E>
+  METAL_FUNC imageblock_slice<E, imageblock_layout_implicit> slice(unsigned index) const thread METAL_CONST_ARG(index) METAL_VALID_RENDER_TARGET(index, E, T)
+  {
+    return imageblock_slice<E, imageblock_layout_implicit>(__metal_imageblock_implicit_data(_imgblock, index, E()));
+  }
+
+  template <typename E>
+  METAL_FUNC imageblock_slice<E, imageblock_layout_implicit> slice(unsigned index, ushort2 size) const thread METAL_CONST_ARG(index) METAL_VALID_RENDER_TARGET(index, E, T)
+  {
+    return imageblock_slice<E, imageblock_layout_implicit>(__metal_imageblock_implicit_data(_imgblock, index, E()), size);
+  }
+};
+} // namespace metal
+#pragma METAL internals : disable
+#endif
+
+#endif // __METAL_IMAGEBLOCKS
