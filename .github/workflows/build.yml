@@ -13,7 +13,7 @@ concurrency:
 jobs:
   build_mojave:
     name: Zip and Upload Binaries
-    runs-on: macos-13
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v3
       - uses: apple-actions/import-codesign-certs@8f3fb608891dd2244cdab3d69cd68c0d37a7fe93
