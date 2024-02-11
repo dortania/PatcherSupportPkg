@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Application-Group</key>
+	<string>AirPort</string>
+	<key>BuildMachineOSBuild</key>
+	<string>20A241133</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>WiFiAgent</string>
+	<key>CFBundleGetInfoString</key>
+	<string>17.0, Copyright © 2012-2019 Apple Inc. All rights reserved.</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.apple.wifi.WiFiAgent</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>WiFiAgent</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>17.0</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleSupportedPlatforms</key>
+	<array>
+		<string>MacOSX</string>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>1728</string>
+	<key>DTCompiler</key>
+	<string>com.apple.compilers.llvm.clang.1_0</string>
+	<key>DTPlatformBuild</key>
+	<string>12E6178j</string>
+	<key>DTPlatformName</key>
+	<string>macosx</string>
+	<key>DTPlatformVersion</key>
+	<string>11.7</string>
+	<key>DTSDKBuild</key>
+	<string>20G1400s</string>
+	<key>DTSDKName</key>
+	<string>macosx11.7internal</string>
+	<key>DTXcode</key>
+	<string>1240</string>
+	<key>DTXcodeBuild</key>
+	<string>12E6178j</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.7</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>Mach Services</key>
+	<dict>
+		<key>com.apple.usernotifications.delegate.com.apple.wifi.usernotifications.autohotspot</key>
+		<true/>
+		<key>com.apple.usernotifications.delegate.com.apple.wifi.usernotifications.diagnostics</key>
+		<true/>
+	</dict>
+	<key>NSMainNibFile</key>
+	<string>MainMenu</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+</dict>
+</plist>
