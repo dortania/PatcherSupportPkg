@@ -38,9 +38,42 @@ class GenerateInternalDiffDiskImage:
         Grab a list of all files that are not committed to git
         Exclude files that wouldn't be compatible with the patcher (ex. zip files)
         """
+        uncommited_files = self._find_uncommited_files()
+        uncommited_files = [file for file in uncommited_files if file.startswith("Universal-Binaries")]
+
+        for extension in [".zip", ".dmg", ".pkg"]:
+            uncommited_files = [file for file in uncommited_files if not file.endswith(extension)]
+
+        return uncommited_files
+
+
+    def _find_uncommited_files(self) -> list:
+        """
+        Grab a list of all files that are not committed to git
+
+        Use git status to find uncommited files
+        """
+        uncommited_files = subprocess.run(
+            ["/usr/bin/git", "status", "--porcelain"], capture_output=True, text=True)
+        if uncommited_files.returncode != 0:
+            print("  - Failed to find uncommited files")
+            print(uncommited_files.stdout)
+            print(uncommited_files.stderr)
+            return []
+
+        # Strip status flags
+        return [file[3:] for file in uncommited_files.stdout.split("\n") if file]
+
+
+    def _legacy_find_uncommited_files(self) -> list:
+        """
+        Grab a list of all files that are not committed to git
+
+        Legacy variant using ls-files. This is less reliable than using git status
+        """
         uncommited_files = subprocess.run(
             [
-                "git", "ls-files", "--others", "--exclude-standard"
+                "/usr/bin/git", "ls-files", "--others", "--exclude-standard"
             ], capture_output=True, text=True)
         if uncommited_files.returncode != 0:
             print("  - Failed to find uncommited files")
@@ -48,13 +81,7 @@ class GenerateInternalDiffDiskImage:
             print(uncommited_files.stderr)
             return []
 
-        uncommited_files = uncommited_files.stdout.split("\n")
-        uncommited_files = [file for file in uncommited_files if file.startswith("Universal-Binaries")]
-
-        for extension in [".zip", ".dmg", ".pkg"]:
-            uncommited_files = [file for file in uncommited_files if not file.endswith(extension)]
-
-        return uncommited_files
+        return uncommited_files.stdout.split("\n")
 
 
     def _prepare_workspace(self) -> None:
