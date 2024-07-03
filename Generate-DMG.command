@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 Build and sign PatcherSupportPkg Disk Image.
 Note password encryption required to pass Apple's notarization.

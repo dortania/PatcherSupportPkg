@@ -66,6 +66,7 @@ class MoraeaBinaryMerging:
                 "SkyLight":             f"Universal-Binaries/10.14.6-{version}/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/SkyLight",
                 "SkyLightOld.dylib":    f"Universal-Binaries/10.14.6-{version}/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/SkyLightOld.dylib",
                 **({ "FakeLibSystem.dylib": f"Universal-Binaries/10.14.6-{version}/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/FakeLibSystem.dylib"} if int(version) >= 23 else {}),
+                **({ "LibSystemWrapper.dylib": f"Universal-Binaries/10.14.6-{version}/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/LibSystemWrapper.dylib"} if int(version) >= 23 else {}),
             },
             "Zoe": {
                 "IOSurface":          f"Universal-Binaries/10.15.7-{version}/System/Library/Frameworks/IOSurface.framework/Versions/A/IOSurface",
