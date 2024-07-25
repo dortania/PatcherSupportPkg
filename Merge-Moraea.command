@@ -90,14 +90,27 @@ class MoraeaBinaryMerging:
                 # Check if exists at destination location
                 if Path(self.file_map[folder][binary]).exists():
                     print("    - Binary found at destination location, removing")
-                    subprocess.run(["rm", self.file_map[folder][binary]])
+                    subprocess.run(["/bin/rm", self.file_map[folder][binary]])
 
                 # Copy binary to destination location
                 print("    - Copying binary to destination location")
                 if not Path(self.file_map[folder][binary]).parent.exists():
                     print("    - Creating parent folder")
-                    subprocess.run(["mkdir", "-p", Path(self.file_map[folder][binary]).parent])
-                subprocess.run(["cp", self.input_folder / f"{folder}/{binary}", self.file_map[folder][binary]])
+                    subprocess.run(["/bin/mkdir", "-p", Path(self.file_map[folder][binary]).parent])
+                subprocess.run(["/bin/mv", self.input_folder / f"{folder}/{binary}", self.file_map[folder][binary]])
+
+        unused_files = []
+        for folder in self.file_map:
+            for file in Path(self.input_folder / folder).iterdir():
+                if file.name == ".DS_Store":
+                    continue
+                unused_files.append(file)
+
+        if len(unused_files) > 0:
+            print("- Unused files found:")
+            for file in unused_files:
+                print(f"  - {file}")
+            raise ValueError("Unused files found, check the output above")
 
 
 if __name__ == "__main__":
@@ -119,7 +132,7 @@ if __name__ == "__main__":
                 print("#" * 80)
                 MoraeaBinaryMerging(input_folder=folder)
                 print("- Removing input folder")
-                subprocess.run(["rm", "-rf", folder])
+                subprocess.run(["/bin/rm", "-rf", folder])
     else:
         MoraeaBinaryMerging(input_folder=args.input, version=args.version)
 
