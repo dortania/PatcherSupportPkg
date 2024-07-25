@@ -5,6 +5,7 @@ Note password encryption required to pass Apple's notarization.
 """
 
 import os
+import argparse
 import subprocess
 
 UB_DIRECTORY:     str = "Universal-Binaries"
@@ -18,14 +19,15 @@ SIGNING_IDENTITY: str = "OpenCore Legacy Patcher Software Signing"
 
 class GenerateDiskImage:
 
-    def __init__(self) -> None:
+    def __init__(self, sign_dmg: bool = False) -> None:
         print("Generating DMG")
         self._set_working_directory()
         self._strip_extended_attributes()
         self._remove_ds_store()
         self._create_dmg()
         self._convert_dmg()
-        self._sign_dmg()
+        if sign_dmg:
+            self._sign_dmg()
         self._remove_tmp_dmg()
 
 
@@ -40,7 +42,7 @@ class GenerateDiskImage:
         On some instances, "hdiutil: create failed - Resource busy" is thrown
         """
         print("  - Resetting hdiutil")
-        subprocess.run(["killall", "hdiutil"], capture_output=True)
+        subprocess.run(["/usr/bin/killall", "hdiutil"], capture_output=True)
 
 
     def _strip_extended_attributes(self) -> None:
@@ -50,7 +52,7 @@ class GenerateDiskImage:
 
     def _remove_ds_store(self) -> None:
         print("  - Removing .DS_Store files")
-        subprocess.run(["find", UB_DIRECTORY, "-name", ".DS_Store", "-delete"], capture_output=True)
+        subprocess.run(["/usr/bin/find", UB_DIRECTORY, "-name", ".DS_Store", "-delete"], capture_output=True)
 
 
     def _create_dmg(self, raise_on_error: bool = False) -> None:
@@ -59,7 +61,7 @@ class GenerateDiskImage:
         """
         print("  - Creating DMG")
         result = subprocess.run([
-            "hdiutil", "create",
+            "/usr/bin/hdiutil", "create",
             "-srcfolder", UB_DIRECTORY, "tmp.dmg",
             "-volname", DMG_VOLNAME,
             "-fs", "HFS+", "-ov",
@@ -85,7 +87,7 @@ class GenerateDiskImage:
         """
         print("  - Converting DMG")
         result = subprocess.run([
-            "hdiutil", "convert",
+            "/usr/bin/hdiutil", "convert",
             "-format", "ULMO", "tmp.dmg",
             "-o", DMG_NAME,
             "-passphrase", DMG_PASSPHRASE,
@@ -107,7 +109,7 @@ class GenerateDiskImage:
     def _sign_dmg(self) -> None:
         print("  - Signing DMG")
         result = subprocess.run([
-            "codesign", "-s", SIGNING_IDENTITY, DMG_NAME
+            "/usr/bin/codesign", "-s", SIGNING_IDENTITY, DMG_NAME
         ], capture_output=True)
         if result.returncode != 0:
             print("    - Failed to sign DMG")
@@ -117,8 +119,12 @@ class GenerateDiskImage:
 
 
     def _remove_tmp_dmg(self) -> None:
-        subprocess.run(["rm", "tmp.dmg"], capture_output=True)
+        subprocess.run(["/bin/rm", "tmp.dmg"], capture_output=True)
 
 
 if __name__ == "__main__":
-    GenerateDiskImage()
+    parser = argparse.ArgumentParser(description="Generate PatcherSupportPkg Disk Image")
+    parser.add_argument("--sign", action="store_true", help="Sign the generated DMG")
+    args = parser.parse_args()
+
+    GenerateDiskImage(sign_dmg=args.sign)
