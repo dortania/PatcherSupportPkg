@@ -91,12 +91,12 @@ class GenerateInternalDiffDiskImage:
         print("  - Preparing workspace")
 
         if Path(OVERLAY_DMG).exists():
-            subprocess.run(["rm", OVERLAY_DMG])
+            subprocess.run(["/bin/rm", OVERLAY_DMG])
 
         if Path(OVERLAY_FOLDER).exists():
-            subprocess.run(["rm", "-rf", OVERLAY_FOLDER])
+            subprocess.run(["/bin/rm", "-rf", OVERLAY_FOLDER])
 
-        subprocess.run(["mkdir", OVERLAY_FOLDER])
+        subprocess.run(["/bin/mkdir", OVERLAY_FOLDER])
 
 
     def _fetch_encryption_password(self) -> str:
@@ -119,12 +119,12 @@ class GenerateInternalDiffDiskImage:
             src_path = Path(file)
             dst_path = Path(OVERLAY_FOLDER) / str(src_path).split("Universal-Binaries/")[1]
             if not Path(dst_path.parent).exists():
-                subprocess.run(["mkdir", "-p", dst_path.parent])
-            subprocess.run(["cp", "-a", src_path, dst_path])
+                subprocess.run(["/bin/mkdir", "-p", dst_path.parent])
+            subprocess.run(["/bin/cp", "-a", src_path, dst_path])
 
         print("  - Generating tmp DMG")
         subprocess.run([
-            "hdiutil", "create",
+            "/usr/bin/hdiutil", "create",
             "-srcfolder", OVERLAY_FOLDER, "tmp.dmg",
             "-volname", "Dortania Internal Resources",
             "-fs", "HFS+",
@@ -133,23 +133,23 @@ class GenerateInternalDiffDiskImage:
         ], capture_output=True, text=True)
         print("  - Converting to encrypted DMG")
         subprocess.run(
-            ["hdiutil", "convert",
+            ["/usr/bin/hdiutil", "convert",
              "-format", "ULMO", "tmp.dmg",
              "-o", OVERLAY_DMG,
              "-passphrase", self._fetch_encryption_password(),
              "-encryption",
              "-ov"
         ], capture_output=True, text=True)
-        subprocess.run(["rm", "tmp.dmg"])
+        subprocess.run(["/bin/rm", "tmp.dmg"])
 
         if Path(OCLP_DIRECTORY).exists():
             print("  - Moving DMG")
             if Path(OCLP_DIRECTORY, OVERLAY_DMG).exists():
-                subprocess.run(["rm", f"{OCLP_DIRECTORY}/{OVERLAY_DMG}"])
-            subprocess.run(["mv", OVERLAY_DMG, f"{OCLP_DIRECTORY}/{OVERLAY_DMG}"])
+                subprocess.run(["/bin/rm", f"{OCLP_DIRECTORY}/{OVERLAY_DMG}"])
+            subprocess.run(["/bin/mv", OVERLAY_DMG, f"{OCLP_DIRECTORY}/{OVERLAY_DMG}"])
 
         print("  - Cleaning up")
-        subprocess.run(["rm", "-rf", OVERLAY_FOLDER])
+        subprocess.run(["/bin/rm", "-rf", OVERLAY_FOLDER])
 
 
 if __name__ == "__main__":
