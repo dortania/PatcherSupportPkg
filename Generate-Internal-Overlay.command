@@ -39,6 +39,7 @@ class GenerateInternalDiffDiskImage:
         Exclude files that wouldn't be compatible with the patcher (ex. zip files)
         """
         uncommited_files = self._find_uncommited_files()
+        uncommited_files = [file[1:-1] if file.startswith(("'", '"')) and file.endswith(("'", '"')) else file for file in uncommited_files]
         uncommited_files = [file for file in uncommited_files if file.startswith("Universal-Binaries")]
 
         for extension in [".zip", ".dmg", ".pkg"]:
