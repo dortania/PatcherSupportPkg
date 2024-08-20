@@ -27,15 +27,6 @@
 	</dict>
 	<key>files2</key>
 	<dict>
-		<key>MacOS/impostor.dylib</key>
-		<dict>
-			<key>cdhash</key>
-			<data>
-			XXYCRfCK+/4a7dr9645j21XWCtA=
-			</data>
-			<key>requirement</key>
-			<string>cdhash H"5d760245f08afbfe1aeddafdeb8e63db55d60ad0"</string>
-		</dict>
 		<key>Resources/BronzeStatistics-analysis.js</key>
 		<dict>
 			<key>hash2</key>
