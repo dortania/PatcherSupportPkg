@@ -1,0 +1,100 @@
+//===-- metal_graphics ----------------------------------------------------===//
+// Copyright (c) 2014-2016 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_GRAPHICS
+#define __METAL_GRAPHICS
+
+#include <metal_type_traits>
+
+namespace metal
+{
+// Metal 1.1 s5.9: Graphics Functions.
+
+// Metal 1.1 s5.9.1.1: Fragment Functions -- Derivatives.
+
+template <typename T, typename _E = typename enable_if<_disjunction<is_same<make_scalar_t<T>, half>, is_same<make_scalar_t<T>, float>>::value>::type>
+METAL_FUNC T dfdx(T p)
+{
+  return __metal_dfdx(p);
+}
+
+template <typename T, typename _E = typename enable_if<_disjunction<is_same<make_scalar_t<T>, half>, is_same<make_scalar_t<T>, float>>::value>::type>
+METAL_FUNC T dfdy(T p)
+{
+  return __metal_dfdy(p);
+}
+
+template <typename T, typename _E = typename enable_if<_disjunction<is_same<make_scalar_t<T>, half>, is_same<make_scalar_t<T>, float>>::value>::type>
+METAL_FUNC T fwidth(T p)
+{
+  return __metal_fwidth(p);
+}
+
+#if defined(__HAVE_SEPARATE_SHADING_RATES__)
+// TODO: Metal X.Y sZ.W Fragment Functions – Samples -- update version and
+// section number, see <rdar://problem/32963258>.
+
+enum class fragment_rate
+{
+  raster = 0,
+  color = 1
+};
+
+METAL_FUNC uint get_num_samples(fragment_rate rate = fragment_rate::raster)
+{
+  return __metal_get_num_samples(int(rate));
+}
+
+METAL_FUNC float2 get_sample_position(uint indx, fragment_rate rate = fragment_rate::raster)
+{
+  return __metal_get_sample_position(indx, int(rate));
+}
+
+#else
+// Metal 1.1 s5.9.1.2 Fragment Functions – Samples
+
+METAL_FUNC uint get_num_samples()
+{
+  return __metal_get_num_samples(0);
+}
+
+METAL_FUNC float2 get_sample_position(uint indx)
+{
+  return __metal_get_sample_position(indx, 0);
+}
+#endif
+
+// Metal 1.1 s5.9.1.3: Fragment Functions -- Flow Control.
+
+#if defined(__HAVE_DISCARD_FRAGMENT_NORETURN__)
+METAL_FUNC METAL_NORETURN void discard_fragment()
+#else
+METAL_FUNC void discard_fragment()
+#endif
+{
+  __metal_discard_fragment();
+}
+
+#if defined(__HAVE_DRAW_INDIRECT__)
+typedef struct
+{
+  uint vertexCount;
+  uint instanceCount;
+  uint vertexStart;
+  uint baseInstance;
+} MTLDrawPrimitivesIndirectArguments;
+
+typedef struct
+{
+  uint indexCount;
+  uint instanceCount;
+  uint indexStart;
+  uint baseVertex;
+  uint baseInstance;
+} MTLDrawIndexedPrimitivesIndirectArguments;
+#endif
+
+} // namespace metal
+
+#endif // __METAL_GRAPHICS

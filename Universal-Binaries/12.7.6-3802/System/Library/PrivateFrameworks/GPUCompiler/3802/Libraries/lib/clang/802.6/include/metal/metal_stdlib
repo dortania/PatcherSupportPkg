@@ -1,0 +1,26 @@
+#ifndef __METAL_STDLIB
+#define __METAL_STDLIB
+
+#include <metal_array>
+#include <metal_atomic>
+#include <metal_common>
+#include <metal_compute>
+#include <metal_functional>
+#include <metal_geometric>
+#include <metal_graphics>
+#include <metal_indirect_command_buffer>
+#include <metal_initializer_list>
+#include <metal_integer>
+#include <metal_limits>
+#include <metal_math>
+#include <metal_matrix>
+#include <metal_numeric>
+#include <metal_pack>
+#include <metal_quadgroup>
+#include <metal_relational>
+#include <metal_simdgroup>
+#include <metal_texture>
+#include <metal_uniform>
+#include <metal_utility>
+
+#endif // __METAL_STDLIB

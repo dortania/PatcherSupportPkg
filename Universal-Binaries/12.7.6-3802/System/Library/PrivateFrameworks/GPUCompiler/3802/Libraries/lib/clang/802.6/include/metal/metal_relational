@@ -1,0 +1,200 @@
+//===-- metal_relational --------------------------------------------------===//
+// Copyright (c) 2014-2017 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_RELATIONAL
+#define __METAL_RELATIONAL
+
+#pragma METAL internals : enable
+namespace metal
+{
+// Metal 1.1 s5.4: Relational Functions.
+
+template <typename T>
+struct _fp_encoding_traits_impl;
+
+template <typename T, int N>
+struct _fp_encoding_traits_impl<T __attribute__((ext_vector_type(N)))>
+{
+  typedef typename _fp_encoding_traits_impl<T>::encoding_type __attribute__((ext_vector_type(N))) encoding_type;
+  constexpr static constant encoding_type bit_width = sizeof(encoding_type) * CHAR_BIT;
+  constexpr static constant encoding_type sign_mask = _fp_encoding_traits_impl<T>::sign_mask;
+  constexpr static constant encoding_type inf_mask = _fp_encoding_traits_impl<T>::inf_mask;
+  constexpr static constant encoding_type min_mask = _fp_encoding_traits_impl<T>::min_mask;
+};
+template <typename T, int N>
+struct _fp_encoding_traits_impl<T __attribute__((packed_vector_type(N)))>
+{
+  typedef typename _fp_encoding_traits_impl<T>::encoding_type __attribute__((packed_vector_type(N))) encoding_type;
+  constexpr static constant encoding_type bit_width = sizeof(encoding_type) * CHAR_BIT;
+  constexpr static constant encoding_type sign_mask = _fp_encoding_traits_impl<T>::sign_mask;
+  constexpr static constant encoding_type inf_mask = _fp_encoding_traits_impl<T>::inf_mask;
+  constexpr static constant encoding_type min_mask = _fp_encoding_traits_impl<T>::min_mask;
+};
+template <>
+struct _fp_encoding_traits_impl<half>
+{
+  typedef ushort encoding_type;
+  constexpr static constant encoding_type bit_width = sizeof(encoding_type) * CHAR_BIT;
+  constexpr static constant encoding_type sign_mask = 0x8000;
+  constexpr static constant encoding_type inf_mask = 0x7c00;
+  constexpr static constant encoding_type min_mask = 0x0400;
+};
+template <>
+struct _fp_encoding_traits_impl<float>
+{
+  typedef uint encoding_type;
+  constexpr static constant encoding_type bit_width = sizeof(encoding_type) * CHAR_BIT;
+  constexpr static constant encoding_type sign_mask = 0x80000000;
+  constexpr static constant encoding_type inf_mask = 0x7f800000;
+  constexpr static constant encoding_type min_mask = 0x00800000;
+};
+#if defined(__HAVE_NATIVE_DOUBLE__)
+template <>
+struct _fp_encoding_traits_impl<double>
+{
+  typedef unsigned __metal_internal_int64_t encoding_type;
+  constexpr static constant encoding_type bit_width = sizeof(encoding_type) * CHAR_BIT;
+  constexpr static constant encoding_type sign_mask = 0x8000000000000000;
+  constexpr static constant encoding_type inf_mask = 0x7ff0000000000000;
+  constexpr static constant encoding_type min_mask = 0x0010000000000000;
+};
+#endif
+
+template <typename T>
+struct _fp_encoding_traits : _fp_encoding_traits_impl<remove_cv_t<T>>
+{
+};
+
+template <typename T, typename U, typename _E = void>
+struct _relational_select_operand_type
+{
+  typedef void type;
+};
+
+// We shipped a version of Metal using overloded functions to implement the
+// select function instead of using a single template function. For any pair of
+// scalar or vector types T, U for which a call to the overloaded version of
+// select `select(T(x), U(y), c)` was valid (including via implicit conversion
+// sequences), the call to the templated version must also be valid.
+//
+// Conversion of the third parameter into a boolean vector is not supported.
+//
+// The general form of the select function is `O select(T, U, B)`; O is the
+// arithmetic type the function operates with. The arguments of type `T` and `U`
+// are cast to `O` before being passed to the builtin. The argument of type `B`
+// is either a `bool` -- if both `T` and `U` are scalar -- or a vector which
+// length matches the length of `O`. The rules to deduce O from the pair <T, U>
+// are as follows:
+//
+// 1) If T and U are both the same arithmetic type, identity conversion is
+//    triggered.
+template <typename T>
+struct _relational_select_operand_type<T, T, typename enable_if<is_arithmetic<T>::value>::type>
+{
+  typedef T type;
+};
+
+// 2) If T or U is a vector type, and the other is an arithmetic scalar type,
+//    then O is the vector type.
+template <typename T, typename U>
+struct _relational_select_operand_type<T, U, typename enable_if<(is_vector<T>::value ^ is_vector<U>::value) && ((is_scalar<T>::value && is_arithmetic<T>::value) ^ (is_scalar<U>::value && is_arithmetic<U>::value))>::type>
+{
+  typedef conditional_t<is_vector<T>::value, T, U> type;
+};
+
+template <typename T, typename U>
+using _relational_select_operand_type_t = typename _relational_select_operand_type<T, U>::type;
+template <typename T, typename U>
+struct _relational_select_enable : bool_constant<!is_same<void, _relational_select_operand_type_t<T, U>>::value>
+{
+};
+
+template <typename T, typename _E = void>
+struct _make_bool_impl;
+
+template <typename T>
+struct _make_bool_impl<T, typename enable_if<is_arithmetic<T>::value && is_scalar<T>::value>::type>
+{
+  typedef bool type;
+};
+template <typename T, int N>
+struct _make_bool_impl<T __attribute__((ext_vector_type(N)))>
+{
+  typedef bool __attribute__((ext_vector_type(N))) type;
+};
+template <typename T, int N>
+struct _make_bool_impl<T __attribute__((packed_vector_type(N)))>
+{
+  typedef bool __attribute__((packed_vector_type(N))) type;
+};
+
+template <typename T>
+struct _make_bool : _make_bool_impl<remove_cv_t<T>>
+{
+};
+template <typename T>
+using _make_bool_t = typename _make_bool<T>::type;
+
+template <typename T, typename _E = typename enable_if<is_same<make_scalar_t<T>, bool>::value>::type>
+METAL_FUNC bool all(T x)
+{
+  return __metal_all(x);
+}
+
+template <typename T, typename _E = typename enable_if<is_same<make_scalar_t<T>, bool>::value>::type>
+METAL_FUNC bool any(T x)
+{
+  return __metal_any(x);
+}
+
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC _make_bool_t<T> isinf(T x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<T>::encoding_type) & ~_fp_encoding_traits<T>::sign_mask) == _fp_encoding_traits<T>::inf_mask;
+}
+
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC _make_bool_t<T> isfinite(T x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<T>::encoding_type) & ~_fp_encoding_traits<T>::sign_mask) < _fp_encoding_traits<T>::inf_mask;
+}
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC _make_bool_t<T> isnan(T x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<T>::encoding_type) & ~_fp_encoding_traits<T>::sign_mask) > _fp_encoding_traits<T>::inf_mask;
+}
+
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC _make_bool_t<T> isnormal(T x)
+{
+  return typename _fp_encoding_traits<T>::encoding_type((__builtin_astype(x, typename _fp_encoding_traits<T>::encoding_type) & ~_fp_encoding_traits<T>::sign_mask) - _fp_encoding_traits<T>::min_mask) < typename _fp_encoding_traits<T>::encoding_type(_fp_encoding_traits<T>::inf_mask - _fp_encoding_traits<T>::min_mask);
+}
+
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC _make_bool_t<T> isunordered(T x, T y)
+{
+  return isnan(x) || isnan(y);
+}
+
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC _make_bool_t<T> isordered(T x, T y)
+{
+  return !isunordered(x, y);
+}
+
+template <typename T, typename U, typename _O = typename enable_if<_relational_select_enable<T, U>::value, _relational_select_operand_type_t<T, U>>::type>
+METAL_FUNC _O select(T x, U y, _make_bool_t<_O> c)
+{
+  return __metal_select(_O(x), _O(y), c);
+}
+
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC _make_bool_t<T> signbit(T x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<T>::encoding_type) >> (_fp_encoding_traits<T>::bit_width - 1)) == 1;
+}
+} // namespace metal
+#pragma METAL internals : disable
+
+#endif // __METAL_RELATIONAL

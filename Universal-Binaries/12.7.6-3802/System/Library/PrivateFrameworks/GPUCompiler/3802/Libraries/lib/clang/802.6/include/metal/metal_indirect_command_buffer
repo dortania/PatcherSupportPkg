@@ -1,0 +1,267 @@
+//===-- metal_indirect_command_buffer -------------------------------------===//
+// Copyright (c) 2017 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_INDIRECT_COMMAND_BUFFER
+#define __METAL_INDIRECT_COMMAND_BUFFER
+
+namespace metal
+{
+
+#if defined(__HAVE_INDIRECT_COMMAND_BUFFER__)
+// TODO: Fix comment for the section and title.
+// Metal 2.2 <section>: Indirect Command Buffers
+
+#pragma METAL internals : enable
+
+template <typename T>
+struct _is_metal_buffer_pointee_impl : bool_constant<__is_metal_buffer_pointee(T)>
+{
+};
+
+template <typename T>
+struct is_metal_buffer_pointee : _is_metal_buffer_pointee_impl<remove_cv_t<T>>
+{
+};
+
+struct compute_command;
+
+struct compute_command_buffer
+{
+private:
+  compute_command_buffer_t t;
+  friend struct compute_command;
+};
+
+struct compute_pipeline_state
+{
+private:
+  compute_pipeline_state_t t;
+  friend struct compute_command;
+};
+
+struct compute_command
+{
+  METAL_FUNC compute_command(thread compute_command_buffer &cmd_buf, uint index) thread
+      : buf(cmd_buf.t), index(index)
+  {
+    __metal_acquire_compute_command(buf, index);
+  }
+
+  METAL_FUNC compute_command(const thread compute_command &that) thread = delete;
+
+  METAL_FUNC ~compute_command() thread
+  {
+    __metal_release_compute_command(buf, index);
+  }
+
+  METAL_FUNC thread compute_command &operator=(const thread compute_command &that) thread = delete;
+
+  const thread compute_command &operator,(const thread compute_command &that) const thread = delete;
+
+  METAL_FUNC void set_compute_pipeline_state(compute_pipeline_state pipeline_state) thread
+  {
+    __metal_set_pipeline_state_compute_command(buf, index, pipeline_state.t);
+  }
+
+  template <typename T, typename _E = typename enable_if<is_metal_buffer_pointee<T>::value>::type>
+  METAL_FUNC void set_kernel_buffer(device T *buffer, uint bind_point) thread
+  {
+    __metal_set_kernel_buffer_compute_command(buf, index, static_cast<device void *>(buffer), bind_point);
+  }
+  template <typename T, typename _E = typename enable_if<is_metal_buffer_pointee<T>::value>::type>
+  METAL_FUNC void set_kernel_buffer(constant T *buffer, uint bind_point) thread
+  {
+    __metal_set_kernel_buffer_compute_command(buf, index, static_cast<constant void *>(buffer), bind_point);
+  }
+
+  METAL_FUNC void dispatch_threadgroups(uint3 threadgroups, uint3 threads_per_threadgroup) thread
+  {
+    __metal_dispatch_threadgroups_compute_command(buf, index, threadgroups, threads_per_threadgroup);
+  }
+
+  METAL_FUNC void concurrent_dispatch_threadgroups(uint3 threadgroups, uint3 threads_per_threadgroup) thread
+  {
+    __metal_concurrent_dispatch_threadgroups_compute_command(buf, index, threadgroups, threads_per_threadgroup);
+  }
+
+  METAL_FUNC void nop() thread
+  {
+    __metal_nop_compute_command(buf, index);
+  }
+
+  METAL_FUNC void stop() thread
+  {
+    __metal_stop_compute_command(buf, index);
+  }
+
+private:
+  compute_command_buffer_t buf;
+  uint index;
+};
+
+struct render_command;
+
+struct render_command_buffer
+{
+private:
+  render_command_buffer_t t;
+  friend struct render_command;
+};
+
+struct render_pipeline_state
+{
+private:
+  render_pipeline_state_t t;
+  friend struct render_command;
+};
+
+enum class primitive_type
+{
+  point,
+  line,
+  line_strip,
+  triangle,
+  triangle_strip
+};
+
+struct render_command
+{
+  METAL_FUNC render_command(thread render_command_buffer &cmd_buf, uint index) thread
+      : buf(cmd_buf.t), index(index)
+  {
+    __metal_acquire_render_command(buf, index);
+  }
+
+  METAL_FUNC render_command(const thread render_command &that) thread = delete;
+
+  METAL_FUNC ~render_command() thread
+  {
+    __metal_release_render_command(buf, index);
+  }
+
+  METAL_FUNC thread render_command &operator=(const thread render_command &that) thread = delete;
+
+  const thread render_command &operator,(const thread render_command &that) const thread = delete;
+
+  METAL_FUNC void set_render_pipeline_state(render_pipeline_state pipeline_state) thread
+  {
+    __metal_set_pipeline_state_render_command(buf, index, pipeline_state.t);
+  }
+
+  template <typename T, typename _E = typename enable_if<is_metal_buffer_pointee<T>::value>::type>
+  METAL_FUNC void set_vertex_buffer(device T *buffer, uint bind_point) thread
+  {
+    __metal_set_vertex_buffer_render_command(buf, index, static_cast<device void *>(buffer), bind_point);
+  }
+  template <typename T, typename _E = typename enable_if<is_metal_buffer_pointee<T>::value>::type>
+  METAL_FUNC void set_vertex_buffer(constant T *buffer, uint bind_point) thread
+  {
+    __metal_set_vertex_buffer_render_command(buf, index, static_cast<constant void *>(buffer), bind_point);
+  }
+
+  template <typename T, typename _E = typename enable_if<is_metal_buffer_pointee<T>::value>::type>
+  METAL_FUNC void set_fragment_buffer(device T *buffer, uint bind_point) thread
+  {
+    __metal_set_fragment_buffer_render_command(buf, index, static_cast<device void *>(buffer), bind_point);
+  }
+  template <typename T, typename _E = typename enable_if<is_metal_buffer_pointee<T>::value>::type>
+  METAL_FUNC void set_fragment_buffer(constant T *buffer, uint bind_point) thread
+  {
+    __metal_set_fragment_buffer_render_command(buf, index, static_cast<constant void *>(buffer), bind_point);
+  }
+
+  template <typename T, typename _E = typename enable_if<is_metal_buffer_pointee<T>::value>::type>
+  METAL_FUNC void set_tile_buffer(device T *buffer, uint bind_point) thread
+  {
+    __metal_set_tile_buffer_render_command(buf, index, static_cast<device void *>(buffer), bind_point);
+  }
+  template <typename T, typename _E = typename enable_if<is_metal_buffer_pointee<T>::value>::type>
+  METAL_FUNC void set_tile_buffer(constant T *buffer, uint bind_point) thread
+  {
+    __metal_set_tile_buffer_render_command(buf, index, static_cast<constant void *>(buffer), bind_point);
+  }
+
+  METAL_FUNC void draw_primitives(primitive_type type, uint vertex_start, uint vertex_count, uint instance_count, uint base_instance) thread
+  {
+    __metal_draw_primitives_render_command(buf, index, uint(type), vertex_start, vertex_count, instance_count, base_instance);
+  }
+
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, ushort>, is_same<T, uint>>>::type>
+  METAL_FUNC void draw_indexed_primitives(primitive_type type, uint index_count, device T *index_buffer, uint index_start, uint instance_count, uint base_vertex, uint base_instance) thread
+  {
+    __metal_draw_indexed_primitives_render_command(buf, index, uint(type), index_count, static_cast<device void *>(index_buffer), index_start, instance_count, base_vertex, base_instance);
+  }
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, ushort>, is_same<T, uint>>>::type>
+  METAL_FUNC void draw_indexed_primitives(primitive_type type, uint index_count, constant T *index_buffer, uint index_start, uint instance_count, uint base_vertex, uint base_instance) thread
+  {
+    __metal_draw_indexed_primitives_render_command(buf, index, uint(type), index_count, static_cast<constant void *>(index_buffer), index_start, instance_count, base_vertex, base_instance);
+  }
+
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, MTLQuadTessellationFactorsHalf>, is_same<T, MTLTriangleTessellationFactorsHalf>>>::type>
+  METAL_FUNC void set_tessellation_factor_buffer(device T *buffer, uint offset, uint instance_stride) thread
+  {
+    __metal_set_tessellation_factor_buffer_render_command(buf, index, static_cast<device void *>(buffer), offset, instance_stride);
+  }
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, MTLQuadTessellationFactorsHalf>, is_same<T, MTLTriangleTessellationFactorsHalf>>>::type>
+  METAL_FUNC void set_tessellation_factor_buffer(constant T *buffer, uint offset, uint instance_stride) thread
+  {
+    __metal_set_tessellation_factor_buffer_render_command(buf, index, static_cast<constant void *>(buffer), offset, instance_stride);
+  }
+
+  METAL_FUNC void set_tessellation_factor_scale(half scale) thread
+  {
+    __metal_set_tessellation_factor_scale_render_command(buf, index, scale);
+  }
+
+  METAL_FUNC void draw_patches(uint num_patch_control_points, uint patch_start, uint patch_count, device uint *patch_index_buffer, uint instance_count, uint base_instance) thread
+  {
+    __metal_draw_patches_render_command(buf, index, num_patch_control_points, patch_start, patch_count, static_cast<device void *>(patch_index_buffer), instance_count, base_instance);
+  }
+  METAL_FUNC void draw_patches(uint num_patch_control_points, uint patch_start, uint patch_count, constant uint *patch_index_buffer, uint instance_count, uint base_instance) thread
+  {
+    __metal_draw_patches_render_command(buf, index, num_patch_control_points, patch_start, patch_count, static_cast<constant void *>(patch_index_buffer), instance_count, base_instance);
+  }
+
+  METAL_FUNC void draw_indexed_patches(uint num_patch_control_points, uint patch_start, uint patch_count, device uint *patch_index_buffer, device void *control_point_index_buffer, uint instance_count, uint base_instance) thread
+  {
+    __metal_draw_indexed_patches_render_command(buf, index, num_patch_control_points, patch_start, patch_count, static_cast<device void *>(patch_index_buffer), control_point_index_buffer, instance_count, base_instance);
+  }
+  METAL_FUNC void draw_indexed_patches(uint num_patch_control_points, uint patch_start, uint patch_count, device uint *patch_index_buffer, constant void *control_point_index_buffer, uint instance_count, uint base_instance) thread
+  {
+    __metal_draw_indexed_patches_render_command(buf, index, num_patch_control_points, patch_start, patch_count, static_cast<device void *>(patch_index_buffer), control_point_index_buffer, instance_count, base_instance);
+  }
+  METAL_FUNC void draw_indexed_patches(uint num_patch_control_points, uint patch_start, uint patch_count, constant uint *patch_index_buffer, device void *control_point_index_buffer, uint instance_count, uint base_instance) thread
+  {
+    __metal_draw_indexed_patches_render_command(buf, index, num_patch_control_points, patch_start, patch_count, static_cast<constant void *>(patch_index_buffer), control_point_index_buffer, instance_count, base_instance);
+  }
+  METAL_FUNC void draw_indexed_patches(uint num_patch_control_points, uint patch_start, uint patch_count, constant uint *patch_index_buffer, constant void *control_point_index_buffer, uint instance_count, uint base_instance) thread
+  {
+    __metal_draw_indexed_patches_render_command(buf, index, num_patch_control_points, patch_start, patch_count, static_cast<constant void *>(patch_index_buffer), control_point_index_buffer, instance_count, base_instance);
+  }
+
+  METAL_FUNC void dispatch_threads_per_tile(uint2 threads_per_tile) thread
+  {
+    __metal_dispatch_threads_per_tile_render_command(buf, index, threads_per_tile);
+  }
+
+  METAL_FUNC void nop() thread
+  {
+    __metal_nop_render_command(buf, index);
+  }
+
+  METAL_FUNC void stop() thread
+  {
+    __metal_stop_render_command(buf, index);
+  }
+
+private:
+  render_command_buffer_t buf;
+  uint index;
+};
+
+#endif // defined (__HAVE_INDIRECT_COMMAND_BUFFER__)
+
+} // namespace metal
+
+#endif // __METAL_INDIRECT_COMMAND_BUFFER

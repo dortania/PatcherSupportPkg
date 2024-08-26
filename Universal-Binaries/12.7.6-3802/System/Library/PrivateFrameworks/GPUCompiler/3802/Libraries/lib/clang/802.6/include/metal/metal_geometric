@@ -1,0 +1,378 @@
+//===-- metal_geometric ---------------------------------------------------===//
+// Copyright (c) 2014-2016 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_GEOMETRIC
+#define __METAL_GEOMETRIC
+
+#include <metal_limits>
+#include <metal_math>
+
+#pragma METAL internals : enable
+namespace metal
+{
+// Metal 1.1 s5.7: Geometric Functions.
+
+template <typename T>
+struct _fp_range_traits_impl;
+
+template <>
+struct _fp_range_traits_impl<half>
+{
+  constexpr static constant half scale_down = 0x1.0p-10;
+  constexpr static constant half scale_down_inv = 0x1.0p+10;
+  constexpr static constant half scale_up = 0x1.0p+8;
+  constexpr static constant half scale_up_inv = 0x1.0p-8;
+};
+template <>
+struct _fp_range_traits_impl<float>
+{
+  constexpr static constant float scale_down = 0x1.0p-66;
+  constexpr static constant float scale_down_inv = 0x1.0p+66;
+  constexpr static constant float scale_up = 0x1.0p+64;
+  constexpr static constant float scale_up_inv = 0x1.0p-64;
+};
+#if defined(__HAVE_NATIVE_DOUBLE__)
+template <>
+struct _fp_range_traits_impl<double>
+{
+  constexpr static constant double scale_down = 0x1.0p-514;
+  constexpr static constant double scale_down_inv = 0x1.0p+514;
+  constexpr static constant double scale_up = 0x1.0p+512;
+  constexpr static constant double scale_up_inv = 0x1.0p-512;
+};
+#endif
+
+template <typename T>
+struct _fp_range_traits : _fp_range_traits_impl<remove_cv_t<T>>
+{
+};
+
+template <typename T, typename U, typename _E = void>
+struct _geometric_binary_func_operand_type
+{
+  using type = void;
+};
+
+// We shipped a version of Metal using overloded functions to implement binary
+// functions instead of template functions. For any pair of scalar or vector
+// types T, U for which a call to the overloaded version of foo
+// `foo(T(x), U(y))` was valid (including via implicit conversion sequences),
+// the call to the templated version must also be valid.
+//
+// The general form of the binary geometric function is `O foo(T, U)`; O is the
+// floating-point vector arithmetic type the function operates with. The
+// arguments (of type T and U) are cast to O before being passed to the
+// builtin. The rules to deduce O from the pair <T, U> are as follows:
+//
+// 1) If T and U are both the same floating-point vector type, identity
+//    conversion is triggered.
+template <typename T>
+struct _geometric_binary_func_operand_type<T, T, typename enable_if<_is_fp_vector<T>::value>::type>
+{
+  using type = T;
+};
+
+// 2) If T or U is a floating-point vector type, and the other is a
+//    floating-point or integral scalar type, then O is the floating-point
+//    vector type.
+template <typename T, typename U>
+struct _geometric_binary_func_operand_type<T, U, typename enable_if<(_is_fp_vector<T>::value ^ _is_fp_vector<U>::value) && (_is_scalar<T>::value ^ _is_scalar<U>::value)>::type>
+{
+  using type = typename conditional<_is_fp_vector<T>::value, T, U>::type;
+};
+
+template <typename T, typename U>
+using _geometric_binary_func_operand_type_t = typename _geometric_binary_func_operand_type<T, U>::type;
+template <typename T, typename U>
+struct _geometric_binary_func_enable : bool_constant<!is_same<void, _geometric_binary_func_operand_type_t<T, U>>::value>
+{
+};
+
+template <typename T, typename U, typename V, typename _E = void>
+struct _geometric_ternary_func_operand_type
+{
+  using type = void;
+};
+
+// Something similar happens for ternary functions in the form O foo(T, U, V):
+//
+// 1) If T, U, and V are the same floating-point vector type, identify
+//    conversion is triggered.
+template <typename T>
+struct _geometric_ternary_func_operand_type<T, T, T, typename enable_if<_is_fp_vector<T>::value>::type>
+{
+  using type = T;
+};
+
+// 2) If T, U, V are three different type, one of them is a floating-point
+//    vector type and the others are floating-point or scalar types, then O is
+//    the floating-point vector type.
+template <typename T, typename U, typename V>
+struct _geometric_ternary_func_operand_type<T, U, V, typename enable_if<(_is_fp_vector<T>::value + _is_fp_vector<U>::value + _is_fp_vector<V>::value) == 1 && (_is_scalar<T>::value + _is_scalar<U>::value + _is_scalar<V>::value) == 2 && (!is_same<T, U>::value && !is_same<T, V>::value && !is_same<U, V>::value)>::type>
+{
+  using type = typename conditional<_is_fp_vector<T>::value, T, U>::type;
+};
+
+// 3) If T has the same type of U, or T has the same type of V, or U has the
+//    same type of V, then the rules for geometric binary functions are applied
+//    to the two different types.
+template <typename T, typename V>
+struct _geometric_ternary_func_operand_type<T, T, V, typename enable_if<!is_same<T, V>::value>::type> : _geometric_binary_func_operand_type<T, V>
+{
+};
+template <typename T, typename U>
+struct _geometric_ternary_func_operand_type<T, U, T, typename enable_if<!is_same<T, U>::value>::type> : _geometric_binary_func_operand_type<T, U>
+{
+};
+template <typename T, typename U>
+struct _geometric_ternary_func_operand_type<T, U, U, typename enable_if<!is_same<T, U>::value>::type> : _geometric_binary_func_operand_type<T, U>
+{
+};
+
+template <typename T, typename U, typename V>
+using _geometric_ternary_func_operand_type_t = typename _geometric_ternary_func_operand_type<T, U, V>::type;
+template <typename T, typename U, typename V>
+struct _geometric_ternary_func_enable : bool_constant<!is_same<void, _geometric_ternary_func_operand_type_t<T, U, V>>::value>
+{
+};
+
+// The geometric cross function operands rules are an extension of the
+// geometric binary function rules. An extra restriction applies: the O vector
+// type must be 3-elements wide.
+template <typename T, typename U, typename _E = void>
+struct _geometric_cross_func_operand_type : _geometric_binary_func_operand_type<T, U>
+{
+};
+
+template <typename T, typename U>
+using _geometric_cross_func_operand_type_t = typename _geometric_cross_func_operand_type<T, U>::type;
+template <typename T, typename U>
+struct _geometric_cross_func_enable : bool_constant<!is_same<void, _geometric_cross_func_operand_type_t<T, U>>::value && vec_elements<_geometric_cross_func_operand_type_t<T, U>>::value == 3>
+{
+};
+
+// The geometric refraction function operand rules are an extension of the
+// geometric binary function rules. An extra restriction applies: the second
+// operand must be a scalar type.
+template <typename T, typename U, typename V, typename _E = void>
+struct _geometric_refract_func_operand_type : _geometric_binary_func_operand_type<T, U>
+{
+};
+
+template <typename T, typename U, typename V>
+using _geometric_refract_func_operand_type_t = typename _geometric_refract_func_operand_type<T, U, V>::type;
+template <typename T, typename U, typename V>
+struct _geometric_refract_func_enable : bool_constant<!is_same<void, _geometric_cross_func_operand_type_t<T, U>>::value && is_scalar<V>::value>
+{
+};
+
+template <typename T, typename U, typename _O = typename enable_if<_geometric_binary_func_enable<T, U>::value, _geometric_binary_func_operand_type_t<T, U>>::type>
+METAL_FUNC make_scalar_t<_O> dot(T x, U y)
+{
+  return __metal_dot(_O(x), _O(y));
+}
+
+template <typename T, typename _E = typename enable_if<_is_fp_vector<T>::value>::type>
+METAL_FUNC make_scalar_t<T> length_squared(T x)
+{
+  return dot(x, x);
+}
+
+namespace fast
+{
+template <typename T, typename _E = typename enable_if<_is_fp_vector<T>::value && is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC make_scalar_t<T> length(T x)
+{
+  return fast::sqrt(length_squared(x));
+}
+
+template <typename T, typename _E = typename enable_if<_is_fp_vector<T>::value && is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T normalize(T x)
+{
+  return x * fast::rsqrt(length_squared(x));
+}
+
+template <typename T, typename U, typename _O = typename enable_if<_geometric_binary_func_enable<T, U>::value, _geometric_binary_func_operand_type_t<T, U>>::type, typename _E = typename enable_if<is_same<float, make_scalar_t<_O>>::value>::type>
+METAL_FUNC make_scalar_t<_O> distance(T x, U y)
+{
+  return fast::length(_O(x) - _O(y));
+}
+} // namespace fast
+
+namespace precise
+{
+template <typename T, typename _E = typename enable_if<_is_fp_vector<T>::value && is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC make_scalar_t<T> length(T x)
+{
+  using R = make_scalar_t<T>;
+
+  R len_sq = length_squared(x);
+  if (isinf(len_sq))
+  {
+    len_sq = length_squared(x * _fp_range_traits<R>::scale_down);
+    return _fp_range_traits<R>::scale_down_inv * precise::sqrt(len_sq);
+  }
+  if (len_sq < numeric_limits<R>::min() / numeric_limits<R>::epsilon())
+  {
+    len_sq = length_squared(x * _fp_range_traits<R>::scale_up);
+    return _fp_range_traits<R>::scale_up_inv * precise::sqrt(len_sq);
+  }
+  return precise::sqrt(len_sq);
+}
+
+template <typename T, typename _E = typename enable_if<_is_fp_vector<T>::value && is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T normalize(T x)
+{
+  using R = make_scalar_t<T>;
+
+  if (any(isinf(x)))
+    return numeric_limits<R>::quiet_NaN();
+
+  R len_sq = length_squared(x);
+  if (isinf(len_sq))
+  {
+    x *= _fp_range_traits<R>::scale_down;
+    len_sq = length_squared(x);
+    if (isinf(len_sq))
+      return copysign(select(T(0), T(1), isinf(x)), x);
+  }
+  else if (len_sq < numeric_limits<R>::min() / numeric_limits<R>::epsilon())
+  {
+    x *= _fp_range_traits<R>::scale_up;
+    len_sq = length_squared(x);
+    if (len_sq == R(0))
+      return x;
+  }
+  return x * precise::rsqrt(len_sq);
+}
+
+template <typename T, typename U, typename _O = typename enable_if<_geometric_binary_func_enable<T, U>::value, _geometric_binary_func_operand_type_t<T, U>>::type, typename _E = typename enable_if<is_same<float, make_scalar_t<_O>>::value>::type>
+METAL_FUNC make_scalar_t<_O> distance(T x, U y)
+{
+  return precise::length(_O(x) - _O(y));
+}
+} // namespace precise
+
+template <typename T, typename _E = void>
+struct _length_impl
+{
+  METAL_FUNC make_scalar_t<T> operator()(T x) const thread
+  {
+    return sqrt(length_squared(x));
+  }
+};
+
+template <typename T>
+struct _length_impl<T, typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+{
+  METAL_FUNC make_scalar_t<T> operator()(T x) const thread
+  {
+#if defined(__FAST_MATH__)
+    return fast::length(x);
+#else
+    return precise::length(x);
+#endif
+  }
+};
+
+template <typename T, typename _E = typename enable_if<_is_fp_vector<T>::value>::type>
+METAL_FUNC make_scalar_t<T> length(T x)
+{
+  return _length_impl<T>()(x);
+}
+
+template <typename T, typename _E = void>
+struct _normalize_impl
+{
+  METAL_FUNC T operator()(T x) const thread
+  {
+    return x * rsqrt(length_squared(x));
+  }
+};
+
+template <typename T>
+struct _normalize_impl<T, typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+{
+  METAL_FUNC T operator()(T x) const thread
+  {
+#if defined(__FAST_MATH__)
+    return fast::normalize(x);
+#else
+    return precise::normalize(x);
+#endif
+  }
+};
+
+template <typename T, typename _E = typename enable_if<_is_fp_vector<T>::value>::type>
+METAL_FUNC T normalize(T x)
+{
+  return _normalize_impl<T>()(x);
+}
+
+template <typename T, typename _E = void>
+struct _distance_impl
+{
+  METAL_FUNC make_scalar_t<T> operator()(T x, T y) const thread
+  {
+    return length(x - y);
+  }
+};
+
+template <typename T>
+struct _distance_impl<T, typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+{
+  METAL_FUNC make_scalar_t<T> operator()(T x, T y) const thread
+  {
+#if defined(__FAST_MATH__)
+    return fast::distance(x, y);
+#else
+    return precise::distance(x, y);
+#endif
+  }
+};
+
+template <typename T, typename U, typename _O = typename enable_if<_geometric_binary_func_enable<T, U>::value, _geometric_binary_func_operand_type_t<T, U>>::type>
+METAL_FUNC make_scalar_t<_O> distance(T x, U y)
+{
+  return _distance_impl<_O>()(_O(x), _O(y));
+}
+
+template <typename T, typename U, typename _O = typename enable_if<_geometric_binary_func_enable<T, U>::value, _geometric_binary_func_operand_type_t<T, U>>::type>
+METAL_FUNC make_scalar_t<_O> distance_squared(T x, U y)
+{
+  return length_squared(_O(x) - _O(y));
+}
+
+template <typename T, typename U, typename V, typename _O = typename enable_if<_geometric_ternary_func_enable<T, U, V>::value, _geometric_ternary_func_operand_type_t<T, U, V>>::type>
+METAL_FUNC _O faceforward(T n, U i, V nref)
+{
+  return dot(_O(nref), _O(i)) < make_scalar_t<_O>(0) ? _O(n) : _O(-n);
+}
+
+template <typename T, typename U, typename _O = typename enable_if<_geometric_binary_func_enable<T, U>::value, _geometric_binary_func_operand_type_t<T, U>>::type>
+METAL_FUNC _O reflect(T i, U n)
+{
+  return _O(i) - make_scalar_t<_O>(2) * dot(_O(n), _O(i)) * _O(n);
+}
+
+template <typename T, typename U, typename V, typename _O = typename enable_if<_geometric_refract_func_enable<T, U, V>::value, _geometric_refract_func_operand_type_t<T, U, V>>::type>
+METAL_FUNC _O refract(T i, U n, V eta)
+{
+  using R = make_scalar_t<_O>;
+
+  R k = R(1) - R(eta) * R(eta) * (R(1) - dot(_O(n), _O(i)) * dot(_O(n), _O(i)));
+  if (k < R(0))
+    return {0};
+  return R(eta) * _O(i) - (R(eta) * dot(_O(n), _O(i)) + sqrt(k)) * _O(n);
+}
+
+template <typename T, typename U, typename _O = typename enable_if<_geometric_cross_func_enable<T, U>::value, _geometric_cross_func_operand_type_t<T, U>>::type>
+METAL_FUNC _O cross(T x, U y)
+{
+  return {(_O(x)[1] * _O(y)[2]) - (_O(y)[1] * _O(x)[2]), (_O(x)[2] * _O(y)[0]) - (_O(y)[2] * _O(x)[0]), (_O(x)[0] * _O(y)[1]) - (_O(y)[0] * _O(x)[1])};
+}
+} // namespace metal
+#pragma METAL internals : disable
+
+#endif // __METAL_GEOMETRIC

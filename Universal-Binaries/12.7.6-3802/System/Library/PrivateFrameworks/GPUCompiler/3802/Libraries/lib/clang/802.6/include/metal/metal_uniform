@@ -1,0 +1,1060 @@
+//===-- metal_uniform -----------------------------------------------------===//
+// Copyright (c) 2017 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_UNIFORM
+#define __METAL_UNIFORM
+
+#ifdef __HAVE_UNIFORM__
+
+#include <metal_type_traits>
+
+#pragma METAL internals : enable
+namespace metal {
+template <typename T, typename = void>
+struct uniform;
+
+template <typename T>
+struct _is_uniform_impl : false_type
+{
+};
+template <typename T>
+struct _is_uniform_impl<uniform<T>> : true_type
+{
+};
+
+template <typename T>
+struct is_uniform : _is_uniform_impl<remove_cv_t<T>>
+{
+};
+template <typename T>
+constexpr constant bool is_uniform_v = is_uniform<T>::value;
+
+template <typename T>
+struct remove_uniform
+{
+  typedef T value_type;
+};
+template <typename T>
+struct remove_uniform<const T>
+{
+  typedef const typename remove_uniform<T>::value_type value_type;
+};
+template <typename T>
+struct remove_uniform<volatile T>
+{
+  typedef volatile typename remove_uniform<T>::value_type value_type;
+};
+template <typename T>
+struct remove_uniform<uniform<T>>
+{
+  typedef T value_type;
+};
+template <typename T>
+using remove_uniform_t = typename remove_uniform<T>::value_type;
+
+template <typename T, typename = void>
+struct _is_arg_uniform : _constarg_traits<T>
+{
+};
+template <typename T>
+struct _is_arg_uniform<uniform<T>>
+{
+  static constexpr bool check(const thread uniform<T> &) { return true; }
+  static constexpr bool check(const device uniform<T> &) { return true; }
+  static constexpr bool check(const constant uniform<T> &) { return true; }
+  static constexpr bool check(const threadgroup uniform<T> &) { return true; }
+};
+
+template <typename U, typename V>
+struct _is_explicit_convertible_impl
+{
+private:
+  template<typename T, typename = decltype(V(T()))>
+  static true_type test(thread void *);
+
+  template<typename T>
+  static false_type test(...);
+
+public:
+  using type = decltype(test<U>(nullptr));
+};
+
+template <typename U, typename V>
+struct _is_explicit_convertible : _is_explicit_convertible_impl<U, V>::type
+{
+};
+template <typename U, typename V>
+constexpr constant bool _is_explicit_convertible_v = _is_explicit_convertible<U, V>::value;
+
+#define METAL_ARG_UNIFORM(x, N)                                                \
+  METAL_ENABLE_IF(_is_arg_uniform<decltype(x)>::check(x), "operand " #N " is not a uniform value")
+
+template <typename T>
+METAL_FUNC constexpr uniform<T> make_uniform(T x)
+{
+  return uniform<T>(x, uniform<T>::_tag_init);
+}
+
+template <typename T>
+struct uniform<T, typename enable_if<is_arithmetic_v<T>>::type>
+{
+  typedef T value_type;
+
+  T __v;
+
+  constexpr uniform() thread = default;
+
+  template <typename U, typename = typename enable_if<!is_uniform_v<U> && is_convertible_v<T, U>>::type>
+  constexpr uniform(U u) thread METAL_ARG_UNIFORM(u, 1) : __v(u)
+  {
+  }
+
+  constexpr uniform() constant = default;
+
+  template <typename U, typename = typename enable_if<!is_uniform_v<U> && is_convertible_v<T, U>>::type>
+  constexpr uniform(U u) constant METAL_ARG_UNIFORM(u, 1) : __v(u)
+  {
+  }
+
+  constexpr uniform() threadgroup = default;
+
+  template <typename U, typename = typename enable_if<!is_uniform_v<U> && is_convertible_v<T, U>>::type>
+  constexpr uniform(U u) threadgroup METAL_ARG_UNIFORM(u, 1) : __v(u)
+  {
+  }
+
+  template <typename U, typename = typename enable_if<!is_uniform_v<U> && is_convertible_v<T, U>>::type>
+  constexpr METAL_FUNC METAL_IMPLICIT operator U() const thread
+  {
+    __builtin_assume(__metal_is_uniform(__v));
+    return U(__v);
+  }
+
+  template <typename U, typename = typename enable_if<!is_uniform_v<U> && is_convertible_v<T, U>>::type>
+  constexpr METAL_FUNC METAL_IMPLICIT operator uniform<U>() const thread
+  {
+    return make_uniform<U>(__v);
+  }
+
+  template <typename U, typename = typename enable_if<!is_uniform_v<U> && !is_convertible_v<T, U> && _is_explicit_convertible_v<T, U>>::type>
+  constexpr METAL_FUNC METAL_EXPLICIT operator U() const thread
+  {
+    __builtin_assume(__metal_is_uniform(__v));
+    return U(__v);
+  }
+
+  template <typename U, typename = typename enable_if<!is_uniform_v<U> && !is_convertible_v<T, U> && _is_explicit_convertible_v<T, U>>::type>
+  constexpr METAL_FUNC  METAL_EXPLICIT operator uniform<U>() const thread
+  {
+    return make_uniform<U>(U(__v));
+  }
+
+  template <typename U, typename = typename enable_if<!is_uniform_v<U> && is_convertible_v<T, U>>::type>
+  constexpr METAL_FUNC METAL_IMPLICIT operator U() const device
+  {
+    __builtin_assume(__metal_is_uniform(__v));
+    return U(__v);
+  }
+
+  template <typename U, typename = typename enable_if<!is_uniform_v<U> && is_convertible_v<T, U>>::type>
+  constexpr METAL_FUNC METAL_IMPLICIT operator uniform<U>() const device
+  {
+    return make_uniform<U>(__v);
+  }
+
+  template <typename U, typename = typename enable_if<!is_uniform_v<U> && !is_convertible_v<T, U> && _is_explicit_convertible_v<T, U>>::type>
+  constexpr METAL_FUNC METAL_EXPLICIT operator U() const device
+  {
+    __builtin_assume(__metal_is_uniform(__v));
+    return U(__v);
+  }
+
+  template <typename U, typename = typename enable_if<!is_uniform_v<U> && !is_convertible_v<T, U> && _is_explicit_convertible_v<T, U>>::type>
+  constexpr METAL_FUNC  METAL_EXPLICIT operator uniform<U>() const device
+  {
+    return make_uniform<U>(U(__v));
+  }
+
+  template <typename U, typename = typename enable_if<!is_uniform_v<U> && is_convertible_v<T, U>>::type>
+  constexpr METAL_FUNC METAL_IMPLICIT operator U() const constant
+  {
+    __builtin_assume(__metal_is_uniform(__v));
+    return U(__v);
+  }
+
+  template <typename U, typename = typename enable_if<!is_uniform_v<U> && is_convertible_v<T, U>>::type>
+  constexpr METAL_FUNC METAL_IMPLICIT operator uniform<U>() const constant
+  {
+    return make_uniform<U>(__v);
+  }
+
+  template <typename U, typename = typename enable_if<!is_uniform_v<U> && !is_convertible_v<T, U> && _is_explicit_convertible_v<T, U>>::type>
+  constexpr METAL_FUNC METAL_EXPLICIT operator U() const constant
+  {
+    __builtin_assume(__metal_is_uniform(__v));
+    return U(__v);
+  }
+
+  template <typename U, typename = typename enable_if<!is_uniform_v<U> && !is_convertible_v<T, U> && _is_explicit_convertible_v<T, U>>::type>
+  constexpr METAL_FUNC  METAL_EXPLICIT operator uniform<U>() const constant
+  {
+    return make_uniform<U>(U(__v));
+  }
+
+  template <typename U, typename = typename enable_if<!is_uniform_v<U> && is_convertible_v<T, U>>::type>
+  constexpr METAL_FUNC METAL_IMPLICIT operator U() const threadgroup
+  {
+    __builtin_assume(__metal_is_uniform(__v));
+    return U(__v);
+  }
+
+  template <typename U, typename = typename enable_if<!is_uniform_v<U> && is_convertible_v<T, U>>::type>
+  constexpr METAL_FUNC METAL_IMPLICIT operator uniform<U>() const threadgroup
+  {
+    return make_uniform<U>(__v);
+  }
+
+  template <typename U, typename = typename enable_if<!is_uniform_v<U> && !is_convertible_v<T, U> && _is_explicit_convertible_v<T, U>>::type>
+  constexpr METAL_FUNC METAL_EXPLICIT operator U() const threadgroup
+  {
+    __builtin_assume(__metal_is_uniform(__v));
+    return U(__v);
+  }
+
+  template <typename U, typename = typename enable_if<!is_uniform_v<U> && !is_convertible_v<T, U> && _is_explicit_convertible_v<T, U>>::type>
+  constexpr METAL_FUNC  METAL_EXPLICIT operator uniform<U>() const threadgroup
+  {
+    return make_uniform<U>(U(__v));
+  }
+
+
+  template <typename U>
+  constexpr typename enable_if<is_convertible_v<T, remove_uniform_t<U>>, thread uniform &>::type operator=(U u) thread METAL_ARG_UNIFORM(u, 1)
+  {
+    __v = remove_uniform_t<U>(u);
+    return *this;
+  }
+
+  template <typename U>
+  constexpr typename enable_if<is_convertible_v<T, remove_uniform_t<U>>, device uniform &>::type operator=(U u) device METAL_ARG_UNIFORM(u, 1)
+  {
+    __v = remove_uniform_t<U>(u);
+    return *this;
+  }
+
+  template <typename U>
+  constexpr typename enable_if<is_convertible_v<T, remove_uniform_t<U>>, threadgroup uniform &>::type operator=(U u) threadgroup METAL_ARG_UNIFORM(u, 1)
+  {
+    __v = remove_uniform_t<U>(u);
+    return *this;
+  }
+
+
+private:
+  enum _tag { _tag_init };
+  template <typename U, typename = typename enable_if<!is_uniform_v<U> && is_convertible_v<T, U>>::type>
+  constexpr uniform(U u, _tag) thread : __v(u)
+  {
+  }
+
+  template <typename U>
+  friend constexpr uniform<U> make_uniform(U);
+};
+
+template <typename U, typename V, template <typename> class P>
+using _binop_uniform_constraints_t = typename enable_if<
+    (is_uniform_v<U> || is_uniform_v<V>) &&
+    P<remove_uniform_t<U>>::value && P<remove_uniform_t<V>>::value &&
+    ((is_vector_v<remove_uniform_t<U>> &&
+      is_vector_v<remove_uniform_t<V>> &&
+      is_convertible_v<remove_uniform_t<U>, remove_uniform_t<V>>) ||
+     !is_vector_v<remove_uniform_t<U>> ||
+     !is_vector_v<remove_uniform_t<V>>)>::type;
+
+template <typename U, typename V, template <typename> class P>
+using _binop_uniform_l_constraints_t = typename enable_if<
+    is_uniform_v<U> &&
+    P<remove_uniform_t<U>>::value && P<V>::value &&
+    ((is_vector_v<remove_uniform_t<U>> && is_vector_v<V> &&
+      is_convertible_v<remove_uniform_t<U>, V>) ||
+     !is_vector_v<remove_uniform_t<U>> || !is_vector_v<V>)>::type;
+
+template <typename U, typename V, template <typename> class P>
+using _binop_uniform_r_constraints_t = typename enable_if<
+    is_uniform_v<V>  &&
+    P<U>::value && P<remove_uniform_t<V>>::value &&
+    ((is_vector_v<U> && is_vector_v<remove_uniform_t<V>> &&
+      is_convertible_v<U, remove_uniform_t<V>>) ||
+     !is_vector_v<V> || !is_vector_v<remove_uniform_t<U>>)>::type;
+
+template <typename U, typename V, template <typename> class P>
+using _op_assign_uniform_constraints_t = typename enable_if<
+    is_uniform_v<U> && is_same_v<U, remove_cv_t<U>> &&
+    P<remove_uniform_t<U>>::value &&
+    P<remove_uniform_t<V>>::value &&
+    ((is_vector_v<remove_uniform_t<U>> &&
+      is_vector_v<remove_uniform_t<V>> &&
+      is_convertible_v<remove_uniform_t<U>, remove_uniform_t<V>>) ||
+     !is_vector_v<remove_uniform_t<U>> ||
+     !is_vector_v<remove_uniform_t<V>>)>::type;
+
+template <typename U, template <typename> class P>
+using _unop_uniform_constraints_t =
+    typename enable_if<is_uniform_v<U> &&
+                       P<remove_uniform_t<U>>::value>::type;
+
+template <typename U>
+using _inc_dec_uniform_constraints_t =
+    typename enable_if<is_uniform_v<U> &&
+                       is_arithmetic_v<remove_uniform_t<U>> &&
+                       !is_same_v<make_scalar_t<remove_uniform_t<U>>, bool>>::type;
+
+template <typename T>
+using _is_convertible_to_bool = is_convertible<T, bool>;
+
+// Binary arithmetic operators.
+template <typename U, typename V, typename = _binop_uniform_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC uniform<decltype(remove_uniform_t<U>() + remove_uniform_t<V>())>
+operator+(U u, V v) METAL_ARG_UNIFORM(u, 1) METAL_ARG_UNIFORM(v, 2)
+{
+  return make_uniform<decltype(remove_uniform_t<U>() + remove_uniform_t<V>())>(remove_uniform_t<U>(u) + remove_uniform_t<V>(v));
+}
+
+template <typename U, typename V, typename = _binop_uniform_l_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC decltype(remove_uniform_t<U>() + V())
+operator+(U u, V v)
+{
+  return remove_uniform_t<U>(u) + V(v);
+}
+
+template <typename U, typename V, typename = _binop_uniform_r_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC decltype(U() + remove_uniform_t<V>())
+operator+(U u, V v)
+{
+  return U(u) + remove_uniform_t<V>(v);
+}
+
+
+template <typename U, typename V, typename = _binop_uniform_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC uniform<decltype(remove_uniform_t<U>() - remove_uniform_t<V>())>
+operator-(U u, V v) METAL_ARG_UNIFORM(u, 1) METAL_ARG_UNIFORM(v, 2)
+{
+  return make_uniform<decltype(remove_uniform_t<U>() - remove_uniform_t<V>())>(remove_uniform_t<U>(u) - remove_uniform_t<V>(v));
+}
+
+template <typename U, typename V, typename = _binop_uniform_l_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC decltype(remove_uniform_t<U>() - V())
+operator-(U u, V v)
+{
+  return remove_uniform_t<U>(u) - V(v);
+}
+
+template <typename U, typename V, typename = _binop_uniform_r_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC decltype(U() - remove_uniform_t<V>())
+operator-(U u, V v)
+{
+  return U(u) - remove_uniform_t<V>(v);
+}
+
+
+template <typename U, typename V, typename = _binop_uniform_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC uniform<decltype(remove_uniform_t<U>() * remove_uniform_t<V>())>
+operator*(U u, V v) METAL_ARG_UNIFORM(u, 1) METAL_ARG_UNIFORM(v, 2)
+{
+  return make_uniform<decltype(remove_uniform_t<U>() * remove_uniform_t<V>())>(remove_uniform_t<U>(u) * remove_uniform_t<V>(v));
+}
+
+template <typename U, typename V, typename = _binop_uniform_l_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC decltype(remove_uniform_t<U>() * V())
+operator*(U u, V v)
+{
+  return remove_uniform_t<U>(u) * V(v);
+}
+
+template <typename U, typename V, typename = _binop_uniform_r_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC decltype(U() * remove_uniform_t<V>())
+operator*(U u, V v)
+{
+  return U(u) * remove_uniform_t<V>(v);
+}
+
+
+template <typename U, typename V, typename = _binop_uniform_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC uniform<decltype(remove_uniform_t<U>() / remove_uniform_t<V>())>
+operator/(U u, V v) METAL_ARG_UNIFORM(u, 1) METAL_ARG_UNIFORM(v, 2)
+{
+  return make_uniform<decltype(remove_uniform_t<U>() / remove_uniform_t<V>())>(remove_uniform_t<U>(u) / remove_uniform_t<V>(v));
+}
+
+template <typename U, typename V, typename = _binop_uniform_l_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC decltype(remove_uniform_t<U>() / V())
+operator/(U u, V v)
+{
+  return remove_uniform_t<U>(u) / V(v);
+}
+
+template <typename U, typename V, typename = _binop_uniform_r_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC decltype(U() / remove_uniform_t<V>())
+operator/(U u, V v)
+{
+  return U(u) / remove_uniform_t<V>(v);
+}
+
+
+template <typename U, typename V, typename = _binop_uniform_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC uniform<decltype(remove_uniform_t<U>() % remove_uniform_t<V>())>
+operator%(U u, V v) METAL_ARG_UNIFORM(u, 1) METAL_ARG_UNIFORM(v, 2)
+{
+  return make_uniform<decltype(remove_uniform_t<U>() % remove_uniform_t<V>())>(remove_uniform_t<U>(u) % remove_uniform_t<V>(v));
+}
+
+template <typename U, typename V, typename = _binop_uniform_l_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC decltype(remove_uniform_t<U>() % V())
+operator%(U u, V v)
+{
+  return remove_uniform_t<U>(u) % V(v);
+}
+
+template <typename U, typename V, typename = _binop_uniform_r_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC decltype(U() % remove_uniform_t<V>())
+operator%(U u, V v)
+{
+  return U(u) % remove_uniform_t<V>(v);
+}
+
+// Unary arithmetic operators.
+template <typename U, typename = _unop_uniform_constraints_t<U, is_arithmetic>>
+constexpr METAL_FUNC uniform<decltype(+remove_uniform_t<U>())>
+operator+(U u) METAL_ARG_UNIFORM(u, 1)
+{
+  return make_uniform<decltype(+remove_uniform_t<U>())>(+remove_uniform_t<U>(u));
+}
+
+template <typename U, typename = _unop_uniform_constraints_t<U, is_arithmetic>>
+constexpr METAL_FUNC uniform<decltype(-remove_uniform_t<U>())>
+operator-(U u) METAL_ARG_UNIFORM(u, 1)
+{
+  return make_uniform<decltype(-remove_uniform_t<U>())>(-remove_uniform_t<U>(u));
+}
+
+// Relational operators.
+template <typename U, typename V, typename = _binop_uniform_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC uniform<decltype(remove_uniform_t<U>() == remove_uniform_t<V>())>
+operator==(U u, V v) METAL_ARG_UNIFORM(u, 1) METAL_ARG_UNIFORM(v, 2)
+{
+  return make_uniform<decltype(remove_uniform_t<U>() == remove_uniform_t<V>())>(remove_uniform_t<U>(u) == remove_uniform_t<V>(v));
+}
+
+template <typename U, typename V, typename = _binop_uniform_l_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC decltype(remove_uniform_t<U>() == V())
+operator==(U u, V v)
+{
+  return remove_uniform_t<U>(u) == V(v);
+}
+
+template <typename U, typename V, typename = _binop_uniform_r_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC decltype(U() == remove_uniform_t<V>())
+operator==(U u, V v)
+{
+  return U(u) == remove_uniform_t<V>(v);
+}
+
+
+template <typename U, typename V, typename = _binop_uniform_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC uniform<decltype(remove_uniform_t<U>() != remove_uniform_t<V>())>
+operator!=(U u, V v) METAL_ARG_UNIFORM(u, 1) METAL_ARG_UNIFORM(v, 2)
+{
+  return make_uniform<decltype(remove_uniform_t<U>() != remove_uniform_t<V>())>(remove_uniform_t<U>(u) != remove_uniform_t<V>(v));
+}
+
+template <typename U, typename V, typename = _binop_uniform_l_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC decltype(remove_uniform_t<U>() != V())
+operator!=(U u, V v)
+{
+  return remove_uniform_t<U>(u) != V(v);
+}
+
+template <typename U, typename V, typename = _binop_uniform_r_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC decltype(U() != remove_uniform_t<V>())
+operator!=(U u, V v)
+{
+  return U(u) != remove_uniform_t<V>(v);
+}
+
+
+template <typename U, typename V, typename = _binop_uniform_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC uniform<decltype(remove_uniform_t<U>() < remove_uniform_t<V>())>
+operator<(U u, V v) METAL_ARG_UNIFORM(u, 1) METAL_ARG_UNIFORM(v, 2)
+{
+  return make_uniform<decltype(remove_uniform_t<U>() < remove_uniform_t<V>())>(remove_uniform_t<U>(u) < remove_uniform_t<V>(v));
+}
+
+template <typename U, typename V, typename = _binop_uniform_l_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC decltype(remove_uniform_t<U>() < V())
+operator<(U u, V v)
+{
+  return remove_uniform_t<U>(u) < V(v);
+}
+
+template <typename U, typename V, typename = _binop_uniform_r_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC decltype(U() < remove_uniform_t<V>())
+operator<(U u, V v)
+{
+  return U(u) < remove_uniform_t<V>(v);
+}
+
+
+template <typename U, typename V, typename = _binop_uniform_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC uniform<decltype(remove_uniform_t<U>() > remove_uniform_t<V>())>
+operator>(U u, V v) METAL_ARG_UNIFORM(u, 1) METAL_ARG_UNIFORM(v, 2)
+{
+  return make_uniform<decltype(remove_uniform_t<U>() > remove_uniform_t<V>())>(remove_uniform_t<U>(u) > remove_uniform_t<V>(v));
+}
+
+template <typename U, typename V, typename = _binop_uniform_l_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC decltype(remove_uniform_t<U>() > V())
+operator>(U u, V v)
+{
+  return remove_uniform_t<U>(u) > V(v);
+}
+
+template <typename U, typename V, typename = _binop_uniform_r_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC decltype(U() > remove_uniform_t<V>())
+operator>(U u, V v)
+{
+  return U(u) > remove_uniform_t<V>(v);
+}
+
+
+template <typename U, typename V, typename = _binop_uniform_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC uniform<decltype(remove_uniform_t<U>() <= remove_uniform_t<V>())>
+operator<=(U u, V v) METAL_ARG_UNIFORM(u, 1) METAL_ARG_UNIFORM(v, 2)
+{
+  return make_uniform<decltype(remove_uniform_t<U>() <= remove_uniform_t<V>())>(remove_uniform_t<U>(u) <= remove_uniform_t<V>(v));
+}
+
+template <typename U, typename V, typename = _binop_uniform_l_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC decltype(remove_uniform_t<U>() <= V())
+operator<=(U u, V v)
+{
+  return remove_uniform_t<U>(u) <= V(v);
+}
+
+template <typename U, typename V, typename = _binop_uniform_r_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC decltype(U() <= remove_uniform_t<V>())
+operator<=(U u, V v)
+{
+  return U(u) <= remove_uniform_t<V>(v);
+}
+
+
+template <typename U, typename V, typename = _binop_uniform_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC uniform<decltype(remove_uniform_t<U>() >= remove_uniform_t<V>())>
+operator>=(U u, V v) METAL_ARG_UNIFORM(u, 1) METAL_ARG_UNIFORM(v, 2)
+{
+  return make_uniform<decltype(remove_uniform_t<U>() >= remove_uniform_t<V>())>(remove_uniform_t<U>(u) >= remove_uniform_t<V>(v));
+}
+
+template <typename U, typename V, typename = _binop_uniform_l_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC decltype(remove_uniform_t<U>() >= V())
+operator>=(U u, V v)
+{
+  return remove_uniform_t<U>(u) >= V(v);
+}
+
+template <typename U, typename V, typename = _binop_uniform_r_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC decltype(U() >= remove_uniform_t<V>())
+operator>=(U u, V v)
+{
+  return U(u) >= remove_uniform_t<V>(v);
+}
+
+
+// Shift operators.
+
+template <typename U, typename V, typename = _binop_uniform_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC uniform<decltype(remove_uniform_t<U>() << remove_uniform_t<V>())>
+operator<<(U u, V v) METAL_ARG_UNIFORM(u, 1) METAL_ARG_UNIFORM(v, 2)
+{
+  return make_uniform<decltype(remove_uniform_t<U>() << remove_uniform_t<V>())>(remove_uniform_t<U>(u) << remove_uniform_t<V>(v));
+}
+
+template <typename U, typename V, typename = _binop_uniform_l_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC decltype(remove_uniform_t<U>() << V())
+operator<<(U u, V v)
+{
+  return remove_uniform_t<U>(u) << V(v);
+}
+
+template <typename U, typename V, typename = _binop_uniform_r_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC decltype(U() << remove_uniform_t<V>())
+operator<<(U u, V v)
+{
+  return U(u) << remove_uniform_t<V>(v);
+}
+
+
+template <typename U, typename V, typename = _binop_uniform_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC uniform<decltype(remove_uniform_t<U>() >> remove_uniform_t<V>())>
+operator>>(U u, V v) METAL_ARG_UNIFORM(u, 1) METAL_ARG_UNIFORM(v, 2)
+{
+  return make_uniform<decltype(remove_uniform_t<U>() >> remove_uniform_t<V>())>(remove_uniform_t<U>(u) >> remove_uniform_t<V>(v));
+}
+
+template <typename U, typename V, typename = _binop_uniform_l_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC decltype(remove_uniform_t<U>() >> V())
+operator>>(U u, V v)
+{
+  return remove_uniform_t<U>(u) >> V(v);
+}
+
+template <typename U, typename V, typename = _binop_uniform_r_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC decltype(U() >> remove_uniform_t<V>())
+operator>>(U u, V v)
+{
+  return U(u) >> remove_uniform_t<V>(v);
+}
+
+
+// Binary logic operators.
+
+template <typename U, typename V, typename = _binop_uniform_constraints_t<U, V, _is_convertible_to_bool>>
+constexpr METAL_FUNC uniform<decltype(remove_uniform_t<U>() && remove_uniform_t<V>())>
+operator&&(U u, V v) METAL_ARG_UNIFORM(u, 1) METAL_ARG_UNIFORM(v, 2)
+{
+  return make_uniform<decltype(remove_uniform_t<U>() && remove_uniform_t<V>())>(remove_uniform_t<U>(u) && remove_uniform_t<V>(v));
+}
+
+template <typename U, typename V, typename = _binop_uniform_l_constraints_t<U, V, _is_convertible_to_bool>>
+constexpr METAL_FUNC decltype(remove_uniform_t<U>() && V())
+operator&&(U u, V v)
+{
+  return remove_uniform_t<U>(u) && V(v);
+}
+
+template <typename U, typename V, typename = _binop_uniform_r_constraints_t<U, V, _is_convertible_to_bool>>
+constexpr METAL_FUNC decltype(U() && remove_uniform_t<V>())
+operator&&(U u, V v)
+{
+  return U(u) && remove_uniform_t<V>(v);
+}
+
+
+template <typename U, typename V, typename = _binop_uniform_constraints_t<U, V, _is_convertible_to_bool>>
+constexpr METAL_FUNC uniform<decltype(remove_uniform_t<U>() || remove_uniform_t<V>())>
+operator||(U u, V v) METAL_ARG_UNIFORM(u, 1) METAL_ARG_UNIFORM(v, 2)
+{
+  return make_uniform<decltype(remove_uniform_t<U>() || remove_uniform_t<V>())>(remove_uniform_t<U>(u) || remove_uniform_t<V>(v));
+}
+
+template <typename U, typename V, typename = _binop_uniform_l_constraints_t<U, V, _is_convertible_to_bool>>
+constexpr METAL_FUNC decltype(remove_uniform_t<U>() || V())
+operator||(U u, V v)
+{
+  return remove_uniform_t<U>(u) || V(v);
+}
+
+template <typename U, typename V, typename = _binop_uniform_r_constraints_t<U, V, _is_convertible_to_bool>>
+constexpr METAL_FUNC decltype(U() || remove_uniform_t<V>())
+operator||(U u, V v)
+{
+  return U(u) || remove_uniform_t<V>(v);
+}
+
+// Unary logic operators.
+template <typename U, typename = _unop_uniform_constraints_t<U, _is_convertible_to_bool>>
+constexpr METAL_FUNC uniform<decltype(!remove_uniform_t<U>())>
+operator!(U u) METAL_ARG_UNIFORM(u, 1)
+{
+  return make_uniform<decltype(!remove_uniform_t<U>())>(!remove_uniform_t<U>(u));
+}
+
+// Binary bitwise operators.
+
+template <typename U, typename V, typename = _binop_uniform_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC uniform<decltype(remove_uniform_t<U>() & remove_uniform_t<V>())>
+operator&(U u, V v) METAL_ARG_UNIFORM(u, 1) METAL_ARG_UNIFORM(v, 2)
+{
+  return make_uniform<decltype(remove_uniform_t<U>() & remove_uniform_t<V>())>(remove_uniform_t<U>(u) & remove_uniform_t<V>(v));
+}
+
+template <typename U, typename V, typename = _binop_uniform_l_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC decltype(remove_uniform_t<U>() & V())
+operator&(U u, V v)
+{
+  return remove_uniform_t<U>(u) & V(v);
+}
+
+template <typename U, typename V, typename = _binop_uniform_r_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC decltype(U() & remove_uniform_t<V>())
+operator&(U u, V v)
+{
+  return U(u) & remove_uniform_t<V>(v);
+}
+
+
+template <typename U, typename V, typename = _binop_uniform_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC uniform<decltype(remove_uniform_t<U>() | remove_uniform_t<V>())>
+operator|(U u, V v) METAL_ARG_UNIFORM(u, 1) METAL_ARG_UNIFORM(v, 2)
+{
+  return make_uniform<decltype(remove_uniform_t<U>() | remove_uniform_t<V>())>(remove_uniform_t<U>(u) | remove_uniform_t<V>(v));
+}
+
+template <typename U, typename V, typename = _binop_uniform_l_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC decltype(remove_uniform_t<U>() | V())
+operator|(U u, V v)
+{
+  return remove_uniform_t<U>(u) | V(v);
+}
+
+template <typename U, typename V, typename = _binop_uniform_r_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC decltype(U() | remove_uniform_t<V>())
+operator|(U u, V v)
+{
+  return U(u) | remove_uniform_t<V>(v);
+}
+
+
+template <typename U, typename V, typename = _binop_uniform_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC uniform<decltype(remove_uniform_t<U>() ^ remove_uniform_t<V>())>
+operator^(U u, V v) METAL_ARG_UNIFORM(u, 1) METAL_ARG_UNIFORM(v, 2)
+{
+  return make_uniform<decltype(remove_uniform_t<U>() ^ remove_uniform_t<V>())>(remove_uniform_t<U>(u) ^ remove_uniform_t<V>(v));
+}
+
+template <typename U, typename V, typename = _binop_uniform_l_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC decltype(remove_uniform_t<U>() ^ V())
+operator^(U u, V v)
+{
+  return remove_uniform_t<U>(u) ^ V(v);
+}
+
+template <typename U, typename V, typename = _binop_uniform_r_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC decltype(U() ^ remove_uniform_t<V>())
+operator^(U u, V v)
+{
+  return U(u) ^ remove_uniform_t<V>(v);
+}
+
+
+// Unary bitwise operators.
+template <typename U, typename = _unop_uniform_constraints_t<U, is_integral>>
+constexpr METAL_FUNC uniform<decltype(~remove_uniform_t<U>())>
+operator~(U u)METAL_ARG_UNIFORM(u, 1)
+{
+  return make_uniform<decltype(~remove_uniform_t<U>())>(~remove_uniform_t<U>(u));
+}
+
+// Increment operators (thread address space).
+template <typename U, typename = _inc_dec_uniform_constraints_t<U>>
+constexpr METAL_FUNC thread U &operator++(thread U &u)
+{
+  u.__v = remove_uniform_t<U>(u) + remove_uniform_t<U>(1);
+  return u;
+}
+
+template <typename U, typename = _inc_dec_uniform_constraints_t<U>>
+constexpr METAL_FUNC U operator++(thread U &u, int)
+{
+  U res = u;
+  ++u;
+  return res;
+}
+
+template <typename U, typename = _inc_dec_uniform_constraints_t<U>>
+constexpr METAL_FUNC thread U &operator--(thread U &u)
+{
+  u.__v = remove_uniform_t<U>(u) - remove_uniform_t<U>(1);
+  return u;
+}
+
+template <typename U, typename = _inc_dec_uniform_constraints_t<U>>
+constexpr METAL_FUNC U operator--(thread U &u, int)
+{
+  U res = u;
+  --u;
+  return res;
+}
+
+// Compound assignment operators (thread address space).
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC thread U &operator+=(thread U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) + remove_uniform_t<V>(v);
+  return u;
+}
+
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC thread U &operator-=(thread U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) - remove_uniform_t<V>(v);
+  return u;
+}
+
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC thread U &operator*=(thread U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) * remove_uniform_t<V>(v);
+  return u;
+}
+
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC thread U &operator/=(thread U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) / remove_uniform_t<V>(v);
+  return u;
+}
+
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC thread U &operator%=(thread U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) % remove_uniform_t<V>(v);
+  return u;
+}
+
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC thread U &operator<<=(thread U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) << remove_uniform_t<V>(v);
+  return u;
+}
+
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC thread U &operator>>=(thread U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) >> remove_uniform_t<V>(v);
+  return u;
+}
+
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC thread U &operator&=(thread U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) & remove_uniform_t<V>(v);
+  return u;
+}
+
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC thread U &operator|=(thread U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) | remove_uniform_t<V>(v);
+  return u;
+}
+
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC thread U &operator^=(thread U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) ^ remove_uniform_t<V>(v);
+  return u;
+}
+
+// Increment operators (device address space).
+template <typename U, typename = _inc_dec_uniform_constraints_t<U>>
+constexpr METAL_FUNC device U &operator++(device U &u)
+{
+  u.__v = remove_uniform_t<U>(u) + remove_uniform_t<U>(1);
+  return u;
+}
+
+template <typename U, typename = _inc_dec_uniform_constraints_t<U>>
+constexpr METAL_FUNC U operator++(device U &u, int)
+{
+  U res = u;
+  ++u;
+  return res;
+}
+
+template <typename U, typename = _inc_dec_uniform_constraints_t<U>>
+constexpr METAL_FUNC device U &operator--(device U &u)
+{
+  u.__v = remove_uniform_t<U>(u) - remove_uniform_t<U>(1);
+  return u;
+}
+
+template <typename U, typename = _inc_dec_uniform_constraints_t<U>>
+constexpr METAL_FUNC U operator--(device U &u, int)
+{
+  U res = u;
+  --u;
+  return res;
+}
+
+// Compound assignment operators (device address space).
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC device U &operator+=(device U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) + remove_uniform_t<V>(v);
+  return u;
+}
+
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC device U &operator-=(device U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) - remove_uniform_t<V>(v);
+  return u;
+}
+
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC device U &operator*=(device U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) * remove_uniform_t<V>(v);
+  return u;
+}
+
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC device U &operator/=(device U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) / remove_uniform_t<V>(v);
+  return u;
+}
+
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC device U &operator%=(device U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) % remove_uniform_t<V>(v);
+  return u;
+}
+
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC device U &operator<<=(device U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) << remove_uniform_t<V>(v);
+  return u;
+}
+
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC device U &operator>>=(device U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) >> remove_uniform_t<V>(v);
+  return u;
+}
+
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC device U &operator&=(device U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) & remove_uniform_t<V>(v);
+  return u;
+}
+
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC device U &operator|=(device U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) | remove_uniform_t<V>(v);
+  return u;
+}
+
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC device U &operator^=(device U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) ^ remove_uniform_t<V>(v);
+  return u;
+}
+
+// Increment operators (threadgroup address space).
+template <typename U, typename = _inc_dec_uniform_constraints_t<U>>
+constexpr METAL_FUNC threadgroup U &operator++(threadgroup U &u)
+{
+  u.__v = remove_uniform_t<U>(u) + remove_uniform_t<U>(1);
+  return u;
+}
+
+template <typename U, typename = _inc_dec_uniform_constraints_t<U>>
+constexpr METAL_FUNC U operator++(threadgroup U &u, int)
+{
+  U res = u;
+  ++u;
+  return res;
+}
+
+template <typename U, typename = _inc_dec_uniform_constraints_t<U>>
+constexpr METAL_FUNC threadgroup U &operator--(threadgroup U &u)
+{
+  u.__v = remove_uniform_t<U>(u) - remove_uniform_t<U>(1);
+  return u;
+}
+
+template <typename U, typename = _inc_dec_uniform_constraints_t<U>>
+constexpr METAL_FUNC U operator--(threadgroup U &u, int)
+{
+  U res = u;
+  --u;
+  return res;
+}
+
+// Compound assignment operators (threadgroup address space).
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC threadgroup U &operator+=(threadgroup U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) + remove_uniform_t<V>(v);
+  return u;
+}
+
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC threadgroup U &operator-=(threadgroup U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) - remove_uniform_t<V>(v);
+  return u;
+}
+
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC threadgroup U &operator*=(threadgroup U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) * remove_uniform_t<V>(v);
+  return u;
+}
+
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_arithmetic>>
+constexpr METAL_FUNC threadgroup U &operator/=(threadgroup U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) / remove_uniform_t<V>(v);
+  return u;
+}
+
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC threadgroup U &operator%=(threadgroup U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) % remove_uniform_t<V>(v);
+  return u;
+}
+
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC threadgroup U &operator<<=(threadgroup U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) << remove_uniform_t<V>(v);
+  return u;
+}
+
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC threadgroup U &operator>>=(threadgroup U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) >> remove_uniform_t<V>(v);
+  return u;
+}
+
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC threadgroup U &operator&=(threadgroup U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) & remove_uniform_t<V>(v);
+  return u;
+}
+
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC threadgroup U &operator|=(threadgroup U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) | remove_uniform_t<V>(v);
+  return u;
+}
+
+template <typename U, typename V, typename = _op_assign_uniform_constraints_t<U, V, is_integral>>
+constexpr METAL_FUNC threadgroup U &operator^=(threadgroup U &u, V v) METAL_ARG_UNIFORM(v, 2)
+{
+  u.__v = remove_uniform_t<U>(u) ^ remove_uniform_t<V>(v);
+  return u;
+}
+
+}
+#pragma METAL internals : disable
+
+#endif
+
+#endif
