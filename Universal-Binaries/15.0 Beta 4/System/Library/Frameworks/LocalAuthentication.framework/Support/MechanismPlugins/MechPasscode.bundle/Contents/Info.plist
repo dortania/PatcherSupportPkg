@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>BuildMachineOSBuild</key>
+	<string>22A380021</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>MechPasscode</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.apple.LocalAuthentication.MechPasscode</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>MechPasscode</string>
+	<key>CFBundlePackageType</key>
+	<string>BNDL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleSupportedPlatforms</key>
+	<array>
+		<string>MacOSX</string>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>DTCompiler</key>
+	<string>com.apple.compilers.llvm.clang.1_0</string>
+	<key>DTPlatformBuild</key>
+	<string>24A5289h</string>
+	<key>DTPlatformName</key>
+	<string>macosx</string>
+	<key>DTPlatformVersion</key>
+	<string>15.0</string>
+	<key>DTSDKBuild</key>
+	<string>24A5289h</string>
+	<key>DTSDKName</key>
+	<string>macosx15.0.internal</string>
+	<key>DTXcode</key>
+	<string>1600</string>
+	<key>DTXcodeBuild</key>
+	<string>16A6170g</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>15.0</string>
+	<key>NSPrincipalClass</key>
+	<string>MechanismPasscode</string>
+</dict>
+</plist>
