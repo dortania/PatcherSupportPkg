@@ -31,6 +31,15 @@
 	</dict>
 	<key>files2</key>
 	<dict>
+		<key>MacOS/impostor.dylib</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			hyChYVgPyLlco14JCX7hWNjCHZk=
+			</data>
+			<key>requirement</key>
+			<string>cdhash H"8720a161580fc8b95ca35e09097ee158d8c21d99"</string>
+		</dict>
 		<key>Resources/GFX10Statistics-analysis.js</key>
 		<dict>
 			<key>hash2</key>

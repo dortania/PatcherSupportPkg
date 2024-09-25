@@ -3,34 +3,192 @@
 <plist version="1.0">
 <dict>
 	<key>files</key>
-	<dict/>
+	<dict>
+		<key>version.plist</key>
+		<data>
+		IWrOyfKjDkFgGXymiMABq9VEuCs=
+		</data>
+	</dict>
 	<key>files2</key>
-	<dict/>
+	<dict>
+		<key>PlugIns/AMDRadeonX6000HWLibs.kext</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			08FFA90iItSP0GoLJKJHj24SvNY=
+			</data>
+			<key>requirement</key>
+			<string>identifier "com.apple.kext.AMDRadeonX6000HWLibs" and anchor apple</string>
+		</dict>
+		<key>PlugIns/AMDRadeonX6100HWLibs.kext</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			URqdpudxt7KB1qacGX8GxiWJKt4=
+			</data>
+			<key>requirement</key>
+			<string>identifier "com.apple.kext.AMDRadeonX6100HWLibs" and anchor apple</string>
+		</dict>
+		<key>PlugIns/AMDRadeonX6200HWLibs.kext</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			vCoe7nfui3B5nr6WW1vKEZr5uAI=
+			</data>
+			<key>requirement</key>
+			<string>identifier "com.apple.kext.AMDRadeonX6200HWLibs" and anchor apple</string>
+		</dict>
+		<key>PlugIns/AMDRadeonX6300HWLibs.kext</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			nBN4iyVUwdQLSFatp3t4bqJ1T4w=
+			</data>
+			<key>requirement</key>
+			<string>identifier "com.apple.kext.AMDRadeonX6300HWLibs" and anchor apple</string>
+		</dict>
+		<key>PlugIns/AMDRadeonX6700HWLibs.kext</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			IAGYC6/N1QkwDkcBQPvd3ukyOXY=
+			</data>
+			<key>requirement</key>
+			<string>identifier "com.apple.kext.AMDRadeonX6700HWLibs" and anchor apple</string>
+		</dict>
+		<key>PlugIns/AMDRadeonX6800HWLibs.kext</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			FE3qeQwlbMshPpPqVz49gmUghBc=
+			</data>
+			<key>requirement</key>
+			<string>identifier "com.apple.kext.AMDRadeonX6800HWLibs" and anchor apple</string>
+		</dict>
+		<key>PlugIns/AMDRadeonX6810HWLibs.kext</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			agPeJEP7VlMWlfYU8XR95/qNXSQ=
+			</data>
+			<key>requirement</key>
+			<string>identifier "com.apple.kext.AMDRadeonX6810HWLibs" and anchor apple</string>
+		</dict>
+		<key>version.plist</key>
+		<dict>
+			<key>hash</key>
+			<data>
+			IWrOyfKjDkFgGXymiMABq9VEuCs=
+			</data>
+			<key>hash2</key>
+			<data>
+			LgYgdrOQYIi8Y68w5OeEger7paj8Bzmo6OINu0v2IV8=
+			</data>
+		</dict>
+	</dict>
 	<key>rules</key>
 	<dict>
-		<key>^PlugIns/</key>
+		<key>^Resources/</key>
+		<true/>
+		<key>^Resources/.*\.lproj/</key>
+		<dict>
+			<key>optional</key>
+			<true/>
+			<key>weight</key>
+			<real>1000</real>
+		</dict>
+		<key>^Resources/.*\.lproj/locversion.plist$</key>
 		<dict>
 			<key>omit</key>
 			<true/>
 			<key>weight</key>
-			<real>200</real>
+			<real>1100</real>
 		</dict>
+		<key>^Resources/Base\.lproj/</key>
+		<dict>
+			<key>weight</key>
+			<real>1010</real>
+		</dict>
+		<key>^version.plist$</key>
+		<true/>
 	</dict>
 	<key>rules2</key>
 	<dict>
+		<key>.*\.dSYM($|/)</key>
+		<dict>
+			<key>weight</key>
+			<real>11</real>
+		</dict>
+		<key>^(.*/)?\.DS_Store$</key>
+		<dict>
+			<key>omit</key>
+			<true/>
+			<key>weight</key>
+			<real>2000</real>
+		</dict>
 		<key>^(Frameworks|SharedFrameworks|PlugIns|Plug-ins|XPCServices|Helpers|MacOS|Library/(Automator|Spotlight|LoginItems))/</key>
 		<dict>
 			<key>nested</key>
 			<true/>
 			<key>weight</key>
-			<real>0.0</real>
+			<real>10</real>
 		</dict>
-		<key>^PlugIns/</key>
+		<key>^.*</key>
+		<true/>
+		<key>^Info\.plist$</key>
 		<dict>
 			<key>omit</key>
 			<true/>
 			<key>weight</key>
-			<real>200</real>
+			<real>20</real>
+		</dict>
+		<key>^PkgInfo$</key>
+		<dict>
+			<key>omit</key>
+			<true/>
+			<key>weight</key>
+			<real>20</real>
+		</dict>
+		<key>^Resources/</key>
+		<dict>
+			<key>weight</key>
+			<real>20</real>
+		</dict>
+		<key>^Resources/.*\.lproj/</key>
+		<dict>
+			<key>optional</key>
+			<true/>
+			<key>weight</key>
+			<real>1000</real>
+		</dict>
+		<key>^Resources/.*\.lproj/locversion.plist$</key>
+		<dict>
+			<key>omit</key>
+			<true/>
+			<key>weight</key>
+			<real>1100</real>
+		</dict>
+		<key>^Resources/Base\.lproj/</key>
+		<dict>
+			<key>weight</key>
+			<real>1010</real>
+		</dict>
+		<key>^[^/]+$</key>
+		<dict>
+			<key>nested</key>
+			<true/>
+			<key>weight</key>
+			<real>10</real>
+		</dict>
+		<key>^embedded\.provisionprofile$</key>
+		<dict>
+			<key>weight</key>
+			<real>20</real>
+		</dict>
+		<key>^version\.plist$</key>
+		<dict>
+			<key>weight</key>
+			<real>20</real>
 		</dict>
 	</dict>
 </dict>
