@@ -1,0 +1,2487 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Bottlenecks</key>
+	<dict>
+		<key>analysis_shaderALU_bound</key>
+		<dict>
+			<key>name</key>
+			<string>Shader ALU Bound</string>
+			<key>description</key>
+			<string>is shader ALU bound</string>
+		</dict>
+		<key>analysis_TextureSamplingInst_bound</key>
+		<dict>
+			<key>name</key>
+			<string>Texture Sampling Instructions Bound</string>
+			<key>description</key>
+			<string>is shader texture sampling instruction bound</string>
+		</dict>
+		<key>analysis_pixelRate_bound</key>
+		<dict>
+			<key>name</key>
+			<string>Pixel Rate Bound</string>
+			<key>description</key>
+			<string>is pixel rate bound</string>
+		</dict>
+		<key>analysis_primitiveRate_bound</key>
+		<dict>
+			<key>name</key>
+			<string>Primitive Rate Bound</string>
+			<key>description</key>
+			<string>is primitive rate bound</string>
+		</dict>
+		<key>analysis_memory_bound</key>
+		<dict>
+			<key>name</key>
+			<string>Memory Bandwidth Bound</string>
+			<key>description</key>
+			<string>is memory bandwidth bound</string>
+		</dict>
+	</dict>
+	<key>Version</key>
+	<string>1.0</string>
+	<key>Instruments</key>
+	<dict>
+		<key>DefaultSamplingInterval</key>
+		<integer>500</integer>
+		<key>Profiles</key>
+		<dict>
+			<key>Limiters1</key>
+			<dict>
+				<key>DerivedCounters</key>
+				<array>
+					<dict>
+						<key>Name</key>
+						<string>VSOccupancy</string>
+					</dict>
+					<dict>
+						<key>Name</key>
+						<string>PSOccupancy</string>
+					</dict>
+					<dict>
+						<key>Name</key>
+						<string>CSOccupancy</string>
+					</dict>
+					<dict>
+						<key>Name</key>
+						<string>LLCRead</string>
+					</dict>
+					<dict>
+						<key>Name</key>
+						<string>LLCWrite</string>
+					</dict>
+					<dict>
+						<key>Name</key>
+						<string>ALUutilization</string>
+					</dict>
+				</array>
+			</dict>
+		</dict>
+	</dict>
+	<key>DerivedCounters</key>
+	<dict>
+		<key>VSOccupancy</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>DerivedVSOccupancy</string>
+				<string>DerivedCPF</string>
+			</array>
+			<key>name</key>
+			<string>Vertex Shader Occupancy</string>
+			<key>description</key>
+			<string>Vertex Shader occupancy</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>PSOccupancy</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>DerivedPSOccupancy</string>
+				<string>DerivedCPF</string>
+			</array>
+			<key>name</key>
+			<string>Fragment Shader Occupancy</string>
+			<key>description</key>
+			<string>Fragment Shader occupancy</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>CSOccupancy</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>DerivedCSOccupancy</string>
+				<string>DerivedCSNOccupancy</string>
+				<string>DerivedCPF</string>
+			</array>
+			<key>name</key>
+			<string>Compute Shader Occupancy</string>
+			<key>description</key>
+			<string>Compute Shader occupancy</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>LLCRead</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>DerivedLLCRead</string>
+				<string>GpuTime</string>
+			</array>
+			<key>name</key>
+			<string>Last Level Cache Read</string>
+			<key>description</key>
+			<string>Last Level Cache Read # of Bytes</string>
+			<key>type</key>
+			<string>Rate</string>
+		</dict>
+		<key>LLCWrite</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>DerivedLLCWrite</string>
+				<string>GpuTime</string>
+			</array>
+			<key>name</key>
+			<string>Last Level Cache Written</string>
+			<key>description</key>
+			<string>Last Level Cache Write # of Bytes</string>
+			<key>type</key>
+			<string>Rate</string>
+		</dict>
+		<key>ALUutilization</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>DerivedWavesInFlight</string>
+				<string>DerivedALUActiveInst</string>
+				<string>DerivedALUThreadCycles</string>
+				<string>GpuTime</string>
+			</array>
+			<key>name</key>
+			<string>ALUutilization</string>
+			<key>description</key>
+			<string>Utilization of instructions in SIMD</string>
+			<key>type</key>
+			<string>Rate</string>
+		</dict>
+		<key>GPUTime</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>MTLStat_nSec</string>
+			</array>
+			<key>name</key>
+			<string>GPU Time</string>
+			<key>description</key>
+			<string>GPU Time in nSec</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>GPUBusy</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_GPU_Engine_Ticks</string>
+				<string>AMDStat_GPU_Engine_Busy_Ticks</string>
+			</array>
+			<key>name</key>
+			<string>GPU Busy %</string>
+			<key>description</key>
+			<string>Percentage of time GPU is doing work</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>GPUStall</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>GPUBusy</string>
+			</array>
+			<key>name</key>
+			<string>GPU Stall %</string>
+			<key>description</key>
+			<string>Percentage of time GPU is being stalled</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>ShaderCoreUtilization</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>MTLStatShaderCost</string>
+				<string>MTLStatComputeCost</string>
+			</array>
+			<key>name</key>
+			<string>Shader Core Utilization %</string>
+			<key>description</key>
+			<string>Percentage of time Shader core is doing work</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>ShaderCoreALUActive</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>MTLStatComputeCost</string>
+				<string>AMDStat_Shader_SALU_Cycles</string>
+				<string>AMDStat_Shader_VALU_Cycles</string>
+				<string>AMDStat_Compute_SALU_Insts</string>
+				<string>AMDStat_Compute_VALU_Inst_Cycles</string>
+				<string>AMDStat_GPU_Engine_Busy_Ticks</string>
+			</array>
+			<key>name</key>
+			<string>Shader Core ALU Active %</string>
+			<key>description</key>
+			<string>Percentage of time Shader core is doing actual work (ALU instructions) in total GPU time</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>ShaderCoreVertexALUActive</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Vertex_SALU_Insts</string>
+				<string>AMDStat_Vertex_VALU_Inst_Cycles</string>
+				<string>AMDStat_GPU_Engine_Busy_Ticks</string>
+			</array>
+			<key>name</key>
+			<string>ALU active % in Vertex Shader</string>
+			<key>description</key>
+			<string>Percentage of time shader core is running ALU instructions in vertex shader in total GPU time</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>ShaderCoreFragmentALUActive</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Fragment_SALU_Insts</string>
+				<string>AMDStat_Fragment_VALU_Inst_Cycles</string>
+				<string>AMDStat_GPU_Engine_Busy_Ticks</string>
+			</array>
+			<key>name</key>
+			<string>ALU active % in Fragment Shader</string>
+			<key>description</key>
+			<string>Percentage of time shader core is running ALU instructions in fragment shader in total GPU time</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>MemoryStallPerWavefrontCompute</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Compute_Wait_Inst_VMEM</string>
+				<string>AMDStat_Compute_WAIT_CNT_VMVS</string>
+				<string>AMDStat_Compute_Waves_Executed</string>
+				<string>AverageWavefrontLatencyCompute</string>
+			</array>
+			<key>name</key>
+			<string>Memory Stall % in Compute Shader Wavefronts</string>
+			<key>description</key>
+			<string>Percentage of time a compute shader wavefront is stalled by memory operation</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>MemoryStallPerWavefrontVertex</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Vertex_Wait_Inst_VMEM</string>
+				<string>AMDStat_Vertex_WAIT_CNT_VMVS</string>
+				<string>AMDStat_Vertex_Waves_Executed</string>
+				<string>AverageWavefrontLatencyVertex</string>
+			</array>
+			<key>name</key>
+			<string>Memory Stall % in Vertex Shader Wavefronts</string>
+			<key>description</key>
+			<string>Percentage of time a vertex shader wavefront is stalled by memory operation</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>MemoryStallPerWavefrontFragment</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Fragment_Wait_Inst_VMEM</string>
+				<string>AMDStat_Fragment_WAIT_CNT_VMVS</string>
+				<string>AMDStat_Fragment_Waves_Executed</string>
+				<string>AverageWavefrontLatencyFragment</string>
+			</array>
+			<key>name</key>
+			<string>Memory Stall % in Fragment Shader Wavefronts</string>
+			<key>description</key>
+			<string>Percentage of time a fragment shader wavefront is stalled by memory operation</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>AverageWavefrontLatencyCompute</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Compute_Accum_Prev_Cycles</string>
+				<string>AMDStat_Compute_Waves_Executed</string>
+			</array>
+			<key>name</key>
+			<string>Average latency of a Compute Shader Wavefront</string>
+			<key>description</key>
+			<string>Average cycles each Compute shader wavefront takes</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>AverageWavefrontLatencyVertex</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Vertex_Accum_Prev_Cycles</string>
+				<string>AMDStat_Vertex_Waves_Executed</string>
+			</array>
+			<key>name</key>
+			<string>Average latency of a Vertex Shader Wavefront</string>
+			<key>description</key>
+			<string>Average cycles each vertex shader wavefront takes</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>AverageWavefrontLatencyFragment</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Fragment_Accum_Prev_Cycles</string>
+				<string>AMDStat_Fragment_Waves_Executed</string>
+			</array>
+			<key>name</key>
+			<string>Average latency of a Fragment Shader Wavefront</string>
+			<key>description</key>
+			<string>Average cycles each fragment shader wavefront takes</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>AverageWavesInflightCompute</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Compute_Accum_Prev_Cycles</string>
+				<string>AMDStat_Compute_Busy_Cycles</string>
+			</array>
+			<key>name</key>
+			<string>Compute Shader Wavefront SIMD Occupancy</string>
+			<key>description</key>
+			<string>Average Number of Compute Shader Wavefront In Flight per SIMD</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>AverageWavesInflightVertex</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Vertex_Accum_Prev_Cycles</string>
+				<string>AMDStat_Vertex_Busy_Cycles</string>
+			</array>
+			<key>name</key>
+			<string>Vertex Shader Wavefront SIMD Occupancy</string>
+			<key>description</key>
+			<string>Average Number of Vertex Shader Wavefront In Flight per SIMD</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>AverageWavesInflightFragment</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Fragment_Accum_Prev_Cycles</string>
+				<string>AMDStat_Fragment_Busy_Cycles</string>
+			</array>
+			<key>name</key>
+			<string>Fragment Shader Wavefront SIMD Occupancy</string>
+			<key>description</key>
+			<string>Average Number of Fragment Shader Wavefront In Flight per SIMD</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>ShaderCoreStall</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>ShaderCoreALUActive</string>
+				<string>AMDStat_GPU_Engine_Busy_Ticks</string>
+				<string>AMDStat_Shader_VMEM_Read_Cycles</string>
+				<string>AMDStat_Shader_VMEM_Write_Cycles</string>
+				<string>AMDStat_Shader_EXP_Cycles</string>
+				<string>AMDStat_Shader_GDS_Cycles</string>
+				<string>MTLStatShaderCost</string>
+			</array>
+			<key>name</key>
+			<string>% of Stall Time in Shader Core in total GPU time</string>
+			<key>description</key>
+			<string>Percentage of time shader core is being stalled in total GPU time</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>SamplerBusy</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Sampler_Busy</string>
+			</array>
+			<key>name</key>
+			<string>% of Busy Time in Sampler</string>
+			<key>description</key>
+			<string>Percentage of time Sampler is busy</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>L2CacheThroughput</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_L2_Cache_Request</string>
+				<string>AMDStat_L2_Busy</string>
+				<string>AMDStat_GPU_Engine_Busy_Ticks</string>
+			</array>
+			<key>name</key>
+			<string>L2 Cache Throughput</string>
+			<key>description</key>
+			<string>Number of requests (cache lines) being sent to L2 Cache per GPU clock</string>
+			<key>type</key>
+			<string>Rate</string>
+		</dict>
+		<key>L2CacheDramBandwidth</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_L2_Write_Size</string>
+				<string>AMDStat_L2_Read_Size</string>
+				<string>AMDStat_L2_Busy</string>
+				<string>AMDStat_GPU_Engine_Busy_Ticks</string>
+			</array>
+			<key>name</key>
+			<string>L2 Cache Dram Bandwidth</string>
+			<key>description</key>
+			<string>Number of GB being accessed in memory by L2 cache per second</string>
+			<key>type</key>
+			<string>Rate</string>
+		</dict>
+		<key>VSInvocation</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_DS_Invocations</string>
+				<string>AMDStat_VS_Invocations</string>
+			</array>
+			<key>name</key>
+			<string>Vertex Shader Invocations</string>
+			<key>description</key>
+			<string>Number of times vertex shader is invoked</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>CSInvocation</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_CS_Invocations</string>
+				<string>AMDStat_VS_Invocations</string>
+				<string>AMDStat_PS_Invocations</string>
+			</array>
+			<key>name</key>
+			<string>Compute Shader Invocations</string>
+			<key>description</key>
+			<string>Number of times compute shader is invoked</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>PSInvocation</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_PS_Invocations</string>
+                                <string>AMDStat_VS_Invocations</string>
+			</array>
+			<key>name</key>
+			<string>Fragment Shader Invocations</string>
+			<key>description</key>
+			<string>Number of times fragment shader is invoked</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>VertexCost</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Vertex_Accum_Prev_Cycles</string>
+				<string>AMDStat_Fragment_Accum_Prev_Cycles</string>
+			</array>
+			<key>name</key>
+			<string>Vertex Shader Cost</string>
+			<key>description</key>
+			<string>% of total compute unit cycles spend running vertex shader</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>FragmentCost</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Vertex_Accum_Prev_Cycles</string>
+				<string>AMDStat_Fragment_Accum_Prev_Cycles</string>
+			</array>
+			<key>name</key>
+			<string>Fragment Shader Cost</string>
+			<key>description</key>
+			<string>% of total compute unit cycles spend running fragment shader</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>VertexDuration</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>MTLStatFragmentCost</string>
+				<string>MTLStatVertexCost</string>
+			</array>
+			<key>name</key>
+			<string>Vertex Shader Duration</string>
+			<key>description</key>
+			<string>% of GPU busy time the vertex shader is in flight</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>FragmentDuration</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>MTLStatFragmentCost</string>
+				<string>MTLStatVertexCost</string>
+			</array>
+			<key>name</key>
+			<string>Fragment Shader Duration</string>
+			<key>description</key>
+			<string>% of GPU busy time the fragment shader is in flight</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>PixelToVertexRatio</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_GE_Vertices</string>
+				<string>PixelsRasterized</string>
+			</array>
+			<key>name</key>
+			<string>Pixel To Vertex Ratio</string>
+			<key>description</key>
+			<string>Number of pixels per vertex</string>
+			<key>type</key>
+			<string>Rate</string>
+		</dict>
+		<key>PixelPerTriangle</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>PrimitivesSubmitted</string>
+				<string>PixelsRasterized</string>
+			</array>
+			<key>name</key>
+			<string>Pixel Per Triangle</string>
+			<key>description</key>
+			<string>Number of pixels per triangle</string>
+			<key>type</key>
+			<string>Rate</string>
+		</dict>
+		<key>VerticesSubmitted</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_HS_Invocations</string>
+				<string>AMDStat_GE_Vertices</string>
+				<string>AMDStat_VS_Vertices_In</string>
+			</array>
+			<key>name</key>
+			<string>Vertices Submitted</string>
+			<key>description</key>
+			<string>Number of vertices being submitted to input assembly</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>NumberOfPatchesSubmitted</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_HS_Invocations</string>
+				<string>AMDStat_GE_Vertices</string>
+			</array>
+			<key>name</key>
+			<string>Number of Patches Submitted</string>
+			<key>description</key>
+			<string>Number of patches being submitted to input assembly</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>VerticesReused</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Vertices_Reuse</string>
+				<string>AMDStat_GE_Vertices</string>
+				<string>AMDStat_VS_Invocations</string>
+			</array>
+			<key>name</key>
+			<string>Number of Vertices Reused</string>
+			<key>description</key>
+			<string>Number of number of vertices being reused in the total number of submitted vertices</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>VerticesReusedPercentage</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>VerticesReused</string>
+				<string>AMDStat_GE_Vertices</string>
+			</array>
+			<key>name</key>
+			<string>Percentage of Vertices Reused</string>
+			<key>description</key>
+			<string>Percentage of number of vertices being reused in the total number of submitted vertices</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>AverageTessFactor</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_HS_Invocations</string>
+				<string>AMDStat_VS_Vertices_In</string>
+				<string>AMDStat_GE_Vertices</string>
+			</array>
+			<key>name</key>
+			<string>Average Tessellation Factor</string>
+			<key>description</key>
+			<string>Average of actually calculated tessellation factor</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>VerticesRendered</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_VS_Vertices_In</string>
+			</array>
+			<key>name</key>
+			<string>Number of Vertices Rendered</string>
+			<key>description</key>
+			<string>Number of number of vertices being passed to shader core in total number of vertices submitted</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>VerticesRenderedPercentage</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_VS_Vertices_In</string>
+				<string>VerticesSubmitted</string>
+			</array>
+			<key>name</key>
+			<string>Percentage of Vertices Rendered</string>
+			<key>description</key>
+			<string>Percentage of number of vertices being passed to shader core in total number of vertices submitted</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>PrimitivesSubmitted</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_HS_Invocations</string>
+				<string>AMDStat_C_Invocations</string>
+				<string>AMDStat_GE_Primitives</string>
+			</array>
+			<key>name</key>
+			<string>Primitives Submitted</string>
+			<key>description</key>
+			<string>Number of primitives gathered by input assembly</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>PrimitivesRendered</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_C_Primitives</string>
+			</array>
+			<key>name</key>
+			<string>Number of Primitives Rendered</string>
+			<key>description</key>
+			<string>Number of Number of primitives actually rendered in total number of primitives submitted</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>PrimitivesRenderedPercentage</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_C_Primitives</string>
+				<string>PrimitivesSubmitted</string>
+			</array>
+			<key>name</key>
+			<string>Percentage of Primitives Rendered</string>
+			<key>description</key>
+			<string>Percentage of Number of primitives actually rendered in total number of primitives submitted</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>NumberOfCulledPrimitives</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Culled_Prims</string>
+			</array>
+			<key>name</key>
+			<string>Number of Primitives Culled</string>
+			<key>description</key>
+			<string>Number of Number of primitives being culled in total number of primitives submitted</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>NumberOfCulledPrimitivesPercentage</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Culled_Prims</string>
+				<string>PrimitivesSubmitted</string>
+			</array>
+			<key>name</key>
+			<string>Percentage of Primitives Culled</string>
+			<key>description</key>
+			<string>Percentage of Number of primitives being culled in total number of primitives submitted</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>NumberOfClippedPrimitives</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Clipped_Prims</string>
+			</array>
+			<key>name</key>
+			<string>Number of Primitives Clipped</string>
+			<key>description</key>
+			<string>Number of Number of primitives being clipped in total number of primitives submitted</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>NumberOfClippedPrimitivesPercentage</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Clipped_Prims</string>
+				<string>PrimitivesSubmitted</string>
+			</array>
+			<key>name</key>
+			<string>Percentage of Primitives Clipped</string>
+			<key>description</key>
+			<string>Percentage of Number of primitives being clipped in total number of primitives submitted</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>HierarchicalZTotalTilesCount</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_HiZTiles_Total_Count</string>
+			</array>
+			<key>name</key>
+			<string>Hierarchical ZTotal Tiles Count</string>
+			<key>description</key>
+			<string>Number of tiles sent to hierarchical Z test</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>HierarchicalZFailPercentage</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_HiZTiles_Culled_Count</string>
+				<string>AMDStat_HiZTiles_Total_Count</string>
+			</array>
+			<key>name</key>
+			<string>Percentage of Hierarchical Z Fail Count</string>
+			<key>description</key>
+			<string>Percentage of number of tiles that fails hierarchical Z test in the total number of tiles sent to HiZ test</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>PreZPassSampleCount</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_PreZ_Samples_PassingZ</string>
+			</array>
+			<key>name</key>
+			<string>PreZ Z test Pass Sample Count</string>
+			<key>description</key>
+			<string>Number of samples that pass preZ Z test</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>PreZFailSampleCount</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_PreZ_Samples_FailingZ</string>
+			</array>
+			<key>name</key>
+			<string>PreZ Z test Fail Count</string>
+			<key>description</key>
+			<string>Number of samples that fail preZ Z test</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>PreZStencilFailSampleCount</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_PreZ_Samples_FailingS</string>
+			</array>
+			<key>name</key>
+			<string>PreZ Stencil Test Fail SampleCount</string>
+			<key>description</key>
+			<string>Number of samples that fail preZ stencil test</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>PostZPassSampleCount</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_PostZ_Samples_PassingZ</string>
+			</array>
+			<key>name</key>
+			<string>PostZ Z test Pass Sample Count</string>
+			<key>description</key>
+			<string>Number of samples that pass postZ Z test</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>PostZFailSampleCount</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_PostZ_Samples_FailingZ</string>
+			</array>
+			<key>name</key>
+			<string>PostZ Z test Fail Sample Count</string>
+			<key>description</key>
+			<string>Number of samples that fail postZ Z test</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>PostZStencilFailSampleCount</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_PostZ_Samples_FailingS</string>
+			</array>
+			<key>name</key>
+			<string>PostZ Stencil test Fail Sample Count</string>
+			<key>description</key>
+			<string>Number of samples that fail postZ stencil test</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>PreZFailPercentage</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_PreZ_Quads_Count</string>
+				<string>AMDStat_FS_Quads_Count</string>
+				<string>AMDStat_PreHiZ_Total_Quads_Count</string>
+			</array>
+			<key>name</key>
+			<string>Fail % in PreZ Z and Stencil test</string>
+			<key>description</key>
+			<string>Percentage of pixels that failed preZ Z and stencil test in total number of rasterized pixels</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>PostZFailPercentage</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_PostZ_Samples_FailingZ</string>
+				<string>AMDStat_PostZ_Samples_FailingS</string>
+				<string>AMDStat_PostZ_Samples_PassingZ</string>
+				<string>AMDStat_PreZ_Quads_Count</string>
+				<string>AMDStat_PostFS_Pixels</string>
+				<string>AMDStat_PreHiZ_Total_Quads_Count</string>
+			</array>
+			<key>name</key>
+			<string>Fail % in PostZ Z and Stencil test</string>
+			<key>description</key>
+			<string>Percentage of pixels that failed postZ Z and stencil test in total number of rasterized pixels</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>PixelsRasterized</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_PreHiZ_Total_Quads_Count</string>
+			</array>
+			<key>name</key>
+			<string>Pixels Rasterized</string>
+			<key>description</key>
+			<string>Total number of pixels rasterized</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>PixelsDrawn</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Pixels_Drawn</string>
+				<string>NumMRT</string>
+			</array>
+			<key>name</key>
+			<string>Pixels Drawn</string>
+			<key>description</key>
+			<string>Number of pixels written to color buffer</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>PixelsDrawnPercentage</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>NumMRT</string>
+				<string>AMDStat_Quads_Drawn</string>
+				<string>AMDStat_PreHiZ_Total_Quads_Count</string>
+			</array>
+			<key>name</key>
+			<string>% of Pixels Drawn</string>
+			<key>description</key>
+			<string>Percentage of number of pixels written to color buffer in total number of rasterized pixels</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>FragmentsDrawn</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>PixelsDrawn</string>
+				<string>AMDStat_Quads_Drawn</string>
+				<string>AMDStat_Quad_Fragments_Drawn</string>
+				<string>NumMRT</string>
+			</array>
+			<key>name</key>
+			<string>Fragments Drawn</string>
+			<key>description</key>
+			<string>Number of fragments written to color buffer</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>PixelsDiscardedPercentage</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_PS_Invocations</string>
+				<string>AMDStat_PostFS_Pixels</string>
+				<string>AMDStat_PreHiZ_Total_Quads_Count</string>
+			</array>
+			<key>name</key>
+			<string>% of Pixels Discarded in Shader</string>
+			<key>description</key>
+			<string>Percentage of number of pixels being discarded in shader in total number of pixels rasterized</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>PixelRate</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Pixels_Drawn</string>
+				<string>AMDStat_CBDrawn_Busy</string>
+				<string>AMDStat_GPU_Engine_Busy_Ticks</string>
+			</array>
+			<key>name</key>
+			<string>Pixel Rate</string>
+			<key>description</key>
+			<string>Number of pixels being rendered per GPU clock</string>
+			<key>type</key>
+			<string>Rate</string>
+		</dict>
+		<key>ALUInstructionPerInvocationCompute</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Compute_Waves_Executed</string>
+				<string>AMDStat_Compute_SALU_Insts</string>
+				<string>AMDStat_Compute_VALU_Insts</string>
+			</array>
+			<key>name</key>
+			<string>ALU Instructions Executed Per Compute Shader Invocation</string>
+			<key>description</key>
+			<string>Total number of ALU instructions executed in each compute shader invocation</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>ALUInstructionPerInvocationVertex</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Vertex_SALU_Insts</string>
+				<string>AMDStat_Vertex_Waves_Executed</string>
+				<string>AMDStat_Vertex_VALU_Insts</string>
+			</array>
+			<key>name</key>
+			<string>ALU Instructions Executed Per Vertex Shader Invocation</string>
+			<key>description</key>
+			<string>Total number of ALU instructions executed in each vertex shader invocation</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>ALUInstructionPerInvocationFragment</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Fragment_Waves_Executed</string>
+				<string>AMDStat_Fragment_SALU_Insts</string>
+				<string>AMDStat_Fragment_VALU_Insts</string>
+			</array>
+			<key>name</key>
+			<string>ALU Instructions Executed Per Fragment Shader Invocation</string>
+			<key>description</key>
+			<string>Total number of ALU instructions executed in each fragment shader invocation</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>MemInstructionPerInvocationCompute</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Compute_Waves_Executed</string>
+				<string>AMDStat_Compute_VMEM_Write_Cycles</string>
+				<string>AMDStat_Compute_VMEM_Read_Cycles</string>
+				<string>AMDStat_Compute_SMEM_Insts</string>
+			</array>
+			<key>name</key>
+			<string>Memory Instructions Executed Per Compute Shader Invocation</string>
+			<key>description</key>
+			<string>Total number of memory instructions executed in each compute shader invocation</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>MemInstructionPerInvocationVertex</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Vertex_VMEM_Write_Cycles</string>
+				<string>AMDStat_Vertex_Waves_Executed</string>
+				<string>AMDStat_Vertex_VMEM_Read_Cycles</string>
+				<string>AMDStat_Vertex_SMEM_Insts</string>
+			</array>
+			<key>name</key>
+			<string>Memory Instructions Executed Per Vertex Shader Invocation</string>
+			<key>description</key>
+			<string>Total number of memory instructions executed in each vertex shader invocation</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>MemInstructionPerInvocationFragment</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Fragment_Waves_Executed</string>
+				<string>AMDStat_Fragment_VMEM_Write_Cycles</string>
+				<string>AMDStat_Fragment_VMEM_Read_Cycles</string>
+				<string>AMDStat_Fragment_SMEM_Insts</string>
+			</array>
+			<key>name</key>
+			<string>Memory Instructions Executed Per Fragment Shader Invocation</string>
+			<key>description</key>
+			<string>Total number of memory Iinstructions executed in each fragment shader invocation</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>ControlInstructionPerInvocationCompute</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Compute_Waves_Executed</string>
+				<string>AMDStat_Compute_Branch_Insts</string>
+			</array>
+			<key>name</key>
+			<string>Control Instructions Executed Per Compute Shader Invocation</string>
+			<key>description</key>
+			<string>Total number of control instructions executed in each compute shader invocation</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>ControlInstructionPerInvocationVertex</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Vertex_Waves_Executed</string>
+				<string>AMDStat_Vertex_Branch_Insts</string>
+			</array>
+			<key>name</key>
+			<string>Control Instructions Executed Per Vertex Shader Invocation</string>
+			<key>description</key>
+			<string>Total number of control instructions executed in each vertex shader invocation</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>ControlInstructionPerInvocationFragment</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Fragment_Waves_Executed</string>
+				<string>AMDStat_Fragment_Branch_Insts</string>
+			</array>
+			<key>name</key>
+			<string>Control Instructions Executed Per Fragment Shader Invocation</string>
+			<key>description</key>
+			<string>Total number of control instructions executed in each fragment shader invocation</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>ALUToMemRatioCompute</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>ALUInstructionPerInvocationCompute</string>
+				<string>MemInstructionPerInvocationCompute</string>
+			</array>
+			<key>name</key>
+			<string>ALU to Memory Ratio in Compute Shader</string>
+			<key>description</key>
+			<string>Number of ALU instructions per memory instruction in compute shader</string>
+			<key>type</key>
+			<string>Rate</string>
+		</dict>
+		<key>ALUToMemRatioVertex</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>ALUInstructionPerInvocationVertex</string>
+				<string>MemInstructionPerInvocationVertex</string>
+			</array>
+			<key>name</key>
+			<string>ALU to Memory Ratio in Vertex Shader</string>
+			<key>description</key>
+			<string>Number of ALU instructions per memory instruction in vertex shader</string>
+			<key>type</key>
+			<string>Rate</string>
+		</dict>
+		<key>ALUToMemRatioFragment</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>ALUInstructionPerInvocationFragment</string>
+				<string>MemInstructionPerInvocationFragment</string>
+			</array>
+			<key>name</key>
+			<string>ALU to Memory Ratio in Fragment Shader</string>
+			<key>description</key>
+			<string>Number of ALU instructions per memory instruction in fragment shader</string>
+			<key>type</key>
+			<string>Rate</string>
+		</dict>
+		<key>LdsStallPerWavefrontCompute</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Compute_WAIT_CNT_LGKM</string>
+				<string>AMDStat_Compute_LDS_Wait</string>
+				<string>AMDStat_Compute_Waves_Executed</string>
+				<string>AverageWavefrontLatencyCompute</string>
+			</array>
+			<key>name</key>
+			<string>% of LDS Stall in a Compute Wavefront</string>
+			<key>description</key>
+			<string>Percentage of a compute shader wavefront being stalled by LDS access</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>LdsStallPerWavefrontVertex</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Vertex_LDS_Wait</string>
+				<string>AMDStat_Vertex_WAIT_CNT_LGKM</string>
+				<string>AMDStat_Vertex_Waves_Executed</string>
+				<string>AverageWavefrontLatencyVertex</string>
+			</array>
+			<key>name</key>
+			<string>% of LDS Stall in a Vertex Wavefront</string>
+			<key>description</key>
+			<string>Percentage of a vertex shader wavefront being stalled by LDS access</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>LdsStallPerWavefrontFragment</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Fragment_LDS_Wait</string>
+				<string>AMDStat_Fragment_WAIT_CNT_LGKM</string>
+				<string>AMDStat_Fragment_Waves_Executed</string>
+				<string>AverageWavefrontLatencyFragment</string>
+			</array>
+			<key>name</key>
+			<string>% of LDS Stall in a Fragment Wavefront</string>
+			<key>description</key>
+			<string>Percentage of a fragment wavefront being stalled by LDS access</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>ROPStall</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_ROP_Stalled_Ticks</string>
+				<string>AMDStat_GPU_Engine_Busy_Ticks</string>
+			</array>
+			<key>name</key>
+			<string>ROP Stall</string>
+			<key>description</key>
+			<string>Percentage of GPU busy time being stalled by ROP</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>ExportStallPerWavefrontVertex</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Vertex_Wait_Export_Alloc</string>
+				<string>AMDStat_Vertex_WAIT_CNT_EXP</string>
+				<string>AMDStat_Vertex_Waves_Executed</string>
+				<string>AverageWavefrontLatencyVertex</string>
+			</array>
+			<key>name</key>
+			<string>Export Stall % in Vertex Shader Wavefronts</string>
+			<key>description</key>
+			<string>Percentage of time a vertex shader wavefront is stalled by export instructions</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>ExportStallPerWavefrontFragment</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Fragment_Wait_Export_Alloc</string>
+				<string>AMDStat_Fragment_WAIT_CNT_EXP</string>
+				<string>AMDStat_Fragment_Waves_Executed</string>
+				<string>AverageWavefrontLatencyFragment</string>
+			</array>
+			<key>name</key>
+			<string>Export Stall % in Fragment Shader Wavefronts</string>
+			<key>description</key>
+			<string>Percentage of time a fragment shader wavefront is stalled by export instructions</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>ZeroAreaCullPrims</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_ZeroArea_Culled_Prims</string>
+			</array>
+			<key>name</key>
+			<string>Number of Zero Area Culled Primitives</string>
+			<key>description</key>
+			<string>Number of number of primitives being culled due to having zero area coverage in total number of primitives submitted</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>ZeroAreaCullPrimsPercentage</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_ZeroArea_Culled_Prims</string>
+				<string>PrimitivesSubmitted</string>
+			</array>
+			<key>name</key>
+			<string>Percentage of Zero Area Culled Primitives</string>
+			<key>description</key>
+			<string>Percentage of number of primitives being culled due to having zero area coverage in total number of primitives submitted</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>ClipperCullPrims</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Clipping_Culled_Prims</string>
+			</array>
+			<key>name</key>
+			<string>Number of Clipper Culled Primitives</string>
+			<key>description</key>
+			<string>Number of number of primitives being culled by clipper in total number of primitives submitted</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>ClipperCullPrimsPercentage</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Clipping_Culled_Prims</string>
+				<string>PrimitivesSubmitted</string>
+			</array>
+			<key>name</key>
+			<string>Percentage of Clipper Culled Primitives</string>
+			<key>description</key>
+			<string>Percentage of number of primitives being culled by clipper in total number of primitives submitted</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>MemUnitBusy</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_TexUnit_Busy</string>
+				<string>AMDStat_GPU_Engine_Busy_Ticks</string>
+			</array>
+			<key>name</key>
+			<string>Memory Unit Stall</string>
+			<key>description</key>
+			<string>Percentage of GPUTime the memory unit is active</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>MemUnitBusyCycles</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_TexUnit_Busy_Ticks</string>
+			</array>
+			<key>name</key>
+			<string>Memory Unit Busy Cycles</string>
+			<key>description</key>
+			<string>Number of GPU cycles the memory unit is active</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>MemUnitStalled</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_TexUnit_Stall</string>
+				<string>AMDStat_GPU_Engine_Busy_Ticks</string>
+			</array>
+			<key>name</key>
+			<string>Memory Unit Stall Cycles</string>
+			<key>description</key>
+			<string>The percentage of GPUTime the memory unit is stalled</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>MemUnitStalledCycles</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_TexUnit_Stalled_Ticks</string>
+			</array>
+			<key>name</key>
+			<string>Memory Unit Stall Cycles</string>
+			<key>description</key>
+			<string>Number of GPU cycles the memory unit is stalled</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>WriteUnitStalled</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_L2_Write_Unit_Stalled</string>
+				<string>AMDStat_GPU_Engine_Busy_Ticks</string>
+			</array>
+			<key>name</key>
+			<string>Write Unit Stall Cycles</string>
+			<key>description</key>
+			<string>The percentage of GPUTime the write unit is stalled</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>WriteUnitStalledCycles</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_L2_Write_Unit_Stalled</string>
+			</array>
+			<key>name</key>
+			<string>Write Unit Stall Cycles</string>
+			<key>description</key>
+			<string>Number of GPU cycles the write unit is stalled</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>LocalVidMemBytes</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_LocalVidMemBytes</string>
+			</array>
+			<key>name</key>
+			<string>Write Unit Stall Cycles</string>
+			<key>description</key>
+			<string>Number of GPU cycles the write unit is stalled</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>XGMIBytes</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_XGMIBytes</string>
+			</array>
+			<key>name</key>
+			<string>Write Unit Stall Cycles</string>
+			<key>description</key>
+			<string>Number of GPU cycles the write unit is stalled</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>PcieBytes</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_PcieBytes</string>
+			</array>
+			<key>name</key>
+			<string>PCIEbytes</string>
+			<key>description</key>
+			<string>Number of GPU cycles the write unit is stalled</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>TextureUnitStall</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_TexUnit_Stall</string>
+			</array>
+			<key>name</key>
+			<string>Texture Unit Stall</string>
+			<key>description</key>
+			<string>Percentage of GPU busy time the texture unit is stalled</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>TextureUnitBusy</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_TexUnit_Busy</string>
+			</array>
+			<key>name</key>
+			<string>Texture Unit Busy</string>
+			<key>description</key>
+			<string>Percentage of GPU busy time the texture unit is busy</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>TextureCacheMissRate</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_TextureCache_Hit</string>
+				<string>AMDStat_TextureCache_Miss</string>
+			</array>
+			<key>name</key>
+			<string>Texture Cache Miss Rate</string>
+			<key>description</key>
+			<string>Percentage of time Texture Cache access is a Miss</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>L0CacheHitRate</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_L0_Cache_Request</string>
+				<string>AMDStat_L0_Cache_Miss</string>
+			</array>
+			<key>name</key>
+			<string>L0 Cache Hit Rate</string>
+			<key>description</key>
+			<string>Percentage of time L0 Cache access is a Hit</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>L0CacheHitCount</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_L0_Cache_Request</string>
+				<string>AMDStat_L0_Cache_Miss</string>
+			</array>
+			<key>name</key>
+			<string>L0 Cache Hit Count</string>
+			<key>description</key>
+			<string>Count of L0 Cache Hits</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>L0CacheMissCount</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_L0_Cache_Miss</string>
+			</array>
+			<key>name</key>
+			<string>L0 Cache Miss Count</string>
+			<key>description</key>
+			<string>Count of L0 Cache Misses</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>L1CacheHitRate</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_L1_Cache_Miss</string>
+				<string>AMDStat_L1_Cache_Request</string>
+			</array>
+			<key>name</key>
+			<string>L1 Cache Hit Rate</string>
+			<key>description</key>
+			<string>Percentage of time L1 Cache access is a Hit</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>L1CacheHitCount</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_L1_Cache_Miss</string>
+				<string>AMDStat_L1_Cache_Request</string>
+			</array>
+			<key>name</key>
+			<string>L1 Cache Hit Count</string>
+			<key>description</key>
+			<string>L1 Cache Hit Count</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>L1CacheMissCount</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_L1_Cache_Miss</string>
+			</array>
+			<key>name</key>
+			<string>L1 Cache Miss Count</string>
+			<key>description</key>
+			<string>L1 Cache Miss Count</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>L2CacheHitRate</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_L2_Cache_Miss</string>
+				<string>AMDStat_L2_Cache_Request</string>
+			</array>
+			<key>name</key>
+			<string>L2 Cache Hit Rate</string>
+			<key>description</key>
+			<string>Percentage of time L2 Cache access is a Hit</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>L2CacheMissRate</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_L2_Cache_Miss</string>
+				<string>AMDStat_L2_Cache_Request</string>
+			</array>
+			<key>name</key>
+			<string>L2 Cache Miss Rate</string>
+			<key>description</key>
+			<string>Percentage of time L2 Cache access is a Miss</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>L2CacheHitCount</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_L2_Cache_Miss</string>
+				<string>AMDStat_L2_Cache_Request</string>
+			</array>
+			<key>name</key>
+			<string>L2 Cache Hit Count</string>
+			<key>description</key>
+			<string>Count of L2 Cache access is a Hit</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>L2CacheMissCount</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_L2_Cache_Miss</string>
+			</array>
+			<key>name</key>
+			<string>L2 Cache Miss Count</string>
+			<key>description</key>
+			<string>Count of L2 Cache access is a Miss</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>FetchSize</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Tex_Fetch_Size_32B</string>
+				<string>AMDStat_Tex_Fetch_Size_64B</string>
+				<string>AMDStat_Tex_Fetch_Size_96B</string>
+				<string>AMDStat_Tex_Fetch_Size_128B</string>
+			</array>
+			<key>name</key>
+			<string>FetchSize</string>
+			<key>description</key>
+			<string>Number of total bytes fetched from the video memory</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>WriteSize</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_L2_Write_Size</string>
+				<string>AMDStat_Tex_Write_Size</string>
+			</array>
+			<key>name</key>
+			<string>WriteSize</string>
+			<key>description</key>
+			<string>Number of total bytes written to the video memory</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>VertexMemoryFetchLatency</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_GE_MemRead_Bin0</string>
+				<string>AMDStat_GE_MemRead_Bin1</string>
+				<string>AMDStat_GE_MemRead_Bin2</string>
+				<string>AMDStat_GE_MemRead_Bin3</string>
+				<string>AMDStat_GE_MemRead_Bin4</string>
+				<string>AMDStat_GE_MemRead_Bin5</string>
+				<string>AMDStat_GE_MemRead_Bin6</string>
+				<string>AMDStat_GE_MemRead_Bin7</string>
+			</array>
+			<key>name</key>
+			<string>Vertex Memory Fetch Latency</string>
+			<key>description</key>
+			<string>Average latency of vertex memory fetch in number of GPU clocks</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>NumMRT</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_PostFS_Pixels</string>
+				<string>AMDStat_PostFS_Exports</string>
+			</array>
+			<key>name</key>
+			<string>Number of MRT</string>
+			<key>description</key>
+			<string>Number of MRT being used</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>PrimitiveRate</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_FrontEnd_Busy_SE0PA0</string>
+				<string>AMDStat_FrontEnd_Busy_SE0PA1</string>
+				<string>AMDStat_FrontEnd_Busy_SE1PA0</string>
+				<string>AMDStat_FrontEnd_Busy_SE1PA1</string>
+				<string>AMDStat_FrontEnd_Busy_SE2PA0</string>
+				<string>AMDStat_FrontEnd_Busy_SE2PA1</string>
+				<string>AMDStat_FrontEnd_Busy_SE3PA0</string>
+				<string>AMDStat_FrontEnd_Busy_SE3PA1</string>
+				<string>AMDStat_FrontEnd_Stall_SE0PA0</string>
+				<string>AMDStat_FrontEnd_Stall_SE0PA1</string>
+				<string>AMDStat_FrontEnd_Stall_SE1PA0</string>
+				<string>AMDStat_FrontEnd_Stall_SE1PA1</string>
+				<string>AMDStat_FrontEnd_Stall_SE2PA0</string>
+				<string>AMDStat_FrontEnd_Stall_SE2PA1</string>
+				<string>AMDStat_FrontEnd_Stall_SE3PA0</string>
+				<string>AMDStat_FrontEnd_Stall_SE3PA1</string>
+				<string>AMDStat_FrontEnd_StarvedBusy_SE0PA0</string>
+				<string>AMDStat_FrontEnd_StarvedBusy_SE0PA1</string>
+				<string>AMDStat_FrontEnd_StarvedBusy_SE1PA0</string>
+				<string>AMDStat_FrontEnd_StarvedBusy_SE1PA1</string>
+				<string>AMDStat_FrontEnd_StarvedBusy_SE2PA0</string>
+				<string>AMDStat_FrontEnd_StarvedBusy_SE2PA1</string>
+				<string>AMDStat_FrontEnd_StarvedBusy_SE3PA0</string>
+				<string>AMDStat_FrontEnd_StarvedBusy_SE3PA1</string>
+			</array>
+			<key>name</key>
+			<string>Primitive Rate</string>
+			<key>description</key>
+			<string>Number of primitives processed per GPU clock</string>
+			<key>type</key>
+			<string>Rate</string>
+		</dict>
+		<key>VertexRate</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_VS_Vertices_In</string>
+				<string>AMDStat_VS_Stalled_Ticks</string>
+				<string>AMDStat_VS_StarvedBusy_Ticks</string>
+			</array>
+			<key>name</key>
+			<string>Vertex Rate</string>
+			<key>description</key>
+			<string>Number of vertices processed per GPU clock during vertex pipe busy time</string>
+			<key>type</key>
+			<string>Rate</string>
+		</dict>
+		<key>PeakPrimitiveRate</key>
+		<dict>
+			<key>name</key>
+			<string>Peak Primitive Rate per Clock</string>
+			<key>description</key>
+			<string>Peak primitive rate per GPU clock supported by this GPU. To reach peak primitive rate you have to have perfect vertex reuse.</string>
+			<key>type</key>
+			<string>Rate</string>
+		</dict>
+		<key>PeakVertexRate</key>
+		<dict>
+			<key>name</key>
+			<string>Peak Vertex Rate per Clock</string>
+			<key>description</key>
+			<string>Peak vertex rate per GPU clock supported by this GPU</string>
+			<key>type</key>
+			<string>Rate</string>
+		</dict>
+		<key>PeakPixelRate</key>
+		<dict>
+			<key>name</key>
+			<string>Peak Pixel Rate per Clock</string>
+			<key>description</key>
+			<string>Peak pixel rate per GPU clock supported by this GPU</string>
+			<key>type</key>
+			<string>Rate</string>
+		</dict>
+		<key>VertexRatePercentage</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>PeakVertexRate</string>
+				<string>VertexRate</string>
+			</array>
+			<key>name</key>
+			<string>Vertex Rate Percentage</string>
+			<key>description</key>
+			<string>Percentage of actual vertex rate in peak vertex rate</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>PrimitiveRatePercentage</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>PeakPrimitiveRate</string>
+				<string>PrimitiveRate</string>
+			</array>
+			<key>name</key>
+			<string>Primitive Rate Percentage</string>
+			<key>description</key>
+			<string>Percentage of actual primitiveR rate in peak primitive rate</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>PixelRatePercentage</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>PeakPixelRate</string>
+				<string>PixelRate</string>
+			</array>
+			<key>name</key>
+			<string>Pixel Rate Percentage</string>
+			<key>description</key>
+			<string>Percentage of actual pixel rate in peak pixel rate</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>ParameterCacheStall</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_ParameterCache_Stall</string>
+			</array>
+			<key>name</key>
+			<string>% of GPU time stalled by Full Parameter Cache</string>
+			<key>description</key>
+			<string>Percentage of GPU time VS workload is stalled due to parameter cache space. This can also be caused by backend not releasing parameter cache space fast enough.</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>ShaderCoreVertexStall</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Vertex_SALU_Insts</string>
+				<string>AMDStat_Vertex_VALU_Inst_Cycles</string>
+				<string>AverageThreadsPerVertexWavefront</string>
+				<string>AMDStat_Vertex_VMEM_Read_Cycles</string>
+				<string>AMDStat_Vertex_VMEM_Write_Cycles</string>
+				<string>AMDStat_Vertex_VMEM_Inst_Cycles</string>
+				<string>AMDStat_Vertex_EXP_Insts</string>
+				<string>AMDStat_GPU_Engine_Busy_Ticks</string>
+				<string>MTLStatVertexCost</string>
+			</array>
+			<key>name</key>
+			<string>Shader Core Stall % in Vertex Shader</string>
+			<key>description</key>
+			<string>Percentage of time shader core is being stalled in vertex shader in total GPU time</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>ShaderCoreFragmentStall</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Fragment_SALU_Insts</string>
+				<string>AMDStat_Fragment_VALU_Inst_Cycles</string>
+				<string>AverageThreadsPerFragmentWavefront</string>
+				<string>AMDStat_Fragment_VMEM_Inst_Cycles</string>
+				<string>AMDStat_Fragment_VMEM_Read_Cycles</string>
+				<string>AMDStat_Fragment_VMEM_Write_Cycles</string>
+				<string>AMDStat_Fragment_SMEM_Insts</string>
+				<string>AMDStat_Fragment_EXP_Insts</string>
+				<string>AMDStat_GPU_Engine_Busy_Ticks</string>
+				<string>MTLStatFragmentCost</string>
+			</array>
+			<key>name</key>
+			<string>Shader Core Stall % in Fragment Shader</string>
+			<key>description</key>
+			<string>Percentage of time shader core is being stalled in fragment shader in total GPU time</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>TessellatorBusy</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Tessellator_Busy</string>
+			</array>
+			<key>name</key>
+			<string>Tessellator Busy</string>
+			<key>description</key>
+			<string>Percentage of GPU busy time the tessellator is busy</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>CBDrawnBusyRate</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_CBDrawn_Busy</string>
+				<string>AMDStat_CB_Busy</string>
+			</array>
+			<key>name</key>
+			<string>Color Buffer Draw to Busy Rate</string>
+			<key>description</key>
+			<string>Percentage of time color buffer is busy drawing to total color buffer busy time</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>ColorBlockL2Throughput</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_CBDrawn_Busy</string>
+				<string>AMDStat_CB_Mem_Read</string>
+				<string>AMDStat_CB_Mem_Written</string>
+			</array>
+			<key>name</key>
+			<string>Traffic send out by Color Buffer To L2 Cache</string>
+			<key>description</key>
+			<string>Bytes of cache access made by color buffer each clock when color buffer is busy</string>
+			<key>type</key>
+			<string>Rate</string>
+		</dict>
+		<key>CBMemRead</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_CB_Mem_Read</string>
+			</array>
+			<key>name</key>
+			<string>Color Buffer Memory Read</string>
+			<key>description</key>
+			<string>Number of bytes read from the color buffer.</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>CBColorAndMaskRead</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_CB_Mem_Read</string>
+				<string>AMDStat_CB_FC_MC_DCC_Mem_Read</string>
+				<string>AMDStat_CB_CM_Mem_Read</string>
+				<string>AMDStat_CB_FC_Mem_Read</string>
+			</array>
+			<key>name</key>
+			<string>Color Buffer and Mask buffer Memory Read</string>
+			<key>description</key>
+			<string>Total number of bytes read from the color and mask buffers.</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>CBMemWritten</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_CB_Mem_Written</string>
+			</array>
+			<key>name</key>
+			<string>Color Buffer Memory Written</string>
+			<key>description</key>
+			<string>Number of bytes written to the color buffer.</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>CBColorAndMaskWritten</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_CB_Mem_Written</string>
+				<string>AMDStat_CB_FC_MC_DCC_Mem_Written</string>
+				<string>AMDStat_CB_CM_Mem_Written</string>
+				<string>AMDStat_CB_FC_Mem_Written</string>
+			</array>
+			<key>name</key>
+			<string>Color Buffer and Mask buffer Memory Written</string>
+			<key>description</key>
+			<string>Total number of bytes written to the color and mask buffers.</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>CBSlowPixelPct</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Quad_Fragments_32ABGR_Drawn</string>
+				<string>AMDStat_Quad_Fragments_Drawn</string>
+			</array>
+			<key>name</key>
+			<string>Color Buffer slow draws</string>
+			<key>description</key>
+			<string>Percentage of pixels written to the color buffer using a half-rate or quarter-rate format.</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>CBSlowPixelCount</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Quad_Fragments_32ABGR_Drawn</string>
+			</array>
+			<key>name</key>
+			<string>Color Buffer slow draws pixel count</string>
+			<key>description</key>
+			<string>Number of pixels written to the color buffer using a half-rate or quarter-rate format</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>DepthBlockL2Throughput</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_ZUnit_Busy</string>
+				<string>AMDStat_DB_Tile_Read</string>
+				<string>AMDStat_DB_Quad_Read</string>
+				<string>AMDStat_DB_Tile_Write</string>
+				<string>AMDStat_DB_Quad_Write</string>
+			</array>
+			<key>name</key>
+			<string>Traffic send out by Depth Buffer To L2 Cache</string>
+			<key>description</key>
+			<string>Bytes of cache access made by depth buffer each clock when Depth buffer is busy</string>
+			<key>type</key>
+			<string>Rate</string>
+		</dict>
+		<key>ZUnitStalled</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_ZUnit_Stalled</string>
+				<string>AMDStat_GPU_Engine_Busy_Ticks</string>
+			</array>
+			<key>name</key>
+			<string>ZUnit Stall rate</string>
+			<key>description</key>
+			<string>The percentage of GPUTime the depth buffer spends waiting for the color buffer to be ready to accept data. High figures here indicate a bottleneck in color buffer operations.</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>ZUnitStalledCycles</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_ZUnit_Stalled_Ticks</string>
+			</array>
+			<key>name</key>
+			<string>ZUnit Stall cycles</string>
+			<key>description</key>
+			<string>Number of GPU cycles the depth buffer spends waiting for the color buffer to be ready to accept data. Larger numbers indicate a bottleneck in color buffer operations.</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>DBMemRead</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_DB_Tile_Read</string>
+				<string>AMDStat_DB_Quad_Read</string>
+			</array>
+			<key>name</key>
+			<string>Depth Buffer Memory Read</string>
+			<key>description</key>
+			<string>Number of bytes read from the Depth buffer.</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>DBMemWritten</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_DB_Tile_Write</string>
+				<string>AMDStat_DB_Quad_Write</string>
+			</array>
+			<key>name</key>
+			<string>Depth Buffer Memory Written</string>
+			<key>description</key>
+			<string>Number of bytes written to the Depth buffer.</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>TexTriFilteringPct</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_TexUnit_TriFilteringCount</string>
+				<string>AMDStat_TexUnit_NoTriFilteringCount</string>
+			</array>
+			<key>name</key>
+			<string>Tri Filtering Tex</string>
+			<key>description</key>
+			<string>Percentage of pixels that received trilinear filtering. Note that not all pixels for which trilinear filtering is enabled will receive it (e.g. if the texture is magnified)</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>TexTriFilteringCount</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_TexUnit_TriFilteringCount</string>
+			</array>
+			<key>name</key>
+			<string>Trilinear Filtering Count of pixels</string>
+			<key>description</key>
+			<string>Count of pixels that received trilinear filtering. Note that not all pixels for which trilinear filtering is enabled will receive it (e.g. if the texture is magnified).</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>NoTexTriFilteringCount</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_TexUnit_NoTriFilteringCount</string>
+			</array>
+			<key>name</key>
+			<string>Non Trilinear Filtering Count of pixels</string>
+			<key>description</key>
+			<string>Count of pixels that did not receive trilinear filtering.</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>TexVolFilteringPct</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_TexUnit_TexVolFilteringCount</string>
+				<string>AMDStat_TexUnit_NoTexVolFilteringCount</string>
+			</array>
+			<key>name</key>
+			<string>Volume Filtered Pixel Percentage</string>
+			<key>description</key>
+			<string>Percentage of pixels that received volume filtering.</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>TexVolFilteringCount</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_TexUnit_TexVolFilteringCount</string>
+			</array>
+			<key>name</key>
+			<string>Volume Filtering Count of pixels</string>
+			<key>description</key>
+			<string>Count of pixels that received volume filtering.</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>NoTexVolFilteringCount</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_TexUnit_NoTexVolFilteringCount</string>
+			</array>
+			<key>name</key>
+			<string>Non Volume Filtering Count of pixels</string>
+			<key>description</key>
+			<string>Count of pixels that did not receive volume filtering.</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>TexAveAnisotropy</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_TexUnit_Average_Anisotropy_1</string>
+				<string>AMDStat_TexUnit_Average_Anisotropy_2</string>
+				<string>AMDStat_TexUnit_Average_Anisotropy_4</string>
+				<string>AMDStat_TexUnit_Average_Anisotropy_6</string>
+				<string>AMDStat_TexUnit_Average_Anisotropy_8</string>
+				<string>AMDStat_TexUnit_Average_Anisotropy_10</string>
+				<string>AMDStat_TexUnit_Average_Anisotropy_12</string>
+				<string>AMDStat_TexUnit_Average_Anisotropy_14</string>
+				<string>AMDStat_TexUnit_Average_Anisotropy_16</string>
+			</array>
+			<key>name</key>
+			<string>Average Anisotropy</string>
+			<key>description</key>
+			<string>The average degree of anisotropy applied. A number between 1 and 16. The anisotropic filtering algorithm only applies samples where they are required (e.g. there will be no extra anisotropic samples if the view vector is perpendicular to the surface) so this can be much lower than the requested anisotropy.</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>CSVFetchInsts</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Compute_Tex_Load_Inst</string>
+				<string>AMDStat_Compute_Waves_Executed</string>
+			</array>
+			<key>name</key>
+			<string>Average vector fetch instructions</string>
+			<key>description</key>
+			<string>The average number of vector fetch instructions from the video memory executed per work-item (affected by flow control).</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>CSSFetchInsts</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Compute_SMEM_Insts</string>
+				<string>AMDStat_Compute_Waves_Executed</string>
+			</array>
+			<key>name</key>
+			<string>Average scalar fetch instructions</string>
+			<key>description</key>
+			<string>The average number of scalar fetch instructions from the video memory executed per work-item (affected by flow control).</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>CSVWriteInsts</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Compute_Tex_Store_Inst</string>
+				<string>AMDStat_Compute_Waves_Executed</string>
+			</array>
+			<key>name</key>
+			<string>Average vector fetch instructions</string>
+			<key>description</key>
+			<string>The average number of vector fetch instructions from the video memory executed per work-item (affected by flow control).</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>CSVALUBusy</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Compute_VALU_Inst_Cycles</string>
+				<string>AMDStat_GPU_Engine_Busy_Ticks</string>
+			</array>
+			<key>name</key>
+			<string>Percentage of CS vector ALU instructions</string>
+			<key>description</key>
+			<string>The percentage of GPUTime vector ALU instructions are processed. Value range: 0% (bad) to 100% (optimal).</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>CSVALUBusyCycles</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Compute_VALU_Inst_Cycles</string>
+			</array>
+			<key>name</key>
+			<string>Number of CS vector ALU instruction cycles</string>
+			<key>description</key>
+			<string>Number of GPU cycles where vector ALU instructions are processed.</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>CSSALUBusy</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Compute_SALU_Insts</string>
+				<string>AMDStat_GPU_Engine_Busy_Ticks</string>
+			</array>
+			<key>name</key>
+			<string>Percentage of CS scalar ALU instructions</string>
+			<key>description</key>
+			<string>The percentage of GPUTime scalar ALU instructions are processed. Value range: 0% (bad) to 100% (optimal).</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>CSSALUBusyCycles</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Compute_SALU_Insts</string>
+			</array>
+			<key>name</key>
+			<string>Number of CS scalar ALU instruction cycles</string>
+			<key>description</key>
+			<string>Number of GPU cycles where scalar ALU instructions are processed</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>CSMemUnitBusy</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_TexUnit_Busy</string>
+				<string>AMDStat_CSG_number_of_threadGrps</string>
+				<string>AMDStat_CSN_number_of_threadGrps</string>
+				<string>AMDStat_GPU_Engine_Busy_Ticks</string>
+			</array>
+			<key>name</key>
+			<string>CS Memory Unit Busy</string>
+			<key>description</key>
+			<string>The percentage of GPUTime the memory unit is active. The result includes the stall time (MemUnitStalled). This is measured with all extra fetches and writes and any cache or memory effects taken into account. Value range: 0% to 100% (fetch-bound).</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>CSMemUnitBusyCycles</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_TexUnit_Busy_Ticks</string>
+				<string>AMDStat_CSG_number_of_threadGrps</string>
+				<string>AMDStat_CSN_number_of_threadGrps</string>
+			</array>
+			<key>name</key>
+			<string>CS Memory Unit Busy Cycles</string>
+			<key>description</key>
+			<string>Number of GPU cycles the memory unit is active</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>CSMemUnitStalled</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_L0_Stall</string>
+				<string>AMDStat_CSG_number_of_threadGrps</string>
+				<string>AMDStat_CSN_number_of_threadGrps</string>
+				<string>AMDStat_GPU_Engine_Busy_Ticks</string>
+			</array>
+			<key>name</key>
+			<string>CS Memory Unit Stall Cycles from CS instructions</string>
+			<key>description</key>
+			<string>The percentage of GPUTime the memory unit is stalled. Try reducing the number or size of fetches and writes if possible. Value range: 0% (optimal) to 100% (bad).</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>CSMemUnitStalledCycles</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_L0_Stall</string>
+				<string>AMDStat_CSG_number_of_threadGrps</string>
+				<string>AMDStat_CSN_number_of_threadGrps</string>
+			</array>
+			<key>name</key>
+			<string>CS Memory Unit Stall Cycles</string>
+			<key>description</key>
+			<string>Number of GPU cycles the memory unit is stalled</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>CSWriteUnitStalled</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_L2_Write_Unit_Stalled</string>
+				<string>AMDStat_CSG_number_of_threadGrps</string>
+				<string>AMDStat_CSN_number_of_threadGrps</string>
+				<string>AMDStat_GPU_Engine_Busy_Ticks</string>
+			</array>
+			<key>name</key>
+			<string>CS Write Unit Stall Cycles from CS instructions</string>
+			<key>description</key>
+			<string>The percentage of GPUTime the write unit is stalled.</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>CSWriteUnitStalledCycles</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_L2_Write_Unit_Stalled</string>
+				<string>AMDStat_CSG_number_of_threadGrps</string>
+				<string>AMDStat_CSN_number_of_threadGrps</string>
+			</array>
+			<key>name</key>
+			<string>CS Write Unit Stall Cycles</string>
+			<key>description</key>
+			<string>Number of GPU cycles the write unit is stalled.</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>CSGDSInsts</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Compute_GDS_Insts</string>
+				<string>AMDStat_Compute_Waves_Executed</string>
+			</array>
+			<key>name</key>
+			<string>Average GDS instructions</string>
+			<key>description</key>
+			<string>The average number of GDS read or GDS write instructions executed per work item (affected by flow control).</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>CSLDSInsts</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Compute_LDS_Insts</string>
+				<string>AMDStat_Compute_Waves_Executed</string>
+			</array>
+			<key>name</key>
+			<string>Average LDS instructions</string>
+			<key>description</key>
+			<string>The average number of LDS read or LDS write instructions executed per work item (affected by flow control).</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>CSALUStalledByLDS</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Compute_LDS_Wait</string>
+				<string>AMDStat_GPU_Engine_Busy_Ticks</string>
+				<string>AMDStat_Compute_Waves_Executed</string>
+			</array>
+			<key>name</key>
+			<string>Average Stall time due to LDS instructions</string>
+			<key>description</key>
+			<string>The percentage of GPUTime ALU units are stalled by the LDS input queue being full or the output queue being not ready. If there are LDS bank conflicts, reduce them. Otherwise, try reducing the number of LDS accesses if possible. Value range: 0% (optimal) to 100% (bad).</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>CSLDSBankConflict</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_CSG_number_of_threadGrps</string>
+				<string>AMDStat_CSN_number_of_threadGrps</string>
+				<string>AMDStat_GPU_Engine_Busy_Ticks</string>
+				<string>AMDStat_Compute_LDS_Bank_Conflict</string>
+			</array>
+			<key>name</key>
+			<string>Average LDS Stall time due to bank conflicts</string>
+			<key>description</key>
+			<string>The percentage of GPUTime LDS is stalled by bank conflicts. Value range: 0% (optimal) to 100% (bad).</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>CSLDSBankConflictCycles</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_CSG_number_of_threadGrps</string>
+				<string>AMDStat_CSN_number_of_threadGrps</string>
+				<string>AMDStat_Compute_LDS_Bank_Conflict</string>
+			</array>
+			<key>name</key>
+			<string>Number LDS Stall cycles due to bank conflicts</string>
+			<key>description</key>
+			<string>Number of GPU cycles the LDS is stalled by bank conflicts. Value range: 0 (optimal) to GPUBusyCycles (bad).</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>AverageThreadsPerVertexWavefront</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Vertex_Waves_Executed</string>
+				<string>AMDStat_VS_Invocations</string>
+			</array>
+			<key>name</key>
+			<string>Average Threads Per Vertex Wavefront</string>
+			<key>description</key>
+			<string>Average number of active threads per vertex wavefront</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>AverageThreadsPerFragmentWavefront</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Fragment_Waves_Executed</string>
+				<string>AMDStat_PS_Invocations</string>
+			</array>
+			<key>name</key>
+			<string>Average Threads Per Fragment Wavefront</string>
+			<key>description</key>
+			<string>Average number of active threads per fragment wavefront</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>AverageThreadsPerComputeWavefront</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>AMDStat_Compute_Waves_Executed</string>
+				<string>AMDStat_CS_Invocations</string>
+			</array>
+			<key>name</key>
+			<string>Average Threads Per Compute Wavefront</string>
+			<key>description</key>
+			<string>Average number of active threads per compute wavefront</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+	</dict>
+</dict>
+</plist>
