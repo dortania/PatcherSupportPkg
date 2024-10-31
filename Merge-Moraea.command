@@ -104,6 +104,8 @@ class MoraeaBinaryMerging:
             for file in Path(self.input_folder / folder).iterdir():
                 if file.name == ".DS_Store":
                     continue
+                if file.suffix == ".m":
+                    continue
                 unused_files.append(file)
 
         if len(unused_files) > 0:
