@@ -3,14 +3,14 @@
 <plist version="1.0">
 <dict>
 	<key>BuildVersion</key>
-	<string>1216</string>
+	<string>182</string>
 	<key>CFBundleShortVersionString</key>
-	<string>400.7.13</string>
+	<string>1.0</string>
 	<key>CFBundleVersion</key>
-	<string>AppleCameraDeviceAbstractionLayer-7.13.0</string>
+	<string>1</string>
 	<key>ProjectName</key>
-	<string>AppleCameraInterface</string>
+	<string>LocalAuthentication</string>
 	<key>SourceVersion</key>
-	<string>7013000000000</string>
+	<string>1656040025000000</string>
 </dict>
 </plist>
