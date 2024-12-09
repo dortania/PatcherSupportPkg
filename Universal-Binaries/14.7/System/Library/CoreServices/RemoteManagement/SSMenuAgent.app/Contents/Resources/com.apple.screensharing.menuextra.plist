@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>ProcessType</key>
+	<string>App</string>
+	<key>EnableTransactions</key>
+	<true/>
+	<key>Label</key>
+	<string>com.apple.screensharing.menuextra</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/System/Library/CoreServices/RemoteManagement/SSMenuAgent.app/Contents/MacOS/SSMenuAgent</string>
+	</array>
+	<key>MachServices</key>
+	<dict>
+		<key>com.apple.screensharing.menuextra</key>
+		<true/>
+	</dict>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>LaunchEvents</key>
+	<dict>
+		<key>com.apple.notifyd.matching</key>
+		<dict>
+			<key>com.apple.screensharing.menuextra</key>
+			<dict>
+				<key>Notification</key>
+				<string>com.apple.screensharing.menuextra</string>
+			</dict>
+		</dict>
+	</dict>
+	<key>LimitLoadToSessionType</key>
+	<array>
+		<string>Aqua</string>
+		<string>LoginWindow</string>
+	</array>
+	<key>ThrottleInterval</key>
+	<integer>1</integer>
+</dict>
+</plist>

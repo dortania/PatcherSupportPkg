@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>ProcessType</key>
+	<string>Standard</string>
+	<key>Label</key>
+	<string>com.apple.ssinvitationagent</string>
+	<key>Program</key>
+	<string>/System/Library/CoreServices/RemoteManagement/ScreensharingAgent.bundle/Contents/Support/SSInvitationAgent.app/Contents/MacOS/SSInvitationAgent</string>
+	<key>MachServices</key>
+	<dict>
+		<key>com.apple.screensharing.ViewInvitation</key>
+		<true/>
+		<key>com.apple.screensharing.ShareScreenInvitation</key>
+		<true/>
+	</dict>
+	<key>LaunchEvents</key>
+	<dict>
+		<key>com.apple.notifyd.matching</key>
+		<dict>
+			<key>com.apple.screensharing.idslaunchnotification</key>
+			<dict>
+				<key>Notification</key>
+				<string>com.apple.screensharing.idslaunchnotification</string>
+			</dict>
+		</dict>
+	</dict>
+</dict>
+</plist>
