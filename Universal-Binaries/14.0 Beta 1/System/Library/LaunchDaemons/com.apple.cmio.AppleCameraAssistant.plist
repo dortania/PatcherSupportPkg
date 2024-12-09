@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.apple.cmio.AppleCameraAssistant</string>
+	<key>MachServices</key>
+	<dict>
+		<key>com.apple.cmio.AppleCameraAssistant</key>
+		<true/>
+	</dict>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/System/Library/Frameworks/CoreMediaIO.framework/Versions/A/Resources/AppleCamera.plugin/Contents/Resources/AppleCameraAssistant</string>
+	</array>
+	<key>ThrottleInterval</key>
+	<integer>1</integer>
+	<key>ProcessType</key>
+	<string>Interactive</string>
+	<key>LegacyTimers</key>
+	<true/>
+	<key>UserName</key>
+	<string>_cmiodalassistants</string>
+	<key>GroupName</key>
+	<string>_cmiodalassistants</string>
+</dict>
+</plist>
