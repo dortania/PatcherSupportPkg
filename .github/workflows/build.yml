@@ -29,12 +29,12 @@ jobs:
       - name: Generate Checksums
         run: shasum -a 256 Universal-Binaries.dmg > sha256sum.txt
       - name: Upload Universal Binaries to Artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: Universal Binaries
           path: Universal-Binaries.dmg
       - name: Upload Checksums to Artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: sha256sum.txt
           path: sha256sum.txt
