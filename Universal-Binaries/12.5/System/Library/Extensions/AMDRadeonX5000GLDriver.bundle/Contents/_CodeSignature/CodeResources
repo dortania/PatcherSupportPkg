@@ -3,17 +3,29 @@
 <plist version="1.0">
 <dict>
 	<key>files</key>
-	<dict/>
+	<dict>
+		<key>version.plist</key>
+		<data>
+		qOD5mRpJvjbTwq98EUrvUAnqfZ8=
+		</data>
+	</dict>
 	<key>files2</key>
 	<dict>
 		<key>MacOS/ATIRadeonX5000SCLib.dylib</key>
 		<dict>
 			<key>cdhash</key>
 			<data>
-			OzgaBHb4lVyU/A4yXI9b3CaXi7U=
+			jpOpT2N9v49heyD/VqoV64+kd78=
 			</data>
 			<key>requirement</key>
-			<string>cdhash H"3b381a0476f8955c94fc0e325c8f5bdc26978bb5"</string>
+			<string>cdhash H"8e93a94f637dbf8f617b20ff56aa15eb8fa477bf"</string>
+		</dict>
+		<key>version.plist</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			6A9zmKa26viK0qRnkUJl1LDhiyU7q9ziG0QjRoUlIP4=
+			</data>
 		</dict>
 	</dict>
 	<key>rules</key>

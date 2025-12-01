@@ -24,6 +24,10 @@
 		<data>
 		lAHI/QhL93goZONxXyvKy1DjiSk=
 		</data>
+		<key>version.plist</key>
+		<data>
+		qOD5mRpJvjbTwq98EUrvUAnqfZ8=
+		</data>
 	</dict>
 	<key>files2</key>
 	<dict>
@@ -31,10 +35,10 @@
 		<dict>
 			<key>cdhash</key>
 			<data>
-			HPzO92uEFemNYeyOcRM2Ohguqbg=
+			nzaLeJJV/GDlnXxsd3P1bnzyzTM=
 			</data>
 			<key>requirement</key>
-			<string>identifier impostor and certificate root = H"c290d2bff240f4e990f7ac9b632f568d0e2a82f5"</string>
+			<string>cdhash H"9f368b789255fc60e59d7c6c7773f56e7cf2cd33"</string>
 		</dict>
 		<key>Resources/GFX9Statistics-analysis.js</key>
 		<dict>
@@ -69,6 +73,13 @@
 			<key>hash2</key>
 			<data>
 			fA113DrJZFRZQnYR2OC0UnyDrtIckwUwouiqJQwWNk8=
+			</data>
+		</dict>
+		<key>version.plist</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			6A9zmKa26viK0qRnkUJl1LDhiyU7q9ziG0QjRoUlIP4=
 			</data>
 		</dict>
 	</dict>

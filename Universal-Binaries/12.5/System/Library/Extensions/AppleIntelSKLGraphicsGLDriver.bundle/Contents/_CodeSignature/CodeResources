@@ -6,7 +6,7 @@
 	<dict>
 		<key>version.plist</key>
 		<data>
-		AJHsvVMuYAd8eVD5BWvuduIifmQ=
+		URlFX7MLezd996uL8bW+BEuXPuM=
 		</data>
 	</dict>
 	<key>files2</key>
@@ -15,16 +15,16 @@
 		<dict>
 			<key>cdhash</key>
 			<data>
-			PO8EX0nfe17mY7OiJ63o2XB9aBY=
+			riSc0tOuR/VkQf8FCwoT++SQGKQ=
 			</data>
 			<key>requirement</key>
-			<string>identifier "com.apple.libigdmd" and anchor apple</string>
+			<string>cdhash H"ae249cd2d3ae47f56441ff050b0a13fbe49018a4"</string>
 		</dict>
 		<key>version.plist</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			XPjvaIz9/XGd/aywyHv1QSE6l0kdkvfKGAl4mcbAOT0=
+			PvhrI50u+OQwbfb1M/cDiH/QxHdF+nBED9FQfZFG+9E=
 			</data>
 		</dict>
 	</dict>

@@ -218,7 +218,7 @@
 		</data>
 		<key>version.plist</key>
 		<data>
-		AJHsvVMuYAd8eVD5BWvuduIifmQ=
+		URlFX7MLezd996uL8bW+BEuXPuM=
 		</data>
 	</dict>
 	<key>files2</key>
@@ -227,19 +227,19 @@
 		<dict>
 			<key>cdhash</key>
 			<data>
-			W3FAytYH+weDso2/u1jLbdnWqQA=
+			mXVO6RhXcmEASJx7B2QGmEaFf9M=
 			</data>
 			<key>requirement</key>
-			<string>cdhash H"5b7140cad607fb0783b28dbfbb58cb6dd9d6a900"</string>
+			<string>cdhash H"99754ee91857726100489c7b0764069846857fd3"</string>
 		</dict>
 		<key>MacOS/libigdmd.dylib</key>
 		<dict>
 			<key>cdhash</key>
 			<data>
-			tlOKosf9aewdUVwI/KZKbWlGuiI=
+			6ZicY33MwlytN2ZqazbH7IkSG6w=
 			</data>
 			<key>requirement</key>
-			<string>identifier "com.apple.libigdmd" and anchor apple</string>
+			<string>cdhash H"e9989c637dccc25cad37666a6b36c7ec89121bac"</string>
 		</dict>
 		<key>Resources/MetalStatistics-analysis.js</key>
 		<dict>
@@ -616,7 +616,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			XPjvaIz9/XGd/aywyHv1QSE6l0kdkvfKGAl4mcbAOT0=
+			PvhrI50u+OQwbfb1M/cDiH/QxHdF+nBED9FQfZFG+9E=
 			</data>
 		</dict>
 	</dict>
