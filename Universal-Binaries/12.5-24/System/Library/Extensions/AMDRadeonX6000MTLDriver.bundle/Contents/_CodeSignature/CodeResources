@@ -26,7 +26,7 @@
 		</data>
 		<key>version.plist</key>
 		<data>
-		IWrOyfKjDkFgGXymiMABq9VEuCs=
+		qOD5mRpJvjbTwq98EUrvUAnqfZ8=
 		</data>
 	</dict>
 	<key>files2</key>
@@ -35,10 +35,10 @@
 		<dict>
 			<key>cdhash</key>
 			<data>
-			hyChYVgPyLlco14JCX7hWNjCHZk=
+			L213SsWcatR3HQJP48NV4gFOCMM=
 			</data>
 			<key>requirement</key>
-			<string>cdhash H"8720a161580fc8b95ca35e09097ee158d8c21d99"</string>
+			<string>cdhash H"2f6d774ac59c6ad4771d024fe3c355e2014e08c3"</string>
 		</dict>
 		<key>Resources/GFX10Statistics-analysis.js</key>
 		<dict>
@@ -79,7 +79,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			LgYgdrOQYIi8Y68w5OeEger7paj8Bzmo6OINu0v2IV8=
+			6A9zmKa26viK0qRnkUJl1LDhiyU7q9ziG0QjRoUlIP4=
 			</data>
 		</dict>
 	</dict>

@@ -270,28 +270,28 @@
 		</data>
 		<key>version.plist</key>
 		<data>
-		AJHsvVMuYAd8eVD5BWvuduIifmQ=
+		URlFX7MLezd996uL8bW+BEuXPuM=
 		</data>
 	</dict>
 	<key>files2</key>
 	<dict>
-		<key>MacOS/AppleIntelBDWGraphicsMTLDriver_real</key>
+		<key>MacOS/impostor.dylib</key>
 		<dict>
 			<key>cdhash</key>
 			<data>
-			f9VVzmNFq7domFvO5dor0M1zKIA=
+			gt5fituXIGhZh0YlberwRQinDU0=
 			</data>
 			<key>requirement</key>
-			<string>cdhash H"7fd555ce6345abb768985bcee5da2bd0cd732880"</string>
+			<string>cdhash H"82de5f8adb972068598746256deaf04508a70d4d"</string>
 		</dict>
 		<key>MacOS/libigdmd.dylib</key>
 		<dict>
 			<key>cdhash</key>
 			<data>
-			8Qd3qKYybh7B4UnBHn7rqKo5cP4=
+			IPDFqfM0K+n1cvF9/vNqs5ulmZI=
 			</data>
 			<key>requirement</key>
-			<string>identifier "com.apple.libigdmd" and anchor apple</string>
+			<string>cdhash H"20f0c5a9f3342be9f572f17dfef36ab39ba59992"</string>
 		</dict>
 		<key>Resources/MetalStatistics-analysis.js</key>
 		<dict>
@@ -759,7 +759,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			XPjvaIz9/XGd/aywyHv1QSE6l0kdkvfKGAl4mcbAOT0=
+			PvhrI50u+OQwbfb1M/cDiH/QxHdF+nBED9FQfZFG+9E=
 			</data>
 		</dict>
 	</dict>

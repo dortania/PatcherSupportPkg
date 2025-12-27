@@ -3,32 +3,247 @@
 <plist version="1.0">
 <dict>
 	<key>files</key>
-	<dict/>
+	<dict>
+		<key>Resources/runtime-reduced.igil64.bc</key>
+		<data>
+		00JEhrggua062uAjmIYxu80Pz6Y=
+		</data>
+		<key>Resources/runtime.igc64.split</key>
+		<data>
+		eD+Ed83I8KxkxKJx3iFbqxbe1fc=
+		</data>
+		<key>Resources/runtime.igcHSW64.split</key>
+		<data>
+		S/s2d8kjQM8EyMBM55Ii7wafv4o=
+		</data>
+		<key>Resources/runtime.igil64.bc</key>
+		<data>
+		Ulg37GsqtMp1t4jhIhLuNYWlm6Q=
+		</data>
+		<key>Resources/runtime.igil64.split</key>
+		<data>
+		Oo1tqUkJYT578y08BLmCEDdoWqA=
+		</data>
+		<key>version.plist</key>
+		<data>
+		URlFX7MLezd996uL8bW+BEuXPuM=
+		</data>
+	</dict>
 	<key>files2</key>
-	<dict/>
+	<dict>
+		<key>MacOS/libIGIL-Metal.dylib</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			0hLGT5zqglcMCqLXlHYREENFBPo=
+			</data>
+			<key>requirement</key>
+			<string>cdhash H"cca9c244d388a86223a226e186372b295aaffd6d" or cdhash H"d212c64f9cea82570c0aa2d794761110434504fa"</string>
+		</dict>
+		<key>MacOS/libISAProfilerDyn.dylib</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			EHmT8apDft5Qo15YNG+MoHU7oDI=
+			</data>
+			<key>requirement</key>
+			<string>cdhash H"107993f1aa437ede50a35e58346f8ca0753ba032"</string>
+		</dict>
+		<key>MacOS/libMTLIGCCompilerPlugin.dylib</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			ph20nQ0e4Y6KqZiKSUJyiLAtyqA=
+			</data>
+			<key>requirement</key>
+			<string>cdhash H"a61db49d0d1ee18e8aa9988a49427288b02dcaa0"</string>
+		</dict>
+		<key>MacOS/libigc.dylib</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			smRFhMGbJG3n8MZ0ke0HD2Vo3CE=
+			</data>
+			<key>requirement</key>
+			<string>cdhash H"b2644584c19b246de7f0c67491ed070f6568dc21"</string>
+		</dict>
+		<key>MacOS/libigcHSW.dylib</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			Y/x/oDqFGDqj1hrntGaCerVZIRo=
+			</data>
+			<key>requirement</key>
+			<string>cdhash H"63fc7fa03a85183aa3d61ae7b466827ab559211a"</string>
+		</dict>
+		<key>Resources/runtime-reduced.igil64.bc</key>
+		<dict>
+			<key>hash</key>
+			<data>
+			00JEhrggua062uAjmIYxu80Pz6Y=
+			</data>
+			<key>hash2</key>
+			<data>
+			NrxLYeay5QkqvonecwlC7m2KJNYLsbkhppuytFGusHI=
+			</data>
+		</dict>
+		<key>Resources/runtime.igc64.split</key>
+		<dict>
+			<key>hash</key>
+			<data>
+			eD+Ed83I8KxkxKJx3iFbqxbe1fc=
+			</data>
+			<key>hash2</key>
+			<data>
+			VWPrLNVHcC2DVb/K+HlQ5cPFm7R3K+LzNLRlcSYsihY=
+			</data>
+		</dict>
+		<key>Resources/runtime.igcHSW64.split</key>
+		<dict>
+			<key>hash</key>
+			<data>
+			S/s2d8kjQM8EyMBM55Ii7wafv4o=
+			</data>
+			<key>hash2</key>
+			<data>
+			yJWksGISWVUUZl0jb1DGuzwhTpJgHsO2C3X2lMcblvU=
+			</data>
+		</dict>
+		<key>Resources/runtime.igil64.bc</key>
+		<dict>
+			<key>hash</key>
+			<data>
+			Ulg37GsqtMp1t4jhIhLuNYWlm6Q=
+			</data>
+			<key>hash2</key>
+			<data>
+			Huaw9Wr2uJxl0Zx67ORe7pA7Fr836d7VDyp5xj2OBbI=
+			</data>
+		</dict>
+		<key>Resources/runtime.igil64.split</key>
+		<dict>
+			<key>hash</key>
+			<data>
+			Oo1tqUkJYT578y08BLmCEDdoWqA=
+			</data>
+			<key>hash2</key>
+			<data>
+			Cn5VvRxiI7plNZ+juxnfU6IK13HhPHGV4/w6EQmMdFo=
+			</data>
+		</dict>
+		<key>version.plist</key>
+		<dict>
+			<key>hash</key>
+			<data>
+			URlFX7MLezd996uL8bW+BEuXPuM=
+			</data>
+			<key>hash2</key>
+			<data>
+			PvhrI50u+OQwbfb1M/cDiH/QxHdF+nBED9FQfZFG+9E=
+			</data>
+		</dict>
+	</dict>
 	<key>rules</key>
 	<dict>
+		<key>^Resources/</key>
+		<true/>
+		<key>^Resources/.*\.lproj/</key>
+		<dict>
+			<key>optional</key>
+			<true/>
+			<key>weight</key>
+			<real>1000</real>
+		</dict>
+		<key>^Resources/.*\.lproj/locversion.plist$</key>
+		<dict>
+			<key>omit</key>
+			<true/>
+			<key>weight</key>
+			<real>1100</real>
+		</dict>
+		<key>^Resources/Base\.lproj/</key>
+		<dict>
+			<key>weight</key>
+			<real>1010</real>
+		</dict>
+		<key>^version.plist$</key>
+		<true/>
+	</dict>
+	<key>rules2</key>
+	<dict>
+		<key>.*\.dSYM($|/)</key>
+		<dict>
+			<key>weight</key>
+			<real>11</real>
+		</dict>
+		<key>^(.*/)?\.DS_Store$</key>
+		<dict>
+			<key>omit</key>
+			<true/>
+			<key>weight</key>
+			<real>2000</real>
+		</dict>
+		<key>^(Frameworks|SharedFrameworks|PlugIns|Plug-ins|XPCServices|Helpers|MacOS|Library/(Automator|Spotlight|LoginItems))/</key>
+		<dict>
+			<key>nested</key>
+			<true/>
+			<key>weight</key>
+			<real>10</real>
+		</dict>
 		<key>^.*</key>
+		<true/>
+		<key>^Info\.plist$</key>
 		<dict>
 			<key>omit</key>
 			<true/>
 			<key>weight</key>
 			<real>20</real>
 		</dict>
-	</dict>
-	<key>rules2</key>
-	<dict>
-		<key>^(Frameworks|SharedFrameworks|PlugIns|Plug-ins|XPCServices|Helpers|MacOS|Library/(Automator|Spotlight|LoginItems))/</key>
+		<key>^PkgInfo$</key>
+		<dict>
+			<key>omit</key>
+			<true/>
+			<key>weight</key>
+			<real>20</real>
+		</dict>
+		<key>^Resources/</key>
+		<dict>
+			<key>weight</key>
+			<real>20</real>
+		</dict>
+		<key>^Resources/.*\.lproj/</key>
+		<dict>
+			<key>optional</key>
+			<true/>
+			<key>weight</key>
+			<real>1000</real>
+		</dict>
+		<key>^Resources/.*\.lproj/locversion.plist$</key>
+		<dict>
+			<key>omit</key>
+			<true/>
+			<key>weight</key>
+			<real>1100</real>
+		</dict>
+		<key>^Resources/Base\.lproj/</key>
+		<dict>
+			<key>weight</key>
+			<real>1010</real>
+		</dict>
+		<key>^[^/]+$</key>
 		<dict>
 			<key>nested</key>
 			<true/>
 			<key>weight</key>
-			<real>0.0</real>
+			<real>10</real>
 		</dict>
-		<key>^.*</key>
+		<key>^embedded\.provisionprofile$</key>
 		<dict>
-			<key>omit</key>
-			<true/>
+			<key>weight</key>
+			<real>20</real>
+		</dict>
+		<key>^version\.plist$</key>
+		<dict>
 			<key>weight</key>
 			<real>20</real>
 		</dict>
