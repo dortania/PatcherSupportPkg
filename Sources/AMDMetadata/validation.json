@@ -1,0 +1,258 @@
+{
+  "evidenceScope": "Sanitized extract of local result manifests and authored shader output; no raw host logs",
+  "cpu": {
+    "status": "passed",
+    "results": [
+      {
+        "fixture": "argument-air27",
+        "mode": "original",
+        "expectedExit": 3,
+        "output": "FAIL regression: exact_delta=0 parser_wrapper=0"
+      },
+      {
+        "fixture": "argument-air27",
+        "mode": "repaired",
+        "expectedExit": 0,
+        "output": "PASS regression: removed=2 exact_delta=1 parser_wrapper=1"
+      },
+      {
+        "fixture": "argument-air24",
+        "mode": "original",
+        "expectedExit": 0,
+        "output": "PASS regression: removed=0 exact_delta=1 parser_wrapper=1"
+      },
+      {
+        "fixture": "argument-air24",
+        "mode": "repaired",
+        "expectedExit": 0,
+        "output": "PASS regression: removed=0 exact_delta=1 parser_wrapper=1"
+      }
+    ],
+    "wrapperSHA256": "4274057dee5f09ea386664427444004e7083dd23db227e2f08fb459a5b4286e8",
+    "sourceSHA256": {
+      "build.py": "cbf5f47e07ee067ec2479836877d318b762005adef42c758fc7c6e572c469566",
+      "pinned_llvm.hpp": "fe82e2eba0a25e4cf6de5df2d104566474b67ffde865b4a3d1305b424e3b96ee",
+      "regression.cpp": "d9488b8d417c5ff69006966a094b6e927e412db22acdc83dc40671c357b69685",
+      "test.py": "b0f62394f76d6044146b535db589f42b0c83de2ef5931de45a2523202c91c0f7",
+      "normalize.cpp": "dd132fe856a26b8db8c6bedfd2a89319801070f5b86f0d235c0ca72efd5b05e5"
+    },
+    "releaseExports": [
+      "__ZN4llvm12amdMtlPlugin14ILPluginHelperC1EPKvm"
+    ],
+    "installedProviderUnchanged": true
+  },
+  "payload": {
+    "changed": [
+      "Contents/MacOS/AMDShared",
+      "Contents/_CodeSignature/CodeResources"
+    ],
+    "added": [
+      "Contents/MacOS/MetadataCompat.dylib"
+    ],
+    "files": {
+      "Contents/Info.plist": "3a8f0e0673f46e549e0acd78913b84690ff92e647108d0bad3d011592b24e34c",
+      "Contents/MacOS/AMDShared": "51a4048fa1ed115345f2936ddaa472318b1bcf8bf27fccb473b0da52e4d8392e",
+      "Contents/MacOS/MetadataCompat.dylib": "4274057dee5f09ea386664427444004e7083dd23db227e2f08fb459a5b4286e8",
+      "Contents/PlugIns/libAMDIL902.dylib": "62c83e55dec12b849f98a6df6f012fc0c9def83311ed89685bff76843ea3ee37",
+      "Contents/PlugIns/libGCNASM.dylib": "62c3b17b8d25bea847883b0741295ebb0f5efc31b3bb788c8462ceb4561cad2e",
+      "Contents/PlugIns/libSC.dylib": "6366cc8b8023970ab4f29720075f4bbb80584ad81f1eb97f73a34ece836647d7",
+      "Contents/Resources/runtime.amdil.bc": "08f165ad165e84231be27bb2af74cb975b65d5ec9beae15095497025a135fc44",
+      "Contents/Resources/runtime.amdil.builtin": "8538980ef3cb93a1e46ee839d220d2670a9c40ef9fc4c60613b5055a367e8172",
+      "Contents/_CodeSignature/CodeResources": "b72c68059caa4ac117a7f7fbecf740dc02b5c250acfaf0eceafb69f6dc7d4bb7"
+    },
+    "originalSectionsUnchanged": true,
+    "vendorFilesUnchanged": true,
+    "signatureCheck": "adapter/main signature and exact resource hashes; stock nested trust unchanged"
+  },
+  "hardwarePrototype": {
+    "controlsOnly": false,
+    "debugger": false,
+    "compilerOverrides": false,
+    "results": [
+      {
+        "case": "render-amd-literal-1",
+        "exit": 0,
+        "passed": true
+      },
+      {
+        "case": "render-amd-literal-2",
+        "exit": 0,
+        "passed": true
+      },
+      {
+        "case": "render-amd-direct-1",
+        "exit": 0,
+        "passed": true
+      },
+      {
+        "case": "render-amd-direct-2",
+        "exit": 0,
+        "passed": true
+      },
+      {
+        "case": "render-amd-argument-1",
+        "exit": 0,
+        "passed": true
+      },
+      {
+        "case": "render-amd-argument-2",
+        "exit": 0,
+        "passed": true
+      },
+      {
+        "case": "render-intel-literal-1",
+        "exit": 0,
+        "passed": true
+      },
+      {
+        "case": "render-intel-literal-2",
+        "exit": 0,
+        "passed": true
+      },
+      {
+        "case": "render-intel-direct-1",
+        "exit": 0,
+        "passed": true
+      },
+      {
+        "case": "render-intel-direct-2",
+        "exit": 0,
+        "passed": true
+      },
+      {
+        "case": "render-intel-argument-1",
+        "exit": 0,
+        "passed": true
+      },
+      {
+        "case": "render-intel-argument-2",
+        "exit": 0,
+        "passed": true
+      },
+      {
+        "case": "readback-amd-literal-1",
+        "exit": 0,
+        "passed": true
+      },
+      {
+        "case": "readback-amd-literal-2",
+        "exit": 0,
+        "passed": true
+      },
+      {
+        "case": "readback-amd-direct-1",
+        "exit": 0,
+        "passed": true
+      },
+      {
+        "case": "readback-amd-direct-2",
+        "exit": 0,
+        "passed": true
+      },
+      {
+        "case": "readback-amd-argument-1",
+        "exit": 0,
+        "passed": true
+      },
+      {
+        "case": "readback-amd-argument-2",
+        "exit": 0,
+        "passed": true
+      },
+      {
+        "case": "readback-intel-literal-1",
+        "exit": 0,
+        "passed": true
+      },
+      {
+        "case": "readback-intel-literal-2",
+        "exit": 0,
+        "passed": true
+      },
+      {
+        "case": "readback-intel-direct-1",
+        "exit": 0,
+        "passed": true
+      },
+      {
+        "case": "readback-intel-direct-2",
+        "exit": 0,
+        "passed": true
+      },
+      {
+        "case": "readback-intel-argument-1",
+        "exit": 0,
+        "passed": true
+      },
+      {
+        "case": "readback-intel-argument-2",
+        "exit": 0,
+        "passed": true
+      }
+    ],
+    "status": "passed",
+    "installedUnchangedDuringTest": true,
+    "programs": {
+      "render": {
+        "sourceSHA256": "42bbf0ae67936d4b83269a3e9463b4f766dc6a2163766352c77a995e259d0122",
+        "executableSHA256": "fc240b5abd0aa9eabec1c4e0e9d30cbc96fc07014e76742ba945d80ec893e2f1"
+      },
+      "readback": {
+        "sourceSHA256": "4880db6189235fbe761c53a4ae1613df99dd4a950a17c1387abaae0e0eb93d7c",
+        "executableSHA256": "db2e6d1b32d20cc822710ed536137ac976459b3239a0b09ea95742fc1bc6a5e2"
+      }
+    },
+    "amdArgumentExample": [
+      {
+        "requested": "amd",
+        "operation": "single compute invocation",
+        "lowPower": false,
+        "event": "DEVICE",
+        "argumentBuffersTier": 1,
+        "language": "Metal 2.0",
+        "name": "AMD Radeon Pro 450",
+        "variant": "argument"
+      },
+      {
+        "event": "MSL_SOURCE",
+        "source": "#include <metal_stdlib>\nusing namespace metal;\nstruct Params { float value; };\nstruct Args { constant Params *data [[id(0)]]; };\nkernel void computeMain_6b68c9f95d89(constant Args &args [[buffer(0)]], device float *result [[buffer(1)]]) { result[0] = args.data->value; }\n"
+      },
+      {
+        "seconds": 1.2626819610595703,
+        "error": "",
+        "event": "PIPELINE_CREATED"
+      },
+      {
+        "actual": 7.25,
+        "status": 4,
+        "expected": 7.25,
+        "event": "READBACK_PASS",
+        "error": ""
+      }
+    ],
+    "date": "2026-10-02",
+    "machine": "MacBookPro13,3",
+    "macOS": "15.8",
+    "build": "24H23",
+    "oclpVersion": "2.5.1",
+    "adapterSHA256": "35e7897e44a39557e7aa3ca8771e04b546b6e4ef89050c94a02f2c3ee57b7aa7",
+    "binary": "Earlier diagnostic prototype; stripped PR binary not installed",
+    "ordinaryServiceSample": {
+      "adapterLoaded": true,
+      "originalProviderUUID": "D5CF0007-8935-3193-B3F1-D0B3DD0DCC91"
+    },
+    "humanReport": {
+      "application": "BIMx",
+      "result": "works again with the candidate installed",
+      "versionSceneDurationRecorded": false
+    },
+    "dock": {
+      "barInitiallyOffscreen": true,
+      "sampledMainThreadIdle": true,
+      "newCrashReportPresent": false,
+      "restartingOnlyDockRestoredBar": true,
+      "prototypeRemainedInstalled": true,
+      "causality": "Installation-triggered regression not excluded"
+    }
+  }
+}
