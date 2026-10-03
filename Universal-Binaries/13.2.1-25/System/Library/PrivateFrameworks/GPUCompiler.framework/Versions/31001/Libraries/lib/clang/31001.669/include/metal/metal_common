@@ -1,0 +1,631 @@
+// -*- Metal -*-
+//===-- metal_common ------------------------------------------------------===//
+// Copyright (c) 2014-2018 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_COMMON
+#define __METAL_COMMON
+
+#if defined(__FAST_MATH__)
+#define __METAL_MAYBE_FAST_MATH__ __METAL_FAST_MATH__
+#else
+#define __METAL_MAYBE_FAST_MATH__ __METAL_PRECISE_MATH__
+#endif
+
+namespace metal
+{
+// Metal 1.1 s5.2: Common Functions.
+
+namespace fast
+{
+METAL_FUNC float clamp(float x, float minval, float maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_FAST_MATH__);
+}
+METAL_FUNC float saturate(float x)
+{
+  return __metal_saturate(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 clamp(float2 x, float2 minval, float2 maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_FAST_MATH__);
+}
+METAL_FUNC float2 saturate(float2 x)
+{
+  return __metal_saturate(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 clamp(float3 x, float3 minval, float3 maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_FAST_MATH__);
+}
+METAL_FUNC float3 saturate(float3 x)
+{
+  return __metal_saturate(x, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 clamp(float4 x, float4 minval, float4 maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_FAST_MATH__);
+}
+METAL_FUNC float4 saturate(float4 x)
+{
+  return __metal_saturate(x, __METAL_FAST_MATH__);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC float8 clamp(float8 x, float8 minval, float8 maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_FAST_MATH__);
+}
+METAL_FUNC float8 saturate(float8 x)
+{
+  return __metal_saturate(x, __METAL_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC float16 clamp(float16 x, float16 minval, float16 maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_FAST_MATH__);
+}
+METAL_FUNC float16 saturate(float16 x)
+{
+  return __metal_saturate(x, __METAL_FAST_MATH__);
+}
+#endif
+} // namespace fast
+
+namespace precise
+{
+METAL_FUNC float clamp(float x, float minval, float maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float saturate(float x)
+{
+  return __metal_saturate(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 clamp(float2 x, float2 minval, float2 maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float2 saturate(float2 x)
+{
+  return __metal_saturate(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 clamp(float3 x, float3 minval, float3 maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float3 saturate(float3 x)
+{
+  return __metal_saturate(x, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 clamp(float4 x, float4 minval, float4 maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float4 saturate(float4 x)
+{
+  return __metal_saturate(x, __METAL_PRECISE_MATH__);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC float8 clamp(float8 x, float8 minval, float8 maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float8 saturate(float8 x)
+{
+  return __metal_saturate(x, __METAL_PRECISE_MATH__);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC float16 clamp(float16 x, float16 minval, float16 maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_PRECISE_MATH__);
+}
+METAL_FUNC float16 saturate(float16 x)
+{
+  return __metal_saturate(x, __METAL_PRECISE_MATH__);
+}
+#endif
+} // namespace precise
+
+METAL_FUNC half clamp(half x, half minval, half maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half saturate(half x)
+{
+  return __metal_saturate(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 clamp(half2 x, half2 minval, half2 maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half2 saturate(half2 x)
+{
+  return __metal_saturate(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 clamp(half3 x, half3 minval, half3 maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half3 saturate(half3 x)
+{
+  return __metal_saturate(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 clamp(half4 x, half4 minval, half4 maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half4 saturate(half4 x)
+{
+  return __metal_saturate(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC half8 clamp(half8 x, half8 minval, half8 maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half8 saturate(half8 x)
+{
+  return __metal_saturate(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC half16 clamp(half16 x, half16 minval, half16 maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC half16 saturate(half16 x)
+{
+  return __metal_saturate(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+METAL_FUNC float clamp(float x, float minval, float maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float saturate(float x)
+{
+  return __metal_saturate(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 clamp(float2 x, float2 minval, float2 maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float2 saturate(float2 x)
+{
+  return __metal_saturate(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 clamp(float3 x, float3 minval, float3 maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float3 saturate(float3 x)
+{
+  return __metal_saturate(x, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 clamp(float4 x, float4 minval, float4 maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float4 saturate(float4 x)
+{
+  return __metal_saturate(x, __METAL_MAYBE_FAST_MATH__);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC float8 clamp(float8 x, float8 minval, float8 maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float8 saturate(float8 x)
+{
+  return __metal_saturate(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC float16 clamp(float16 x, float16 minval, float16 maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC float16 saturate(float16 x)
+{
+  return __metal_saturate(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double clamp(double x, double minval, double maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double saturate(double x)
+{
+  return __metal_saturate(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double2 clamp(double2 x, double2 minval, double2 maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double2 saturate(double2 x)
+{
+  return __metal_saturate(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double3 clamp(double3 x, double3 minval, double3 maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double3 saturate(double3 x)
+{
+  return __metal_saturate(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double4 clamp(double4 x, double4 minval, double4 maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double4 saturate(double4 x)
+{
+  return __metal_saturate(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double8 clamp(double8 x, double8 minval, double8 maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double8 saturate(double8 x)
+{
+  return __metal_saturate(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double16 clamp(double16 x, double16 minval, double16 maxval)
+{
+  return __metal_clamp(x, minval, maxval, __METAL_MAYBE_FAST_MATH__);
+}
+METAL_FUNC double16 saturate(double16 x)
+{
+  return __metal_saturate(x, __METAL_MAYBE_FAST_MATH__);
+}
+#endif
+#endif
+METAL_FUNC half mix(half x, half y, half a)
+{
+  return __metal_mix(x, y, a);
+}
+METAL_FUNC half sign(half x)
+{
+  return __metal_sign(x);
+}
+METAL_FUNC half smoothstep(half edge0, half edge1, half x)
+{
+  half t = clamp((x - edge0) / (edge1 - edge0), half(0), half(1));
+  return t * t * (half(3) - half(2) * t);
+}
+METAL_FUNC half step(half edge, half x)
+{
+  return half(x >= edge);
+}
+METAL_FUNC half2 mix(half2 x, half2 y, half2 a)
+{
+  return __metal_mix(x, y, a);
+}
+METAL_FUNC half2 sign(half2 x)
+{
+  return __metal_sign(x);
+}
+METAL_FUNC half2 smoothstep(half2 edge0, half2 edge1, half2 x)
+{
+  half2 t = clamp((x - edge0) / (edge1 - edge0), half2(0), half2(1));
+  return t * t * (half2(3) - half2(2) * t);
+}
+METAL_FUNC half2 step(half2 edge, half2 x)
+{
+  return half2(x >= edge);
+}
+METAL_FUNC half3 mix(half3 x, half3 y, half3 a)
+{
+  return __metal_mix(x, y, a);
+}
+METAL_FUNC half3 sign(half3 x)
+{
+  return __metal_sign(x);
+}
+METAL_FUNC half3 smoothstep(half3 edge0, half3 edge1, half3 x)
+{
+  half3 t = clamp((x - edge0) / (edge1 - edge0), half3(0), half3(1));
+  return t * t * (half3(3) - half3(2) * t);
+}
+METAL_FUNC half3 step(half3 edge, half3 x)
+{
+  return half3(x >= edge);
+}
+METAL_FUNC half4 mix(half4 x, half4 y, half4 a)
+{
+  return __metal_mix(x, y, a);
+}
+METAL_FUNC half4 sign(half4 x)
+{
+  return __metal_sign(x);
+}
+METAL_FUNC half4 smoothstep(half4 edge0, half4 edge1, half4 x)
+{
+  half4 t = clamp((x - edge0) / (edge1 - edge0), half4(0), half4(1));
+  return t * t * (half4(3) - half4(2) * t);
+}
+METAL_FUNC half4 step(half4 edge, half4 x)
+{
+  return half4(x >= edge);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC half8 mix(half8 x, half8 y, half8 a)
+{
+  return __metal_mix(x, y, a);
+}
+METAL_FUNC half8 sign(half8 x)
+{
+  return __metal_sign(x);
+}
+METAL_FUNC half8 smoothstep(half8 edge0, half8 edge1, half8 x)
+{
+  half8 t = clamp((x - edge0) / (edge1 - edge0), half8(0), half8(1));
+  return t * t * (half8(3) - half8(2) * t);
+}
+METAL_FUNC half8 step(half8 edge, half8 x)
+{
+  return half8(x >= edge);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC half16 mix(half16 x, half16 y, half16 a)
+{
+  return __metal_mix(x, y, a);
+}
+METAL_FUNC half16 sign(half16 x)
+{
+  return __metal_sign(x);
+}
+METAL_FUNC half16 smoothstep(half16 edge0, half16 edge1, half16 x)
+{
+  half16 t = clamp((x - edge0) / (edge1 - edge0), half16(0), half16(1));
+  return t * t * (half16(3) - half16(2) * t);
+}
+METAL_FUNC half16 step(half16 edge, half16 x)
+{
+  return half16(x >= edge);
+}
+#endif
+METAL_FUNC float mix(float x, float y, float a)
+{
+  return __metal_mix(x, y, a);
+}
+METAL_FUNC float sign(float x)
+{
+  return __metal_sign(x);
+}
+METAL_FUNC float smoothstep(float edge0, float edge1, float x)
+{
+  float t = clamp((x - edge0) / (edge1 - edge0), float(0), float(1));
+  return t * t * (float(3) - float(2) * t);
+}
+METAL_FUNC float step(float edge, float x)
+{
+  return float(x >= edge);
+}
+METAL_FUNC float2 mix(float2 x, float2 y, float2 a)
+{
+  return __metal_mix(x, y, a);
+}
+METAL_FUNC float2 sign(float2 x)
+{
+  return __metal_sign(x);
+}
+METAL_FUNC float2 smoothstep(float2 edge0, float2 edge1, float2 x)
+{
+  float2 t = clamp((x - edge0) / (edge1 - edge0), float2(0), float2(1));
+  return t * t * (float2(3) - float2(2) * t);
+}
+METAL_FUNC float2 step(float2 edge, float2 x)
+{
+  return float2(x >= edge);
+}
+METAL_FUNC float3 mix(float3 x, float3 y, float3 a)
+{
+  return __metal_mix(x, y, a);
+}
+METAL_FUNC float3 sign(float3 x)
+{
+  return __metal_sign(x);
+}
+METAL_FUNC float3 smoothstep(float3 edge0, float3 edge1, float3 x)
+{
+  float3 t = clamp((x - edge0) / (edge1 - edge0), float3(0), float3(1));
+  return t * t * (float3(3) - float3(2) * t);
+}
+METAL_FUNC float3 step(float3 edge, float3 x)
+{
+  return float3(x >= edge);
+}
+METAL_FUNC float4 mix(float4 x, float4 y, float4 a)
+{
+  return __metal_mix(x, y, a);
+}
+METAL_FUNC float4 sign(float4 x)
+{
+  return __metal_sign(x);
+}
+METAL_FUNC float4 smoothstep(float4 edge0, float4 edge1, float4 x)
+{
+  float4 t = clamp((x - edge0) / (edge1 - edge0), float4(0), float4(1));
+  return t * t * (float4(3) - float4(2) * t);
+}
+METAL_FUNC float4 step(float4 edge, float4 x)
+{
+  return float4(x >= edge);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC float8 mix(float8 x, float8 y, float8 a)
+{
+  return __metal_mix(x, y, a);
+}
+METAL_FUNC float8 sign(float8 x)
+{
+  return __metal_sign(x);
+}
+METAL_FUNC float8 smoothstep(float8 edge0, float8 edge1, float8 x)
+{
+  float8 t = clamp((x - edge0) / (edge1 - edge0), float8(0), float8(1));
+  return t * t * (float8(3) - float8(2) * t);
+}
+METAL_FUNC float8 step(float8 edge, float8 x)
+{
+  return float8(x >= edge);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC float16 mix(float16 x, float16 y, float16 a)
+{
+  return __metal_mix(x, y, a);
+}
+METAL_FUNC float16 sign(float16 x)
+{
+  return __metal_sign(x);
+}
+METAL_FUNC float16 smoothstep(float16 edge0, float16 edge1, float16 x)
+{
+  float16 t = clamp((x - edge0) / (edge1 - edge0), float16(0), float16(1));
+  return t * t * (float16(3) - float16(2) * t);
+}
+METAL_FUNC float16 step(float16 edge, float16 x)
+{
+  return float16(x >= edge);
+}
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double mix(double x, double y, double a)
+{
+  return __metal_mix(x, y, a);
+}
+METAL_FUNC double sign(double x)
+{
+  return __metal_sign(x);
+}
+METAL_FUNC double smoothstep(double edge0, double edge1, double x)
+{
+  double t = clamp((x - edge0) / (edge1 - edge0), double(0), double(1));
+  return t * t * (double(3) - double(2) * t);
+}
+METAL_FUNC double step(double edge, double x)
+{
+  return double(x >= edge);
+}
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double2 mix(double2 x, double2 y, double2 a)
+{
+  return __metal_mix(x, y, a);
+}
+METAL_FUNC double2 sign(double2 x)
+{
+  return __metal_sign(x);
+}
+METAL_FUNC double2 smoothstep(double2 edge0, double2 edge1, double2 x)
+{
+  double2 t = clamp((x - edge0) / (edge1 - edge0), double2(0), double2(1));
+  return t * t * (double2(3) - double2(2) * t);
+}
+METAL_FUNC double2 step(double2 edge, double2 x)
+{
+  return double2(x >= edge);
+}
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double3 mix(double3 x, double3 y, double3 a)
+{
+  return __metal_mix(x, y, a);
+}
+METAL_FUNC double3 sign(double3 x)
+{
+  return __metal_sign(x);
+}
+METAL_FUNC double3 smoothstep(double3 edge0, double3 edge1, double3 x)
+{
+  double3 t = clamp((x - edge0) / (edge1 - edge0), double3(0), double3(1));
+  return t * t * (double3(3) - double3(2) * t);
+}
+METAL_FUNC double3 step(double3 edge, double3 x)
+{
+  return double3(x >= edge);
+}
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double4 mix(double4 x, double4 y, double4 a)
+{
+  return __metal_mix(x, y, a);
+}
+METAL_FUNC double4 sign(double4 x)
+{
+  return __metal_sign(x);
+}
+METAL_FUNC double4 smoothstep(double4 edge0, double4 edge1, double4 x)
+{
+  double4 t = clamp((x - edge0) / (edge1 - edge0), double4(0), double4(1));
+  return t * t * (double4(3) - double4(2) * t);
+}
+METAL_FUNC double4 step(double4 edge, double4 x)
+{
+  return double4(x >= edge);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double8 mix(double8 x, double8 y, double8 a)
+{
+  return __metal_mix(x, y, a);
+}
+METAL_FUNC double8 sign(double8 x)
+{
+  return __metal_sign(x);
+}
+METAL_FUNC double8 smoothstep(double8 edge0, double8 edge1, double8 x)
+{
+  double8 t = clamp((x - edge0) / (edge1 - edge0), double8(0), double8(1));
+  return t * t * (double8(3) - double8(2) * t);
+}
+METAL_FUNC double8 step(double8 edge, double8 x)
+{
+  return double8(x >= edge);
+}
+#endif
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double16 mix(double16 x, double16 y, double16 a)
+{
+  return __metal_mix(x, y, a);
+}
+METAL_FUNC double16 sign(double16 x)
+{
+  return __metal_sign(x);
+}
+METAL_FUNC double16 smoothstep(double16 edge0, double16 edge1, double16 x)
+{
+  double16 t = clamp((x - edge0) / (edge1 - edge0), double16(0), double16(1));
+  return t * t * (double16(3) - double16(2) * t);
+}
+METAL_FUNC double16 step(double16 edge, double16 x)
+{
+  return double16(x >= edge);
+}
+#endif
+#endif
+} // namespace metal
+
+#endif // __METAL_COMMON

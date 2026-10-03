@@ -1,0 +1,230 @@
+//===-- metal_functional --------------------------------------------------===//
+// Copyright (c) 2014-2017 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_FUNCTIONAL
+#define __METAL_FUNCTIONAL
+
+namespace metal
+{
+template <typename T>
+struct plus
+{
+  typedef T first_argument_type;
+  typedef T second_argument_type;
+  typedef T result_type;
+
+  T operator()(const thread T &a, const thread T &b) const thread
+  {
+    return a + b;
+  }
+  T operator()(const thread T &a, const device T &b) const thread
+  {
+    return a + b;
+  }
+  T operator()(const thread T &a, const constant T &b) const thread
+  {
+    return a + b;
+  }
+  T operator()(const thread T &a, const threadgroup T &b) const thread
+  {
+    return a + b;
+  }
+  T operator()(const device T &a, const thread T &b) const thread
+  {
+    return a + b;
+  }
+  T operator()(const device T &a, const device T &b) const thread
+  {
+    return a + b;
+  }
+  T operator()(const device T &a, const constant T &b) const thread
+  {
+    return a + b;
+  }
+  T operator()(const device T &a, const threadgroup T &b) const thread
+  {
+    return a + b;
+  }
+  T operator()(const constant T &a, const thread T &b) const thread
+  {
+    return a + b;
+  }
+  T operator()(const constant T &a, const device T &b) const thread
+  {
+    return a + b;
+  }
+  T operator()(const constant T &a, const constant T &b) const thread
+  {
+    return a + b;
+  }
+  T operator()(const constant T &a, const threadgroup T &b) const thread
+  {
+    return a + b;
+  }
+  T operator()(const threadgroup T &a, const thread T &b) const thread
+  {
+    return a + b;
+  }
+  T operator()(const threadgroup T &a, const device T &b) const thread
+  {
+    return a + b;
+  }
+  T operator()(const threadgroup T &a, const constant T &b) const thread
+  {
+    return a + b;
+  }
+  T operator()(const threadgroup T &a, const threadgroup T &b) const thread
+  {
+    return a + b;
+  }
+};
+
+template <typename T>
+struct minus
+{
+  typedef T first_argument_type;
+  typedef T second_argument_type;
+  typedef T result_type;
+
+  T operator()(const thread T &a, const thread T &b) const thread
+  {
+    return a - b;
+  }
+  T operator()(const thread T &a, const device T &b) const thread
+  {
+    return a - b;
+  }
+  T operator()(const thread T &a, const constant T &b) const thread
+  {
+    return a - b;
+  }
+  T operator()(const thread T &a, const threadgroup T &b) const thread
+  {
+    return a - b;
+  }
+  T operator()(const device T &a, const thread T &b) const thread
+  {
+    return a - b;
+  }
+  T operator()(const device T &a, const device T &b) const thread
+  {
+    return a - b;
+  }
+  T operator()(const device T &a, const constant T &b) const thread
+  {
+    return a - b;
+  }
+  T operator()(const device T &a, const threadgroup T &b) const thread
+  {
+    return a - b;
+  }
+  T operator()(const constant T &a, const thread T &b) const thread
+  {
+    return a - b;
+  }
+  T operator()(const constant T &a, const device T &b) const thread
+  {
+    return a - b;
+  }
+  T operator()(const constant T &a, const constant T &b) const thread
+  {
+    return a - b;
+  }
+  T operator()(const constant T &a, const threadgroup T &b) const thread
+  {
+    return a - b;
+  }
+  T operator()(const threadgroup T &a, const thread T &b) const thread
+  {
+    return a - b;
+  }
+  T operator()(const threadgroup T &a, const device T &b) const thread
+  {
+    return a - b;
+  }
+  T operator()(const threadgroup T &a, const constant T &b) const thread
+  {
+    return a - b;
+  }
+  T operator()(const threadgroup T &a, const threadgroup T &b) const thread
+  {
+    return a - b;
+  }
+};
+
+template <typename T>
+struct multiplies
+{
+  typedef T first_argument_type;
+  typedef T second_argument_type;
+  typedef T result_type;
+
+  T operator()(const thread T &a, const thread T &b) const thread
+  {
+    return a * b;
+  }
+  T operator()(const thread T &a, const device T &b) const thread
+  {
+    return a * b;
+  }
+  T operator()(const thread T &a, const constant T &b) const thread
+  {
+    return a * b;
+  }
+  T operator()(const thread T &a, const threadgroup T &b) const thread
+  {
+    return a * b;
+  }
+  T operator()(const device T &a, const thread T &b) const thread
+  {
+    return a * b;
+  }
+  T operator()(const device T &a, const device T &b) const thread
+  {
+    return a * b;
+  }
+  T operator()(const device T &a, const constant T &b) const thread
+  {
+    return a * b;
+  }
+  T operator()(const device T &a, const threadgroup T &b) const thread
+  {
+    return a * b;
+  }
+  T operator()(const constant T &a, const thread T &b) const thread
+  {
+    return a * b;
+  }
+  T operator()(const constant T &a, const device T &b) const thread
+  {
+    return a * b;
+  }
+  T operator()(const constant T &a, const constant T &b) const thread
+  {
+    return a * b;
+  }
+  T operator()(const constant T &a, const threadgroup T &b) const thread
+  {
+    return a * b;
+  }
+  T operator()(const threadgroup T &a, const thread T &b) const thread
+  {
+    return a * b;
+  }
+  T operator()(const threadgroup T &a, const device T &b) const thread
+  {
+    return a * b;
+  }
+  T operator()(const threadgroup T &a, const constant T &b) const thread
+  {
+    return a * b;
+  }
+  T operator()(const threadgroup T &a, const threadgroup T &b) const thread
+  {
+    return a * b;
+  }
+};
+} // namespace metal
+
+#endif // __METAL_FUNCTIONAL

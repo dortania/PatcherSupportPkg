@@ -1,1 +1,0 @@
-/System/Library/CoreServices/WiFiAgent.app/Contents/MacOS/WiFiAgent

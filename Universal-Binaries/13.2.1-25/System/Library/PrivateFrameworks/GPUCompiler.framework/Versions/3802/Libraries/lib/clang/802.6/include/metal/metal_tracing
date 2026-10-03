@@ -1,0 +1,435 @@
+//===-- metal_tracing -----------------------------------------------------===//
+// Copyright (c) 2018 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_TRACING
+#define __METAL_TRACING
+
+#if defined(__HAVE_TRACING__)
+
+using namespace metal;
+
+uint32_t kernel_thread_tracepoint(constant uint32_t *module_id, uint32_t id,
+                                  uint3 thread_position_in_grid,
+                                  device void *trace_buffer)
+  __asm("_metal_kernel_thread_tracepoint");
+
+uint32_t vertex_thread_tracepoint(constant uint32_t *module_id, uint32_t id,
+                                  uint vertex_id, uint instance_id,
+                                  device void *trace_buffer)
+  __asm("_metal_vertex_thread_tracepoint");
+
+uint32_t fragment_thread_tracepoint(constant uint32_t *module_id, uint32_t id,
+                                    float4 position, uint sample_id,
+                                    device void *trace_buffer)
+  __asm("_metal_fragment_thread_tracepoint");
+
+uint32_t post_tesselation_vertex_thread_tracepoint(
+    constant uint32_t *module_id, uint32_t id,
+    uint patch_id, uint instance_id,
+    device void *trace_buffer)
+  __asm("_metal_post_tesselation_vertex_thread_tracepoint");
+
+void waypoint_tracepoint(constant uint32_t *module_id, uint32_t id,
+                         uint32_t thread_id, device void *trace_buffer)
+  __asm("_metal_waypoint_tracepoint");
+
+void variable_tracepoint(constant uint32_t *module_id, uint32_t id,
+                         const thread void *address,
+                         uint32_t thread_id, device void *trace_buffer)
+  __asm("_metal_variable_tracepoint.p0i8");
+
+void data_tracepoint(constant uint32_t *module_id, uint32_t id,
+                     const thread void *address, unsigned size,
+                     uint32_t thread_id, device void *trace_buffer)
+  __asm("_metal_data_tracepoint.p0i8");
+
+void data_tracepoint(constant uint32_t *module_id, uint32_t id,
+                     const threadgroup void *address, unsigned size,
+                     uint32_t thread_id, device void *trace_buffer)
+  __asm("_metal_data_tracepoint.p3i8");
+
+#pragma METAL internals : enable
+
+#include <metal_atomic>
+
+namespace {
+struct TraceBuffer {
+  inline uint32_t get_thread_id() device;
+  inline device void *reserve(uint32_t size) device;
+
+private:
+  // Thread-id counter.
+  atomic_uint thread_id;
+
+  // The size of the trace buffer including the header.
+  const uint32_t trace_stream_size;
+
+  // The position of the trace stream.
+  atomic_uint trace_stream_position;
+};
+
+struct KernelTraceBuffer : TraceBuffer {
+  inline bool is_in_region_of_interest(
+      uint3 the_thread_position_in_grid) const device;
+
+private:
+  uint3 thread_position_in_grid[2];
+};
+
+struct VertexTraceBuffer : TraceBuffer {
+  inline bool is_in_region_of_interest(uint the_vertex_id,
+                                       uint the_instance_id) const device;
+
+private:
+  uint instance_id;
+  uint vertex_count;
+  uint vertex_ids[1];
+
+};
+
+struct FragmentTraceBuffer : TraceBuffer {
+  inline bool is_in_region_of_interest(float4 the_position,
+                                       uint the_sample_id) const device;
+
+private:
+  float4 position[2];
+  uint sample_id[2];
+};
+
+struct PostTesselationVertexTraceBuffer : TraceBuffer {
+  inline bool is_in_region_of_interest(uint the_patch_id,
+                                       uint the_instance_id) const device;
+
+private:
+  uint instance_id;
+  uint patch_count;
+  uint patch_ids[1];
+};
+}
+
+template <typename T, typename U, typename _E = typename enable_if<_disjunction<is_same<T, int>, is_same<T, uint>>::value && is_convertible<T, U>::value>::type>
+__attribute__((no_tracepoint)) T my_atomic_fetch_add_explicit(volatile device _atomic<T>* object, U operand, memory_order order) METAL_CONST_ARG(order)
+{
+  return __metal_atomic_fetch_add_explicit(&object->__s, T(operand), int(order), __METAL_MEMORY_SCOPE_DEVICE__);
+}
+
+template <typename T, typename U, typename _E = typename enable_if<_disjunction<is_same<T, int>, is_same<T, uint>>::value && is_convertible<T, U>::value>::type>
+__attribute__((no_tracepoint)) T my_atomic_fetch_sub_explicit(volatile device _atomic<T>* object, U operand, memory_order order) METAL_CONST_ARG(order)
+{
+  return __metal_atomic_fetch_sub_explicit(&object->__s, T(operand), int(order), __METAL_MEMORY_SCOPE_DEVICE__);
+}
+
+template <typename T, typename _E = typename enable_if<is_same<make_scalar_t<T>, bool>::value>::type>
+__attribute__((no_tracepoint)) bool my_all(T x)
+{
+  return __metal_all(x);
+}
+
+METAL_INTERNAL __attribute__((no_tracepoint))
+uint32_t TraceBuffer::get_thread_id() device {
+  // TODO: Handle overflow of thread-ids.
+  return my_atomic_fetch_add_explicit(&thread_id, 1, memory_order_relaxed);
+}
+
+METAL_INTERNAL __attribute__((no_tracepoint))
+device void *TraceBuffer::reserve(uint32_t size) device {
+  // NOTE: Ignore the overflow that could theoretically happen here.
+  uint32_t position = my_atomic_fetch_add_explicit(&trace_stream_position, size,
+                                                   memory_order_relaxed);
+  if ((position + size) >= trace_stream_size) {
+    my_atomic_fetch_sub_explicit(&trace_stream_position, size,
+                                 memory_order_relaxed);
+    return nullptr;
+  }
+  return ((device uint8_t *) this) + position;
+}
+
+METAL_INTERNAL __attribute__((no_tracepoint))
+bool KernelTraceBuffer::is_in_region_of_interest(
+    uint3 the_thread_position_in_grid) const device {
+  return (my_all(thread_position_in_grid[0] <= the_thread_position_in_grid) &&
+          my_all(the_thread_position_in_grid <= thread_position_in_grid[1]));
+}
+
+METAL_INTERNAL __attribute__((no_tracepoint))
+bool VertexTraceBuffer::is_in_region_of_interest(
+    uint the_vertex_id, uint the_instance_id) const device {
+  if (instance_id == the_instance_id) {
+    device auto *ids = &vertex_ids[0];
+    for (unsigned i = 0; i != vertex_count; ++i)
+      if (the_vertex_id == ids[i])
+        return true;
+  }
+  return false;
+}
+
+METAL_INTERNAL __attribute__((no_tracepoint))
+bool FragmentTraceBuffer::is_in_region_of_interest(
+    float4 the_position, uint the_sample_id) const device {
+  return (my_all(position[0] <= the_position) &&
+          my_all(the_position <= position[1]) &&
+          (sample_id[0] <= the_sample_id) && (the_sample_id <= sample_id[1]));
+}
+
+METAL_INTERNAL __attribute__((no_tracepoint))
+bool PostTesselationVertexTraceBuffer::is_in_region_of_interest(
+    uint the_patch_id, uint the_instance_id) const device {
+  if (instance_id == the_instance_id) {
+    device auto *ids = &patch_ids[0];
+    for (unsigned i = 0; i != patch_count; ++i)
+      if (the_patch_id == ids[i])
+        return true;
+  }
+  return false;
+}
+
+#pragma METAL internals : disable
+
+#define MEMCPY __builtin_memcpy
+
+METAL_INTERNAL __attribute__((noinline, no_tracepoint, weak))
+uint32_t kernel_thread_tracepoint(constant uint32_t *module_id, uint32_t id,
+                                  uint3 thread_position_in_grid,
+                                  device void *trace_buffer) {
+  device auto *tb = (device KernelTraceBuffer *) trace_buffer;
+
+  if (!tb->is_in_region_of_interest(thread_position_in_grid))
+    return 0;
+
+  uint32_t thread_id = tb->get_thread_id();
+  if (thread_id == 0)
+    return 0;
+
+  device uint8_t *stream =
+      (device uint8_t *) tb->reserve(sizeof(id) + sizeof(thread_id) +
+                                     sizeof (thread_position_in_grid));
+  if (!stream)
+    return 0;
+
+  MEMCPY(stream, &thread_id, sizeof(thread_id));
+  stream += sizeof(thread_id);
+
+  uint32_t real_id = (*module_id << 24) | ((id << 8) >> 8);
+  MEMCPY(stream, &real_id, sizeof(real_id));
+  stream += sizeof(real_id);
+
+  MEMCPY(stream, &thread_position_in_grid,
+         sizeof(thread_position_in_grid));
+  stream += sizeof(thread_position_in_grid);
+
+  return thread_id;
+}
+
+METAL_INTERNAL __attribute__((noinline, no_tracepoint, weak))
+uint32_t vertex_thread_tracepoint(constant uint32_t *module_id, uint32_t id,
+                                  uint vertex_id, uint instance_id,
+                                  device void *trace_buffer) {
+  device auto *tb = (device VertexTraceBuffer *) trace_buffer;
+
+  if (!tb->is_in_region_of_interest(vertex_id, instance_id))
+    return 0;
+
+  uint32_t thread_id = tb->get_thread_id();
+  if (thread_id == 0)
+    return 0;
+
+  device uint8_t *stream =
+      (device uint8_t *) tb->reserve(sizeof(id) + sizeof(thread_id) +
+                                     sizeof(vertex_id) + sizeof(instance_id));
+  if (!stream)
+    return 0;
+
+  MEMCPY(stream, &thread_id, sizeof(thread_id));
+  stream += sizeof(thread_id);
+
+  uint32_t real_id = (*module_id << 24) | ((id << 8) >> 8);
+  MEMCPY(stream, &real_id, sizeof(real_id));
+  stream += sizeof(real_id);
+
+  MEMCPY(stream, &vertex_id, sizeof(vertex_id));
+  stream += sizeof(vertex_id);
+
+  MEMCPY(stream, &instance_id, sizeof(instance_id));
+  stream += sizeof(instance_id);
+
+  return thread_id;
+}
+
+METAL_INTERNAL __attribute__((noinline, no_tracepoint, weak))
+uint32_t fragment_thread_tracepoint(constant uint32_t *module_id, uint32_t id,
+                                    float4 position, uint sample_id,
+                                    device void *trace_buffer) {
+  device auto *tb = (device FragmentTraceBuffer *) trace_buffer;
+
+  if (!tb->is_in_region_of_interest(position, sample_id))
+    return 0;
+
+  uint32_t thread_id = tb->get_thread_id();
+  if (thread_id == 0)
+    return 0;
+
+  device uint8_t *stream =
+      (device uint8_t *) tb->reserve(sizeof(id) + sizeof(thread_id) +
+                                     sizeof(position) + sizeof(sample_id));
+  if (!stream)
+    return 0;
+
+  MEMCPY(stream, &thread_id, sizeof(thread_id));
+  stream += sizeof(thread_id);
+
+  uint32_t real_id = (*module_id << 24) | ((id << 8) >> 8);
+  MEMCPY(stream, &real_id, sizeof(real_id));
+  stream += sizeof(real_id);
+
+  MEMCPY(stream, &position, sizeof(position));
+  stream += sizeof(position);
+
+  MEMCPY(stream, &sample_id, sizeof(sample_id));
+  stream += sizeof(sample_id);
+
+  return thread_id;
+}
+
+METAL_INTERNAL __attribute__((noinline, no_tracepoint, weak))
+uint32_t post_tesselation_vertex_thread_tracepoint(
+    constant uint32_t *module_id, uint32_t id,
+    uint patch_id, uint instance_id,
+    device void *trace_buffer) {
+  device auto *tb = (device PostTesselationVertexTraceBuffer *) trace_buffer;
+
+  if (!tb->is_in_region_of_interest(patch_id, instance_id))
+    return 0;
+
+  uint32_t thread_id = tb->get_thread_id();
+  if (thread_id == 0)
+    return 0;
+
+  device uint8_t *stream =
+      (device uint8_t *) tb->reserve(sizeof(id) + sizeof(thread_id) +
+                                     sizeof(patch_id) + sizeof(instance_id));
+  if (!stream)
+    return 0;
+
+  MEMCPY(stream, &thread_id, sizeof(thread_id));
+  stream += sizeof(thread_id);
+
+  uint32_t real_id = (*module_id << 24) | ((id << 8) >> 8);
+  MEMCPY(stream, &real_id, sizeof(real_id));
+  stream += sizeof(real_id);
+
+  MEMCPY(stream, &patch_id, sizeof(patch_id));
+  stream += sizeof(patch_id);
+
+  MEMCPY(stream, &instance_id, sizeof(instance_id));
+  stream += sizeof(instance_id);
+
+  return 0;
+}
+
+METAL_INTERNAL __attribute__((noinline, no_tracepoint, weak))
+void waypoint_tracepoint(constant uint32_t *module_id, uint32_t id,
+                         uint32_t thread_id, device void *trace_buffer) {
+  if (thread_id == 0)
+    return;
+
+  device TraceBuffer *tb = (device TraceBuffer *) trace_buffer;
+  device uint8_t *stream =
+      (device uint8_t *) tb->reserve(sizeof(id) + sizeof(thread_id));
+  if (!stream)
+    return;
+
+  MEMCPY(stream, &thread_id, sizeof(thread_id));
+  stream += sizeof(thread_id);
+
+  uint32_t real_id = (*module_id << 24) | ((id << 8) >> 8);
+  MEMCPY(stream, &real_id, sizeof(real_id));
+  stream += sizeof(real_id);
+}
+
+#define VARIABLE_TRACEPOINT(AS)                                                           \
+    METAL_INTERNAL __attribute__((no_tracepoint))                                         \
+    static void variable_tracepoint_impl(constant uint32_t *module_id, uint32_t id,       \
+                                         const AS void *address,                          \
+                                         uint32_t thread_id, device void *trace_buffer) { \
+      if (thread_id == 0)                                                                 \
+        return;                                                                           \
+                                                                                          \
+      device TraceBuffer *tb = (device TraceBuffer *) trace_buffer;                       \
+      device uint8_t *stream =                                                            \
+          (device uint8_t *) tb->reserve(sizeof(id) + sizeof(thread_id) +                 \
+                                         sizeof(address));                                \
+      if (!stream)                                                                        \
+        return;                                                                           \
+                                                                                          \
+      MEMCPY(stream, &thread_id, sizeof(thread_id));                                      \
+      stream += sizeof(thread_id);                                                        \
+                                                                                          \
+      uint32_t real_id = (*module_id << 24) | ((id << 8) >> 8);                           \
+      MEMCPY(stream, &real_id, sizeof(real_id));                                          \
+      stream += sizeof(real_id);                                                          \
+                                                                                          \
+      MEMCPY(stream, &address, sizeof(address));                                          \
+      stream += sizeof(address);                                                          \
+    }
+
+VARIABLE_TRACEPOINT(thread)
+
+METAL_INTERNAL __attribute__((noinline, no_tracepoint, weak))
+void variable_tracepoint(constant uint32_t *module_id, uint32_t id,
+                         const thread void *address,
+                         uint32_t thread_id, device void *trace_buffer) {
+  variable_tracepoint_impl(module_id, id, address, thread_id, trace_buffer);
+}
+
+#define STATIC_DATA_TRACEPOINT(AS)                                                           \
+    METAL_INTERNAL __attribute__((no_tracepoint))                                            \
+    static void static_data_tracepoint_impl(constant uint32_t *module_id, uint32_t id,       \
+                                            const AS void *address, uint32_t size,           \
+                                            uint32_t thread_id, device void *trace_buffer) { \
+      if (thread_id == 0)                                                                    \
+        return;                                                                              \
+                                                                                             \
+      device TraceBuffer *tb = (device TraceBuffer *) trace_buffer;                          \
+      uint32_t adjusted_size = (size + 3) & ~0x3;                                            \
+      device uint8_t *stream =                                                               \
+          (device uint8_t *) tb->reserve(sizeof(id) + sizeof(thread_id) +                    \
+                                         sizeof(address) + adjusted_size);                   \
+      if (!stream)                                                                           \
+        return;                                                                              \
+                                                                                             \
+      MEMCPY(stream, &thread_id, sizeof(thread_id));                                         \
+      stream += sizeof(thread_id);                                                           \
+                                                                                             \
+      uint32_t real_id = (*module_id << 24) | ((id << 8) >> 8);                              \
+      MEMCPY(stream, &real_id, sizeof(real_id));                                             \
+      stream += sizeof(real_id);                                                             \
+                                                                                             \
+      MEMCPY(stream, &address, sizeof(address));                                             \
+      stream += sizeof(address);                                                             \
+                                                                                             \
+      MEMCPY(stream, address, size);                                                         \
+      stream += size;                                                                        \
+    }
+
+STATIC_DATA_TRACEPOINT(thread)
+
+METAL_INTERNAL __attribute__((noinline, no_tracepoint, weak))
+void data_tracepoint(constant uint32_t *module_id, uint32_t id,
+                     const thread void *address, unsigned size,
+                     uint32_t thread_id, device void *trace_buffer) {
+  static_data_tracepoint_impl(module_id, id, address, size, thread_id, trace_buffer);
+}
+
+STATIC_DATA_TRACEPOINT(threadgroup)
+
+METAL_INTERNAL __attribute__((noinline, no_tracepoint, weak))
+void data_tracepoint(constant uint32_t *module_id, uint32_t id,
+                     const threadgroup void *address, unsigned size,
+                     uint32_t thread_id, device void *trace_buffer) {
+  static_data_tracepoint_impl(module_id, id, address, size, thread_id, trace_buffer);
+}
+
+#endif // defined(__HAVE_TRACING__)
+
+#endif // __METAL_TRACING

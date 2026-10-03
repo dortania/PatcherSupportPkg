@@ -1,0 +1,681 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+      <key>Version</key>
+      <string>1.0</string>
+      <key>DerivedCounters</key>
+      <dict>
+            <key>GpuTime</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>GpuTimeMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>GpuTimeMD</string>
+                  <key>description</key>
+                  <string>Time elapsed on the GPU during the measurement.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                              <string>Memory</string>
+                              <string>Vertex Processing</string>
+                              <string>Fragment Processing</string>
+                  </array>
+            </dict>
+            <key>GpuCoreClocks</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>GpuCoreClocksMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>GpuCoreClocksMD</string>
+                  <key>description</key>
+                  <string>The total number of GPU core clocks elapsed during the measurement.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                              <string>Memory</string>
+                              <string>Vertex Processing</string>
+                              <string>Fragment Processing</string>
+                  </array>
+            </dict>
+            <key>AvgGpuCoreFrequencyMHz</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>AvgGpuCoreFrequencyMHzMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>AvgGpuCoreFrequencyMHzMD</string>
+                  <key>description</key>
+                  <string>Average GPU Core Frequency in the measurement.</string>
+                  <key>type</key>
+                  <string>Rate</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                              <string>Memory</string>
+                              <string>Vertex Processing</string>
+                              <string>Fragment Processing</string>
+                  </array>
+            </dict>
+            <key>VsThreads</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>VsThreadsMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>VsThreadsMD</string>
+                  <key>description</key>
+                  <string>The total number of vertex shader hardware threads dispatched.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                  </array>
+            </dict>
+            <key>HsThreads</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>HsThreadsMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>HsThreadsMD</string>
+                  <key>description</key>
+                  <string>The total number of hull shader hardware threads dispatched.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                  </array>
+            </dict>
+            <key>DsThreads</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>DsThreadsMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>DsThreadsMD</string>
+                  <key>description</key>
+                  <string>The total number of domain shader hardware threads dispatched.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                  </array>
+            </dict>
+            <key>GsThreads</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>GsThreadsMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>GsThreadsMD</string>
+                  <key>description</key>
+                  <string>The total number of geometry shader hardware threads dispatched.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                  </array>
+            </dict>
+            <key>PsThreads</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>PsThreadsMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>PsThreadsMD</string>
+                  <key>description</key>
+                  <string>The total number of pixel shader hardware threads dispatched.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                  </array>
+            </dict>
+            <key>CsThreads</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>CsThreadsMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>CsThreadsMD</string>
+                  <key>description</key>
+                  <string>The total number of compute shader hardware threads dispatched.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                  </array>
+            </dict>
+            <key>EuActive</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>EuActiveMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>EuActiveMD</string>
+                  <key>description</key>
+                  <string>The percentage of time in which the Execution Units were actively processing.</string>
+                  <key>type</key>
+                  <string>Percentage</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                  </array>
+            </dict>
+            <key>EuStall</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>EuStallMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>EuStallMD</string>
+                  <key>description</key>
+                  <string>The percentage of time in which the Execution Units were stalled.</string>
+                  <key>type</key>
+                  <string>Percentage</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                  </array>
+            </dict>
+            <key>EuAvgIpcRate</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>EuAvgIpcRateMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>EuAvgIpcRateMD</string>
+                  <key>description</key>
+                  <string>The average rate of IPC calculated for 2 FPU pipelines.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                  </array>
+            </dict>
+            <key>EuFpuBothActive</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>EuFpuBothActiveMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>EuFpuBothActiveMD</string>
+                  <key>description</key>
+                  <string>The percentage of time in which both EU FPU pipelines were actively processing.</string>
+                  <key>type</key>
+                  <string>Percentage</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                  </array>
+            </dict>
+            <key>Fpu0Active</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>Fpu0ActiveMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>Fpu0ActiveMD</string>
+                  <key>description</key>
+                  <string>The percentage of time in which EU FPU0 pipeline was actively processing.</string>
+                  <key>type</key>
+                  <string>Percentage</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                  </array>
+            </dict>
+            <key>Fpu1Active</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>Fpu1ActiveMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>Fpu1ActiveMD</string>
+                  <key>description</key>
+                  <string>The percentage of time in which EU FPU1 pipeline was actively processing.</string>
+                  <key>type</key>
+                  <string>Percentage</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                  </array>
+            </dict>
+            <key>EuSendActive</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>EuSendActiveMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>EuSendActiveMD</string>
+                  <key>description</key>
+                  <string>The percentage of time in which EU send pipeline was actively processing.</string>
+                  <key>type</key>
+                  <string>Percentage</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                  </array>
+            </dict>
+            <key>EuThreadOccupancy</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>EuThreadOccupancyMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>EuThreadOccupancyMD</string>
+                  <key>description</key>
+                  <string>The percentage of time in which hardware threads occupied EUs.</string>
+                  <key>type</key>
+                  <string>Percentage</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                  </array>
+            </dict>
+            <key>SamplerTexels</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>SamplerTexelsMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>SamplerTexelsMD</string>
+                  <key>description</key>
+                  <string>The total number of texels seen on input (with 2x2 accuracy) in all sampler units.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                              <string>Memory</string>
+                  </array>
+            </dict>
+            <key>SamplerTexelMisses</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>SamplerTexelMissesMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>SamplerTexelMissesMD</string>
+                  <key>description</key>
+                  <string>The total number of texels lookups (with 2x2 accuracy) that missed L1 sampler cache.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                              <string>Memory</string>
+                  </array>
+            </dict>
+            <key>SlmBytesRead</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>SlmBytesReadMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>SlmBytesReadMD</string>
+                  <key>description</key>
+                  <string>The total number of GPU memory bytes read from shared local memory.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Memory</string>
+                  </array>
+            </dict>
+            <key>SlmBytesWritten</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>SlmBytesWrittenMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>SlmBytesWrittenMD</string>
+                  <key>description</key>
+                  <string>The total number of GPU memory bytes written into shared local memory.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Memory</string>
+                  </array>
+            </dict>
+            <key>ShaderMemoryAccesses</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>ShaderMemoryAccessesMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>ShaderMemoryAccessesMD</string>
+                  <key>description</key>
+                  <string>The total number of shader memory accesses to L3.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Memory</string>
+                  </array>
+            </dict>
+            <key>ShaderAtomics</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>ShaderAtomicsMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>ShaderAtomicsMD</string>
+                  <key>description</key>
+                  <string>The total number of shader atomic memory accesses.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Memory</string>
+                  </array>
+            </dict>
+            <key>L3ShaderThroughput</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>L3ShaderThroughputMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>L3ShaderThroughputMD</string>
+                  <key>description</key>
+                  <string>The total number of GPU memory bytes transferred between shaders and L3 caches w/o URB.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Memory</string>
+                  </array>
+            </dict>
+            <key>ShaderBarriers</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>ShaderBarriersMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>ShaderBarriersMD</string>
+                  <key>description</key>
+                  <string>The total number of shader barrier messages.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Memory</string>
+                  </array>
+            </dict>
+            <key>EuHdc0Writes32B</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>EuHdc0Writes32BMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>EuHdc0Writes32BMD</string>
+                  <key>description</key>
+                  <string>The subslice 0 EU data writes to Data Port with 32B per message.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                              <string>Memory</string>
+                  </array>
+            </dict>
+            <key>EuHdc0Writes64B</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>EuHdc0Writes64BMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>EuHdc0Writes64BMD</string>
+                  <key>description</key>
+                  <string>The subslice 0 EU data writes to Data Port with 64B per message.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                              <string>Memory</string>
+                  </array>
+            </dict>
+            <key>EuHdc0Writes96B</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>EuHdc0Writes96BMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>EuHdc0Writes96BMD</string>
+                  <key>description</key>
+                  <string>The subslice 0 EU data writes to Data Port with 64B per message.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                              <string>Memory</string>
+                  </array>
+            </dict>
+            <key>EuHdc0Writes128B</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>EuHdc0Writes128BMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>EuHdc0Writes128BMD</string>
+                  <key>description</key>
+                  <string>The subslice 0 EU data writes to Data Port with 128B per message.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                              <string>Memory</string>
+                  </array>
+            </dict>
+            <key>EuHdc0Writes192B</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>EuHdc0Writes192BMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>EuHdc0Writes192BMD</string>
+                  <key>description</key>
+                  <string>The subslice 0 EU data simd16 writes to Data Port with 192B per message.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                              <string>Memory</string>
+                  </array>
+            </dict>
+            <key>EuHdc0Writes128BSimd16</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>EuHdc0Writes128BSimd16MD</string>
+                  </array>
+                  <key>name</key>
+                  <string>EuHdc0Writes128BSimd16MD</string>
+                  <key>description</key>
+                  <string>The subslice 0 EU data simd16 writes to Data Port with 128B per message.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                              <string>Memory</string>
+                  </array>
+            </dict>
+            <key>EuHdc0Writes256BSimd16</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>EuHdc0Writes256BSimd16MD</string>
+                  </array>
+                  <key>name</key>
+                  <string>EuHdc0Writes256BSimd16MD</string>
+                  <key>description</key>
+                  <string>The subslice 0 EU data simd16 writes to Data Port with 256B per message.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                              <string>Memory</string>
+                  </array>
+            </dict>
+            <key>Hdc0L3DataReads</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>Hdc0L3DataReadsMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>Hdc0L3DataReadsMD</string>
+                  <key>description</key>
+                  <string>The subslice 0 Data Port data and constant reads from L3 cache.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                              <string>Memory</string>
+                  </array>
+            </dict>
+            <key>Hdc0L3DataWrites</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>Hdc0L3DataWritesMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>Hdc0L3DataWritesMD</string>
+                  <key>description</key>
+                  <string>The subslice 0 Data Port data writes to L3 cache.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                              <string>Memory</string>
+                  </array>
+            </dict>
+            <key>Hdc0L3Reads</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>Hdc0L3ReadsMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>Hdc0L3ReadsMD</string>
+                  <key>description</key>
+                  <string>The subslice 0 Data Port reads from L3 cache.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                              <string>Memory</string>
+                  </array>
+            </dict>
+            <key>Hdc0L3Writes</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>Hdc0L3WritesMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>Hdc0L3WritesMD</string>
+                  <key>description</key>
+                  <string>The subslice 0 Data Port writes to L3 cache.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                              <string>Memory</string>
+                  </array>
+            </dict>
+            <key>EuBytesWrittenPerCacheLine</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>EuBytesWrittenPerCacheLineMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>EuBytesWrittenPerCacheLineMD</string>
+                  <key>description</key>
+                  <string>Average EU bytes written per L3 cache line.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                              <string>Memory</string>
+                  </array>
+            </dict>
+            <key>EuDataWritesPerCacheLine</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>EuDataWritesPerCacheLineMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>EuDataWritesPerCacheLineMD</string>
+                  <key>description</key>
+                  <string>Coalescing ratio of EU write requests to L3 cache lines.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                              <string>Memory</string>
+                  </array>
+            </dict>
+      </dict>
+</dict>
+</plist>

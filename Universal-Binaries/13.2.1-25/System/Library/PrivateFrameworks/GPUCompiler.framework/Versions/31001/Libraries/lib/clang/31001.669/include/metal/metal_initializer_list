@@ -1,0 +1,48 @@
+// -*- Metal -*-
+//===-- metal_initializer_list --------------------------------------------===//
+// Copyright (c) 2014-2018 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_INITIALIZER_LIST
+#define __METAL_INITIALIZER_LIST
+
+namespace metal
+{
+template <typename T>
+struct initializer_list
+{
+  typedef T value_type;
+  typedef const thread T& reference;
+  typedef const thread T& const_reference;
+  typedef size_t size_type;
+
+  typedef const thread T *iterator;
+  typedef const thread T *const_iterator;
+
+  constexpr initializer_list() thread
+      : elems(nullptr), count(0)
+  {
+  }
+
+  size_type size() const thread
+  {
+    return count;
+  }
+
+  const_iterator begin() const thread
+  {
+    return elems;
+  }
+
+  const_iterator end() const thread
+  {
+    return elems + count;
+  }
+
+private:
+  const thread value_type *elems;
+  size_type count;
+};
+} // namespace metal
+
+#endif // __METAL_INITIALIZER_LIST

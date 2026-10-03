@@ -1,0 +1,4 @@
+BUILD_VARIANTS[sdk=macosx*] = normal kasan
+BUILD_VARIANTS[sdk=iphoneos*] = normal kasan
+OTHER_CFLAGS_kasan = $(KASAN_DEFAULT_CFLAGS)
+CODE_SIGN_IDENTITY = -

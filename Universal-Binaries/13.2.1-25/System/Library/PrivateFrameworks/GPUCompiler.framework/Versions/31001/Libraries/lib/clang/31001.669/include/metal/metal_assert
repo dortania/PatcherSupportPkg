@@ -1,0 +1,22 @@
+// -*- Metal -*-
+//===-- metal_assert ------------------------------------------------------===//
+// Copyright (c) 2014-2019 Apple Inc. All rights reserved
+//
+// This header is for internal use only. This header may disappear between
+// releases.
+//===----------------------------------------------------------------------===//
+
+#ifdef __METAL_ASSERT
+
+#undef __METAL_ASSERT
+#undef assert
+
+#endif // __METAL_ASSERT
+
+#define __METAL_ASSERT
+
+#if defined(NDEBUG) || !defined(__HAVE_ASSERT__)
+#define assert(condition) ((void) 0)
+#else
+#define assert(condition) ((void) 0)
+#endif

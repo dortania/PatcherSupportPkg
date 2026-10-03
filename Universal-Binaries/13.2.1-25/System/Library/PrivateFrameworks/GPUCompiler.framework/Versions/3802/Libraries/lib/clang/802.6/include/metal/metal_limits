@@ -1,0 +1,174 @@
+//===-- metal_limits ------------------------------------------------------===//
+// Copyright (c) 2014-2016 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_LIMITS
+#define __METAL_LIMITS
+
+#pragma METAL internals : enable
+namespace metal
+{
+enum float_round_style
+{
+  round_indeterminate = -1,
+  round_toward_zero = 0,
+  round_to_nearest = 1,
+  round_toward_infinity = 2,
+  round_toward_neg_infinity = 3
+};
+
+enum float_denorm_style
+{
+  denorm_indeterminate = -1,
+  denorm_absent = 0,
+  denorm_present = 1
+};
+
+template <typename T>
+struct _numeric_limits_impl
+{
+  static constexpr constant bool is_specialized = false;
+  static constexpr constant bool is_signed = false;
+  static constexpr constant bool is_integer = false;
+  static constexpr constant bool is_exact = false;
+  static constexpr constant bool has_infinity = false;
+  static constexpr constant bool has_quiet_NaN = false;
+  static constexpr constant bool has_signaling_NaN = false;
+  static constexpr constant float_denorm_style has_denorm = denorm_absent;
+  static constexpr constant bool has_denorm_loss = false;
+  static constexpr constant float_round_style round_style = round_toward_zero;
+  static constexpr constant bool is_iec559 = false;
+  static constexpr constant bool is_bounded = false;
+  static constexpr constant bool is_modulo = false;
+  static constexpr constant int digits = 0;
+  static constexpr constant int digits10 = 0;
+  static constexpr constant int max_digits10 = 0;
+  static constexpr constant int radix = 0;
+  static constexpr constant int min_exponent = 0;
+  static constexpr constant int min_exponent10 = 0;
+  static constexpr constant int max_exponent = 0;
+  static constexpr constant int max_exponent10 = 0;
+  static constexpr constant bool traps = false;
+  static constexpr constant bool tinyness_before = false;
+
+  static constexpr T min()
+  {
+    return T();
+  }
+  static constexpr T lowest()
+  {
+    return T();
+  }
+  static constexpr T max()
+  {
+    return T();
+  }
+  static constexpr T epsilon()
+  {
+    return T();
+  }
+  static constexpr T round_error()
+  {
+    return T();
+  }
+  static constexpr T infinity()
+  {
+    return T();
+  }
+  static constexpr T quiet_NaN()
+  {
+    return T();
+  }
+  static constexpr T signaling_NaN()
+  {
+    return T();
+  }
+  static constexpr T denorm_min()
+  {
+    return T();
+  }
+};
+
+// TODO: Implement all the other members -- see <rdar://problem/36141588>.
+template <>
+struct _numeric_limits_impl<half>
+{
+  static constexpr constant bool has_quiet_NaN = true;
+
+  static constexpr half min()
+  {
+    return HALF_MIN;
+  }
+  static constexpr half max()
+  {
+    return HALF_MAX;
+  }
+  static constexpr half epsilon()
+  {
+    return HALF_EPSILON;
+  }
+  static constexpr half quiet_NaN()
+  {
+    return __builtin_nanh("");
+  }
+};
+
+// TODO: Implement all the other members -- see <rdar://problem/36141588>.
+template <>
+struct _numeric_limits_impl<float>
+{
+  static constexpr constant bool has_quiet_NaN = true;
+
+  static constexpr float min()
+  {
+    return FLT_MIN;
+  }
+  static constexpr float max()
+  {
+    return FLT_MAX;
+  }
+  static constexpr float epsilon()
+  {
+    return FLT_EPSILON;
+  }
+  static constexpr float quiet_NaN()
+  {
+    return __builtin_nanf("");
+  }
+};
+
+#if defined(__HAVE_NATIVE_DOUBLE__)
+// TODO: Implement all the other members -- see <rdar://problem/36141588>.
+template <>
+struct _numeric_limits_impl<double>
+{
+  static constexpr constant bool has_quiet_NaN = true;
+
+  static constexpr double min()
+  {
+    return DBL_MIN;
+  }
+  static constexpr double max()
+  {
+    return DBL_MAX;
+  }
+  static constexpr double epsilon()
+  {
+    return DBL_EPSILON;
+  }
+  static constexpr double quiet_NaN()
+  {
+    return __builtin_nan("");
+  }
+};
+#endif
+
+template <typename T>
+struct numeric_limits : _numeric_limits_impl<remove_cv_t<T>>
+{
+};
+
+} // namespace metal
+#pragma METAL internals : disable
+
+#endif // __METAL_LIMITS

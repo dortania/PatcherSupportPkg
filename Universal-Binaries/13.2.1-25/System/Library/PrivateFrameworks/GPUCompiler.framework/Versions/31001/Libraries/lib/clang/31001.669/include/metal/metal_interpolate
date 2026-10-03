@@ -1,0 +1,75 @@
+// -*- Metal -*-
+//===-- metal_interpolate -------------------------------------------------===//
+// Copyright (c) 2019 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_INTERPOLATE
+#define __METAL_INTERPOLATE
+
+#if defined(__HAVE_INTERPOLATION_FUNCTIONS__)
+namespace metal
+{
+namespace interpolation
+{
+struct perspective
+{
+};
+struct no_perspective
+{
+};
+} // namespace interpolation
+
+template <typename T, typename P, typename = void>
+struct interpolant;
+
+template <typename T>
+struct interpolant<T, interpolation::perspective, typename enable_if<is_floating_point<T>::value>::type>
+{
+  METAL_FUNC T interpolate_at_center() thread
+  {
+    return __metal_interpolate_center_perspective(impl, T());
+  }
+  METAL_FUNC T interpolate_at_centroid() thread
+  {
+    return __metal_interpolate_centroid_perspective(impl, T());
+  }
+  METAL_FUNC T interpolate_at_sample(uint sample) thread
+  {
+    return __metal_interpolate_sample_perspective(impl, sample, T());
+  }
+  METAL_FUNC T interpolate_at_offset(float2 offset) thread
+  {
+    return __metal_interpolate_offset_perspective(impl, offset, T());
+  }
+
+private:
+  __metal_interpolant_t impl;
+};
+
+template <typename T>
+struct interpolant<T, interpolation::no_perspective, typename enable_if<is_floating_point<T>::value>::type>
+{
+  METAL_FUNC T interpolate_at_center() thread
+  {
+    return __metal_interpolate_center_no_perspective(impl, T());
+  }
+  METAL_FUNC T interpolate_at_centroid() thread
+  {
+    return __metal_interpolate_centroid_no_perspective(impl, T());
+  }
+  METAL_FUNC T interpolate_at_sample(uint sample) thread
+  {
+    return __metal_interpolate_sample_no_perspective(impl, sample, T());
+  }
+  METAL_FUNC T interpolate_at_offset(float2 offset) thread
+  {
+    return __metal_interpolate_offset_no_perspective(impl, offset, T());
+  }
+
+private:
+  __metal_interpolant_t impl;
+};
+} // namespace metal
+#endif
+
+#endif // __METAL_INTERPOLATE

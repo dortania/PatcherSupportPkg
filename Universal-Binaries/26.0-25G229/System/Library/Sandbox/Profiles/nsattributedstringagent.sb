@@ -1,0 +1,101 @@
+;;; Copyright (c) 2017-2021 Apple Inc.  All Rights reserved.
+;;;
+;;; WARNING: The sandbox rules in this file currently constitute
+;;; Apple System Private Interface and are subject to change at any time and
+;;; without notice.
+;;;
+(version 1)
+
+(deny default)
+(deny file-map-executable process-info* nvram*)
+(deny dynamic-code-generation)
+
+(deny mach-priv-host-port)
+
+(import "system.sb")
+(import "com.apple.corefoundation.sb")
+(corefoundation)
+
+(allow process-info* (target self))
+
+;; For resolving symlinks, realpath(3), and equivalents.
+(allow file-read-metadata)
+
+;; For validating the entitlements of clients.
+(allow process-info-codesignature)
+
+;; The preference domain
+(allow user-preference-read user-preference-write
+       (preference-domain "com.apple.textkit.nsattributedstringagent"))
+
+;; Read/write access to a temporary directory.
+(allow file-read* file-write*
+       (subpath (param "TMPDIR"))
+)
+
+(allow file-read* (extension "com.apple.app-sandbox.read"))
+(allow file-read* file-write* (extension "com.apple.app-sandbox.read-write"))
+
+;; Graphics drivers
+(allow file-map-executable
+    (subpath "/System/Library/Extensions")
+)
+
+(allow iokit-issue-extension)
+
+(allow iokit-open
+    (extension-class "com.apple.webkit.extension.iokit")
+    (iokit-user-client-class "nvDevice")
+    (iokit-user-client-class "nvSharedUserClient")
+    (iokit-user-client-class "IGAccelDevice")
+    (iokit-user-client-class "IOFramebufferSharedUserClient")
+    (iokit-user-client-class "RootDomainUserClient")
+    (iokit-user-client-class "IOSurfaceRootUserClient")
+)
+
+(allow mach-issue-extension
+    (extension-class "com.apple.webkit.extension.mach")
+)
+
+(allow mach-lookup
+    (global-name "com.apple.coreservices.launchservicesd")
+    (global-name "com.apple.nsurlsessiond")
+    (global-name "com.apple.pluginkit.pkd")
+    (global-name "com.apple.tccd.system")
+    (global-name "com.apple.webinspectord")
+    (global-name "com.apple.windowserver.active")
+    (global-name "com.apple.window_proxies")
+    (global-name "com.apple.dock.server")
+    (xpc-service-name
+        "com.apple.WebKit.Networking"
+        "com.apple.WebKit.WebContent"
+    )
+    (global-name "com.apple.AppSSO.service-xpc")
+    (global-name "com.apple.lsd.mapdb")
+    (global-name "com.apple.lsd.modifydb")
+)
+
+(allow system-audit)
+
+(allow user-preference-read
+    (preference-domain "kCFPreferencesAnyApplication")
+    (preference-domain "com.apple.CoreGraphics")
+    (preference-domain "com.apple.Safari.SandboxBroker")
+    (preference-domain "com.apple.universalaccess")
+    (preference-domain "com.apple.webinspectord")
+)
+
+;; for dlopen, xpc service
+(allow file-read*
+    (regex #"/UIFoundation\.framework/Versions/A/UIFoundation$")
+    (regex #"/UIFoundation\.framework/Versions/A/XPCServices/nsattributedstringagent\.xpc")
+)
+
+(allow file-issue-extension
+    (extension-class "com.apple.app-sandbox.read")
+)
+
+;; extend a WebKit-specific sandbox extension used to enable a mach-bootstrap port needed by WebKit
+(allow generic-issue-extension
+         (extension-class "com.apple.webkit.mach-bootstrap")
+)

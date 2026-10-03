@@ -1,0 +1,1144 @@
+// -*- Metal -*-
+//===-- metal_functional --------------------------------------------------===//
+// Copyright (c) 2014-2020 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_FUNCTIONAL
+#define __METAL_FUNCTIONAL
+
+namespace metal
+{
+template <typename T>
+struct plus
+{
+  typedef T first_argument_type;
+  typedef T second_argument_type;
+  typedef T result_type;
+
+  T operator()(const thread T &a, const thread T &b) const thread
+  {
+    return a + b;
+  }
+  T operator()(const thread T &a, const device T &b) const thread
+  {
+    return a + b;
+  }
+  T operator()(const thread T &a, const constant T &b) const thread
+  {
+    return a + b;
+  }
+  T operator()(const thread T &a, const threadgroup T &b) const thread
+  {
+    return a + b;
+  }
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const thread T &a, const threadgroup_imageblock T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const thread T &a, const ray_data T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const thread T &a, const object_data T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+  T operator()(const device T &a, const thread T &b) const thread
+  {
+    return a + b;
+  }
+  T operator()(const device T &a, const device T &b) const thread
+  {
+    return a + b;
+  }
+  T operator()(const device T &a, const constant T &b) const thread
+  {
+    return a + b;
+  }
+  T operator()(const device T &a, const threadgroup T &b) const thread
+  {
+    return a + b;
+  }
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const device T &a, const threadgroup_imageblock T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const device T &a, const ray_data T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const device T &a, const object_data T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+  T operator()(const constant T &a, const thread T &b) const thread
+  {
+    return a + b;
+  }
+  T operator()(const constant T &a, const device T &b) const thread
+  {
+    return a + b;
+  }
+  T operator()(const constant T &a, const constant T &b) const thread
+  {
+    return a + b;
+  }
+  T operator()(const constant T &a, const threadgroup T &b) const thread
+  {
+    return a + b;
+  }
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const constant T &a, const threadgroup_imageblock T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const constant T &a, const ray_data T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const constant T &a, const object_data T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+  T operator()(const threadgroup T &a, const thread T &b) const thread
+  {
+    return a + b;
+  }
+  T operator()(const threadgroup T &a, const device T &b) const thread
+  {
+    return a + b;
+  }
+  T operator()(const threadgroup T &a, const constant T &b) const thread
+  {
+    return a + b;
+  }
+  T operator()(const threadgroup T &a, const threadgroup T &b) const thread
+  {
+    return a + b;
+  }
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup T &a, const threadgroup_imageblock T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const threadgroup T &a, const ray_data T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const threadgroup T &a, const object_data T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup_imageblock T &a, const thread T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup_imageblock T &a, const device T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup_imageblock T &a, const constant T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup_imageblock T &a, const threadgroup T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup_imageblock T &a, const threadgroup_imageblock T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup_imageblock T &a, const ray_data T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+#endif
+#if defined(__HAVE_MESH__)
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup_imageblock T &a, const object_data T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const ray_data T &a, const thread T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const ray_data T &a, const device T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const ray_data T &a, const constant T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const ray_data T &a, const threadgroup T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const ray_data T &a, const threadgroup_imageblock T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const ray_data T &a, const ray_data T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const ray_data T &a, const object_data T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const object_data T &a, const thread T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const object_data T &a, const device T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const object_data T &a, const constant T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const object_data T &a, const threadgroup T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+#if defined(__HAVE_MESH__)
+  T operator()(const object_data T &a, const threadgroup_imageblock T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+#endif
+#if defined(__HAVE_RAYTRACING__)
+#if defined(__HAVE_MESH__)
+  T operator()(const object_data T &a, const ray_data T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const object_data T &a, const object_data T &b) const thread
+  {
+    return a + b;
+  }
+#endif
+};
+
+template <typename T>
+struct minus
+{
+  typedef T first_argument_type;
+  typedef T second_argument_type;
+  typedef T result_type;
+
+  T operator()(const thread T &a, const thread T &b) const thread
+  {
+    return a - b;
+  }
+  T operator()(const thread T &a, const device T &b) const thread
+  {
+    return a - b;
+  }
+  T operator()(const thread T &a, const constant T &b) const thread
+  {
+    return a - b;
+  }
+  T operator()(const thread T &a, const threadgroup T &b) const thread
+  {
+    return a - b;
+  }
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const thread T &a, const threadgroup_imageblock T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const thread T &a, const ray_data T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const thread T &a, const object_data T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+  T operator()(const device T &a, const thread T &b) const thread
+  {
+    return a - b;
+  }
+  T operator()(const device T &a, const device T &b) const thread
+  {
+    return a - b;
+  }
+  T operator()(const device T &a, const constant T &b) const thread
+  {
+    return a - b;
+  }
+  T operator()(const device T &a, const threadgroup T &b) const thread
+  {
+    return a - b;
+  }
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const device T &a, const threadgroup_imageblock T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const device T &a, const ray_data T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const device T &a, const object_data T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+  T operator()(const constant T &a, const thread T &b) const thread
+  {
+    return a - b;
+  }
+  T operator()(const constant T &a, const device T &b) const thread
+  {
+    return a - b;
+  }
+  T operator()(const constant T &a, const constant T &b) const thread
+  {
+    return a - b;
+  }
+  T operator()(const constant T &a, const threadgroup T &b) const thread
+  {
+    return a - b;
+  }
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const constant T &a, const threadgroup_imageblock T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const constant T &a, const ray_data T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const constant T &a, const object_data T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+  T operator()(const threadgroup T &a, const thread T &b) const thread
+  {
+    return a - b;
+  }
+  T operator()(const threadgroup T &a, const device T &b) const thread
+  {
+    return a - b;
+  }
+  T operator()(const threadgroup T &a, const constant T &b) const thread
+  {
+    return a - b;
+  }
+  T operator()(const threadgroup T &a, const threadgroup T &b) const thread
+  {
+    return a - b;
+  }
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup T &a, const threadgroup_imageblock T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const threadgroup T &a, const ray_data T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const threadgroup T &a, const object_data T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup_imageblock T &a, const thread T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup_imageblock T &a, const device T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup_imageblock T &a, const constant T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup_imageblock T &a, const threadgroup T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup_imageblock T &a, const threadgroup_imageblock T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup_imageblock T &a, const ray_data T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+#endif
+#if defined(__HAVE_MESH__)
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup_imageblock T &a, const object_data T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const ray_data T &a, const thread T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const ray_data T &a, const device T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const ray_data T &a, const constant T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const ray_data T &a, const threadgroup T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const ray_data T &a, const threadgroup_imageblock T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const ray_data T &a, const ray_data T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const ray_data T &a, const object_data T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const object_data T &a, const thread T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const object_data T &a, const device T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const object_data T &a, const constant T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const object_data T &a, const threadgroup T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+#if defined(__HAVE_MESH__)
+  T operator()(const object_data T &a, const threadgroup_imageblock T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+#endif
+#if defined(__HAVE_RAYTRACING__)
+#if defined(__HAVE_MESH__)
+  T operator()(const object_data T &a, const ray_data T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const object_data T &a, const object_data T &b) const thread
+  {
+    return a - b;
+  }
+#endif
+};
+
+template <typename T>
+struct multiplies
+{
+  typedef T first_argument_type;
+  typedef T second_argument_type;
+  typedef T result_type;
+
+  T operator()(const thread T &a, const thread T &b) const thread
+  {
+    return a * b;
+  }
+  T operator()(const thread T &a, const device T &b) const thread
+  {
+    return a * b;
+  }
+  T operator()(const thread T &a, const constant T &b) const thread
+  {
+    return a * b;
+  }
+  T operator()(const thread T &a, const threadgroup T &b) const thread
+  {
+    return a * b;
+  }
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const thread T &a, const threadgroup_imageblock T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const thread T &a, const ray_data T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const thread T &a, const object_data T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+  T operator()(const device T &a, const thread T &b) const thread
+  {
+    return a * b;
+  }
+  T operator()(const device T &a, const device T &b) const thread
+  {
+    return a * b;
+  }
+  T operator()(const device T &a, const constant T &b) const thread
+  {
+    return a * b;
+  }
+  T operator()(const device T &a, const threadgroup T &b) const thread
+  {
+    return a * b;
+  }
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const device T &a, const threadgroup_imageblock T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const device T &a, const ray_data T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const device T &a, const object_data T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+  T operator()(const constant T &a, const thread T &b) const thread
+  {
+    return a * b;
+  }
+  T operator()(const constant T &a, const device T &b) const thread
+  {
+    return a * b;
+  }
+  T operator()(const constant T &a, const constant T &b) const thread
+  {
+    return a * b;
+  }
+  T operator()(const constant T &a, const threadgroup T &b) const thread
+  {
+    return a * b;
+  }
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const constant T &a, const threadgroup_imageblock T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const constant T &a, const ray_data T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const constant T &a, const object_data T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+  T operator()(const threadgroup T &a, const thread T &b) const thread
+  {
+    return a * b;
+  }
+  T operator()(const threadgroup T &a, const device T &b) const thread
+  {
+    return a * b;
+  }
+  T operator()(const threadgroup T &a, const constant T &b) const thread
+  {
+    return a * b;
+  }
+  T operator()(const threadgroup T &a, const threadgroup T &b) const thread
+  {
+    return a * b;
+  }
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup T &a, const threadgroup_imageblock T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const threadgroup T &a, const ray_data T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const threadgroup T &a, const object_data T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup_imageblock T &a, const thread T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup_imageblock T &a, const device T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup_imageblock T &a, const constant T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup_imageblock T &a, const threadgroup T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup_imageblock T &a, const threadgroup_imageblock T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup_imageblock T &a, const ray_data T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+#endif
+#if defined(__HAVE_MESH__)
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup_imageblock T &a, const object_data T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const ray_data T &a, const thread T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const ray_data T &a, const device T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const ray_data T &a, const constant T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const ray_data T &a, const threadgroup T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const ray_data T &a, const threadgroup_imageblock T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const ray_data T &a, const ray_data T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const ray_data T &a, const object_data T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const object_data T &a, const thread T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const object_data T &a, const device T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const object_data T &a, const constant T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const object_data T &a, const threadgroup T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+#if defined(__HAVE_MESH__)
+  T operator()(const object_data T &a, const threadgroup_imageblock T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+#endif
+#if defined(__HAVE_RAYTRACING__)
+#if defined(__HAVE_MESH__)
+  T operator()(const object_data T &a, const ray_data T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const object_data T &a, const object_data T &b) const thread
+  {
+    return a * b;
+  }
+#endif
+};
+
+template <typename T>
+struct divides
+{
+  typedef T first_argument_type;
+  typedef T second_argument_type;
+  typedef T result_type;
+
+  T operator()(const thread T &a, const thread T &b) const thread
+  {
+    return a / b;
+  }
+  T operator()(const thread T &a, const device T &b) const thread
+  {
+    return a / b;
+  }
+  T operator()(const thread T &a, const constant T &b) const thread
+  {
+    return a / b;
+  }
+  T operator()(const thread T &a, const threadgroup T &b) const thread
+  {
+    return a / b;
+  }
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const thread T &a, const threadgroup_imageblock T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const thread T &a, const ray_data T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const thread T &a, const object_data T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+  T operator()(const device T &a, const thread T &b) const thread
+  {
+    return a / b;
+  }
+  T operator()(const device T &a, const device T &b) const thread
+  {
+    return a / b;
+  }
+  T operator()(const device T &a, const constant T &b) const thread
+  {
+    return a / b;
+  }
+  T operator()(const device T &a, const threadgroup T &b) const thread
+  {
+    return a / b;
+  }
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const device T &a, const threadgroup_imageblock T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const device T &a, const ray_data T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const device T &a, const object_data T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+  T operator()(const constant T &a, const thread T &b) const thread
+  {
+    return a / b;
+  }
+  T operator()(const constant T &a, const device T &b) const thread
+  {
+    return a / b;
+  }
+  T operator()(const constant T &a, const constant T &b) const thread
+  {
+    return a / b;
+  }
+  T operator()(const constant T &a, const threadgroup T &b) const thread
+  {
+    return a / b;
+  }
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const constant T &a, const threadgroup_imageblock T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const constant T &a, const ray_data T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const constant T &a, const object_data T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+  T operator()(const threadgroup T &a, const thread T &b) const thread
+  {
+    return a / b;
+  }
+  T operator()(const threadgroup T &a, const device T &b) const thread
+  {
+    return a / b;
+  }
+  T operator()(const threadgroup T &a, const constant T &b) const thread
+  {
+    return a / b;
+  }
+  T operator()(const threadgroup T &a, const threadgroup T &b) const thread
+  {
+    return a / b;
+  }
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup T &a, const threadgroup_imageblock T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const threadgroup T &a, const ray_data T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const threadgroup T &a, const object_data T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup_imageblock T &a, const thread T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup_imageblock T &a, const device T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup_imageblock T &a, const constant T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup_imageblock T &a, const threadgroup T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup_imageblock T &a, const threadgroup_imageblock T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup_imageblock T &a, const ray_data T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+#endif
+#if defined(__HAVE_MESH__)
+#if defined(__HAVE_IMAGEBLOCKS__)
+  T operator()(const threadgroup_imageblock T &a, const object_data T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const ray_data T &a, const thread T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const ray_data T &a, const device T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const ray_data T &a, const constant T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const ray_data T &a, const threadgroup T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const ray_data T &a, const threadgroup_imageblock T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const ray_data T &a, const ray_data T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+#if defined(__HAVE_RAYTRACING__)
+  T operator()(const ray_data T &a, const object_data T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const object_data T &a, const thread T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const object_data T &a, const device T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const object_data T &a, const constant T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const object_data T &a, const threadgroup T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+#if defined(__HAVE_IMAGEBLOCKS__)
+#if defined(__HAVE_MESH__)
+  T operator()(const object_data T &a, const threadgroup_imageblock T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+#endif
+#if defined(__HAVE_RAYTRACING__)
+#if defined(__HAVE_MESH__)
+  T operator()(const object_data T &a, const ray_data T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+#endif
+#if defined(__HAVE_MESH__)
+  T operator()(const object_data T &a, const object_data T &b) const thread
+  {
+    return a / b;
+  }
+#endif
+};
+} // namespace metal
+
+#endif // __METAL_FUNCTIONAL

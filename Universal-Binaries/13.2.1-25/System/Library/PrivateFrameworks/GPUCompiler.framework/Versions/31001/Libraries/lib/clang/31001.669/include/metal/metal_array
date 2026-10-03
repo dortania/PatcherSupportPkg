@@ -1,0 +1,941 @@
+// -*- Metal -*-
+//===-- metal_array -------------------------------------------------------===//
+// Copyright (c) 2014-2020 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_ARRAY
+#define __METAL_ARRAY
+
+#if defined(__HAVE_ARRAY__)
+#include <metal_assert>
+
+namespace metal
+{
+template <typename T, size_t N>
+struct array
+{
+  // Use implicitly declared constructors and equality member functions as array
+  // is an aggregate type.
+
+  METAL_FUNC constexpr size_t size() const thread
+  {
+    return N;
+  }
+  METAL_FUNC constexpr size_t max_size() const thread
+  {
+    return N;
+  }
+  METAL_FUNC constexpr bool empty() const thread
+  {
+    return N == 0;
+  }
+
+  METAL_FUNC thread T &front() thread
+  {
+    assert(!empty());
+    return __elems[0];
+  }
+  METAL_FUNC constexpr const thread T &front() const thread
+  {
+    assert(!empty());
+    return __elems[0];
+  }
+
+  METAL_FUNC thread T &back() thread
+  {
+    assert(!empty());
+    return __elems[N - (N != 0)];
+  }
+  METAL_FUNC constexpr const thread T &back() const thread
+  {
+    assert(!empty());
+    return __elems[N - (N != 0)];
+  }
+
+  METAL_FUNC thread T &operator[](size_t pos) thread
+  {
+    assert(pos < size());
+    return __elems[pos];
+  }
+  METAL_FUNC constexpr const thread T &operator[](size_t pos) const thread
+  {
+    assert(pos < size());
+    return __elems[pos];
+  }
+
+  METAL_FUNC thread T *data() thread
+  {
+    return __elems;
+  }
+  METAL_FUNC constexpr const thread T *data() const thread
+  {
+    return __elems;
+  }
+
+  METAL_FUNC constexpr size_t size() const device
+  {
+    return N;
+  }
+  METAL_FUNC constexpr size_t max_size() const device
+  {
+    return N;
+  }
+  METAL_FUNC constexpr bool empty() const device
+  {
+    return N == 0;
+  }
+
+  METAL_FUNC device T &front() device
+  {
+    assert(!empty());
+    return __elems[0];
+  }
+  METAL_FUNC constexpr const device T &front() const device
+  {
+    assert(!empty());
+    return __elems[0];
+  }
+
+  METAL_FUNC device T &back() device
+  {
+    assert(!empty());
+    return __elems[N - (N != 0)];
+  }
+  METAL_FUNC constexpr const device T &back() const device
+  {
+    assert(!empty());
+    return __elems[N - (N != 0)];
+  }
+
+  METAL_FUNC device T &operator[](size_t pos) device
+  {
+    assert(pos < size());
+    return __elems[pos];
+  }
+  METAL_FUNC constexpr const device T &operator[](size_t pos) const device
+  {
+    assert(pos < size());
+    return __elems[pos];
+  }
+
+  METAL_FUNC device T *data() device
+  {
+    return __elems;
+  }
+  METAL_FUNC constexpr const device T *data() const device
+  {
+    return __elems;
+  }
+
+  METAL_FUNC constexpr size_t size() const constant
+  {
+    return N;
+  }
+  METAL_FUNC constexpr size_t max_size() const constant
+  {
+    return N;
+  }
+  METAL_FUNC constexpr bool empty() const constant
+  {
+    return N == 0;
+  }
+
+  METAL_FUNC constexpr const constant T &front() const constant
+  {
+    assert(!empty());
+    return __elems[0];
+  }
+
+  METAL_FUNC constexpr const constant T &back() const constant
+  {
+    assert(!empty());
+    return __elems[N - (N != 0)];
+  }
+
+  METAL_FUNC constexpr const constant T &operator[](size_t pos) const constant
+  {
+    assert(pos < size());
+    return __elems[pos];
+  }
+
+  METAL_FUNC constexpr const constant T *data() const constant
+  {
+    return __elems;
+  }
+
+  METAL_FUNC constexpr size_t size() const threadgroup
+  {
+    return N;
+  }
+  METAL_FUNC constexpr size_t max_size() const threadgroup
+  {
+    return N;
+  }
+  METAL_FUNC constexpr bool empty() const threadgroup
+  {
+    return N == 0;
+  }
+
+  METAL_FUNC threadgroup T &front() threadgroup
+  {
+    assert(!empty());
+    return __elems[0];
+  }
+  METAL_FUNC constexpr const threadgroup T &front() const threadgroup
+  {
+    assert(!empty());
+    return __elems[0];
+  }
+
+  METAL_FUNC threadgroup T &back() threadgroup
+  {
+    assert(!empty());
+    return __elems[N - (N != 0)];
+  }
+  METAL_FUNC constexpr const threadgroup T &back() const threadgroup
+  {
+    assert(!empty());
+    return __elems[N - (N != 0)];
+  }
+
+  METAL_FUNC threadgroup T &operator[](size_t pos) threadgroup
+  {
+    assert(pos < size());
+    return __elems[pos];
+  }
+  METAL_FUNC constexpr const threadgroup T &operator[](size_t pos) const threadgroup
+  {
+    assert(pos < size());
+    return __elems[pos];
+  }
+
+  METAL_FUNC threadgroup T *data() threadgroup
+  {
+    return __elems;
+  }
+  METAL_FUNC constexpr const threadgroup T *data() const threadgroup
+  {
+    return __elems;
+  }
+
+#if defined(__HAVE_IMAGEBLOCKS__)
+  METAL_FUNC constexpr size_t size() const threadgroup_imageblock
+  {
+    return N;
+  }
+  METAL_FUNC constexpr size_t max_size() const threadgroup_imageblock
+  {
+    return N;
+  }
+  METAL_FUNC constexpr bool empty() const threadgroup_imageblock
+  {
+    return N == 0;
+  }
+
+  METAL_FUNC threadgroup_imageblock T &front() threadgroup_imageblock
+  {
+    assert(!empty());
+    return __elems[0];
+  }
+  METAL_FUNC constexpr const threadgroup_imageblock T &front() const threadgroup_imageblock
+  {
+    assert(!empty());
+    return __elems[0];
+  }
+
+  METAL_FUNC threadgroup_imageblock T &back() threadgroup_imageblock
+  {
+    assert(!empty());
+    return __elems[N - (N != 0)];
+  }
+  METAL_FUNC constexpr const threadgroup_imageblock T &back() const threadgroup_imageblock
+  {
+    assert(!empty());
+    return __elems[N - (N != 0)];
+  }
+
+  METAL_FUNC threadgroup_imageblock T &operator[](size_t pos) threadgroup_imageblock
+  {
+    assert(pos < size());
+    return __elems[pos];
+  }
+  METAL_FUNC constexpr const threadgroup_imageblock T &operator[](size_t pos) const threadgroup_imageblock
+  {
+    assert(pos < size());
+    return __elems[pos];
+  }
+
+  METAL_FUNC threadgroup_imageblock T *data() threadgroup_imageblock
+  {
+    return __elems;
+  }
+  METAL_FUNC constexpr const threadgroup_imageblock T *data() const threadgroup_imageblock
+  {
+    return __elems;
+  }
+#endif
+
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC constexpr size_t size() const ray_data
+  {
+    return N;
+  }
+  METAL_FUNC constexpr size_t max_size() const ray_data
+  {
+    return N;
+  }
+  METAL_FUNC constexpr bool empty() const ray_data
+  {
+    return N == 0;
+  }
+
+  METAL_FUNC ray_data T &front() ray_data
+  {
+    assert(!empty());
+    return __elems[0];
+  }
+  METAL_FUNC constexpr const ray_data T &front() const ray_data
+  {
+    assert(!empty());
+    return __elems[0];
+  }
+
+  METAL_FUNC ray_data T &back() ray_data
+  {
+    assert(!empty());
+    return __elems[N - (N != 0)];
+  }
+  METAL_FUNC constexpr const ray_data T &back() const ray_data
+  {
+    assert(!empty());
+    return __elems[N - (N != 0)];
+  }
+
+  METAL_FUNC ray_data T &operator[](size_t pos) ray_data
+  {
+    assert(pos < size());
+    return __elems[pos];
+  }
+  METAL_FUNC constexpr const ray_data T &operator[](size_t pos) const ray_data
+  {
+    assert(pos < size());
+    return __elems[pos];
+  }
+
+  METAL_FUNC ray_data T *data() ray_data
+  {
+    return __elems;
+  }
+  METAL_FUNC constexpr const ray_data T *data() const ray_data
+  {
+    return __elems;
+  }
+#endif
+
+#if defined(__HAVE_MESH__)
+  METAL_FUNC constexpr size_t size() const object_data
+  {
+    return N;
+  }
+  METAL_FUNC constexpr size_t max_size() const object_data
+  {
+    return N;
+  }
+  METAL_FUNC constexpr bool empty() const object_data
+  {
+    return N == 0;
+  }
+
+  METAL_FUNC object_data T &front() object_data
+  {
+    assert(!empty());
+    return __elems[0];
+  }
+  METAL_FUNC constexpr const object_data T &front() const object_data
+  {
+    assert(!empty());
+    return __elems[0];
+  }
+
+  METAL_FUNC object_data T &back() object_data
+  {
+    assert(!empty());
+    return __elems[N - (N != 0)];
+  }
+  METAL_FUNC constexpr const object_data T &back() const object_data
+  {
+    assert(!empty());
+    return __elems[N - (N != 0)];
+  }
+
+  METAL_FUNC object_data T &operator[](size_t pos) object_data
+  {
+    assert(pos < size());
+    return __elems[pos];
+  }
+  METAL_FUNC constexpr const object_data T &operator[](size_t pos) const object_data
+  {
+    assert(pos < size());
+    return __elems[pos];
+  }
+
+  METAL_FUNC object_data T *data() object_data
+  {
+    return __elems;
+  }
+  METAL_FUNC constexpr const object_data T *data() const object_data
+  {
+    return __elems;
+  }
+#endif
+
+  T __elems[N ? N : 1];
+};
+
+template <typename T>
+struct array_ref
+{
+  METAL_FUNC constexpr array_ref() thread : d(nullptr), sz(0)
+  {
+  }
+  METAL_FUNC constexpr array_ref(const thread T &elt) thread : d(&elt), sz(1)
+  {
+  }
+  METAL_FUNC constexpr array_ref(const thread T *data, size_t size) thread : d(data), sz(size)
+  {
+  }
+  template <size_t N>
+  METAL_FUNC constexpr array_ref(const thread T (&data)[N]) thread : d(data), sz(N)
+  {
+  }
+  template <size_t N>
+  METAL_FUNC constexpr array_ref(const thread array<T, N> &data) thread : d(data.data()), sz(data.size())
+  {
+  }
+
+  METAL_FUNC constexpr size_t size() const thread
+  {
+    return sz;
+  }
+  METAL_FUNC constexpr bool empty() const thread
+  {
+    return sz == 0;
+  }
+
+  METAL_FUNC constexpr const thread T &front() const thread
+  {
+    assert(!empty());
+    return d[0];
+  }
+  METAL_FUNC constexpr const thread T &back() const thread
+  {
+    assert(!empty());
+    return d[sz - 1];
+  }
+  METAL_FUNC constexpr const thread T &operator[](size_t pos) const thread
+  {
+    assert(pos < size());
+    return d[pos];
+  }
+  METAL_FUNC constexpr const thread T *data() const thread
+  {
+    return d;
+  }
+
+private:
+  const thread T *d;
+  size_t sz;
+};
+
+template <typename T>
+struct array_ref<device T>
+{
+  METAL_FUNC constexpr array_ref() thread : d(nullptr), sz(0)
+  {
+  }
+  METAL_FUNC constexpr array_ref(const device T &elt) thread : d(&elt), sz(1)
+  {
+  }
+  METAL_FUNC constexpr array_ref(const device T *data, size_t size) thread : d(data), sz(size)
+  {
+  }
+  template <size_t N>
+  METAL_FUNC constexpr array_ref(const device T (&data)[N]) thread : d(data), sz(N)
+  {
+  }
+  template <size_t N>
+  METAL_FUNC constexpr array_ref(const device array<T, N> &data) thread : d(data.data()), sz(data.size())
+  {
+  }
+
+  METAL_FUNC constexpr size_t size() const thread
+  {
+    return sz;
+  }
+  METAL_FUNC constexpr bool empty() const thread
+  {
+    return sz == 0;
+  }
+
+  METAL_FUNC constexpr const device T &front() const thread
+  {
+    assert(!empty());
+    return d[0];
+  }
+  METAL_FUNC constexpr const device T &back() const thread
+  {
+    assert(!empty());
+    return d[sz - 1];
+  }
+  METAL_FUNC constexpr const device T &operator[](size_t pos) const thread
+  {
+    assert(pos < size());
+    return d[pos];
+  }
+  METAL_FUNC constexpr const device T *data() const thread
+  {
+    return d;
+  }
+
+private:
+  const device T *d;
+  size_t sz;
+};
+
+template <typename T>
+struct array_ref<constant T>
+{
+  METAL_FUNC constexpr array_ref() thread : d(nullptr), sz(0)
+  {
+  }
+  METAL_FUNC constexpr array_ref(const constant T &elt) thread : d(&elt), sz(1)
+  {
+  }
+  METAL_FUNC constexpr array_ref(const constant T *data, size_t size) thread : d(data), sz(size)
+  {
+  }
+  template <size_t N>
+  METAL_FUNC constexpr array_ref(const constant T (&data)[N]) thread : d(data), sz(N)
+  {
+  }
+  template <size_t N>
+  METAL_FUNC constexpr array_ref(const constant array<T, N> &data) thread : d(data.data()), sz(data.size())
+  {
+  }
+
+  METAL_FUNC constexpr size_t size() const thread
+  {
+    return sz;
+  }
+  METAL_FUNC constexpr bool empty() const thread
+  {
+    return sz == 0;
+  }
+
+  METAL_FUNC constexpr const constant T &front() const thread
+  {
+    assert(!empty());
+    return d[0];
+  }
+  METAL_FUNC constexpr const constant T &back() const thread
+  {
+    assert(!empty());
+    return d[sz - 1];
+  }
+  METAL_FUNC constexpr const constant T &operator[](size_t pos) const thread
+  {
+    assert(pos < size());
+    return d[pos];
+  }
+  METAL_FUNC constexpr const constant T *data() const thread
+  {
+    return d;
+  }
+
+private:
+  const constant T *d;
+  size_t sz;
+};
+
+template <typename T>
+struct array_ref<threadgroup T>
+{
+  METAL_FUNC constexpr array_ref() thread : d(nullptr), sz(0)
+  {
+  }
+  METAL_FUNC constexpr array_ref(const threadgroup T &elt) thread : d(&elt), sz(1)
+  {
+  }
+  METAL_FUNC constexpr array_ref(const threadgroup T *data, size_t size) thread : d(data), sz(size)
+  {
+  }
+  template <size_t N>
+  METAL_FUNC constexpr array_ref(const threadgroup T (&data)[N]) thread : d(data), sz(N)
+  {
+  }
+  template <size_t N>
+  METAL_FUNC constexpr array_ref(const threadgroup array<T, N> &data) thread : d(data.data()), sz(data.size())
+  {
+  }
+
+  METAL_FUNC constexpr size_t size() const thread
+  {
+    return sz;
+  }
+  METAL_FUNC constexpr bool empty() const thread
+  {
+    return sz == 0;
+  }
+
+  METAL_FUNC constexpr const threadgroup T &front() const thread
+  {
+    assert(!empty());
+    return d[0];
+  }
+  METAL_FUNC constexpr const threadgroup T &back() const thread
+  {
+    assert(!empty());
+    return d[sz - 1];
+  }
+  METAL_FUNC constexpr const threadgroup T &operator[](size_t pos) const thread
+  {
+    assert(pos < size());
+    return d[pos];
+  }
+  METAL_FUNC constexpr const threadgroup T *data() const thread
+  {
+    return d;
+  }
+
+private:
+  const threadgroup T *d;
+  size_t sz;
+};
+
+#if defined(__HAVE_IMAGEBLOCKS__)
+template <typename T>
+struct array_ref<threadgroup_imageblock T>
+{
+  METAL_FUNC constexpr array_ref() thread : d(nullptr), sz(0)
+  {
+  }
+  METAL_FUNC constexpr array_ref(const threadgroup_imageblock T &elt) thread : d(&elt), sz(1)
+  {
+  }
+  METAL_FUNC constexpr array_ref(const threadgroup_imageblock T *data, size_t size) thread : d(data), sz(size)
+  {
+  }
+  template <size_t N>
+  METAL_FUNC constexpr array_ref(const threadgroup_imageblock T (&data)[N]) thread : d(data), sz(N)
+  {
+  }
+  template <size_t N>
+  METAL_FUNC constexpr array_ref(const threadgroup_imageblock array<T, N> &data) thread : d(data.data()), sz(data.size())
+  {
+  }
+
+  METAL_FUNC constexpr size_t size() const thread
+  {
+    return sz;
+  }
+  METAL_FUNC constexpr bool empty() const thread
+  {
+    return sz == 0;
+  }
+
+  METAL_FUNC constexpr const threadgroup_imageblock T &front() const thread
+  {
+    assert(!empty());
+    return d[0];
+  }
+  METAL_FUNC constexpr const threadgroup_imageblock T &back() const thread
+  {
+    assert(!empty());
+    return d[sz - 1];
+  }
+  METAL_FUNC constexpr const threadgroup_imageblock T &operator[](size_t pos) const thread
+  {
+    assert(pos < size());
+    return d[pos];
+  }
+  METAL_FUNC constexpr const threadgroup_imageblock T *data() const thread
+  {
+    return d;
+  }
+
+private:
+  const threadgroup_imageblock T *d;
+  size_t sz;
+};
+#endif
+
+#if defined(__HAVE_RAYTRACING__)
+template <typename T>
+struct array_ref<ray_data T>
+{
+  METAL_FUNC constexpr array_ref() thread : d(nullptr), sz(0)
+  {
+  }
+  METAL_FUNC constexpr array_ref(const ray_data T &elt) thread : d(&elt), sz(1)
+  {
+  }
+  METAL_FUNC constexpr array_ref(const ray_data T *data, size_t size) thread : d(data), sz(size)
+  {
+  }
+  template <size_t N>
+  METAL_FUNC constexpr array_ref(const ray_data T (&data)[N]) thread : d(data), sz(N)
+  {
+  }
+  template <size_t N>
+  METAL_FUNC constexpr array_ref(const ray_data array<T, N> &data) thread : d(data.data()), sz(data.size())
+  {
+  }
+
+  METAL_FUNC constexpr size_t size() const thread
+  {
+    return sz;
+  }
+  METAL_FUNC constexpr bool empty() const thread
+  {
+    return sz == 0;
+  }
+
+  METAL_FUNC constexpr const ray_data T &front() const thread
+  {
+    assert(!empty());
+    return d[0];
+  }
+  METAL_FUNC constexpr const ray_data T &back() const thread
+  {
+    assert(!empty());
+    return d[sz - 1];
+  }
+  METAL_FUNC constexpr const ray_data T &operator[](size_t pos) const thread
+  {
+    assert(pos < size());
+    return d[pos];
+  }
+  METAL_FUNC constexpr const ray_data T *data() const thread
+  {
+    return d;
+  }
+
+private:
+  const ray_data T *d;
+  size_t sz;
+};
+#endif
+
+#if defined(__HAVE_MESH__)
+template <typename T>
+struct array_ref<object_data T>
+{
+  METAL_FUNC constexpr array_ref() thread : d(nullptr), sz(0)
+  {
+  }
+  METAL_FUNC constexpr array_ref(const object_data T &elt) thread : d(&elt), sz(1)
+  {
+  }
+  METAL_FUNC constexpr array_ref(const object_data T *data, size_t size) thread : d(data), sz(size)
+  {
+  }
+  template <size_t N>
+  METAL_FUNC constexpr array_ref(const object_data T (&data)[N]) thread : d(data), sz(N)
+  {
+  }
+  template <size_t N>
+  METAL_FUNC constexpr array_ref(const object_data array<T, N> &data) thread : d(data.data()), sz(data.size())
+  {
+  }
+
+  METAL_FUNC constexpr size_t size() const thread
+  {
+    return sz;
+  }
+  METAL_FUNC constexpr bool empty() const thread
+  {
+    return sz == 0;
+  }
+
+  METAL_FUNC constexpr const object_data T &front() const thread
+  {
+    assert(!empty());
+    return d[0];
+  }
+  METAL_FUNC constexpr const object_data T &back() const thread
+  {
+    assert(!empty());
+    return d[sz - 1];
+  }
+  METAL_FUNC constexpr const object_data T &operator[](size_t pos) const thread
+  {
+    assert(pos < size());
+    return d[pos];
+  }
+  METAL_FUNC constexpr const object_data T *data() const thread
+  {
+    return d;
+  }
+
+private:
+  const object_data T *d;
+  size_t sz;
+};
+#endif
+
+template <typename T>
+METAL_FUNC constexpr array_ref<thread T> make_array_ref(const thread T &elt)
+{
+  return array_ref<thread T>(elt);
+}
+template <typename T>
+METAL_FUNC constexpr array_ref<thread T> make_array_ref(const thread T *data, size_t size)
+{
+  return array_ref<thread T>(data, size);
+}
+template <typename T, size_t N>
+METAL_FUNC constexpr array_ref<thread T> make_array_ref(const thread T (&data)[N])
+{
+  return array_ref<thread T>(data);
+}
+template <typename T, size_t N>
+METAL_FUNC constexpr array_ref<thread T> make_array_ref(const thread array<T, N> &data)
+{
+  return array_ref<thread T>(data);
+}
+
+template <typename T>
+METAL_FUNC constexpr array_ref<device T> make_array_ref(const device T &elt)
+{
+  return array_ref<device T>(elt);
+}
+template <typename T>
+METAL_FUNC constexpr array_ref<device T> make_array_ref(const device T *data, size_t size)
+{
+  return array_ref<device T>(data, size);
+}
+template <typename T, size_t N>
+METAL_FUNC constexpr array_ref<device T> make_array_ref(const device T (&data)[N])
+{
+  return array_ref<device T>(data);
+}
+template <typename T, size_t N>
+METAL_FUNC constexpr array_ref<device T> make_array_ref(const device array<T, N> &data)
+{
+  return array_ref<device T>(data);
+}
+
+template <typename T>
+METAL_FUNC constexpr array_ref<constant T> make_array_ref(const constant T &elt)
+{
+  return array_ref<constant T>(elt);
+}
+template <typename T>
+METAL_FUNC constexpr array_ref<constant T> make_array_ref(const constant T *data, size_t size)
+{
+  return array_ref<constant T>(data, size);
+}
+template <typename T, size_t N>
+METAL_FUNC constexpr array_ref<constant T> make_array_ref(const constant T (&data)[N])
+{
+  return array_ref<constant T>(data);
+}
+template <typename T, size_t N>
+METAL_FUNC constexpr array_ref<constant T> make_array_ref(const constant array<T, N> &data)
+{
+  return array_ref<constant T>(data);
+}
+
+template <typename T>
+METAL_FUNC constexpr array_ref<threadgroup T> make_array_ref(const threadgroup T &elt)
+{
+  return array_ref<threadgroup T>(elt);
+}
+template <typename T>
+METAL_FUNC constexpr array_ref<threadgroup T> make_array_ref(const threadgroup T *data, size_t size)
+{
+  return array_ref<threadgroup T>(data, size);
+}
+template <typename T, size_t N>
+METAL_FUNC constexpr array_ref<threadgroup T> make_array_ref(const threadgroup T (&data)[N])
+{
+  return array_ref<threadgroup T>(data);
+}
+template <typename T, size_t N>
+METAL_FUNC constexpr array_ref<threadgroup T> make_array_ref(const threadgroup array<T, N> &data)
+{
+  return array_ref<threadgroup T>(data);
+}
+
+#if defined(__HAVE_IMAGEBLOCKS__)
+template <typename T>
+METAL_FUNC constexpr array_ref<threadgroup_imageblock T> make_array_ref(const threadgroup_imageblock T &elt)
+{
+  return array_ref<threadgroup_imageblock T>(elt);
+}
+template <typename T>
+METAL_FUNC constexpr array_ref<threadgroup_imageblock T> make_array_ref(const threadgroup_imageblock T *data, size_t size)
+{
+  return array_ref<threadgroup_imageblock T>(data, size);
+}
+template <typename T, size_t N>
+METAL_FUNC constexpr array_ref<threadgroup_imageblock T> make_array_ref(const threadgroup_imageblock T (&data)[N])
+{
+  return array_ref<threadgroup_imageblock T>(data);
+}
+template <typename T, size_t N>
+METAL_FUNC constexpr array_ref<threadgroup_imageblock T> make_array_ref(const threadgroup_imageblock array<T, N> &data)
+{
+  return array_ref<threadgroup_imageblock T>(data);
+}
+#endif
+
+#if defined(__HAVE_RAYTRACING__)
+template <typename T>
+METAL_FUNC constexpr array_ref<ray_data T> make_array_ref(const ray_data T &elt)
+{
+  return array_ref<ray_data T>(elt);
+}
+template <typename T>
+METAL_FUNC constexpr array_ref<ray_data T> make_array_ref(const ray_data T *data, size_t size)
+{
+  return array_ref<ray_data T>(data, size);
+}
+template <typename T, size_t N>
+METAL_FUNC constexpr array_ref<ray_data T> make_array_ref(const ray_data T (&data)[N])
+{
+  return array_ref<ray_data T>(data);
+}
+template <typename T, size_t N>
+METAL_FUNC constexpr array_ref<ray_data T> make_array_ref(const ray_data array<T, N> &data)
+{
+  return array_ref<ray_data T>(data);
+}
+#endif
+
+#if defined(__HAVE_MESH__)
+template <typename T>
+METAL_FUNC constexpr array_ref<object_data T> make_array_ref(const object_data T &elt)
+{
+  return array_ref<object_data T>(elt);
+}
+template <typename T>
+METAL_FUNC constexpr array_ref<object_data T> make_array_ref(const object_data T *data, size_t size)
+{
+  return array_ref<object_data T>(data, size);
+}
+template <typename T, size_t N>
+METAL_FUNC constexpr array_ref<object_data T> make_array_ref(const object_data T (&data)[N])
+{
+  return array_ref<object_data T>(data);
+}
+template <typename T, size_t N>
+METAL_FUNC constexpr array_ref<object_data T> make_array_ref(const object_data array<T, N> &data)
+{
+  return array_ref<object_data T>(data);
+}
+#endif
+} // namespace metal
+#endif
+
+#endif // __METAL_ARRAY

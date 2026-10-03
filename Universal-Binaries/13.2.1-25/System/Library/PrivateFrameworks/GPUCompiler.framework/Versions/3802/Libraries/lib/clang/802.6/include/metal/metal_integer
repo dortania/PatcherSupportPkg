@@ -1,0 +1,1497 @@
+//===-- metal_integer -----------------------------------------------------===//
+// Copyright (c) 2014-2016 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_INTEGER
+#define __METAL_INTEGER
+
+#include <metal_integer_math>
+
+#pragma METAL internals : enable
+namespace metal
+{
+// Metal 1.1 s5.3: Integer Functions.
+
+#if defined(__HAVE_MAD24__)
+template <typename T, typename _E = typename enable_if<_disjunction<is_same<make_scalar_t<T>, int>, is_same<make_scalar_t<T>, uint>>::value>::type>
+METAL_FUNC T mad24(T x, T y, T z)
+{
+  return __metal_mad24(x, y, z);
+}
+#endif
+
+#if defined(__HAVE_MUL24__)
+template <typename T, typename _E = typename enable_if<_disjunction<is_same<make_scalar_t<T>, int>, is_same<make_scalar_t<T>, uint>>::value>::type>
+METAL_FUNC T mul24(T x, T y)
+{
+  return __metal_mul24(x, y);
+}
+#endif
+} // namespace metal
+#pragma METAL internals : disable
+
+// TODO: The following is old code about to be rewritten by Alex.
+namespace metal {
+  // 5.4 Integer Functions
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+  METAL_INTERNAL uchar _air_clz_i8(uchar x, bool is_zero_undef) __asm("air.clz.i8");
+#else
+  METAL_INTERNAL uchar _air_clz_i8(uchar x) __asm("air.clz.i8");
+#endif
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+  METAL_INTERNAL uchar _air_ctz_i8(uchar x, bool is_zero_undef) __asm("air.ctz.i8");
+#else
+  METAL_INTERNAL uchar _air_ctz_i8(uchar x) __asm("air.ctz.i8");
+#endif
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+  METAL_INTERNAL ushort _air_clz_i16(ushort x, bool is_zero_undef) __asm("air.clz.i16");
+#else
+  METAL_INTERNAL ushort _air_clz_i16(ushort x) __asm("air.clz.i16");
+#endif
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+  METAL_INTERNAL ushort _air_ctz_i16(ushort x, bool is_zero_undef) __asm("air.ctz.i16");
+#else
+  METAL_INTERNAL ushort _air_ctz_i16(ushort x) __asm("air.ctz.i16");
+#endif
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+  METAL_INTERNAL uint _air_clz_i32(uint x, bool is_zero_undef) __asm("air.clz.i32");
+#else
+  METAL_INTERNAL uint _air_clz_i32(uint x) __asm("air.clz.i32");
+#endif
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+  METAL_INTERNAL uint _air_ctz_i32(uint x, bool is_zero_undef) __asm("air.ctz.i32");
+#else
+  METAL_INTERNAL uint _air_ctz_i32(uint x) __asm("air.ctz.i32");
+#endif
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+  METAL_INTERNAL vec<uchar,2> _air_clz_v2i8(vec<uchar,2> x, bool is_zero_undef) __asm("air.clz.v2i8");
+#else
+  METAL_INTERNAL vec<uchar,2> _air_clz_v2i8(vec<uchar,2> x) __asm("air.clz.v2i8");
+#endif
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+  METAL_INTERNAL vec<uchar,2> _air_ctz_v2i8(vec<uchar,2> x, bool is_zero_undef) __asm("air.ctz.v2i8");
+#else
+  METAL_INTERNAL vec<uchar,2> _air_ctz_v2i8(vec<uchar,2> x) __asm("air.ctz.v2i8");
+#endif
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+  METAL_INTERNAL vec<ushort,2> _air_clz_v2i16(vec<ushort,2> x, bool is_zero_undef) __asm("air.clz.v2i16");
+#else
+  METAL_INTERNAL vec<ushort,2> _air_clz_v2i16(vec<ushort,2> x) __asm("air.clz.v2i16");
+#endif
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+  METAL_INTERNAL vec<ushort,2> _air_ctz_v2i16(vec<ushort,2> x, bool is_zero_undef) __asm("air.ctz.v2i16");
+#else
+  METAL_INTERNAL vec<ushort,2> _air_ctz_v2i16(vec<ushort,2> x) __asm("air.ctz.v2i16");
+#endif
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+  METAL_INTERNAL vec<uint,2> _air_clz_v2i32(vec<uint,2> x, bool is_zero_undef) __asm("air.clz.v2i32");
+#else
+  METAL_INTERNAL vec<uint,2> _air_clz_v2i32(vec<uint,2> x) __asm("air.clz.v2i32");
+#endif
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+  METAL_INTERNAL vec<uint,2> _air_ctz_v2i32(vec<uint,2> x, bool is_zero_undef) __asm("air.ctz.v2i32");
+#else
+  METAL_INTERNAL vec<uint,2> _air_ctz_v2i32(vec<uint,2> x) __asm("air.ctz.v2i32");
+#endif
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+  METAL_INTERNAL vec<uchar,3> _air_clz_v3i8(vec<uchar,3> x, bool is_zero_undef) __asm("air.clz.v3i8");
+#else
+  METAL_INTERNAL vec<uchar,3> _air_clz_v3i8(vec<uchar,3> x) __asm("air.clz.v3i8");
+#endif
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+  METAL_INTERNAL vec<uchar,3> _air_ctz_v3i8(vec<uchar,3> x, bool is_zero_undef) __asm("air.ctz.v3i8");
+#else
+  METAL_INTERNAL vec<uchar,3> _air_ctz_v3i8(vec<uchar,3> x) __asm("air.ctz.v3i8");
+#endif
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+  METAL_INTERNAL vec<ushort,3> _air_clz_v3i16(vec<ushort,3> x, bool is_zero_undef) __asm("air.clz.v3i16");
+#else
+  METAL_INTERNAL vec<ushort,3> _air_clz_v3i16(vec<ushort,3> x) __asm("air.clz.v3i16");
+#endif
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+  METAL_INTERNAL vec<ushort,3> _air_ctz_v3i16(vec<ushort,3> x, bool is_zero_undef) __asm("air.ctz.v3i16");
+#else
+  METAL_INTERNAL vec<ushort,3> _air_ctz_v3i16(vec<ushort,3> x) __asm("air.ctz.v3i16");
+#endif
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+  METAL_INTERNAL vec<uint,3> _air_clz_v3i32(vec<uint,3> x, bool is_zero_undef) __asm("air.clz.v3i32");
+#else
+  METAL_INTERNAL vec<uint,3> _air_clz_v3i32(vec<uint,3> x) __asm("air.clz.v3i32");
+#endif
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+  METAL_INTERNAL vec<uint,3> _air_ctz_v3i32(vec<uint,3> x, bool is_zero_undef) __asm("air.ctz.v3i32");
+#else
+  METAL_INTERNAL vec<uint,3> _air_ctz_v3i32(vec<uint,3> x) __asm("air.ctz.v3i32");
+#endif
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+  METAL_INTERNAL vec<uchar,4> _air_clz_v4i8(vec<uchar,4> x, bool is_zero_undef) __asm("air.clz.v4i8");
+#else
+  METAL_INTERNAL vec<uchar,4> _air_clz_v4i8(vec<uchar,4> x) __asm("air.clz.v4i8");
+#endif
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+  METAL_INTERNAL vec<uchar,4> _air_ctz_v4i8(vec<uchar,4> x, bool is_zero_undef) __asm("air.ctz.v4i8");
+#else
+  METAL_INTERNAL vec<uchar,4> _air_ctz_v4i8(vec<uchar,4> x) __asm("air.ctz.v4i8");
+#endif
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+  METAL_INTERNAL vec<ushort,4> _air_clz_v4i16(vec<ushort,4> x, bool is_zero_undef) __asm("air.clz.v4i16");
+#else
+  METAL_INTERNAL vec<ushort,4> _air_clz_v4i16(vec<ushort,4> x) __asm("air.clz.v4i16");
+#endif
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+  METAL_INTERNAL vec<ushort,4> _air_ctz_v4i16(vec<ushort,4> x, bool is_zero_undef) __asm("air.ctz.v4i16");
+#else
+  METAL_INTERNAL vec<ushort,4> _air_ctz_v4i16(vec<ushort,4> x) __asm("air.ctz.v4i16");
+#endif
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+  METAL_INTERNAL vec<uint,4> _air_clz_v4i32(vec<uint,4> x, bool is_zero_undef) __asm("air.clz.v4i32");
+#else
+  METAL_INTERNAL vec<uint,4> _air_clz_v4i32(vec<uint,4> x) __asm("air.clz.v4i32");
+#endif
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+  METAL_INTERNAL vec<uint,4> _air_ctz_v4i32(vec<uint,4> x, bool is_zero_undef) __asm("air.ctz.v4i32");
+#else
+  METAL_INTERNAL vec<uint,4> _air_ctz_v4i32(vec<uint,4> x) __asm("air.ctz.v4i32");
+#endif
+
+  METAL_ASM char abs(char x) __asm("air.abs.s.i8");
+  METAL_ASM uchar absdiff(char x, char y) __asm("air.abs_diff.s.i8");
+  METAL_ASM char addsat(char x, char y) __asm("air.add_sat.s.i8");
+  METAL_ASM char hadd(char x, char y) __asm("air.hadd.s.i8");
+  METAL_ASM char rhadd(char x, char y) __asm("air.rhadd.s.i8");
+  METAL_ASM char clamp(char x, char minval, char maxval) __asm("air.clamp.s.i8");
+  METAL_FUNC char clz(char x) {
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+    return static_cast<char>(_air_clz_i8(as_type<uchar>(x), false));
+#else
+    return static_cast<char>(_air_clz_i8(as_type<uchar>(x)));
+#endif
+  }
+  METAL_FUNC char ctz(char x) {
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+   return static_cast<char>(_air_ctz_i8(as_type<uchar>(x), false));
+#else
+   return static_cast<char>(_air_ctz_i8(as_type<uchar>(x)));
+#endif
+  }
+  METAL_ASM char madhi(char a, char b, char c) __asm("air.mad_hi.s.i8");
+  METAL_ASM char madsat(char a, char b, char c) __asm("air.mad_sat.s.i8");
+  METAL_ASM char max(char x, char y) __asm("air.max.s.i8");
+  METAL_ASM char min(char x, char y) __asm("air.min.s.i8");
+  METAL_ASM char mulhi(char x, char y) __asm("air.mul_hi.s.i8");
+  METAL_ASM char rotate(char v, char i) __asm("air.rotate.i8");
+  METAL_ASM char subsat(char x, char y) __asm("air.sub_sat.s.i8");
+  METAL_ASM char popcount(char x) __asm("air.popcount.i8");
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+#if !defined(__HAVE_INTEGER_BIT_EDIT_AIR_FUNCTIONS__)
+  METAL_FUNC char extract_bits(char x, uint offset, uint bits) {
+    if (bits == 0)
+      return 0;
+    uchar xu = as_type<uchar>(x) >> offset;
+    uchar signmask = uchar(1) << (bits - 1);
+    uchar mask1 = ((~xu & signmask) << 1) - 1;
+    uchar mask2 = ~(((xu & signmask) << 1) - 1);
+    xu = (xu & mask1) | mask2;
+    return as_type<char>(xu);
+  }
+  METAL_FUNC uchar insert_bits(uchar base, uchar insert, uint offset, uint bits);
+  METAL_FUNC char insert_bits(char base, char insert, uint offset, uint bits) {
+    return as_type<char>(insert_bits(as_type<uchar>(base), as_type<uchar>(insert), offset, bits));
+  }
+  METAL_FUNC uchar reverse_bits(uchar x);
+  METAL_FUNC char reverse_bits(char x) {
+    return as_type<char>(reverse_bits(as_type<uchar>(x)));
+  }
+#else
+  METAL_ASM char extract_bits(char x, uint offset, uint bits) __asm("air.extract_bits.s.i8");
+  METAL_ASM char insert_bits(char base, char insert, uint offset, uint bits) __asm("air.insert_bits.s.i8");
+  METAL_ASM char reverse_bits(char x) __asm("air.reverse_bits.i8");
+#endif
+#endif
+  METAL_ASM uchar abs(uchar x) __asm("air.abs.u.i8");
+  METAL_ASM uchar absdiff(uchar x, uchar y) __asm("air.abs_diff.u.i8");
+  METAL_ASM uchar addsat(uchar x, uchar y) __asm("air.add_sat.u.i8");
+  METAL_ASM uchar hadd(uchar x, uchar y) __asm("air.hadd.u.i8");
+  METAL_ASM uchar rhadd(uchar x, uchar y) __asm("air.rhadd.u.i8");
+  METAL_ASM uchar clamp(uchar x, uchar minval, uchar maxval) __asm("air.clamp.u.i8");
+  METAL_FUNC uchar clz(uchar x) {
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+    return static_cast<uchar>(_air_clz_i8(as_type<uchar>(x), false));
+#else
+    return static_cast<uchar>(_air_clz_i8(as_type<uchar>(x)));
+#endif
+  }
+  METAL_FUNC uchar ctz(uchar x) {
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+   return static_cast<uchar>(_air_ctz_i8(as_type<uchar>(x), false));
+#else
+   return static_cast<uchar>(_air_ctz_i8(as_type<uchar>(x)));
+#endif
+  }
+  METAL_ASM uchar madhi(uchar a, uchar b, uchar c) __asm("air.mad_hi.u.i8");
+  METAL_ASM uchar madsat(uchar a, uchar b, uchar c) __asm("air.mad_sat.u.i8");
+  METAL_ASM uchar max(uchar x, uchar y) __asm("air.max.u.i8");
+  METAL_ASM uchar min(uchar x, uchar y) __asm("air.min.u.i8");
+  METAL_ASM uchar mulhi(uchar x, uchar y) __asm("air.mul_hi.u.i8");
+  METAL_ASM uchar rotate(uchar v, uchar i) __asm("air.rotate.i8");
+  METAL_ASM uchar subsat(uchar x, uchar y) __asm("air.sub_sat.u.i8");
+  METAL_ASM uchar popcount(uchar x) __asm("air.popcount.i8");
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+#if !defined(__HAVE_INTEGER_BIT_EDIT_AIR_FUNCTIONS__)
+  METAL_FUNC uchar extract_bits(uchar x, uint offset, uint bits) {
+    if (bits == 8)
+      return x;
+    return (x >> offset) & ((uchar(1) << bits) - uchar(1));
+  }
+  METAL_FUNC uchar insert_bits(uchar base, uchar insert, uint offset, uint bits) {
+    if (bits == 8)
+      return insert;
+    uchar mask = ((uchar(1) << bits) - uchar(1)) << offset;
+    return (base & ~mask) | ((insert << offset) & mask);
+  }
+  METAL_FUNC uchar reverse_bits(uchar x) {
+    x = ((x & uchar(0x55)) << 1) | ((x & uchar(0xAA)) >> 1);
+    x = ((x & uchar(0x33)) << 2) | ((x & uchar(0xCC)) >> 2);
+    return (x << 4) | (x >> 4);
+  }
+#else
+  METAL_ASM uchar extract_bits(uchar x, uint offset, uint bits) __asm("air.extract_bits.u.i8");
+  METAL_ASM uchar insert_bits(uchar base, uchar insert, uint offset, uint bits) __asm("air.insert_bits.u.i8");
+  METAL_ASM uchar reverse_bits(uchar x) __asm("air.reverse_bits.i8");
+#endif
+#endif
+  METAL_ASM short abs(short x) __asm("air.abs.s.i16");
+  METAL_ASM ushort absdiff(short x, short y) __asm("air.abs_diff.s.i16");
+  METAL_ASM short addsat(short x, short y) __asm("air.add_sat.s.i16");
+  METAL_ASM short hadd(short x, short y) __asm("air.hadd.s.i16");
+  METAL_ASM short rhadd(short x, short y) __asm("air.rhadd.s.i16");
+  METAL_ASM short clamp(short x, short minval, short maxval) __asm("air.clamp.s.i16");
+  METAL_FUNC short clz(short x) {
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+    return static_cast<short>(_air_clz_i16(as_type<ushort>(x), false));
+#else
+    return static_cast<short>(_air_clz_i16(as_type<ushort>(x)));
+#endif
+  }
+  METAL_FUNC short ctz(short x) {
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+   return static_cast<short>(_air_ctz_i16(as_type<ushort>(x), false));
+#else
+   return static_cast<short>(_air_ctz_i16(as_type<ushort>(x)));
+#endif
+  }
+  METAL_ASM short madhi(short a, short b, short c) __asm("air.mad_hi.s.i16");
+  METAL_ASM short madsat(short a, short b, short c) __asm("air.mad_sat.s.i16");
+  METAL_ASM short max(short x, short y) __asm("air.max.s.i16");
+  METAL_ASM short min(short x, short y) __asm("air.min.s.i16");
+  METAL_ASM short mulhi(short x, short y) __asm("air.mul_hi.s.i16");
+  METAL_ASM short rotate(short v, short i) __asm("air.rotate.i16");
+  METAL_ASM short subsat(short x, short y) __asm("air.sub_sat.s.i16");
+  METAL_ASM short popcount(short x) __asm("air.popcount.i16");
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+#if !defined(__HAVE_INTEGER_BIT_EDIT_AIR_FUNCTIONS__)
+  METAL_FUNC short extract_bits(short x, uint offset, uint bits) {
+    if (bits == 0)
+      return 0;
+    ushort xu = as_type<ushort>(x) >> offset;
+    ushort signmask = ushort(1) << (bits - 1);
+    ushort mask1 = ((~xu & signmask) << 1) - 1;
+    ushort mask2 = ~(((xu & signmask) << 1) - 1);
+    xu = (xu & mask1) | mask2;
+    return as_type<short>(xu);
+  }
+  METAL_FUNC ushort insert_bits(ushort base, ushort insert, uint offset, uint bits);
+  METAL_FUNC short insert_bits(short base, short insert, uint offset, uint bits) {
+    return as_type<short>(insert_bits(as_type<ushort>(base), as_type<ushort>(insert), offset, bits));
+  }
+  METAL_FUNC ushort reverse_bits(ushort x);
+  METAL_FUNC short reverse_bits(short x) {
+    return as_type<short>(reverse_bits(as_type<ushort>(x)));
+  }
+#else
+  METAL_ASM short extract_bits(short x, uint offset, uint bits) __asm("air.extract_bits.s.i16");
+  METAL_ASM short insert_bits(short base, short insert, uint offset, uint bits) __asm("air.insert_bits.s.i16");
+  METAL_ASM short reverse_bits(short x) __asm("air.reverse_bits.i16");
+#endif
+#endif
+  METAL_ASM ushort abs(ushort x) __asm("air.abs.u.i16");
+  METAL_ASM ushort absdiff(ushort x, ushort y) __asm("air.abs_diff.u.i16");
+  METAL_ASM ushort addsat(ushort x, ushort y) __asm("air.add_sat.u.i16");
+  METAL_ASM ushort hadd(ushort x, ushort y) __asm("air.hadd.u.i16");
+  METAL_ASM ushort rhadd(ushort x, ushort y) __asm("air.rhadd.u.i16");
+  METAL_ASM ushort clamp(ushort x, ushort minval, ushort maxval) __asm("air.clamp.u.i16");
+  METAL_FUNC ushort clz(ushort x) {
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+    return static_cast<ushort>(_air_clz_i16(as_type<ushort>(x), false));
+#else
+    return static_cast<ushort>(_air_clz_i16(as_type<ushort>(x)));
+#endif
+  }
+  METAL_FUNC ushort ctz(ushort x) {
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+   return static_cast<ushort>(_air_ctz_i16(as_type<ushort>(x), false));
+#else
+   return static_cast<ushort>(_air_ctz_i16(as_type<ushort>(x)));
+#endif
+  }
+  METAL_ASM ushort madhi(ushort a, ushort b, ushort c) __asm("air.mad_hi.u.i16");
+  METAL_ASM ushort madsat(ushort a, ushort b, ushort c) __asm("air.mad_sat.u.i16");
+  METAL_ASM ushort max(ushort x, ushort y) __asm("air.max.u.i16");
+  METAL_ASM ushort min(ushort x, ushort y) __asm("air.min.u.i16");
+  METAL_ASM ushort mulhi(ushort x, ushort y) __asm("air.mul_hi.u.i16");
+  METAL_ASM ushort rotate(ushort v, ushort i) __asm("air.rotate.i16");
+  METAL_ASM ushort subsat(ushort x, ushort y) __asm("air.sub_sat.u.i16");
+  METAL_ASM ushort popcount(ushort x) __asm("air.popcount.i16");
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+#if !defined(__HAVE_INTEGER_BIT_EDIT_AIR_FUNCTIONS__)
+  METAL_FUNC ushort extract_bits(ushort x, uint offset, uint bits) {
+    if (bits == 16)
+      return x;
+    return (x >> offset) & ((ushort(1) << bits) - ushort(1));
+  }
+  METAL_FUNC ushort insert_bits(ushort base, ushort insert, uint offset, uint bits) {
+    if (bits == 16)
+      return insert;
+    ushort mask = ((ushort(1) << bits) - ushort(1)) << offset;
+    return (base & ~mask) | ((insert << offset) & mask);
+  }
+  METAL_FUNC ushort reverse_bits(ushort x) {
+    x = ((x & ushort(0x5555)) << 1) | ((x & ushort(0xAAAA)) >> 1);
+    x = ((x & ushort(0x3333)) << 2) | ((x & ushort(0xCCCC)) >> 2);
+    x = ((x & ushort(0x0F0F)) << 4) | ((x & ushort(0xF0F0)) >> 4);
+    return (x << 8) | (x >> 8);
+  }
+#else
+  METAL_ASM ushort extract_bits(ushort x, uint offset, uint bits) __asm("air.extract_bits.u.i16");
+  METAL_ASM ushort insert_bits(ushort base, ushort insert, uint offset, uint bits) __asm("air.insert_bits.u.i16");
+  METAL_ASM ushort reverse_bits(ushort x) __asm("air.reverse_bits.i16");
+#endif
+#endif
+  METAL_ASM int abs(int x) __asm("air.abs.s.i32");
+  METAL_ASM uint absdiff(int x, int y) __asm("air.abs_diff.s.i32");
+  METAL_ASM int addsat(int x, int y) __asm("air.add_sat.s.i32");
+  METAL_ASM int hadd(int x, int y) __asm("air.hadd.s.i32");
+  METAL_ASM int rhadd(int x, int y) __asm("air.rhadd.s.i32");
+  METAL_ASM int clamp(int x, int minval, int maxval) __asm("air.clamp.s.i32");
+  METAL_FUNC int clz(int x) {
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+    return static_cast<int>(_air_clz_i32(as_type<uint>(x), false));
+#else
+    return static_cast<int>(_air_clz_i32(as_type<uint>(x)));
+#endif
+  }
+  METAL_FUNC int ctz(int x) {
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+   return static_cast<int>(_air_ctz_i32(as_type<uint>(x), false));
+#else
+   return static_cast<int>(_air_ctz_i32(as_type<uint>(x)));
+#endif
+  }
+  METAL_ASM int madhi(int a, int b, int c) __asm("air.mad_hi.s.i32");
+  METAL_ASM int madsat(int a, int b, int c) __asm("air.mad_sat.s.i32");
+  METAL_ASM int max(int x, int y) __asm("air.max.s.i32");
+  METAL_ASM int min(int x, int y) __asm("air.min.s.i32");
+  METAL_ASM int mulhi(int x, int y) __asm("air.mul_hi.s.i32");
+  METAL_ASM int rotate(int v, int i) __asm("air.rotate.i32");
+  METAL_ASM int subsat(int x, int y) __asm("air.sub_sat.s.i32");
+  METAL_ASM int popcount(int x) __asm("air.popcount.i32");
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+#if !defined(__HAVE_INTEGER_BIT_EDIT_AIR_FUNCTIONS__)
+  METAL_FUNC int extract_bits(int x, uint offset, uint bits) {
+    if (bits == 0)
+      return 0;
+    uint xu = as_type<uint>(x) >> offset;
+    uint signmask = uint(1) << (bits - 1);
+    uint mask1 = ((~xu & signmask) << 1) - 1;
+    uint mask2 = ~(((xu & signmask) << 1) - 1);
+    xu = (xu & mask1) | mask2;
+    return as_type<int>(xu);
+  }
+  METAL_FUNC uint insert_bits(uint base, uint insert, uint offset, uint bits);
+  METAL_FUNC int insert_bits(int base, int insert, uint offset, uint bits) {
+    return as_type<int>(insert_bits(as_type<uint>(base), as_type<uint>(insert), offset, bits));
+  }
+  METAL_FUNC uint reverse_bits(uint x);
+  METAL_FUNC int reverse_bits(int x) {
+    return as_type<int>(reverse_bits(as_type<uint>(x)));
+  }
+#else
+  METAL_ASM int extract_bits(int x, uint offset, uint bits) __asm("air.extract_bits.s.i32");
+  METAL_ASM int insert_bits(int base, int insert, uint offset, uint bits) __asm("air.insert_bits.s.i32");
+  METAL_ASM int reverse_bits(int x) __asm("air.reverse_bits.i32");
+#endif
+#endif
+  METAL_ASM uint abs(uint x) __asm("air.abs.u.i32");
+  METAL_ASM uint absdiff(uint x, uint y) __asm("air.abs_diff.u.i32");
+  METAL_ASM uint addsat(uint x, uint y) __asm("air.add_sat.u.i32");
+  METAL_ASM uint hadd(uint x, uint y) __asm("air.hadd.u.i32");
+  METAL_ASM uint rhadd(uint x, uint y) __asm("air.rhadd.u.i32");
+  METAL_ASM uint clamp(uint x, uint minval, uint maxval) __asm("air.clamp.u.i32");
+  METAL_FUNC uint clz(uint x) {
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+    return static_cast<uint>(_air_clz_i32(as_type<uint>(x), false));
+#else
+    return static_cast<uint>(_air_clz_i32(as_type<uint>(x)));
+#endif
+  }
+  METAL_FUNC uint ctz(uint x) {
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+   return static_cast<uint>(_air_ctz_i32(as_type<uint>(x), false));
+#else
+   return static_cast<uint>(_air_ctz_i32(as_type<uint>(x)));
+#endif
+  }
+  METAL_ASM uint madhi(uint a, uint b, uint c) __asm("air.mad_hi.u.i32");
+  METAL_ASM uint madsat(uint a, uint b, uint c) __asm("air.mad_sat.u.i32");
+  METAL_ASM uint max(uint x, uint y) __asm("air.max.u.i32");
+  METAL_ASM uint min(uint x, uint y) __asm("air.min.u.i32");
+  METAL_ASM uint mulhi(uint x, uint y) __asm("air.mul_hi.u.i32");
+  METAL_ASM uint rotate(uint v, uint i) __asm("air.rotate.i32");
+  METAL_ASM uint subsat(uint x, uint y) __asm("air.sub_sat.u.i32");
+  METAL_ASM uint popcount(uint x) __asm("air.popcount.i32");
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+#if !defined(__HAVE_INTEGER_BIT_EDIT_AIR_FUNCTIONS__)
+  METAL_FUNC uint extract_bits(uint x, uint offset, uint bits) {
+    if (bits == 32)
+      return x;
+    return (x >> offset) & ((uint(1) << bits) - uint(1));
+  }
+  METAL_FUNC uint insert_bits(uint base, uint insert, uint offset, uint bits) {
+    if (bits == 32)
+      return insert;
+    uint mask = ((uint(1) << bits) - uint(1)) << offset;
+    return (base & ~mask) | ((insert << offset) & mask);
+  }
+  METAL_FUNC uint reverse_bits(uint x) {
+    x = ((x & uint(0x55555555)) << 1) | ((x & uint(0xAAAAAAAA)) >> 1);
+    x = ((x & uint(0x33333333)) << 2) | ((x & uint(0xCCCCCCCC)) >> 2);
+    x = ((x & uint(0x0F0F0F0F)) << 4) | ((x & uint(0xF0F0F0F0)) >> 4);
+    x = ((x & uint(0x00FF00FF)) << 8) | ((x & uint(0xFF00FF00)) >> 8);
+    return (x << 16) | (x >> 16);
+  }
+#else
+  METAL_ASM uint extract_bits(uint x, uint offset, uint bits) __asm("air.extract_bits.u.i32");
+  METAL_ASM uint insert_bits(uint base, uint insert, uint offset, uint bits) __asm("air.insert_bits.u.i32");
+  METAL_ASM uint reverse_bits(uint x) __asm("air.reverse_bits.i32");
+#endif
+#endif
+  METAL_ASM vec<char,2> abs(vec<char,2> x) __asm("air.abs.s.v2i8");
+  METAL_ASM vec<uchar,2> absdiff(vec<char,2> x, vec<char,2> y) __asm("air.abs_diff.s.v2i8");
+  METAL_ASM vec<char,2> addsat(vec<char,2> x, vec<char,2> y) __asm("air.add_sat.s.v2i8");
+  METAL_ASM vec<char,2> hadd(vec<char,2> x, vec<char,2> y) __asm("air.hadd.s.v2i8");
+  METAL_ASM vec<char,2> rhadd(vec<char,2> x, vec<char,2> y) __asm("air.rhadd.s.v2i8");
+  METAL_ASM vec<char,2> clamp(vec<char,2> x, vec<char,2> minval, vec<char,2> maxval) __asm("air.clamp.s.v2i8");
+  METAL_FUNC vec<char,2> clamp(vec<char,2> x, char minval, char maxval) { return clamp(x,vec<char,2>(minval),vec<char,2>(maxval)); }
+  METAL_FUNC vec<char,2> clz(vec<char,2> x) {
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+    return static_cast<vec<char,2>>(_air_clz_v2i8(as_type<vec<uchar,2>>(x), false));
+#else
+    return static_cast<vec<char,2>>(_air_clz_v2i8(as_type<vec<uchar,2>>(x)));
+#endif
+  }
+  METAL_FUNC vec<char,2> ctz(vec<char,2> x) {
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+   return static_cast<vec<char,2>>(_air_ctz_v2i8(as_type<vec<uchar,2>>(x), false));
+#else
+   return static_cast<vec<char,2>>(_air_ctz_v2i8(as_type<vec<uchar,2>>(x)));
+#endif
+  }
+  METAL_ASM vec<char,2> madhi(vec<char,2> a, vec<char,2> b, vec<char,2> c) __asm("air.mad_hi.s.v2i8");
+  METAL_ASM vec<char,2> madsat(vec<char,2> a, vec<char,2> b, vec<char,2> c) __asm("air.mad_sat.s.v2i8");
+  METAL_ASM vec<char,2> max(vec<char,2> x, vec<char,2> y) __asm("air.max.s.v2i8");
+  METAL_FUNC vec<char,2> max(vec<char,2> x, char y) { return max(x,vec<char,2>(y)); }
+  METAL_ASM vec<char,2> min(vec<char,2> x, vec<char,2> y) __asm("air.min.s.v2i8");
+  METAL_FUNC vec<char,2> min(vec<char,2> x, char y) { return min(x,vec<char,2>(y)); }
+  METAL_ASM vec<char,2> mulhi(vec<char,2> x, vec<char,2> y) __asm("air.mul_hi.s.v2i8");
+  METAL_ASM vec<char,2> rotate(vec<char,2> v, vec<char,2> i) __asm("air.rotate.v2i8");
+  METAL_ASM vec<char,2> subsat(vec<char,2> x, vec<char,2> y) __asm("air.sub_sat.s.v2i8");
+  METAL_ASM vec<char,2> popcount(vec<char,2> x) __asm("air.popcount.v2i8");
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+#if !defined(__HAVE_INTEGER_BIT_EDIT_AIR_FUNCTIONS__)
+  METAL_FUNC vec<char,2> extract_bits(vec<char,2> x, uint offset, uint bits) {
+    if (bits == 0)
+      return 0;
+    vec<uchar,2> xu = as_type<vec<uchar,2>>(x) >> offset;
+    vec<uchar,2> signmask = vec<uchar,2>(1) << (bits - 1);
+    vec<uchar,2> mask1 = ((~xu & signmask) << 1) - 1;
+    vec<uchar,2> mask2 = ~(((xu & signmask) << 1) - 1);
+    xu = (xu & mask1) | mask2;
+    return as_type<vec<char,2>>(xu);
+  }
+  METAL_FUNC vec<uchar,2> insert_bits(vec<uchar,2> base, vec<uchar,2> insert, uint offset, uint bits);
+  METAL_FUNC vec<char,2> insert_bits(vec<char,2> base, vec<char,2> insert, uint offset, uint bits) {
+    return as_type<vec<char,2>>(insert_bits(as_type<vec<uchar,2>>(base), as_type<vec<uchar,2>>(insert), offset, bits));
+  }
+  METAL_FUNC vec<uchar,2> reverse_bits(vec<uchar,2> x);
+  METAL_FUNC vec<char,2> reverse_bits(vec<char,2> x) {
+    return as_type<vec<char,2>>(reverse_bits(as_type<vec<uchar,2>>(x)));
+  }
+#else
+  METAL_ASM vec<char,2> extract_bits(vec<char,2> x, uint offset, uint bits) __asm("air.extract_bits.s.v2i8");
+  METAL_ASM vec<char,2> insert_bits(vec<char,2> base, vec<char,2> insert, uint offset, uint bits) __asm("air.insert_bits.s.v2i8");
+  METAL_ASM vec<char,2> reverse_bits(vec<char,2> x) __asm("air.reverse_bits.v2i8");
+#endif
+#endif
+  METAL_ASM vec<uchar,2> abs(vec<uchar,2> x) __asm("air.abs.u.v2i8");
+  METAL_ASM vec<uchar,2> absdiff(vec<uchar,2> x, vec<uchar,2> y) __asm("air.abs_diff.u.v2i8");
+  METAL_ASM vec<uchar,2> addsat(vec<uchar,2> x, vec<uchar,2> y) __asm("air.add_sat.u.v2i8");
+  METAL_ASM vec<uchar,2> hadd(vec<uchar,2> x, vec<uchar,2> y) __asm("air.hadd.u.v2i8");
+  METAL_ASM vec<uchar,2> rhadd(vec<uchar,2> x, vec<uchar,2> y) __asm("air.rhadd.u.v2i8");
+  METAL_ASM vec<uchar,2> clamp(vec<uchar,2> x, vec<uchar,2> minval, vec<uchar,2> maxval) __asm("air.clamp.u.v2i8");
+  METAL_FUNC vec<uchar,2> clamp(vec<uchar,2> x, uchar minval, uchar maxval) { return clamp(x,vec<uchar,2>(minval),vec<uchar,2>(maxval)); }
+  METAL_FUNC vec<uchar,2> clz(vec<uchar,2> x) {
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+    return static_cast<vec<uchar,2>>(_air_clz_v2i8(as_type<vec<uchar,2>>(x), false));
+#else
+    return static_cast<vec<uchar,2>>(_air_clz_v2i8(as_type<vec<uchar,2>>(x)));
+#endif
+  }
+  METAL_FUNC vec<uchar,2> ctz(vec<uchar,2> x) {
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+   return static_cast<vec<uchar,2>>(_air_ctz_v2i8(as_type<vec<uchar,2>>(x), false));
+#else
+   return static_cast<vec<uchar,2>>(_air_ctz_v2i8(as_type<vec<uchar,2>>(x)));
+#endif
+  }
+  METAL_ASM vec<uchar,2> madhi(vec<uchar,2> a, vec<uchar,2> b, vec<uchar,2> c) __asm("air.mad_hi.u.v2i8");
+  METAL_ASM vec<uchar,2> madsat(vec<uchar,2> a, vec<uchar,2> b, vec<uchar,2> c) __asm("air.mad_sat.u.v2i8");
+  METAL_ASM vec<uchar,2> max(vec<uchar,2> x, vec<uchar,2> y) __asm("air.max.u.v2i8");
+  METAL_FUNC vec<uchar,2> max(vec<uchar,2> x, uchar y) { return max(x,vec<uchar,2>(y)); }
+  METAL_ASM vec<uchar,2> min(vec<uchar,2> x, vec<uchar,2> y) __asm("air.min.u.v2i8");
+  METAL_FUNC vec<uchar,2> min(vec<uchar,2> x, uchar y) { return min(x,vec<uchar,2>(y)); }
+  METAL_ASM vec<uchar,2> mulhi(vec<uchar,2> x, vec<uchar,2> y) __asm("air.mul_hi.u.v2i8");
+  METAL_ASM vec<uchar,2> rotate(vec<uchar,2> v, vec<uchar,2> i) __asm("air.rotate.v2i8");
+  METAL_ASM vec<uchar,2> subsat(vec<uchar,2> x, vec<uchar,2> y) __asm("air.sub_sat.u.v2i8");
+  METAL_ASM vec<uchar,2> popcount(vec<uchar,2> x) __asm("air.popcount.v2i8");
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+#if !defined(__HAVE_INTEGER_BIT_EDIT_AIR_FUNCTIONS__)
+  METAL_FUNC vec<uchar,2> extract_bits(vec<uchar,2> x, uint offset, uint bits) {
+    if (bits == 8)
+      return x;
+    return (x >> offset) & ((vec<uchar,2>(1) << bits) - vec<uchar,2>(1));
+  }
+  METAL_FUNC vec<uchar,2> insert_bits(vec<uchar,2> base, vec<uchar,2> insert, uint offset, uint bits) {
+    if (bits == 8)
+      return insert;
+    vec<uchar,2> mask = ((vec<uchar,2>(1) << bits) - vec<uchar,2>(1)) << offset;
+    return (base & ~mask) | ((insert << offset) & mask);
+  }
+  METAL_FUNC vec<uchar,2> reverse_bits(vec<uchar,2> x) {
+    x = ((x & vec<uchar,2>(0x55)) << 1) | ((x & vec<uchar,2>(0xAA)) >> 1);
+    x = ((x & vec<uchar,2>(0x33)) << 2) | ((x & vec<uchar,2>(0xCC)) >> 2);
+    return (x << 4) | (x >> 4);
+  }
+#else
+  METAL_ASM vec<uchar,2> extract_bits(vec<uchar,2> x, uint offset, uint bits) __asm("air.extract_bits.u.v2i8");
+  METAL_ASM vec<uchar,2> insert_bits(vec<uchar,2> base, vec<uchar,2> insert, uint offset, uint bits) __asm("air.insert_bits.u.v2i8");
+  METAL_ASM vec<uchar,2> reverse_bits(vec<uchar,2> x) __asm("air.reverse_bits.v2i8");
+#endif
+#endif
+  METAL_ASM vec<short,2> abs(vec<short,2> x) __asm("air.abs.s.v2i16");
+  METAL_ASM vec<ushort,2> absdiff(vec<short,2> x, vec<short,2> y) __asm("air.abs_diff.s.v2i16");
+  METAL_ASM vec<short,2> addsat(vec<short,2> x, vec<short,2> y) __asm("air.add_sat.s.v2i16");
+  METAL_ASM vec<short,2> hadd(vec<short,2> x, vec<short,2> y) __asm("air.hadd.s.v2i16");
+  METAL_ASM vec<short,2> rhadd(vec<short,2> x, vec<short,2> y) __asm("air.rhadd.s.v2i16");
+  METAL_ASM vec<short,2> clamp(vec<short,2> x, vec<short,2> minval, vec<short,2> maxval) __asm("air.clamp.s.v2i16");
+  METAL_FUNC vec<short,2> clamp(vec<short,2> x, short minval, short maxval) { return clamp(x,vec<short,2>(minval),vec<short,2>(maxval)); }
+  METAL_FUNC vec<short,2> clz(vec<short,2> x) {
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+    return static_cast<vec<short,2>>(_air_clz_v2i16(as_type<vec<ushort,2>>(x), false));
+#else
+    return static_cast<vec<short,2>>(_air_clz_v2i16(as_type<vec<ushort,2>>(x)));
+#endif
+  }
+  METAL_FUNC vec<short,2> ctz(vec<short,2> x) {
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+   return static_cast<vec<short,2>>(_air_ctz_v2i16(as_type<vec<ushort,2>>(x), false));
+#else
+   return static_cast<vec<short,2>>(_air_ctz_v2i16(as_type<vec<ushort,2>>(x)));
+#endif
+  }
+  METAL_ASM vec<short,2> madhi(vec<short,2> a, vec<short,2> b, vec<short,2> c) __asm("air.mad_hi.s.v2i16");
+  METAL_ASM vec<short,2> madsat(vec<short,2> a, vec<short,2> b, vec<short,2> c) __asm("air.mad_sat.s.v2i16");
+  METAL_ASM vec<short,2> max(vec<short,2> x, vec<short,2> y) __asm("air.max.s.v2i16");
+  METAL_FUNC vec<short,2> max(vec<short,2> x, short y) { return max(x,vec<short,2>(y)); }
+  METAL_ASM vec<short,2> min(vec<short,2> x, vec<short,2> y) __asm("air.min.s.v2i16");
+  METAL_FUNC vec<short,2> min(vec<short,2> x, short y) { return min(x,vec<short,2>(y)); }
+  METAL_ASM vec<short,2> mulhi(vec<short,2> x, vec<short,2> y) __asm("air.mul_hi.s.v2i16");
+  METAL_ASM vec<short,2> rotate(vec<short,2> v, vec<short,2> i) __asm("air.rotate.v2i16");
+  METAL_ASM vec<short,2> subsat(vec<short,2> x, vec<short,2> y) __asm("air.sub_sat.s.v2i16");
+  METAL_ASM vec<short,2> popcount(vec<short,2> x) __asm("air.popcount.v2i16");
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+#if !defined(__HAVE_INTEGER_BIT_EDIT_AIR_FUNCTIONS__)
+  METAL_FUNC vec<short,2> extract_bits(vec<short,2> x, uint offset, uint bits) {
+    if (bits == 0)
+      return 0;
+    vec<ushort,2> xu = as_type<vec<ushort,2>>(x) >> offset;
+    vec<ushort,2> signmask = vec<ushort,2>(1) << (bits - 1);
+    vec<ushort,2> mask1 = ((~xu & signmask) << 1) - 1;
+    vec<ushort,2> mask2 = ~(((xu & signmask) << 1) - 1);
+    xu = (xu & mask1) | mask2;
+    return as_type<vec<short,2>>(xu);
+  }
+  METAL_FUNC vec<ushort,2> insert_bits(vec<ushort,2> base, vec<ushort,2> insert, uint offset, uint bits);
+  METAL_FUNC vec<short,2> insert_bits(vec<short,2> base, vec<short,2> insert, uint offset, uint bits) {
+    return as_type<vec<short,2>>(insert_bits(as_type<vec<ushort,2>>(base), as_type<vec<ushort,2>>(insert), offset, bits));
+  }
+  METAL_FUNC vec<ushort,2> reverse_bits(vec<ushort,2> x);
+  METAL_FUNC vec<short,2> reverse_bits(vec<short,2> x) {
+    return as_type<vec<short,2>>(reverse_bits(as_type<vec<ushort,2>>(x)));
+  }
+#else
+  METAL_ASM vec<short,2> extract_bits(vec<short,2> x, uint offset, uint bits) __asm("air.extract_bits.s.v2i16");
+  METAL_ASM vec<short,2> insert_bits(vec<short,2> base, vec<short,2> insert, uint offset, uint bits) __asm("air.insert_bits.s.v2i16");
+  METAL_ASM vec<short,2> reverse_bits(vec<short,2> x) __asm("air.reverse_bits.v2i16");
+#endif
+#endif
+  METAL_ASM vec<ushort,2> abs(vec<ushort,2> x) __asm("air.abs.u.v2i16");
+  METAL_ASM vec<ushort,2> absdiff(vec<ushort,2> x, vec<ushort,2> y) __asm("air.abs_diff.u.v2i16");
+  METAL_ASM vec<ushort,2> addsat(vec<ushort,2> x, vec<ushort,2> y) __asm("air.add_sat.u.v2i16");
+  METAL_ASM vec<ushort,2> hadd(vec<ushort,2> x, vec<ushort,2> y) __asm("air.hadd.u.v2i16");
+  METAL_ASM vec<ushort,2> rhadd(vec<ushort,2> x, vec<ushort,2> y) __asm("air.rhadd.u.v2i16");
+  METAL_ASM vec<ushort,2> clamp(vec<ushort,2> x, vec<ushort,2> minval, vec<ushort,2> maxval) __asm("air.clamp.u.v2i16");
+  METAL_FUNC vec<ushort,2> clamp(vec<ushort,2> x, ushort minval, ushort maxval) { return clamp(x,vec<ushort,2>(minval),vec<ushort,2>(maxval)); }
+  METAL_FUNC vec<ushort,2> clz(vec<ushort,2> x) {
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+    return static_cast<vec<ushort,2>>(_air_clz_v2i16(as_type<vec<ushort,2>>(x), false));
+#else
+    return static_cast<vec<ushort,2>>(_air_clz_v2i16(as_type<vec<ushort,2>>(x)));
+#endif
+  }
+  METAL_FUNC vec<ushort,2> ctz(vec<ushort,2> x) {
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+   return static_cast<vec<ushort,2>>(_air_ctz_v2i16(as_type<vec<ushort,2>>(x), false));
+#else
+   return static_cast<vec<ushort,2>>(_air_ctz_v2i16(as_type<vec<ushort,2>>(x)));
+#endif
+  }
+  METAL_ASM vec<ushort,2> madhi(vec<ushort,2> a, vec<ushort,2> b, vec<ushort,2> c) __asm("air.mad_hi.u.v2i16");
+  METAL_ASM vec<ushort,2> madsat(vec<ushort,2> a, vec<ushort,2> b, vec<ushort,2> c) __asm("air.mad_sat.u.v2i16");
+  METAL_ASM vec<ushort,2> max(vec<ushort,2> x, vec<ushort,2> y) __asm("air.max.u.v2i16");
+  METAL_FUNC vec<ushort,2> max(vec<ushort,2> x, ushort y) { return max(x,vec<ushort,2>(y)); }
+  METAL_ASM vec<ushort,2> min(vec<ushort,2> x, vec<ushort,2> y) __asm("air.min.u.v2i16");
+  METAL_FUNC vec<ushort,2> min(vec<ushort,2> x, ushort y) { return min(x,vec<ushort,2>(y)); }
+  METAL_ASM vec<ushort,2> mulhi(vec<ushort,2> x, vec<ushort,2> y) __asm("air.mul_hi.u.v2i16");
+  METAL_ASM vec<ushort,2> rotate(vec<ushort,2> v, vec<ushort,2> i) __asm("air.rotate.v2i16");
+  METAL_ASM vec<ushort,2> subsat(vec<ushort,2> x, vec<ushort,2> y) __asm("air.sub_sat.u.v2i16");
+  METAL_ASM vec<ushort,2> popcount(vec<ushort,2> x) __asm("air.popcount.v2i16");
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+#if !defined(__HAVE_INTEGER_BIT_EDIT_AIR_FUNCTIONS__)
+  METAL_FUNC vec<ushort,2> extract_bits(vec<ushort,2> x, uint offset, uint bits) {
+    if (bits == 16)
+      return x;
+    return (x >> offset) & ((vec<ushort,2>(1) << bits) - vec<ushort,2>(1));
+  }
+  METAL_FUNC vec<ushort,2> insert_bits(vec<ushort,2> base, vec<ushort,2> insert, uint offset, uint bits) {
+    if (bits == 16)
+      return insert;
+    vec<ushort,2> mask = ((vec<ushort,2>(1) << bits) - vec<ushort,2>(1)) << offset;
+    return (base & ~mask) | ((insert << offset) & mask);
+  }
+  METAL_FUNC vec<ushort,2> reverse_bits(vec<ushort,2> x) {
+    x = ((x & vec<ushort,2>(0x5555)) << 1) | ((x & vec<ushort,2>(0xAAAA)) >> 1);
+    x = ((x & vec<ushort,2>(0x3333)) << 2) | ((x & vec<ushort,2>(0xCCCC)) >> 2);
+    x = ((x & vec<ushort,2>(0x0F0F)) << 4) | ((x & vec<ushort,2>(0xF0F0)) >> 4);
+    return (x << 8) | (x >> 8);
+  }
+#else
+  METAL_ASM vec<ushort,2> extract_bits(vec<ushort,2> x, uint offset, uint bits) __asm("air.extract_bits.u.v2i16");
+  METAL_ASM vec<ushort,2> insert_bits(vec<ushort,2> base, vec<ushort,2> insert, uint offset, uint bits) __asm("air.insert_bits.u.v2i16");
+  METAL_ASM vec<ushort,2> reverse_bits(vec<ushort,2> x) __asm("air.reverse_bits.v2i16");
+#endif
+#endif
+  METAL_ASM vec<int,2> abs(vec<int,2> x) __asm("air.abs.s.v2i32");
+  METAL_ASM vec<uint,2> absdiff(vec<int,2> x, vec<int,2> y) __asm("air.abs_diff.s.v2i32");
+  METAL_ASM vec<int,2> addsat(vec<int,2> x, vec<int,2> y) __asm("air.add_sat.s.v2i32");
+  METAL_ASM vec<int,2> hadd(vec<int,2> x, vec<int,2> y) __asm("air.hadd.s.v2i32");
+  METAL_ASM vec<int,2> rhadd(vec<int,2> x, vec<int,2> y) __asm("air.rhadd.s.v2i32");
+  METAL_ASM vec<int,2> clamp(vec<int,2> x, vec<int,2> minval, vec<int,2> maxval) __asm("air.clamp.s.v2i32");
+  METAL_FUNC vec<int,2> clamp(vec<int,2> x, int minval, int maxval) { return clamp(x,vec<int,2>(minval),vec<int,2>(maxval)); }
+  METAL_FUNC vec<int,2> clz(vec<int,2> x) {
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+    return static_cast<vec<int,2>>(_air_clz_v2i32(as_type<vec<uint,2>>(x), false));
+#else
+    return static_cast<vec<int,2>>(_air_clz_v2i32(as_type<vec<uint,2>>(x)));
+#endif
+  }
+  METAL_FUNC vec<int,2> ctz(vec<int,2> x) {
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+   return static_cast<vec<int,2>>(_air_ctz_v2i32(as_type<vec<uint,2>>(x), false));
+#else
+   return static_cast<vec<int,2>>(_air_ctz_v2i32(as_type<vec<uint,2>>(x)));
+#endif
+  }
+  METAL_ASM vec<int,2> madhi(vec<int,2> a, vec<int,2> b, vec<int,2> c) __asm("air.mad_hi.s.v2i32");
+  METAL_ASM vec<int,2> madsat(vec<int,2> a, vec<int,2> b, vec<int,2> c) __asm("air.mad_sat.s.v2i32");
+  METAL_ASM vec<int,2> max(vec<int,2> x, vec<int,2> y) __asm("air.max.s.v2i32");
+  METAL_FUNC vec<int,2> max(vec<int,2> x, int y) { return max(x,vec<int,2>(y)); }
+  METAL_ASM vec<int,2> min(vec<int,2> x, vec<int,2> y) __asm("air.min.s.v2i32");
+  METAL_FUNC vec<int,2> min(vec<int,2> x, int y) { return min(x,vec<int,2>(y)); }
+  METAL_ASM vec<int,2> mulhi(vec<int,2> x, vec<int,2> y) __asm("air.mul_hi.s.v2i32");
+  METAL_ASM vec<int,2> rotate(vec<int,2> v, vec<int,2> i) __asm("air.rotate.v2i32");
+  METAL_ASM vec<int,2> subsat(vec<int,2> x, vec<int,2> y) __asm("air.sub_sat.s.v2i32");
+  METAL_ASM vec<int,2> popcount(vec<int,2> x) __asm("air.popcount.v2i32");
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+#if !defined(__HAVE_INTEGER_BIT_EDIT_AIR_FUNCTIONS__)
+  METAL_FUNC vec<int,2> extract_bits(vec<int,2> x, uint offset, uint bits) {
+    if (bits == 0)
+      return 0;
+    vec<uint,2> xu = as_type<vec<uint,2>>(x) >> offset;
+    vec<uint,2> signmask = vec<uint,2>(1) << (bits - 1);
+    vec<uint,2> mask1 = ((~xu & signmask) << 1) - 1;
+    vec<uint,2> mask2 = ~(((xu & signmask) << 1) - 1);
+    xu = (xu & mask1) | mask2;
+    return as_type<vec<int,2>>(xu);
+  }
+  METAL_FUNC vec<uint,2> insert_bits(vec<uint,2> base, vec<uint,2> insert, uint offset, uint bits);
+  METAL_FUNC vec<int,2> insert_bits(vec<int,2> base, vec<int,2> insert, uint offset, uint bits) {
+    return as_type<vec<int,2>>(insert_bits(as_type<vec<uint,2>>(base), as_type<vec<uint,2>>(insert), offset, bits));
+  }
+  METAL_FUNC vec<uint,2> reverse_bits(vec<uint,2> x);
+  METAL_FUNC vec<int,2> reverse_bits(vec<int,2> x) {
+    return as_type<vec<int,2>>(reverse_bits(as_type<vec<uint,2>>(x)));
+  }
+#else
+  METAL_ASM vec<int,2> extract_bits(vec<int,2> x, uint offset, uint bits) __asm("air.extract_bits.s.v2i32");
+  METAL_ASM vec<int,2> insert_bits(vec<int,2> base, vec<int,2> insert, uint offset, uint bits) __asm("air.insert_bits.s.v2i32");
+  METAL_ASM vec<int,2> reverse_bits(vec<int,2> x) __asm("air.reverse_bits.v2i32");
+#endif
+#endif
+  METAL_ASM vec<uint,2> abs(vec<uint,2> x) __asm("air.abs.u.v2i32");
+  METAL_ASM vec<uint,2> absdiff(vec<uint,2> x, vec<uint,2> y) __asm("air.abs_diff.u.v2i32");
+  METAL_ASM vec<uint,2> addsat(vec<uint,2> x, vec<uint,2> y) __asm("air.add_sat.u.v2i32");
+  METAL_ASM vec<uint,2> hadd(vec<uint,2> x, vec<uint,2> y) __asm("air.hadd.u.v2i32");
+  METAL_ASM vec<uint,2> rhadd(vec<uint,2> x, vec<uint,2> y) __asm("air.rhadd.u.v2i32");
+  METAL_ASM vec<uint,2> clamp(vec<uint,2> x, vec<uint,2> minval, vec<uint,2> maxval) __asm("air.clamp.u.v2i32");
+  METAL_FUNC vec<uint,2> clamp(vec<uint,2> x, uint minval, uint maxval) { return clamp(x,vec<uint,2>(minval),vec<uint,2>(maxval)); }
+  METAL_FUNC vec<uint,2> clz(vec<uint,2> x) {
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+    return static_cast<vec<uint,2>>(_air_clz_v2i32(as_type<vec<uint,2>>(x), false));
+#else
+    return static_cast<vec<uint,2>>(_air_clz_v2i32(as_type<vec<uint,2>>(x)));
+#endif
+  }
+  METAL_FUNC vec<uint,2> ctz(vec<uint,2> x) {
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+   return static_cast<vec<uint,2>>(_air_ctz_v2i32(as_type<vec<uint,2>>(x), false));
+#else
+   return static_cast<vec<uint,2>>(_air_ctz_v2i32(as_type<vec<uint,2>>(x)));
+#endif
+  }
+  METAL_ASM vec<uint,2> madhi(vec<uint,2> a, vec<uint,2> b, vec<uint,2> c) __asm("air.mad_hi.u.v2i32");
+  METAL_ASM vec<uint,2> madsat(vec<uint,2> a, vec<uint,2> b, vec<uint,2> c) __asm("air.mad_sat.u.v2i32");
+  METAL_ASM vec<uint,2> max(vec<uint,2> x, vec<uint,2> y) __asm("air.max.u.v2i32");
+  METAL_FUNC vec<uint,2> max(vec<uint,2> x, uint y) { return max(x,vec<uint,2>(y)); }
+  METAL_ASM vec<uint,2> min(vec<uint,2> x, vec<uint,2> y) __asm("air.min.u.v2i32");
+  METAL_FUNC vec<uint,2> min(vec<uint,2> x, uint y) { return min(x,vec<uint,2>(y)); }
+  METAL_ASM vec<uint,2> mulhi(vec<uint,2> x, vec<uint,2> y) __asm("air.mul_hi.u.v2i32");
+  METAL_ASM vec<uint,2> rotate(vec<uint,2> v, vec<uint,2> i) __asm("air.rotate.v2i32");
+  METAL_ASM vec<uint,2> subsat(vec<uint,2> x, vec<uint,2> y) __asm("air.sub_sat.u.v2i32");
+  METAL_ASM vec<uint,2> popcount(vec<uint,2> x) __asm("air.popcount.v2i32");
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+#if !defined(__HAVE_INTEGER_BIT_EDIT_AIR_FUNCTIONS__)
+  METAL_FUNC vec<uint,2> extract_bits(vec<uint,2> x, uint offset, uint bits) {
+    if (bits == 32)
+      return x;
+    return (x >> offset) & ((vec<uint,2>(1) << bits) - vec<uint,2>(1));
+  }
+  METAL_FUNC vec<uint,2> insert_bits(vec<uint,2> base, vec<uint,2> insert, uint offset, uint bits) {
+    if (bits == 32)
+      return insert;
+    vec<uint,2> mask = ((vec<uint,2>(1) << bits) - vec<uint,2>(1)) << offset;
+    return (base & ~mask) | ((insert << offset) & mask);
+  }
+  METAL_FUNC vec<uint,2> reverse_bits(vec<uint,2> x) {
+    x = ((x & vec<uint,2>(0x55555555)) << 1) | ((x & vec<uint,2>(0xAAAAAAAA)) >> 1);
+    x = ((x & vec<uint,2>(0x33333333)) << 2) | ((x & vec<uint,2>(0xCCCCCCCC)) >> 2);
+    x = ((x & vec<uint,2>(0x0F0F0F0F)) << 4) | ((x & vec<uint,2>(0xF0F0F0F0)) >> 4);
+    x = ((x & vec<uint,2>(0x00FF00FF)) << 8) | ((x & vec<uint,2>(0xFF00FF00)) >> 8);
+    return (x << 16) | (x >> 16);
+  }
+#else
+  METAL_ASM vec<uint,2> extract_bits(vec<uint,2> x, uint offset, uint bits) __asm("air.extract_bits.u.v2i32");
+  METAL_ASM vec<uint,2> insert_bits(vec<uint,2> base, vec<uint,2> insert, uint offset, uint bits) __asm("air.insert_bits.u.v2i32");
+  METAL_ASM vec<uint,2> reverse_bits(vec<uint,2> x) __asm("air.reverse_bits.v2i32");
+#endif
+#endif
+  METAL_ASM vec<char,3> abs(vec<char,3> x) __asm("air.abs.s.v3i8");
+  METAL_ASM vec<uchar,3> absdiff(vec<char,3> x, vec<char,3> y) __asm("air.abs_diff.s.v3i8");
+  METAL_ASM vec<char,3> addsat(vec<char,3> x, vec<char,3> y) __asm("air.add_sat.s.v3i8");
+  METAL_ASM vec<char,3> hadd(vec<char,3> x, vec<char,3> y) __asm("air.hadd.s.v3i8");
+  METAL_ASM vec<char,3> rhadd(vec<char,3> x, vec<char,3> y) __asm("air.rhadd.s.v3i8");
+  METAL_ASM vec<char,3> clamp(vec<char,3> x, vec<char,3> minval, vec<char,3> maxval) __asm("air.clamp.s.v3i8");
+  METAL_FUNC vec<char,3> clamp(vec<char,3> x, char minval, char maxval) { return clamp(x,vec<char,3>(minval),vec<char,3>(maxval)); }
+  METAL_FUNC vec<char,3> clz(vec<char,3> x) {
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+    return static_cast<vec<char,3>>(_air_clz_v3i8(as_type<vec<uchar,3>>(x), false));
+#else
+    return static_cast<vec<char,3>>(_air_clz_v3i8(as_type<vec<uchar,3>>(x)));
+#endif
+  }
+  METAL_FUNC vec<char,3> ctz(vec<char,3> x) {
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+   return static_cast<vec<char,3>>(_air_ctz_v3i8(as_type<vec<uchar,3>>(x), false));
+#else
+   return static_cast<vec<char,3>>(_air_ctz_v3i8(as_type<vec<uchar,3>>(x)));
+#endif
+  }
+  METAL_ASM vec<char,3> madhi(vec<char,3> a, vec<char,3> b, vec<char,3> c) __asm("air.mad_hi.s.v3i8");
+  METAL_ASM vec<char,3> madsat(vec<char,3> a, vec<char,3> b, vec<char,3> c) __asm("air.mad_sat.s.v3i8");
+  METAL_ASM vec<char,3> max(vec<char,3> x, vec<char,3> y) __asm("air.max.s.v3i8");
+  METAL_FUNC vec<char,3> max(vec<char,3> x, char y) { return max(x,vec<char,3>(y)); }
+  METAL_ASM vec<char,3> min(vec<char,3> x, vec<char,3> y) __asm("air.min.s.v3i8");
+  METAL_FUNC vec<char,3> min(vec<char,3> x, char y) { return min(x,vec<char,3>(y)); }
+  METAL_ASM vec<char,3> mulhi(vec<char,3> x, vec<char,3> y) __asm("air.mul_hi.s.v3i8");
+  METAL_ASM vec<char,3> rotate(vec<char,3> v, vec<char,3> i) __asm("air.rotate.v3i8");
+  METAL_ASM vec<char,3> subsat(vec<char,3> x, vec<char,3> y) __asm("air.sub_sat.s.v3i8");
+  METAL_ASM vec<char,3> popcount(vec<char,3> x) __asm("air.popcount.v3i8");
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+#if !defined(__HAVE_INTEGER_BIT_EDIT_AIR_FUNCTIONS__)
+  METAL_FUNC vec<char,3> extract_bits(vec<char,3> x, uint offset, uint bits) {
+    if (bits == 0)
+      return 0;
+    vec<uchar,3> xu = as_type<vec<uchar,3>>(x) >> offset;
+    vec<uchar,3> signmask = vec<uchar,3>(1) << (bits - 1);
+    vec<uchar,3> mask1 = ((~xu & signmask) << 1) - 1;
+    vec<uchar,3> mask2 = ~(((xu & signmask) << 1) - 1);
+    xu = (xu & mask1) | mask2;
+    return as_type<vec<char,3>>(xu);
+  }
+  METAL_FUNC vec<uchar,3> insert_bits(vec<uchar,3> base, vec<uchar,3> insert, uint offset, uint bits);
+  METAL_FUNC vec<char,3> insert_bits(vec<char,3> base, vec<char,3> insert, uint offset, uint bits) {
+    return as_type<vec<char,3>>(insert_bits(as_type<vec<uchar,3>>(base), as_type<vec<uchar,3>>(insert), offset, bits));
+  }
+  METAL_FUNC vec<uchar,3> reverse_bits(vec<uchar,3> x);
+  METAL_FUNC vec<char,3> reverse_bits(vec<char,3> x) {
+    return as_type<vec<char,3>>(reverse_bits(as_type<vec<uchar,3>>(x)));
+  }
+#else
+  METAL_ASM vec<char,3> extract_bits(vec<char,3> x, uint offset, uint bits) __asm("air.extract_bits.s.v3i8");
+  METAL_ASM vec<char,3> insert_bits(vec<char,3> base, vec<char,3> insert, uint offset, uint bits) __asm("air.insert_bits.s.v3i8");
+  METAL_ASM vec<char,3> reverse_bits(vec<char,3> x) __asm("air.reverse_bits.v3i8");
+#endif
+#endif
+  METAL_ASM vec<uchar,3> abs(vec<uchar,3> x) __asm("air.abs.u.v3i8");
+  METAL_ASM vec<uchar,3> absdiff(vec<uchar,3> x, vec<uchar,3> y) __asm("air.abs_diff.u.v3i8");
+  METAL_ASM vec<uchar,3> addsat(vec<uchar,3> x, vec<uchar,3> y) __asm("air.add_sat.u.v3i8");
+  METAL_ASM vec<uchar,3> hadd(vec<uchar,3> x, vec<uchar,3> y) __asm("air.hadd.u.v3i8");
+  METAL_ASM vec<uchar,3> rhadd(vec<uchar,3> x, vec<uchar,3> y) __asm("air.rhadd.u.v3i8");
+  METAL_ASM vec<uchar,3> clamp(vec<uchar,3> x, vec<uchar,3> minval, vec<uchar,3> maxval) __asm("air.clamp.u.v3i8");
+  METAL_FUNC vec<uchar,3> clamp(vec<uchar,3> x, uchar minval, uchar maxval) { return clamp(x,vec<uchar,3>(minval),vec<uchar,3>(maxval)); }
+  METAL_FUNC vec<uchar,3> clz(vec<uchar,3> x) {
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+    return static_cast<vec<uchar,3>>(_air_clz_v3i8(as_type<vec<uchar,3>>(x), false));
+#else
+    return static_cast<vec<uchar,3>>(_air_clz_v3i8(as_type<vec<uchar,3>>(x)));
+#endif
+  }
+  METAL_FUNC vec<uchar,3> ctz(vec<uchar,3> x) {
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+   return static_cast<vec<uchar,3>>(_air_ctz_v3i8(as_type<vec<uchar,3>>(x), false));
+#else
+   return static_cast<vec<uchar,3>>(_air_ctz_v3i8(as_type<vec<uchar,3>>(x)));
+#endif
+  }
+  METAL_ASM vec<uchar,3> madhi(vec<uchar,3> a, vec<uchar,3> b, vec<uchar,3> c) __asm("air.mad_hi.u.v3i8");
+  METAL_ASM vec<uchar,3> madsat(vec<uchar,3> a, vec<uchar,3> b, vec<uchar,3> c) __asm("air.mad_sat.u.v3i8");
+  METAL_ASM vec<uchar,3> max(vec<uchar,3> x, vec<uchar,3> y) __asm("air.max.u.v3i8");
+  METAL_FUNC vec<uchar,3> max(vec<uchar,3> x, uchar y) { return max(x,vec<uchar,3>(y)); }
+  METAL_ASM vec<uchar,3> min(vec<uchar,3> x, vec<uchar,3> y) __asm("air.min.u.v3i8");
+  METAL_FUNC vec<uchar,3> min(vec<uchar,3> x, uchar y) { return min(x,vec<uchar,3>(y)); }
+  METAL_ASM vec<uchar,3> mulhi(vec<uchar,3> x, vec<uchar,3> y) __asm("air.mul_hi.u.v3i8");
+  METAL_ASM vec<uchar,3> rotate(vec<uchar,3> v, vec<uchar,3> i) __asm("air.rotate.v3i8");
+  METAL_ASM vec<uchar,3> subsat(vec<uchar,3> x, vec<uchar,3> y) __asm("air.sub_sat.u.v3i8");
+  METAL_ASM vec<uchar,3> popcount(vec<uchar,3> x) __asm("air.popcount.v3i8");
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+#if !defined(__HAVE_INTEGER_BIT_EDIT_AIR_FUNCTIONS__)
+  METAL_FUNC vec<uchar,3> extract_bits(vec<uchar,3> x, uint offset, uint bits) {
+    if (bits == 8)
+      return x;
+    return (x >> offset) & ((vec<uchar,3>(1) << bits) - vec<uchar,3>(1));
+  }
+  METAL_FUNC vec<uchar,3> insert_bits(vec<uchar,3> base, vec<uchar,3> insert, uint offset, uint bits) {
+    if (bits == 8)
+      return insert;
+    vec<uchar,3> mask = ((vec<uchar,3>(1) << bits) - vec<uchar,3>(1)) << offset;
+    return (base & ~mask) | ((insert << offset) & mask);
+  }
+  METAL_FUNC vec<uchar,3> reverse_bits(vec<uchar,3> x) {
+    x = ((x & vec<uchar,3>(0x55)) << 1) | ((x & vec<uchar,3>(0xAA)) >> 1);
+    x = ((x & vec<uchar,3>(0x33)) << 2) | ((x & vec<uchar,3>(0xCC)) >> 2);
+    return (x << 4) | (x >> 4);
+  }
+#else
+  METAL_ASM vec<uchar,3> extract_bits(vec<uchar,3> x, uint offset, uint bits) __asm("air.extract_bits.u.v3i8");
+  METAL_ASM vec<uchar,3> insert_bits(vec<uchar,3> base, vec<uchar,3> insert, uint offset, uint bits) __asm("air.insert_bits.u.v3i8");
+  METAL_ASM vec<uchar,3> reverse_bits(vec<uchar,3> x) __asm("air.reverse_bits.v3i8");
+#endif
+#endif
+  METAL_ASM vec<short,3> abs(vec<short,3> x) __asm("air.abs.s.v3i16");
+  METAL_ASM vec<ushort,3> absdiff(vec<short,3> x, vec<short,3> y) __asm("air.abs_diff.s.v3i16");
+  METAL_ASM vec<short,3> addsat(vec<short,3> x, vec<short,3> y) __asm("air.add_sat.s.v3i16");
+  METAL_ASM vec<short,3> hadd(vec<short,3> x, vec<short,3> y) __asm("air.hadd.s.v3i16");
+  METAL_ASM vec<short,3> rhadd(vec<short,3> x, vec<short,3> y) __asm("air.rhadd.s.v3i16");
+  METAL_ASM vec<short,3> clamp(vec<short,3> x, vec<short,3> minval, vec<short,3> maxval) __asm("air.clamp.s.v3i16");
+  METAL_FUNC vec<short,3> clamp(vec<short,3> x, short minval, short maxval) { return clamp(x,vec<short,3>(minval),vec<short,3>(maxval)); }
+  METAL_FUNC vec<short,3> clz(vec<short,3> x) {
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+    return static_cast<vec<short,3>>(_air_clz_v3i16(as_type<vec<ushort,3>>(x), false));
+#else
+    return static_cast<vec<short,3>>(_air_clz_v3i16(as_type<vec<ushort,3>>(x)));
+#endif
+  }
+  METAL_FUNC vec<short,3> ctz(vec<short,3> x) {
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+   return static_cast<vec<short,3>>(_air_ctz_v3i16(as_type<vec<ushort,3>>(x), false));
+#else
+   return static_cast<vec<short,3>>(_air_ctz_v3i16(as_type<vec<ushort,3>>(x)));
+#endif
+  }
+  METAL_ASM vec<short,3> madhi(vec<short,3> a, vec<short,3> b, vec<short,3> c) __asm("air.mad_hi.s.v3i16");
+  METAL_ASM vec<short,3> madsat(vec<short,3> a, vec<short,3> b, vec<short,3> c) __asm("air.mad_sat.s.v3i16");
+  METAL_ASM vec<short,3> max(vec<short,3> x, vec<short,3> y) __asm("air.max.s.v3i16");
+  METAL_FUNC vec<short,3> max(vec<short,3> x, short y) { return max(x,vec<short,3>(y)); }
+  METAL_ASM vec<short,3> min(vec<short,3> x, vec<short,3> y) __asm("air.min.s.v3i16");
+  METAL_FUNC vec<short,3> min(vec<short,3> x, short y) { return min(x,vec<short,3>(y)); }
+  METAL_ASM vec<short,3> mulhi(vec<short,3> x, vec<short,3> y) __asm("air.mul_hi.s.v3i16");
+  METAL_ASM vec<short,3> rotate(vec<short,3> v, vec<short,3> i) __asm("air.rotate.v3i16");
+  METAL_ASM vec<short,3> subsat(vec<short,3> x, vec<short,3> y) __asm("air.sub_sat.s.v3i16");
+  METAL_ASM vec<short,3> popcount(vec<short,3> x) __asm("air.popcount.v3i16");
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+#if !defined(__HAVE_INTEGER_BIT_EDIT_AIR_FUNCTIONS__)
+  METAL_FUNC vec<short,3> extract_bits(vec<short,3> x, uint offset, uint bits) {
+    if (bits == 0)
+      return 0;
+    vec<ushort,3> xu = as_type<vec<ushort,3>>(x) >> offset;
+    vec<ushort,3> signmask = vec<ushort,3>(1) << (bits - 1);
+    vec<ushort,3> mask1 = ((~xu & signmask) << 1) - 1;
+    vec<ushort,3> mask2 = ~(((xu & signmask) << 1) - 1);
+    xu = (xu & mask1) | mask2;
+    return as_type<vec<short,3>>(xu);
+  }
+  METAL_FUNC vec<ushort,3> insert_bits(vec<ushort,3> base, vec<ushort,3> insert, uint offset, uint bits);
+  METAL_FUNC vec<short,3> insert_bits(vec<short,3> base, vec<short,3> insert, uint offset, uint bits) {
+    return as_type<vec<short,3>>(insert_bits(as_type<vec<ushort,3>>(base), as_type<vec<ushort,3>>(insert), offset, bits));
+  }
+  METAL_FUNC vec<ushort,3> reverse_bits(vec<ushort,3> x);
+  METAL_FUNC vec<short,3> reverse_bits(vec<short,3> x) {
+    return as_type<vec<short,3>>(reverse_bits(as_type<vec<ushort,3>>(x)));
+  }
+#else
+  METAL_ASM vec<short,3> extract_bits(vec<short,3> x, uint offset, uint bits) __asm("air.extract_bits.s.v3i16");
+  METAL_ASM vec<short,3> insert_bits(vec<short,3> base, vec<short,3> insert, uint offset, uint bits) __asm("air.insert_bits.s.v3i16");
+  METAL_ASM vec<short,3> reverse_bits(vec<short,3> x) __asm("air.reverse_bits.v3i16");
+#endif
+#endif
+  METAL_ASM vec<ushort,3> abs(vec<ushort,3> x) __asm("air.abs.u.v3i16");
+  METAL_ASM vec<ushort,3> absdiff(vec<ushort,3> x, vec<ushort,3> y) __asm("air.abs_diff.u.v3i16");
+  METAL_ASM vec<ushort,3> addsat(vec<ushort,3> x, vec<ushort,3> y) __asm("air.add_sat.u.v3i16");
+  METAL_ASM vec<ushort,3> hadd(vec<ushort,3> x, vec<ushort,3> y) __asm("air.hadd.u.v3i16");
+  METAL_ASM vec<ushort,3> rhadd(vec<ushort,3> x, vec<ushort,3> y) __asm("air.rhadd.u.v3i16");
+  METAL_ASM vec<ushort,3> clamp(vec<ushort,3> x, vec<ushort,3> minval, vec<ushort,3> maxval) __asm("air.clamp.u.v3i16");
+  METAL_FUNC vec<ushort,3> clamp(vec<ushort,3> x, ushort minval, ushort maxval) { return clamp(x,vec<ushort,3>(minval),vec<ushort,3>(maxval)); }
+  METAL_FUNC vec<ushort,3> clz(vec<ushort,3> x) {
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+    return static_cast<vec<ushort,3>>(_air_clz_v3i16(as_type<vec<ushort,3>>(x), false));
+#else
+    return static_cast<vec<ushort,3>>(_air_clz_v3i16(as_type<vec<ushort,3>>(x)));
+#endif
+  }
+  METAL_FUNC vec<ushort,3> ctz(vec<ushort,3> x) {
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+   return static_cast<vec<ushort,3>>(_air_ctz_v3i16(as_type<vec<ushort,3>>(x), false));
+#else
+   return static_cast<vec<ushort,3>>(_air_ctz_v3i16(as_type<vec<ushort,3>>(x)));
+#endif
+  }
+  METAL_ASM vec<ushort,3> madhi(vec<ushort,3> a, vec<ushort,3> b, vec<ushort,3> c) __asm("air.mad_hi.u.v3i16");
+  METAL_ASM vec<ushort,3> madsat(vec<ushort,3> a, vec<ushort,3> b, vec<ushort,3> c) __asm("air.mad_sat.u.v3i16");
+  METAL_ASM vec<ushort,3> max(vec<ushort,3> x, vec<ushort,3> y) __asm("air.max.u.v3i16");
+  METAL_FUNC vec<ushort,3> max(vec<ushort,3> x, ushort y) { return max(x,vec<ushort,3>(y)); }
+  METAL_ASM vec<ushort,3> min(vec<ushort,3> x, vec<ushort,3> y) __asm("air.min.u.v3i16");
+  METAL_FUNC vec<ushort,3> min(vec<ushort,3> x, ushort y) { return min(x,vec<ushort,3>(y)); }
+  METAL_ASM vec<ushort,3> mulhi(vec<ushort,3> x, vec<ushort,3> y) __asm("air.mul_hi.u.v3i16");
+  METAL_ASM vec<ushort,3> rotate(vec<ushort,3> v, vec<ushort,3> i) __asm("air.rotate.v3i16");
+  METAL_ASM vec<ushort,3> subsat(vec<ushort,3> x, vec<ushort,3> y) __asm("air.sub_sat.u.v3i16");
+  METAL_ASM vec<ushort,3> popcount(vec<ushort,3> x) __asm("air.popcount.v3i16");
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+#if !defined(__HAVE_INTEGER_BIT_EDIT_AIR_FUNCTIONS__)
+  METAL_FUNC vec<ushort,3> extract_bits(vec<ushort,3> x, uint offset, uint bits) {
+    if (bits == 16)
+      return x;
+    return (x >> offset) & ((vec<ushort,3>(1) << bits) - vec<ushort,3>(1));
+  }
+  METAL_FUNC vec<ushort,3> insert_bits(vec<ushort,3> base, vec<ushort,3> insert, uint offset, uint bits) {
+    if (bits == 16)
+      return insert;
+    vec<ushort,3> mask = ((vec<ushort,3>(1) << bits) - vec<ushort,3>(1)) << offset;
+    return (base & ~mask) | ((insert << offset) & mask);
+  }
+  METAL_FUNC vec<ushort,3> reverse_bits(vec<ushort,3> x) {
+    x = ((x & vec<ushort,3>(0x5555)) << 1) | ((x & vec<ushort,3>(0xAAAA)) >> 1);
+    x = ((x & vec<ushort,3>(0x3333)) << 2) | ((x & vec<ushort,3>(0xCCCC)) >> 2);
+    x = ((x & vec<ushort,3>(0x0F0F)) << 4) | ((x & vec<ushort,3>(0xF0F0)) >> 4);
+    return (x << 8) | (x >> 8);
+  }
+#else
+  METAL_ASM vec<ushort,3> extract_bits(vec<ushort,3> x, uint offset, uint bits) __asm("air.extract_bits.u.v3i16");
+  METAL_ASM vec<ushort,3> insert_bits(vec<ushort,3> base, vec<ushort,3> insert, uint offset, uint bits) __asm("air.insert_bits.u.v3i16");
+  METAL_ASM vec<ushort,3> reverse_bits(vec<ushort,3> x) __asm("air.reverse_bits.v3i16");
+#endif
+#endif
+  METAL_ASM vec<int,3> abs(vec<int,3> x) __asm("air.abs.s.v3i32");
+  METAL_ASM vec<uint,3> absdiff(vec<int,3> x, vec<int,3> y) __asm("air.abs_diff.s.v3i32");
+  METAL_ASM vec<int,3> addsat(vec<int,3> x, vec<int,3> y) __asm("air.add_sat.s.v3i32");
+  METAL_ASM vec<int,3> hadd(vec<int,3> x, vec<int,3> y) __asm("air.hadd.s.v3i32");
+  METAL_ASM vec<int,3> rhadd(vec<int,3> x, vec<int,3> y) __asm("air.rhadd.s.v3i32");
+  METAL_ASM vec<int,3> clamp(vec<int,3> x, vec<int,3> minval, vec<int,3> maxval) __asm("air.clamp.s.v3i32");
+  METAL_FUNC vec<int,3> clamp(vec<int,3> x, int minval, int maxval) { return clamp(x,vec<int,3>(minval),vec<int,3>(maxval)); }
+  METAL_FUNC vec<int,3> clz(vec<int,3> x) {
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+    return static_cast<vec<int,3>>(_air_clz_v3i32(as_type<vec<uint,3>>(x), false));
+#else
+    return static_cast<vec<int,3>>(_air_clz_v3i32(as_type<vec<uint,3>>(x)));
+#endif
+  }
+  METAL_FUNC vec<int,3> ctz(vec<int,3> x) {
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+   return static_cast<vec<int,3>>(_air_ctz_v3i32(as_type<vec<uint,3>>(x), false));
+#else
+   return static_cast<vec<int,3>>(_air_ctz_v3i32(as_type<vec<uint,3>>(x)));
+#endif
+  }
+  METAL_ASM vec<int,3> madhi(vec<int,3> a, vec<int,3> b, vec<int,3> c) __asm("air.mad_hi.s.v3i32");
+  METAL_ASM vec<int,3> madsat(vec<int,3> a, vec<int,3> b, vec<int,3> c) __asm("air.mad_sat.s.v3i32");
+  METAL_ASM vec<int,3> max(vec<int,3> x, vec<int,3> y) __asm("air.max.s.v3i32");
+  METAL_FUNC vec<int,3> max(vec<int,3> x, int y) { return max(x,vec<int,3>(y)); }
+  METAL_ASM vec<int,3> min(vec<int,3> x, vec<int,3> y) __asm("air.min.s.v3i32");
+  METAL_FUNC vec<int,3> min(vec<int,3> x, int y) { return min(x,vec<int,3>(y)); }
+  METAL_ASM vec<int,3> mulhi(vec<int,3> x, vec<int,3> y) __asm("air.mul_hi.s.v3i32");
+  METAL_ASM vec<int,3> rotate(vec<int,3> v, vec<int,3> i) __asm("air.rotate.v3i32");
+  METAL_ASM vec<int,3> subsat(vec<int,3> x, vec<int,3> y) __asm("air.sub_sat.s.v3i32");
+  METAL_ASM vec<int,3> popcount(vec<int,3> x) __asm("air.popcount.v3i32");
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+#if !defined(__HAVE_INTEGER_BIT_EDIT_AIR_FUNCTIONS__)
+  METAL_FUNC vec<int,3> extract_bits(vec<int,3> x, uint offset, uint bits) {
+    if (bits == 0)
+      return 0;
+    vec<uint,3> xu = as_type<vec<uint,3>>(x) >> offset;
+    vec<uint,3> signmask = vec<uint,3>(1) << (bits - 1);
+    vec<uint,3> mask1 = ((~xu & signmask) << 1) - 1;
+    vec<uint,3> mask2 = ~(((xu & signmask) << 1) - 1);
+    xu = (xu & mask1) | mask2;
+    return as_type<vec<int,3>>(xu);
+  }
+  METAL_FUNC vec<uint,3> insert_bits(vec<uint,3> base, vec<uint,3> insert, uint offset, uint bits);
+  METAL_FUNC vec<int,3> insert_bits(vec<int,3> base, vec<int,3> insert, uint offset, uint bits) {
+    return as_type<vec<int,3>>(insert_bits(as_type<vec<uint,3>>(base), as_type<vec<uint,3>>(insert), offset, bits));
+  }
+  METAL_FUNC vec<uint,3> reverse_bits(vec<uint,3> x);
+  METAL_FUNC vec<int,3> reverse_bits(vec<int,3> x) {
+    return as_type<vec<int,3>>(reverse_bits(as_type<vec<uint,3>>(x)));
+  }
+#else
+  METAL_ASM vec<int,3> extract_bits(vec<int,3> x, uint offset, uint bits) __asm("air.extract_bits.s.v3i32");
+  METAL_ASM vec<int,3> insert_bits(vec<int,3> base, vec<int,3> insert, uint offset, uint bits) __asm("air.insert_bits.s.v3i32");
+  METAL_ASM vec<int,3> reverse_bits(vec<int,3> x) __asm("air.reverse_bits.v3i32");
+#endif
+#endif
+  METAL_ASM vec<uint,3> abs(vec<uint,3> x) __asm("air.abs.u.v3i32");
+  METAL_ASM vec<uint,3> absdiff(vec<uint,3> x, vec<uint,3> y) __asm("air.abs_diff.u.v3i32");
+  METAL_ASM vec<uint,3> addsat(vec<uint,3> x, vec<uint,3> y) __asm("air.add_sat.u.v3i32");
+  METAL_ASM vec<uint,3> hadd(vec<uint,3> x, vec<uint,3> y) __asm("air.hadd.u.v3i32");
+  METAL_ASM vec<uint,3> rhadd(vec<uint,3> x, vec<uint,3> y) __asm("air.rhadd.u.v3i32");
+  METAL_ASM vec<uint,3> clamp(vec<uint,3> x, vec<uint,3> minval, vec<uint,3> maxval) __asm("air.clamp.u.v3i32");
+  METAL_FUNC vec<uint,3> clamp(vec<uint,3> x, uint minval, uint maxval) { return clamp(x,vec<uint,3>(minval),vec<uint,3>(maxval)); }
+  METAL_FUNC vec<uint,3> clz(vec<uint,3> x) {
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+    return static_cast<vec<uint,3>>(_air_clz_v3i32(as_type<vec<uint,3>>(x), false));
+#else
+    return static_cast<vec<uint,3>>(_air_clz_v3i32(as_type<vec<uint,3>>(x)));
+#endif
+  }
+  METAL_FUNC vec<uint,3> ctz(vec<uint,3> x) {
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+   return static_cast<vec<uint,3>>(_air_ctz_v3i32(as_type<vec<uint,3>>(x), false));
+#else
+   return static_cast<vec<uint,3>>(_air_ctz_v3i32(as_type<vec<uint,3>>(x)));
+#endif
+  }
+  METAL_ASM vec<uint,3> madhi(vec<uint,3> a, vec<uint,3> b, vec<uint,3> c) __asm("air.mad_hi.u.v3i32");
+  METAL_ASM vec<uint,3> madsat(vec<uint,3> a, vec<uint,3> b, vec<uint,3> c) __asm("air.mad_sat.u.v3i32");
+  METAL_ASM vec<uint,3> max(vec<uint,3> x, vec<uint,3> y) __asm("air.max.u.v3i32");
+  METAL_FUNC vec<uint,3> max(vec<uint,3> x, uint y) { return max(x,vec<uint,3>(y)); }
+  METAL_ASM vec<uint,3> min(vec<uint,3> x, vec<uint,3> y) __asm("air.min.u.v3i32");
+  METAL_FUNC vec<uint,3> min(vec<uint,3> x, uint y) { return min(x,vec<uint,3>(y)); }
+  METAL_ASM vec<uint,3> mulhi(vec<uint,3> x, vec<uint,3> y) __asm("air.mul_hi.u.v3i32");
+  METAL_ASM vec<uint,3> rotate(vec<uint,3> v, vec<uint,3> i) __asm("air.rotate.v3i32");
+  METAL_ASM vec<uint,3> subsat(vec<uint,3> x, vec<uint,3> y) __asm("air.sub_sat.u.v3i32");
+  METAL_ASM vec<uint,3> popcount(vec<uint,3> x) __asm("air.popcount.v3i32");
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+#if !defined(__HAVE_INTEGER_BIT_EDIT_AIR_FUNCTIONS__)
+  METAL_FUNC vec<uint,3> extract_bits(vec<uint,3> x, uint offset, uint bits) {
+    if (bits == 32)
+      return x;
+    return (x >> offset) & ((vec<uint,3>(1) << bits) - vec<uint,3>(1));
+  }
+  METAL_FUNC vec<uint,3> insert_bits(vec<uint,3> base, vec<uint,3> insert, uint offset, uint bits) {
+    if (bits == 32)
+      return insert;
+    vec<uint,3> mask = ((vec<uint,3>(1) << bits) - vec<uint,3>(1)) << offset;
+    return (base & ~mask) | ((insert << offset) & mask);
+  }
+  METAL_FUNC vec<uint,3> reverse_bits(vec<uint,3> x) {
+    x = ((x & vec<uint,3>(0x55555555)) << 1) | ((x & vec<uint,3>(0xAAAAAAAA)) >> 1);
+    x = ((x & vec<uint,3>(0x33333333)) << 2) | ((x & vec<uint,3>(0xCCCCCCCC)) >> 2);
+    x = ((x & vec<uint,3>(0x0F0F0F0F)) << 4) | ((x & vec<uint,3>(0xF0F0F0F0)) >> 4);
+    x = ((x & vec<uint,3>(0x00FF00FF)) << 8) | ((x & vec<uint,3>(0xFF00FF00)) >> 8);
+    return (x << 16) | (x >> 16);
+  }
+#else
+  METAL_ASM vec<uint,3> extract_bits(vec<uint,3> x, uint offset, uint bits) __asm("air.extract_bits.u.v3i32");
+  METAL_ASM vec<uint,3> insert_bits(vec<uint,3> base, vec<uint,3> insert, uint offset, uint bits) __asm("air.insert_bits.u.v3i32");
+  METAL_ASM vec<uint,3> reverse_bits(vec<uint,3> x) __asm("air.reverse_bits.v3i32");
+#endif
+#endif
+  METAL_ASM vec<char,4> abs(vec<char,4> x) __asm("air.abs.s.v4i8");
+  METAL_ASM vec<uchar,4> absdiff(vec<char,4> x, vec<char,4> y) __asm("air.abs_diff.s.v4i8");
+  METAL_ASM vec<char,4> addsat(vec<char,4> x, vec<char,4> y) __asm("air.add_sat.s.v4i8");
+  METAL_ASM vec<char,4> hadd(vec<char,4> x, vec<char,4> y) __asm("air.hadd.s.v4i8");
+  METAL_ASM vec<char,4> rhadd(vec<char,4> x, vec<char,4> y) __asm("air.rhadd.s.v4i8");
+  METAL_ASM vec<char,4> clamp(vec<char,4> x, vec<char,4> minval, vec<char,4> maxval) __asm("air.clamp.s.v4i8");
+  METAL_FUNC vec<char,4> clamp(vec<char,4> x, char minval, char maxval) { return clamp(x,vec<char,4>(minval),vec<char,4>(maxval)); }
+  METAL_FUNC vec<char,4> clz(vec<char,4> x) {
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+    return static_cast<vec<char,4>>(_air_clz_v4i8(as_type<vec<uchar,4>>(x), false));
+#else
+    return static_cast<vec<char,4>>(_air_clz_v4i8(as_type<vec<uchar,4>>(x)));
+#endif
+  }
+  METAL_FUNC vec<char,4> ctz(vec<char,4> x) {
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+   return static_cast<vec<char,4>>(_air_ctz_v4i8(as_type<vec<uchar,4>>(x), false));
+#else
+   return static_cast<vec<char,4>>(_air_ctz_v4i8(as_type<vec<uchar,4>>(x)));
+#endif
+  }
+  METAL_ASM vec<char,4> madhi(vec<char,4> a, vec<char,4> b, vec<char,4> c) __asm("air.mad_hi.s.v4i8");
+  METAL_ASM vec<char,4> madsat(vec<char,4> a, vec<char,4> b, vec<char,4> c) __asm("air.mad_sat.s.v4i8");
+  METAL_ASM vec<char,4> max(vec<char,4> x, vec<char,4> y) __asm("air.max.s.v4i8");
+  METAL_FUNC vec<char,4> max(vec<char,4> x, char y) { return max(x,vec<char,4>(y)); }
+  METAL_ASM vec<char,4> min(vec<char,4> x, vec<char,4> y) __asm("air.min.s.v4i8");
+  METAL_FUNC vec<char,4> min(vec<char,4> x, char y) { return min(x,vec<char,4>(y)); }
+  METAL_ASM vec<char,4> mulhi(vec<char,4> x, vec<char,4> y) __asm("air.mul_hi.s.v4i8");
+  METAL_ASM vec<char,4> rotate(vec<char,4> v, vec<char,4> i) __asm("air.rotate.v4i8");
+  METAL_ASM vec<char,4> subsat(vec<char,4> x, vec<char,4> y) __asm("air.sub_sat.s.v4i8");
+  METAL_ASM vec<char,4> popcount(vec<char,4> x) __asm("air.popcount.v4i8");
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+#if !defined(__HAVE_INTEGER_BIT_EDIT_AIR_FUNCTIONS__)
+  METAL_FUNC vec<char,4> extract_bits(vec<char,4> x, uint offset, uint bits) {
+    if (bits == 0)
+      return 0;
+    vec<uchar,4> xu = as_type<vec<uchar,4>>(x) >> offset;
+    vec<uchar,4> signmask = vec<uchar,4>(1) << (bits - 1);
+    vec<uchar,4> mask1 = ((~xu & signmask) << 1) - 1;
+    vec<uchar,4> mask2 = ~(((xu & signmask) << 1) - 1);
+    xu = (xu & mask1) | mask2;
+    return as_type<vec<char,4>>(xu);
+  }
+  METAL_FUNC vec<uchar,4> insert_bits(vec<uchar,4> base, vec<uchar,4> insert, uint offset, uint bits);
+  METAL_FUNC vec<char,4> insert_bits(vec<char,4> base, vec<char,4> insert, uint offset, uint bits) {
+    return as_type<vec<char,4>>(insert_bits(as_type<vec<uchar,4>>(base), as_type<vec<uchar,4>>(insert), offset, bits));
+  }
+  METAL_FUNC vec<uchar,4> reverse_bits(vec<uchar,4> x);
+  METAL_FUNC vec<char,4> reverse_bits(vec<char,4> x) {
+    return as_type<vec<char,4>>(reverse_bits(as_type<vec<uchar,4>>(x)));
+  }
+#else
+  METAL_ASM vec<char,4> extract_bits(vec<char,4> x, uint offset, uint bits) __asm("air.extract_bits.s.v4i8");
+  METAL_ASM vec<char,4> insert_bits(vec<char,4> base, vec<char,4> insert, uint offset, uint bits) __asm("air.insert_bits.s.v4i8");
+  METAL_ASM vec<char,4> reverse_bits(vec<char,4> x) __asm("air.reverse_bits.v4i8");
+#endif
+#endif
+  METAL_ASM vec<uchar,4> abs(vec<uchar,4> x) __asm("air.abs.u.v4i8");
+  METAL_ASM vec<uchar,4> absdiff(vec<uchar,4> x, vec<uchar,4> y) __asm("air.abs_diff.u.v4i8");
+  METAL_ASM vec<uchar,4> addsat(vec<uchar,4> x, vec<uchar,4> y) __asm("air.add_sat.u.v4i8");
+  METAL_ASM vec<uchar,4> hadd(vec<uchar,4> x, vec<uchar,4> y) __asm("air.hadd.u.v4i8");
+  METAL_ASM vec<uchar,4> rhadd(vec<uchar,4> x, vec<uchar,4> y) __asm("air.rhadd.u.v4i8");
+  METAL_ASM vec<uchar,4> clamp(vec<uchar,4> x, vec<uchar,4> minval, vec<uchar,4> maxval) __asm("air.clamp.u.v4i8");
+  METAL_FUNC vec<uchar,4> clamp(vec<uchar,4> x, uchar minval, uchar maxval) { return clamp(x,vec<uchar,4>(minval),vec<uchar,4>(maxval)); }
+  METAL_FUNC vec<uchar,4> clz(vec<uchar,4> x) {
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+    return static_cast<vec<uchar,4>>(_air_clz_v4i8(as_type<vec<uchar,4>>(x), false));
+#else
+    return static_cast<vec<uchar,4>>(_air_clz_v4i8(as_type<vec<uchar,4>>(x)));
+#endif
+  }
+  METAL_FUNC vec<uchar,4> ctz(vec<uchar,4> x) {
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+   return static_cast<vec<uchar,4>>(_air_ctz_v4i8(as_type<vec<uchar,4>>(x), false));
+#else
+   return static_cast<vec<uchar,4>>(_air_ctz_v4i8(as_type<vec<uchar,4>>(x)));
+#endif
+  }
+  METAL_ASM vec<uchar,4> madhi(vec<uchar,4> a, vec<uchar,4> b, vec<uchar,4> c) __asm("air.mad_hi.u.v4i8");
+  METAL_ASM vec<uchar,4> madsat(vec<uchar,4> a, vec<uchar,4> b, vec<uchar,4> c) __asm("air.mad_sat.u.v4i8");
+  METAL_ASM vec<uchar,4> max(vec<uchar,4> x, vec<uchar,4> y) __asm("air.max.u.v4i8");
+  METAL_FUNC vec<uchar,4> max(vec<uchar,4> x, uchar y) { return max(x,vec<uchar,4>(y)); }
+  METAL_ASM vec<uchar,4> min(vec<uchar,4> x, vec<uchar,4> y) __asm("air.min.u.v4i8");
+  METAL_FUNC vec<uchar,4> min(vec<uchar,4> x, uchar y) { return min(x,vec<uchar,4>(y)); }
+  METAL_ASM vec<uchar,4> mulhi(vec<uchar,4> x, vec<uchar,4> y) __asm("air.mul_hi.u.v4i8");
+  METAL_ASM vec<uchar,4> rotate(vec<uchar,4> v, vec<uchar,4> i) __asm("air.rotate.v4i8");
+  METAL_ASM vec<uchar,4> subsat(vec<uchar,4> x, vec<uchar,4> y) __asm("air.sub_sat.u.v4i8");
+  METAL_ASM vec<uchar,4> popcount(vec<uchar,4> x) __asm("air.popcount.v4i8");
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+#if !defined(__HAVE_INTEGER_BIT_EDIT_AIR_FUNCTIONS__)
+  METAL_FUNC vec<uchar,4> extract_bits(vec<uchar,4> x, uint offset, uint bits) {
+    if (bits == 8)
+      return x;
+    return (x >> offset) & ((vec<uchar,4>(1) << bits) - vec<uchar,4>(1));
+  }
+  METAL_FUNC vec<uchar,4> insert_bits(vec<uchar,4> base, vec<uchar,4> insert, uint offset, uint bits) {
+    if (bits == 8)
+      return insert;
+    vec<uchar,4> mask = ((vec<uchar,4>(1) << bits) - vec<uchar,4>(1)) << offset;
+    return (base & ~mask) | ((insert << offset) & mask);
+  }
+  METAL_FUNC vec<uchar,4> reverse_bits(vec<uchar,4> x) {
+    x = ((x & vec<uchar,4>(0x55)) << 1) | ((x & vec<uchar,4>(0xAA)) >> 1);
+    x = ((x & vec<uchar,4>(0x33)) << 2) | ((x & vec<uchar,4>(0xCC)) >> 2);
+    return (x << 4) | (x >> 4);
+  }
+#else
+  METAL_ASM vec<uchar,4> extract_bits(vec<uchar,4> x, uint offset, uint bits) __asm("air.extract_bits.u.v4i8");
+  METAL_ASM vec<uchar,4> insert_bits(vec<uchar,4> base, vec<uchar,4> insert, uint offset, uint bits) __asm("air.insert_bits.u.v4i8");
+  METAL_ASM vec<uchar,4> reverse_bits(vec<uchar,4> x) __asm("air.reverse_bits.v4i8");
+#endif
+#endif
+  METAL_ASM vec<short,4> abs(vec<short,4> x) __asm("air.abs.s.v4i16");
+  METAL_ASM vec<ushort,4> absdiff(vec<short,4> x, vec<short,4> y) __asm("air.abs_diff.s.v4i16");
+  METAL_ASM vec<short,4> addsat(vec<short,4> x, vec<short,4> y) __asm("air.add_sat.s.v4i16");
+  METAL_ASM vec<short,4> hadd(vec<short,4> x, vec<short,4> y) __asm("air.hadd.s.v4i16");
+  METAL_ASM vec<short,4> rhadd(vec<short,4> x, vec<short,4> y) __asm("air.rhadd.s.v4i16");
+  METAL_ASM vec<short,4> clamp(vec<short,4> x, vec<short,4> minval, vec<short,4> maxval) __asm("air.clamp.s.v4i16");
+  METAL_FUNC vec<short,4> clamp(vec<short,4> x, short minval, short maxval) { return clamp(x,vec<short,4>(minval),vec<short,4>(maxval)); }
+  METAL_FUNC vec<short,4> clz(vec<short,4> x) {
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+    return static_cast<vec<short,4>>(_air_clz_v4i16(as_type<vec<ushort,4>>(x), false));
+#else
+    return static_cast<vec<short,4>>(_air_clz_v4i16(as_type<vec<ushort,4>>(x)));
+#endif
+  }
+  METAL_FUNC vec<short,4> ctz(vec<short,4> x) {
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+   return static_cast<vec<short,4>>(_air_ctz_v4i16(as_type<vec<ushort,4>>(x), false));
+#else
+   return static_cast<vec<short,4>>(_air_ctz_v4i16(as_type<vec<ushort,4>>(x)));
+#endif
+  }
+  METAL_ASM vec<short,4> madhi(vec<short,4> a, vec<short,4> b, vec<short,4> c) __asm("air.mad_hi.s.v4i16");
+  METAL_ASM vec<short,4> madsat(vec<short,4> a, vec<short,4> b, vec<short,4> c) __asm("air.mad_sat.s.v4i16");
+  METAL_ASM vec<short,4> max(vec<short,4> x, vec<short,4> y) __asm("air.max.s.v4i16");
+  METAL_FUNC vec<short,4> max(vec<short,4> x, short y) { return max(x,vec<short,4>(y)); }
+  METAL_ASM vec<short,4> min(vec<short,4> x, vec<short,4> y) __asm("air.min.s.v4i16");
+  METAL_FUNC vec<short,4> min(vec<short,4> x, short y) { return min(x,vec<short,4>(y)); }
+  METAL_ASM vec<short,4> mulhi(vec<short,4> x, vec<short,4> y) __asm("air.mul_hi.s.v4i16");
+  METAL_ASM vec<short,4> rotate(vec<short,4> v, vec<short,4> i) __asm("air.rotate.v4i16");
+  METAL_ASM vec<short,4> subsat(vec<short,4> x, vec<short,4> y) __asm("air.sub_sat.s.v4i16");
+  METAL_ASM vec<short,4> popcount(vec<short,4> x) __asm("air.popcount.v4i16");
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+#if !defined(__HAVE_INTEGER_BIT_EDIT_AIR_FUNCTIONS__)
+  METAL_FUNC vec<short,4> extract_bits(vec<short,4> x, uint offset, uint bits) {
+    if (bits == 0)
+      return 0;
+    vec<ushort,4> xu = as_type<vec<ushort,4>>(x) >> offset;
+    vec<ushort,4> signmask = vec<ushort,4>(1) << (bits - 1);
+    vec<ushort,4> mask1 = ((~xu & signmask) << 1) - 1;
+    vec<ushort,4> mask2 = ~(((xu & signmask) << 1) - 1);
+    xu = (xu & mask1) | mask2;
+    return as_type<vec<short,4>>(xu);
+  }
+  METAL_FUNC vec<ushort,4> insert_bits(vec<ushort,4> base, vec<ushort,4> insert, uint offset, uint bits);
+  METAL_FUNC vec<short,4> insert_bits(vec<short,4> base, vec<short,4> insert, uint offset, uint bits) {
+    return as_type<vec<short,4>>(insert_bits(as_type<vec<ushort,4>>(base), as_type<vec<ushort,4>>(insert), offset, bits));
+  }
+  METAL_FUNC vec<ushort,4> reverse_bits(vec<ushort,4> x);
+  METAL_FUNC vec<short,4> reverse_bits(vec<short,4> x) {
+    return as_type<vec<short,4>>(reverse_bits(as_type<vec<ushort,4>>(x)));
+  }
+#else
+  METAL_ASM vec<short,4> extract_bits(vec<short,4> x, uint offset, uint bits) __asm("air.extract_bits.s.v4i16");
+  METAL_ASM vec<short,4> insert_bits(vec<short,4> base, vec<short,4> insert, uint offset, uint bits) __asm("air.insert_bits.s.v4i16");
+  METAL_ASM vec<short,4> reverse_bits(vec<short,4> x) __asm("air.reverse_bits.v4i16");
+#endif
+#endif
+  METAL_ASM vec<ushort,4> abs(vec<ushort,4> x) __asm("air.abs.u.v4i16");
+  METAL_ASM vec<ushort,4> absdiff(vec<ushort,4> x, vec<ushort,4> y) __asm("air.abs_diff.u.v4i16");
+  METAL_ASM vec<ushort,4> addsat(vec<ushort,4> x, vec<ushort,4> y) __asm("air.add_sat.u.v4i16");
+  METAL_ASM vec<ushort,4> hadd(vec<ushort,4> x, vec<ushort,4> y) __asm("air.hadd.u.v4i16");
+  METAL_ASM vec<ushort,4> rhadd(vec<ushort,4> x, vec<ushort,4> y) __asm("air.rhadd.u.v4i16");
+  METAL_ASM vec<ushort,4> clamp(vec<ushort,4> x, vec<ushort,4> minval, vec<ushort,4> maxval) __asm("air.clamp.u.v4i16");
+  METAL_FUNC vec<ushort,4> clamp(vec<ushort,4> x, ushort minval, ushort maxval) { return clamp(x,vec<ushort,4>(minval),vec<ushort,4>(maxval)); }
+  METAL_FUNC vec<ushort,4> clz(vec<ushort,4> x) {
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+    return static_cast<vec<ushort,4>>(_air_clz_v4i16(as_type<vec<ushort,4>>(x), false));
+#else
+    return static_cast<vec<ushort,4>>(_air_clz_v4i16(as_type<vec<ushort,4>>(x)));
+#endif
+  }
+  METAL_FUNC vec<ushort,4> ctz(vec<ushort,4> x) {
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+   return static_cast<vec<ushort,4>>(_air_ctz_v4i16(as_type<vec<ushort,4>>(x), false));
+#else
+   return static_cast<vec<ushort,4>>(_air_ctz_v4i16(as_type<vec<ushort,4>>(x)));
+#endif
+  }
+  METAL_ASM vec<ushort,4> madhi(vec<ushort,4> a, vec<ushort,4> b, vec<ushort,4> c) __asm("air.mad_hi.u.v4i16");
+  METAL_ASM vec<ushort,4> madsat(vec<ushort,4> a, vec<ushort,4> b, vec<ushort,4> c) __asm("air.mad_sat.u.v4i16");
+  METAL_ASM vec<ushort,4> max(vec<ushort,4> x, vec<ushort,4> y) __asm("air.max.u.v4i16");
+  METAL_FUNC vec<ushort,4> max(vec<ushort,4> x, ushort y) { return max(x,vec<ushort,4>(y)); }
+  METAL_ASM vec<ushort,4> min(vec<ushort,4> x, vec<ushort,4> y) __asm("air.min.u.v4i16");
+  METAL_FUNC vec<ushort,4> min(vec<ushort,4> x, ushort y) { return min(x,vec<ushort,4>(y)); }
+  METAL_ASM vec<ushort,4> mulhi(vec<ushort,4> x, vec<ushort,4> y) __asm("air.mul_hi.u.v4i16");
+  METAL_ASM vec<ushort,4> rotate(vec<ushort,4> v, vec<ushort,4> i) __asm("air.rotate.v4i16");
+  METAL_ASM vec<ushort,4> subsat(vec<ushort,4> x, vec<ushort,4> y) __asm("air.sub_sat.u.v4i16");
+  METAL_ASM vec<ushort,4> popcount(vec<ushort,4> x) __asm("air.popcount.v4i16");
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+#if !defined(__HAVE_INTEGER_BIT_EDIT_AIR_FUNCTIONS__)
+  METAL_FUNC vec<ushort,4> extract_bits(vec<ushort,4> x, uint offset, uint bits) {
+    if (bits == 16)
+      return x;
+    return (x >> offset) & ((vec<ushort,4>(1) << bits) - vec<ushort,4>(1));
+  }
+  METAL_FUNC vec<ushort,4> insert_bits(vec<ushort,4> base, vec<ushort,4> insert, uint offset, uint bits) {
+    if (bits == 16)
+      return insert;
+    vec<ushort,4> mask = ((vec<ushort,4>(1) << bits) - vec<ushort,4>(1)) << offset;
+    return (base & ~mask) | ((insert << offset) & mask);
+  }
+  METAL_FUNC vec<ushort,4> reverse_bits(vec<ushort,4> x) {
+    x = ((x & vec<ushort,4>(0x5555)) << 1) | ((x & vec<ushort,4>(0xAAAA)) >> 1);
+    x = ((x & vec<ushort,4>(0x3333)) << 2) | ((x & vec<ushort,4>(0xCCCC)) >> 2);
+    x = ((x & vec<ushort,4>(0x0F0F)) << 4) | ((x & vec<ushort,4>(0xF0F0)) >> 4);
+    return (x << 8) | (x >> 8);
+  }
+#else
+  METAL_ASM vec<ushort,4> extract_bits(vec<ushort,4> x, uint offset, uint bits) __asm("air.extract_bits.u.v4i16");
+  METAL_ASM vec<ushort,4> insert_bits(vec<ushort,4> base, vec<ushort,4> insert, uint offset, uint bits) __asm("air.insert_bits.u.v4i16");
+  METAL_ASM vec<ushort,4> reverse_bits(vec<ushort,4> x) __asm("air.reverse_bits.v4i16");
+#endif
+#endif
+  METAL_ASM vec<int,4> abs(vec<int,4> x) __asm("air.abs.s.v4i32");
+  METAL_ASM vec<uint,4> absdiff(vec<int,4> x, vec<int,4> y) __asm("air.abs_diff.s.v4i32");
+  METAL_ASM vec<int,4> addsat(vec<int,4> x, vec<int,4> y) __asm("air.add_sat.s.v4i32");
+  METAL_ASM vec<int,4> hadd(vec<int,4> x, vec<int,4> y) __asm("air.hadd.s.v4i32");
+  METAL_ASM vec<int,4> rhadd(vec<int,4> x, vec<int,4> y) __asm("air.rhadd.s.v4i32");
+  METAL_ASM vec<int,4> clamp(vec<int,4> x, vec<int,4> minval, vec<int,4> maxval) __asm("air.clamp.s.v4i32");
+  METAL_FUNC vec<int,4> clamp(vec<int,4> x, int minval, int maxval) { return clamp(x,vec<int,4>(minval),vec<int,4>(maxval)); }
+  METAL_FUNC vec<int,4> clz(vec<int,4> x) {
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+    return static_cast<vec<int,4>>(_air_clz_v4i32(as_type<vec<uint,4>>(x), false));
+#else
+    return static_cast<vec<int,4>>(_air_clz_v4i32(as_type<vec<uint,4>>(x)));
+#endif
+  }
+  METAL_FUNC vec<int,4> ctz(vec<int,4> x) {
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+   return static_cast<vec<int,4>>(_air_ctz_v4i32(as_type<vec<uint,4>>(x), false));
+#else
+   return static_cast<vec<int,4>>(_air_ctz_v4i32(as_type<vec<uint,4>>(x)));
+#endif
+  }
+  METAL_ASM vec<int,4> madhi(vec<int,4> a, vec<int,4> b, vec<int,4> c) __asm("air.mad_hi.s.v4i32");
+  METAL_ASM vec<int,4> madsat(vec<int,4> a, vec<int,4> b, vec<int,4> c) __asm("air.mad_sat.s.v4i32");
+  METAL_ASM vec<int,4> max(vec<int,4> x, vec<int,4> y) __asm("air.max.s.v4i32");
+  METAL_FUNC vec<int,4> max(vec<int,4> x, int y) { return max(x,vec<int,4>(y)); }
+  METAL_ASM vec<int,4> min(vec<int,4> x, vec<int,4> y) __asm("air.min.s.v4i32");
+  METAL_FUNC vec<int,4> min(vec<int,4> x, int y) { return min(x,vec<int,4>(y)); }
+  METAL_ASM vec<int,4> mulhi(vec<int,4> x, vec<int,4> y) __asm("air.mul_hi.s.v4i32");
+  METAL_ASM vec<int,4> rotate(vec<int,4> v, vec<int,4> i) __asm("air.rotate.v4i32");
+  METAL_ASM vec<int,4> subsat(vec<int,4> x, vec<int,4> y) __asm("air.sub_sat.s.v4i32");
+  METAL_ASM vec<int,4> popcount(vec<int,4> x) __asm("air.popcount.v4i32");
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+#if !defined(__HAVE_INTEGER_BIT_EDIT_AIR_FUNCTIONS__)
+  METAL_FUNC vec<int,4> extract_bits(vec<int,4> x, uint offset, uint bits) {
+    if (bits == 0)
+      return 0;
+    vec<uint,4> xu = as_type<vec<uint,4>>(x) >> offset;
+    vec<uint,4> signmask = vec<uint,4>(1) << (bits - 1);
+    vec<uint,4> mask1 = ((~xu & signmask) << 1) - 1;
+    vec<uint,4> mask2 = ~(((xu & signmask) << 1) - 1);
+    xu = (xu & mask1) | mask2;
+    return as_type<vec<int,4>>(xu);
+  }
+  METAL_FUNC vec<uint,4> insert_bits(vec<uint,4> base, vec<uint,4> insert, uint offset, uint bits);
+  METAL_FUNC vec<int,4> insert_bits(vec<int,4> base, vec<int,4> insert, uint offset, uint bits) {
+    return as_type<vec<int,4>>(insert_bits(as_type<vec<uint,4>>(base), as_type<vec<uint,4>>(insert), offset, bits));
+  }
+  METAL_FUNC vec<uint,4> reverse_bits(vec<uint,4> x);
+  METAL_FUNC vec<int,4> reverse_bits(vec<int,4> x) {
+    return as_type<vec<int,4>>(reverse_bits(as_type<vec<uint,4>>(x)));
+  }
+#else
+  METAL_ASM vec<int,4> extract_bits(vec<int,4> x, uint offset, uint bits) __asm("air.extract_bits.s.v4i32");
+  METAL_ASM vec<int,4> insert_bits(vec<int,4> base, vec<int,4> insert, uint offset, uint bits) __asm("air.insert_bits.s.v4i32");
+  METAL_ASM vec<int,4> reverse_bits(vec<int,4> x) __asm("air.reverse_bits.v4i32");
+#endif
+#endif
+  METAL_ASM vec<uint,4> abs(vec<uint,4> x) __asm("air.abs.u.v4i32");
+  METAL_ASM vec<uint,4> absdiff(vec<uint,4> x, vec<uint,4> y) __asm("air.abs_diff.u.v4i32");
+  METAL_ASM vec<uint,4> addsat(vec<uint,4> x, vec<uint,4> y) __asm("air.add_sat.u.v4i32");
+  METAL_ASM vec<uint,4> hadd(vec<uint,4> x, vec<uint,4> y) __asm("air.hadd.u.v4i32");
+  METAL_ASM vec<uint,4> rhadd(vec<uint,4> x, vec<uint,4> y) __asm("air.rhadd.u.v4i32");
+  METAL_ASM vec<uint,4> clamp(vec<uint,4> x, vec<uint,4> minval, vec<uint,4> maxval) __asm("air.clamp.u.v4i32");
+  METAL_FUNC vec<uint,4> clamp(vec<uint,4> x, uint minval, uint maxval) { return clamp(x,vec<uint,4>(minval),vec<uint,4>(maxval)); }
+  METAL_FUNC vec<uint,4> clz(vec<uint,4> x) {
+#if defined(__HAVE_CLZ_ZERO_UNDEF__)
+    return static_cast<vec<uint,4>>(_air_clz_v4i32(as_type<vec<uint,4>>(x), false));
+#else
+    return static_cast<vec<uint,4>>(_air_clz_v4i32(as_type<vec<uint,4>>(x)));
+#endif
+  }
+  METAL_FUNC vec<uint,4> ctz(vec<uint,4> x) {
+#if defined(__HAVE_CTZ_ZERO_UNDEF__)
+   return static_cast<vec<uint,4>>(_air_ctz_v4i32(as_type<vec<uint,4>>(x), false));
+#else
+   return static_cast<vec<uint,4>>(_air_ctz_v4i32(as_type<vec<uint,4>>(x)));
+#endif
+  }
+  METAL_ASM vec<uint,4> madhi(vec<uint,4> a, vec<uint,4> b, vec<uint,4> c) __asm("air.mad_hi.u.v4i32");
+  METAL_ASM vec<uint,4> madsat(vec<uint,4> a, vec<uint,4> b, vec<uint,4> c) __asm("air.mad_sat.u.v4i32");
+  METAL_ASM vec<uint,4> max(vec<uint,4> x, vec<uint,4> y) __asm("air.max.u.v4i32");
+  METAL_FUNC vec<uint,4> max(vec<uint,4> x, uint y) { return max(x,vec<uint,4>(y)); }
+  METAL_ASM vec<uint,4> min(vec<uint,4> x, vec<uint,4> y) __asm("air.min.u.v4i32");
+  METAL_FUNC vec<uint,4> min(vec<uint,4> x, uint y) { return min(x,vec<uint,4>(y)); }
+  METAL_ASM vec<uint,4> mulhi(vec<uint,4> x, vec<uint,4> y) __asm("air.mul_hi.u.v4i32");
+  METAL_ASM vec<uint,4> rotate(vec<uint,4> v, vec<uint,4> i) __asm("air.rotate.v4i32");
+  METAL_ASM vec<uint,4> subsat(vec<uint,4> x, vec<uint,4> y) __asm("air.sub_sat.u.v4i32");
+  METAL_ASM vec<uint,4> popcount(vec<uint,4> x) __asm("air.popcount.v4i32");
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+#if !defined(__HAVE_INTEGER_BIT_EDIT_AIR_FUNCTIONS__)
+  METAL_FUNC vec<uint,4> extract_bits(vec<uint,4> x, uint offset, uint bits) {
+    if (bits == 32)
+      return x;
+    return (x >> offset) & ((vec<uint,4>(1) << bits) - vec<uint,4>(1));
+  }
+  METAL_FUNC vec<uint,4> insert_bits(vec<uint,4> base, vec<uint,4> insert, uint offset, uint bits) {
+    if (bits == 32)
+      return insert;
+    vec<uint,4> mask = ((vec<uint,4>(1) << bits) - vec<uint,4>(1)) << offset;
+    return (base & ~mask) | ((insert << offset) & mask);
+  }
+  METAL_FUNC vec<uint,4> reverse_bits(vec<uint,4> x) {
+    x = ((x & vec<uint,4>(0x55555555)) << 1) | ((x & vec<uint,4>(0xAAAAAAAA)) >> 1);
+    x = ((x & vec<uint,4>(0x33333333)) << 2) | ((x & vec<uint,4>(0xCCCCCCCC)) >> 2);
+    x = ((x & vec<uint,4>(0x0F0F0F0F)) << 4) | ((x & vec<uint,4>(0xF0F0F0F0)) >> 4);
+    x = ((x & vec<uint,4>(0x00FF00FF)) << 8) | ((x & vec<uint,4>(0xFF00FF00)) >> 8);
+    return (x << 16) | (x >> 16);
+  }
+#else
+  METAL_ASM vec<uint,4> extract_bits(vec<uint,4> x, uint offset, uint bits) __asm("air.extract_bits.u.v4i32");
+  METAL_ASM vec<uint,4> insert_bits(vec<uint,4> base, vec<uint,4> insert, uint offset, uint bits) __asm("air.insert_bits.u.v4i32");
+  METAL_ASM vec<uint,4> reverse_bits(vec<uint,4> x) __asm("air.reverse_bits.v4i32");
+#endif
+#endif
+} // namespace metal
+
+#endif // __METAL_INTEGER

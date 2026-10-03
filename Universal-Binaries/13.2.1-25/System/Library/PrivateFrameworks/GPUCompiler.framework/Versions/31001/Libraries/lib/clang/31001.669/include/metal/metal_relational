@@ -1,0 +1,971 @@
+// -*- Metal -*-
+//===-- metal_relational --------------------------------------------------===//
+// Copyright (c) 2014-2018 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_RELATIONAL
+#define __METAL_RELATIONAL
+
+#include <metal_limits>
+
+#pragma METAL internals : enable
+namespace metal
+{
+// Metal 1.1 s5.4: Relational Functions.
+
+METAL_FUNC bool isfinite(half x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<half>::encoding_type) & ~_fp_encoding_traits<half>::sign_mask) < _fp_encoding_traits<half>::inf_mask;
+}
+METAL_FUNC bool isinf(half x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<half>::encoding_type) & ~_fp_encoding_traits<half>::sign_mask) == _fp_encoding_traits<half>::inf_mask;
+}
+METAL_FUNC bool isnan(half x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<half>::encoding_type) & ~_fp_encoding_traits<half>::sign_mask) > _fp_encoding_traits<half>::inf_mask;
+}
+METAL_FUNC bool isnormal(half x)
+{
+  return typename _fp_encoding_traits<half>::encoding_type((__builtin_astype(x, typename _fp_encoding_traits<half>::encoding_type) & ~_fp_encoding_traits<half>::sign_mask) - _fp_encoding_traits<half>::min_mask) < typename _fp_encoding_traits<half>::encoding_type(_fp_encoding_traits<half>::inf_mask - _fp_encoding_traits<half>::min_mask);
+}
+METAL_FUNC bool isunordered(half x, half y)
+{
+  return isnan(x) || isnan(y);
+}
+METAL_FUNC bool isordered(half x, half y)
+{
+  return !isunordered(x, y);
+}
+METAL_FUNC bool signbit(half x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<half>::encoding_type) >> (_fp_encoding_traits<half>::bit_width - 1)) == 1;
+}
+METAL_FUNC bool2 isfinite(half2 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<half2>::encoding_type) & ~_fp_encoding_traits<half2>::sign_mask) < _fp_encoding_traits<half2>::inf_mask;
+}
+METAL_FUNC bool2 isinf(half2 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<half2>::encoding_type) & ~_fp_encoding_traits<half2>::sign_mask) == _fp_encoding_traits<half2>::inf_mask;
+}
+METAL_FUNC bool2 isnan(half2 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<half2>::encoding_type) & ~_fp_encoding_traits<half2>::sign_mask) > _fp_encoding_traits<half2>::inf_mask;
+}
+METAL_FUNC bool2 isnormal(half2 x)
+{
+  return typename _fp_encoding_traits<half2>::encoding_type((__builtin_astype(x, typename _fp_encoding_traits<half2>::encoding_type) & ~_fp_encoding_traits<half2>::sign_mask) - _fp_encoding_traits<half2>::min_mask) < typename _fp_encoding_traits<half2>::encoding_type(_fp_encoding_traits<half2>::inf_mask - _fp_encoding_traits<half2>::min_mask);
+}
+METAL_FUNC bool2 isunordered(half2 x, half2 y)
+{
+  return isnan(x) || isnan(y);
+}
+METAL_FUNC bool2 isordered(half2 x, half2 y)
+{
+  return !isunordered(x, y);
+}
+METAL_FUNC bool2 signbit(half2 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<half2>::encoding_type) >> (_fp_encoding_traits<half2>::bit_width - 1)) == 1;
+}
+METAL_FUNC bool3 isfinite(half3 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<half3>::encoding_type) & ~_fp_encoding_traits<half3>::sign_mask) < _fp_encoding_traits<half3>::inf_mask;
+}
+METAL_FUNC bool3 isinf(half3 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<half3>::encoding_type) & ~_fp_encoding_traits<half3>::sign_mask) == _fp_encoding_traits<half3>::inf_mask;
+}
+METAL_FUNC bool3 isnan(half3 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<half3>::encoding_type) & ~_fp_encoding_traits<half3>::sign_mask) > _fp_encoding_traits<half3>::inf_mask;
+}
+METAL_FUNC bool3 isnormal(half3 x)
+{
+  return typename _fp_encoding_traits<half3>::encoding_type((__builtin_astype(x, typename _fp_encoding_traits<half3>::encoding_type) & ~_fp_encoding_traits<half3>::sign_mask) - _fp_encoding_traits<half3>::min_mask) < typename _fp_encoding_traits<half3>::encoding_type(_fp_encoding_traits<half3>::inf_mask - _fp_encoding_traits<half3>::min_mask);
+}
+METAL_FUNC bool3 isunordered(half3 x, half3 y)
+{
+  return isnan(x) || isnan(y);
+}
+METAL_FUNC bool3 isordered(half3 x, half3 y)
+{
+  return !isunordered(x, y);
+}
+METAL_FUNC bool3 signbit(half3 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<half3>::encoding_type) >> (_fp_encoding_traits<half3>::bit_width - 1)) == 1;
+}
+METAL_FUNC bool4 isfinite(half4 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<half4>::encoding_type) & ~_fp_encoding_traits<half4>::sign_mask) < _fp_encoding_traits<half4>::inf_mask;
+}
+METAL_FUNC bool4 isinf(half4 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<half4>::encoding_type) & ~_fp_encoding_traits<half4>::sign_mask) == _fp_encoding_traits<half4>::inf_mask;
+}
+METAL_FUNC bool4 isnan(half4 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<half4>::encoding_type) & ~_fp_encoding_traits<half4>::sign_mask) > _fp_encoding_traits<half4>::inf_mask;
+}
+METAL_FUNC bool4 isnormal(half4 x)
+{
+  return typename _fp_encoding_traits<half4>::encoding_type((__builtin_astype(x, typename _fp_encoding_traits<half4>::encoding_type) & ~_fp_encoding_traits<half4>::sign_mask) - _fp_encoding_traits<half4>::min_mask) < typename _fp_encoding_traits<half4>::encoding_type(_fp_encoding_traits<half4>::inf_mask - _fp_encoding_traits<half4>::min_mask);
+}
+METAL_FUNC bool4 isunordered(half4 x, half4 y)
+{
+  return isnan(x) || isnan(y);
+}
+METAL_FUNC bool4 isordered(half4 x, half4 y)
+{
+  return !isunordered(x, y);
+}
+METAL_FUNC bool4 signbit(half4 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<half4>::encoding_type) >> (_fp_encoding_traits<half4>::bit_width - 1)) == 1;
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC bool8 isfinite(half8 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<half8>::encoding_type) & ~_fp_encoding_traits<half8>::sign_mask) < _fp_encoding_traits<half8>::inf_mask;
+}
+METAL_FUNC bool8 isinf(half8 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<half8>::encoding_type) & ~_fp_encoding_traits<half8>::sign_mask) == _fp_encoding_traits<half8>::inf_mask;
+}
+METAL_FUNC bool8 isnan(half8 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<half8>::encoding_type) & ~_fp_encoding_traits<half8>::sign_mask) > _fp_encoding_traits<half8>::inf_mask;
+}
+METAL_FUNC bool8 isnormal(half8 x)
+{
+  return typename _fp_encoding_traits<half8>::encoding_type((__builtin_astype(x, typename _fp_encoding_traits<half8>::encoding_type) & ~_fp_encoding_traits<half8>::sign_mask) - _fp_encoding_traits<half8>::min_mask) < typename _fp_encoding_traits<half8>::encoding_type(_fp_encoding_traits<half8>::inf_mask - _fp_encoding_traits<half8>::min_mask);
+}
+METAL_FUNC bool8 isunordered(half8 x, half8 y)
+{
+  return isnan(x) || isnan(y);
+}
+METAL_FUNC bool8 isordered(half8 x, half8 y)
+{
+  return !isunordered(x, y);
+}
+METAL_FUNC bool8 signbit(half8 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<half8>::encoding_type) >> (_fp_encoding_traits<half8>::bit_width - 1)) == 1;
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC bool16 isfinite(half16 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<half16>::encoding_type) & ~_fp_encoding_traits<half16>::sign_mask) < _fp_encoding_traits<half16>::inf_mask;
+}
+METAL_FUNC bool16 isinf(half16 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<half16>::encoding_type) & ~_fp_encoding_traits<half16>::sign_mask) == _fp_encoding_traits<half16>::inf_mask;
+}
+METAL_FUNC bool16 isnan(half16 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<half16>::encoding_type) & ~_fp_encoding_traits<half16>::sign_mask) > _fp_encoding_traits<half16>::inf_mask;
+}
+METAL_FUNC bool16 isnormal(half16 x)
+{
+  return typename _fp_encoding_traits<half16>::encoding_type((__builtin_astype(x, typename _fp_encoding_traits<half16>::encoding_type) & ~_fp_encoding_traits<half16>::sign_mask) - _fp_encoding_traits<half16>::min_mask) < typename _fp_encoding_traits<half16>::encoding_type(_fp_encoding_traits<half16>::inf_mask - _fp_encoding_traits<half16>::min_mask);
+}
+METAL_FUNC bool16 isunordered(half16 x, half16 y)
+{
+  return isnan(x) || isnan(y);
+}
+METAL_FUNC bool16 isordered(half16 x, half16 y)
+{
+  return !isunordered(x, y);
+}
+METAL_FUNC bool16 signbit(half16 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<half16>::encoding_type) >> (_fp_encoding_traits<half16>::bit_width - 1)) == 1;
+}
+#endif
+METAL_FUNC bool isfinite(float x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<float>::encoding_type) & ~_fp_encoding_traits<float>::sign_mask) < _fp_encoding_traits<float>::inf_mask;
+}
+METAL_FUNC bool isinf(float x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<float>::encoding_type) & ~_fp_encoding_traits<float>::sign_mask) == _fp_encoding_traits<float>::inf_mask;
+}
+METAL_FUNC bool isnan(float x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<float>::encoding_type) & ~_fp_encoding_traits<float>::sign_mask) > _fp_encoding_traits<float>::inf_mask;
+}
+METAL_FUNC bool isnormal(float x)
+{
+  return typename _fp_encoding_traits<float>::encoding_type((__builtin_astype(x, typename _fp_encoding_traits<float>::encoding_type) & ~_fp_encoding_traits<float>::sign_mask) - _fp_encoding_traits<float>::min_mask) < typename _fp_encoding_traits<float>::encoding_type(_fp_encoding_traits<float>::inf_mask - _fp_encoding_traits<float>::min_mask);
+}
+METAL_FUNC bool isunordered(float x, float y)
+{
+  return isnan(x) || isnan(y);
+}
+METAL_FUNC bool isordered(float x, float y)
+{
+  return !isunordered(x, y);
+}
+METAL_FUNC bool signbit(float x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<float>::encoding_type) >> (_fp_encoding_traits<float>::bit_width - 1)) == 1;
+}
+METAL_FUNC bool2 isfinite(float2 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<float2>::encoding_type) & ~_fp_encoding_traits<float2>::sign_mask) < _fp_encoding_traits<float2>::inf_mask;
+}
+METAL_FUNC bool2 isinf(float2 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<float2>::encoding_type) & ~_fp_encoding_traits<float2>::sign_mask) == _fp_encoding_traits<float2>::inf_mask;
+}
+METAL_FUNC bool2 isnan(float2 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<float2>::encoding_type) & ~_fp_encoding_traits<float2>::sign_mask) > _fp_encoding_traits<float2>::inf_mask;
+}
+METAL_FUNC bool2 isnormal(float2 x)
+{
+  return typename _fp_encoding_traits<float2>::encoding_type((__builtin_astype(x, typename _fp_encoding_traits<float2>::encoding_type) & ~_fp_encoding_traits<float2>::sign_mask) - _fp_encoding_traits<float2>::min_mask) < typename _fp_encoding_traits<float2>::encoding_type(_fp_encoding_traits<float2>::inf_mask - _fp_encoding_traits<float2>::min_mask);
+}
+METAL_FUNC bool2 isunordered(float2 x, float2 y)
+{
+  return isnan(x) || isnan(y);
+}
+METAL_FUNC bool2 isordered(float2 x, float2 y)
+{
+  return !isunordered(x, y);
+}
+METAL_FUNC bool2 signbit(float2 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<float2>::encoding_type) >> (_fp_encoding_traits<float2>::bit_width - 1)) == 1;
+}
+METAL_FUNC bool3 isfinite(float3 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<float3>::encoding_type) & ~_fp_encoding_traits<float3>::sign_mask) < _fp_encoding_traits<float3>::inf_mask;
+}
+METAL_FUNC bool3 isinf(float3 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<float3>::encoding_type) & ~_fp_encoding_traits<float3>::sign_mask) == _fp_encoding_traits<float3>::inf_mask;
+}
+METAL_FUNC bool3 isnan(float3 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<float3>::encoding_type) & ~_fp_encoding_traits<float3>::sign_mask) > _fp_encoding_traits<float3>::inf_mask;
+}
+METAL_FUNC bool3 isnormal(float3 x)
+{
+  return typename _fp_encoding_traits<float3>::encoding_type((__builtin_astype(x, typename _fp_encoding_traits<float3>::encoding_type) & ~_fp_encoding_traits<float3>::sign_mask) - _fp_encoding_traits<float3>::min_mask) < typename _fp_encoding_traits<float3>::encoding_type(_fp_encoding_traits<float3>::inf_mask - _fp_encoding_traits<float3>::min_mask);
+}
+METAL_FUNC bool3 isunordered(float3 x, float3 y)
+{
+  return isnan(x) || isnan(y);
+}
+METAL_FUNC bool3 isordered(float3 x, float3 y)
+{
+  return !isunordered(x, y);
+}
+METAL_FUNC bool3 signbit(float3 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<float3>::encoding_type) >> (_fp_encoding_traits<float3>::bit_width - 1)) == 1;
+}
+METAL_FUNC bool4 isfinite(float4 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<float4>::encoding_type) & ~_fp_encoding_traits<float4>::sign_mask) < _fp_encoding_traits<float4>::inf_mask;
+}
+METAL_FUNC bool4 isinf(float4 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<float4>::encoding_type) & ~_fp_encoding_traits<float4>::sign_mask) == _fp_encoding_traits<float4>::inf_mask;
+}
+METAL_FUNC bool4 isnan(float4 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<float4>::encoding_type) & ~_fp_encoding_traits<float4>::sign_mask) > _fp_encoding_traits<float4>::inf_mask;
+}
+METAL_FUNC bool4 isnormal(float4 x)
+{
+  return typename _fp_encoding_traits<float4>::encoding_type((__builtin_astype(x, typename _fp_encoding_traits<float4>::encoding_type) & ~_fp_encoding_traits<float4>::sign_mask) - _fp_encoding_traits<float4>::min_mask) < typename _fp_encoding_traits<float4>::encoding_type(_fp_encoding_traits<float4>::inf_mask - _fp_encoding_traits<float4>::min_mask);
+}
+METAL_FUNC bool4 isunordered(float4 x, float4 y)
+{
+  return isnan(x) || isnan(y);
+}
+METAL_FUNC bool4 isordered(float4 x, float4 y)
+{
+  return !isunordered(x, y);
+}
+METAL_FUNC bool4 signbit(float4 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<float4>::encoding_type) >> (_fp_encoding_traits<float4>::bit_width - 1)) == 1;
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC bool8 isfinite(float8 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<float8>::encoding_type) & ~_fp_encoding_traits<float8>::sign_mask) < _fp_encoding_traits<float8>::inf_mask;
+}
+METAL_FUNC bool8 isinf(float8 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<float8>::encoding_type) & ~_fp_encoding_traits<float8>::sign_mask) == _fp_encoding_traits<float8>::inf_mask;
+}
+METAL_FUNC bool8 isnan(float8 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<float8>::encoding_type) & ~_fp_encoding_traits<float8>::sign_mask) > _fp_encoding_traits<float8>::inf_mask;
+}
+METAL_FUNC bool8 isnormal(float8 x)
+{
+  return typename _fp_encoding_traits<float8>::encoding_type((__builtin_astype(x, typename _fp_encoding_traits<float8>::encoding_type) & ~_fp_encoding_traits<float8>::sign_mask) - _fp_encoding_traits<float8>::min_mask) < typename _fp_encoding_traits<float8>::encoding_type(_fp_encoding_traits<float8>::inf_mask - _fp_encoding_traits<float8>::min_mask);
+}
+METAL_FUNC bool8 isunordered(float8 x, float8 y)
+{
+  return isnan(x) || isnan(y);
+}
+METAL_FUNC bool8 isordered(float8 x, float8 y)
+{
+  return !isunordered(x, y);
+}
+METAL_FUNC bool8 signbit(float8 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<float8>::encoding_type) >> (_fp_encoding_traits<float8>::bit_width - 1)) == 1;
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC bool16 isfinite(float16 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<float16>::encoding_type) & ~_fp_encoding_traits<float16>::sign_mask) < _fp_encoding_traits<float16>::inf_mask;
+}
+METAL_FUNC bool16 isinf(float16 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<float16>::encoding_type) & ~_fp_encoding_traits<float16>::sign_mask) == _fp_encoding_traits<float16>::inf_mask;
+}
+METAL_FUNC bool16 isnan(float16 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<float16>::encoding_type) & ~_fp_encoding_traits<float16>::sign_mask) > _fp_encoding_traits<float16>::inf_mask;
+}
+METAL_FUNC bool16 isnormal(float16 x)
+{
+  return typename _fp_encoding_traits<float16>::encoding_type((__builtin_astype(x, typename _fp_encoding_traits<float16>::encoding_type) & ~_fp_encoding_traits<float16>::sign_mask) - _fp_encoding_traits<float16>::min_mask) < typename _fp_encoding_traits<float16>::encoding_type(_fp_encoding_traits<float16>::inf_mask - _fp_encoding_traits<float16>::min_mask);
+}
+METAL_FUNC bool16 isunordered(float16 x, float16 y)
+{
+  return isnan(x) || isnan(y);
+}
+METAL_FUNC bool16 isordered(float16 x, float16 y)
+{
+  return !isunordered(x, y);
+}
+METAL_FUNC bool16 signbit(float16 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<float16>::encoding_type) >> (_fp_encoding_traits<float16>::bit_width - 1)) == 1;
+}
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC bool isfinite(double x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<double>::encoding_type) & ~_fp_encoding_traits<double>::sign_mask) < _fp_encoding_traits<double>::inf_mask;
+}
+METAL_FUNC bool isinf(double x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<double>::encoding_type) & ~_fp_encoding_traits<double>::sign_mask) == _fp_encoding_traits<double>::inf_mask;
+}
+METAL_FUNC bool isnan(double x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<double>::encoding_type) & ~_fp_encoding_traits<double>::sign_mask) > _fp_encoding_traits<double>::inf_mask;
+}
+METAL_FUNC bool isnormal(double x)
+{
+  return typename _fp_encoding_traits<double>::encoding_type((__builtin_astype(x, typename _fp_encoding_traits<double>::encoding_type) & ~_fp_encoding_traits<double>::sign_mask) - _fp_encoding_traits<double>::min_mask) < typename _fp_encoding_traits<double>::encoding_type(_fp_encoding_traits<double>::inf_mask - _fp_encoding_traits<double>::min_mask);
+}
+METAL_FUNC bool isunordered(double x, double y)
+{
+  return isnan(x) || isnan(y);
+}
+METAL_FUNC bool isordered(double x, double y)
+{
+  return !isunordered(x, y);
+}
+METAL_FUNC bool signbit(double x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<double>::encoding_type) >> (_fp_encoding_traits<double>::bit_width - 1)) == 1;
+}
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC bool2 isfinite(double2 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<double2>::encoding_type) & ~_fp_encoding_traits<double2>::sign_mask) < _fp_encoding_traits<double2>::inf_mask;
+}
+METAL_FUNC bool2 isinf(double2 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<double2>::encoding_type) & ~_fp_encoding_traits<double2>::sign_mask) == _fp_encoding_traits<double2>::inf_mask;
+}
+METAL_FUNC bool2 isnan(double2 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<double2>::encoding_type) & ~_fp_encoding_traits<double2>::sign_mask) > _fp_encoding_traits<double2>::inf_mask;
+}
+METAL_FUNC bool2 isnormal(double2 x)
+{
+  return typename _fp_encoding_traits<double2>::encoding_type((__builtin_astype(x, typename _fp_encoding_traits<double2>::encoding_type) & ~_fp_encoding_traits<double2>::sign_mask) - _fp_encoding_traits<double2>::min_mask) < typename _fp_encoding_traits<double2>::encoding_type(_fp_encoding_traits<double2>::inf_mask - _fp_encoding_traits<double2>::min_mask);
+}
+METAL_FUNC bool2 isunordered(double2 x, double2 y)
+{
+  return isnan(x) || isnan(y);
+}
+METAL_FUNC bool2 isordered(double2 x, double2 y)
+{
+  return !isunordered(x, y);
+}
+METAL_FUNC bool2 signbit(double2 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<double2>::encoding_type) >> (_fp_encoding_traits<double2>::bit_width - 1)) == 1;
+}
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC bool3 isfinite(double3 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<double3>::encoding_type) & ~_fp_encoding_traits<double3>::sign_mask) < _fp_encoding_traits<double3>::inf_mask;
+}
+METAL_FUNC bool3 isinf(double3 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<double3>::encoding_type) & ~_fp_encoding_traits<double3>::sign_mask) == _fp_encoding_traits<double3>::inf_mask;
+}
+METAL_FUNC bool3 isnan(double3 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<double3>::encoding_type) & ~_fp_encoding_traits<double3>::sign_mask) > _fp_encoding_traits<double3>::inf_mask;
+}
+METAL_FUNC bool3 isnormal(double3 x)
+{
+  return typename _fp_encoding_traits<double3>::encoding_type((__builtin_astype(x, typename _fp_encoding_traits<double3>::encoding_type) & ~_fp_encoding_traits<double3>::sign_mask) - _fp_encoding_traits<double3>::min_mask) < typename _fp_encoding_traits<double3>::encoding_type(_fp_encoding_traits<double3>::inf_mask - _fp_encoding_traits<double3>::min_mask);
+}
+METAL_FUNC bool3 isunordered(double3 x, double3 y)
+{
+  return isnan(x) || isnan(y);
+}
+METAL_FUNC bool3 isordered(double3 x, double3 y)
+{
+  return !isunordered(x, y);
+}
+METAL_FUNC bool3 signbit(double3 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<double3>::encoding_type) >> (_fp_encoding_traits<double3>::bit_width - 1)) == 1;
+}
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC bool4 isfinite(double4 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<double4>::encoding_type) & ~_fp_encoding_traits<double4>::sign_mask) < _fp_encoding_traits<double4>::inf_mask;
+}
+METAL_FUNC bool4 isinf(double4 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<double4>::encoding_type) & ~_fp_encoding_traits<double4>::sign_mask) == _fp_encoding_traits<double4>::inf_mask;
+}
+METAL_FUNC bool4 isnan(double4 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<double4>::encoding_type) & ~_fp_encoding_traits<double4>::sign_mask) > _fp_encoding_traits<double4>::inf_mask;
+}
+METAL_FUNC bool4 isnormal(double4 x)
+{
+  return typename _fp_encoding_traits<double4>::encoding_type((__builtin_astype(x, typename _fp_encoding_traits<double4>::encoding_type) & ~_fp_encoding_traits<double4>::sign_mask) - _fp_encoding_traits<double4>::min_mask) < typename _fp_encoding_traits<double4>::encoding_type(_fp_encoding_traits<double4>::inf_mask - _fp_encoding_traits<double4>::min_mask);
+}
+METAL_FUNC bool4 isunordered(double4 x, double4 y)
+{
+  return isnan(x) || isnan(y);
+}
+METAL_FUNC bool4 isordered(double4 x, double4 y)
+{
+  return !isunordered(x, y);
+}
+METAL_FUNC bool4 signbit(double4 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<double4>::encoding_type) >> (_fp_encoding_traits<double4>::bit_width - 1)) == 1;
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC bool8 isfinite(double8 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<double8>::encoding_type) & ~_fp_encoding_traits<double8>::sign_mask) < _fp_encoding_traits<double8>::inf_mask;
+}
+METAL_FUNC bool8 isinf(double8 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<double8>::encoding_type) & ~_fp_encoding_traits<double8>::sign_mask) == _fp_encoding_traits<double8>::inf_mask;
+}
+METAL_FUNC bool8 isnan(double8 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<double8>::encoding_type) & ~_fp_encoding_traits<double8>::sign_mask) > _fp_encoding_traits<double8>::inf_mask;
+}
+METAL_FUNC bool8 isnormal(double8 x)
+{
+  return typename _fp_encoding_traits<double8>::encoding_type((__builtin_astype(x, typename _fp_encoding_traits<double8>::encoding_type) & ~_fp_encoding_traits<double8>::sign_mask) - _fp_encoding_traits<double8>::min_mask) < typename _fp_encoding_traits<double8>::encoding_type(_fp_encoding_traits<double8>::inf_mask - _fp_encoding_traits<double8>::min_mask);
+}
+METAL_FUNC bool8 isunordered(double8 x, double8 y)
+{
+  return isnan(x) || isnan(y);
+}
+METAL_FUNC bool8 isordered(double8 x, double8 y)
+{
+  return !isunordered(x, y);
+}
+METAL_FUNC bool8 signbit(double8 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<double8>::encoding_type) >> (_fp_encoding_traits<double8>::bit_width - 1)) == 1;
+}
+#endif
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC bool16 isfinite(double16 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<double16>::encoding_type) & ~_fp_encoding_traits<double16>::sign_mask) < _fp_encoding_traits<double16>::inf_mask;
+}
+METAL_FUNC bool16 isinf(double16 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<double16>::encoding_type) & ~_fp_encoding_traits<double16>::sign_mask) == _fp_encoding_traits<double16>::inf_mask;
+}
+METAL_FUNC bool16 isnan(double16 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<double16>::encoding_type) & ~_fp_encoding_traits<double16>::sign_mask) > _fp_encoding_traits<double16>::inf_mask;
+}
+METAL_FUNC bool16 isnormal(double16 x)
+{
+  return typename _fp_encoding_traits<double16>::encoding_type((__builtin_astype(x, typename _fp_encoding_traits<double16>::encoding_type) & ~_fp_encoding_traits<double16>::sign_mask) - _fp_encoding_traits<double16>::min_mask) < typename _fp_encoding_traits<double16>::encoding_type(_fp_encoding_traits<double16>::inf_mask - _fp_encoding_traits<double16>::min_mask);
+}
+METAL_FUNC bool16 isunordered(double16 x, double16 y)
+{
+  return isnan(x) || isnan(y);
+}
+METAL_FUNC bool16 isordered(double16 x, double16 y)
+{
+  return !isunordered(x, y);
+}
+METAL_FUNC bool16 signbit(double16 x)
+{
+  return (__builtin_astype(x, typename _fp_encoding_traits<double16>::encoding_type) >> (_fp_encoding_traits<double16>::bit_width - 1)) == 1;
+}
+#endif
+#endif
+METAL_FUNC bool all(bool x)
+{
+  return __metal_all(x);
+}
+METAL_FUNC bool any(bool x)
+{
+  return __metal_any(x);
+}
+METAL_FUNC bool all(bool2 x)
+{
+  return __metal_all(x);
+}
+METAL_FUNC bool any(bool2 x)
+{
+  return __metal_any(x);
+}
+METAL_FUNC bool all(bool3 x)
+{
+  return __metal_all(x);
+}
+METAL_FUNC bool any(bool3 x)
+{
+  return __metal_any(x);
+}
+METAL_FUNC bool all(bool4 x)
+{
+  return __metal_all(x);
+}
+METAL_FUNC bool any(bool4 x)
+{
+  return __metal_any(x);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC bool all(bool8 x)
+{
+  return __metal_all(x);
+}
+METAL_FUNC bool any(bool8 x)
+{
+  return __metal_any(x);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC bool all(bool16 x)
+{
+  return __metal_all(x);
+}
+METAL_FUNC bool any(bool16 x)
+{
+  return __metal_any(x);
+}
+#endif
+METAL_FUNC bool select(bool x, bool y, bool c)
+{
+  return __metal_select(x, y, c);
+}
+METAL_FUNC bool2 select(bool2 x, bool2 y, bool2 c)
+{
+  return __metal_select(x, y, c);
+}
+METAL_FUNC bool3 select(bool3 x, bool3 y, bool3 c)
+{
+  return __metal_select(x, y, c);
+}
+METAL_FUNC bool4 select(bool4 x, bool4 y, bool4 c)
+{
+  return __metal_select(x, y, c);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC bool8 select(bool8 x, bool8 y, bool8 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC bool16 select(bool16 x, bool16 y, bool16 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+METAL_FUNC char select(char x, char y, bool c)
+{
+  return __metal_select(x, y, c);
+}
+METAL_FUNC char2 select(char2 x, char2 y, bool2 c)
+{
+  return __metal_select(x, y, c);
+}
+METAL_FUNC char3 select(char3 x, char3 y, bool3 c)
+{
+  return __metal_select(x, y, c);
+}
+METAL_FUNC char4 select(char4 x, char4 y, bool4 c)
+{
+  return __metal_select(x, y, c);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC char8 select(char8 x, char8 y, bool8 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC char16 select(char16 x, char16 y, bool16 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+METAL_FUNC uchar select(uchar x, uchar y, bool c)
+{
+  return __metal_select(x, y, c);
+}
+METAL_FUNC uchar2 select(uchar2 x, uchar2 y, bool2 c)
+{
+  return __metal_select(x, y, c);
+}
+METAL_FUNC uchar3 select(uchar3 x, uchar3 y, bool3 c)
+{
+  return __metal_select(x, y, c);
+}
+METAL_FUNC uchar4 select(uchar4 x, uchar4 y, bool4 c)
+{
+  return __metal_select(x, y, c);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC uchar8 select(uchar8 x, uchar8 y, bool8 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC uchar16 select(uchar16 x, uchar16 y, bool16 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+METAL_FUNC short select(short x, short y, bool c)
+{
+  return __metal_select(x, y, c);
+}
+METAL_FUNC short2 select(short2 x, short2 y, bool2 c)
+{
+  return __metal_select(x, y, c);
+}
+METAL_FUNC short3 select(short3 x, short3 y, bool3 c)
+{
+  return __metal_select(x, y, c);
+}
+METAL_FUNC short4 select(short4 x, short4 y, bool4 c)
+{
+  return __metal_select(x, y, c);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC short8 select(short8 x, short8 y, bool8 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC short16 select(short16 x, short16 y, bool16 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+METAL_FUNC ushort select(ushort x, ushort y, bool c)
+{
+  return __metal_select(x, y, c);
+}
+METAL_FUNC ushort2 select(ushort2 x, ushort2 y, bool2 c)
+{
+  return __metal_select(x, y, c);
+}
+METAL_FUNC ushort3 select(ushort3 x, ushort3 y, bool3 c)
+{
+  return __metal_select(x, y, c);
+}
+METAL_FUNC ushort4 select(ushort4 x, ushort4 y, bool4 c)
+{
+  return __metal_select(x, y, c);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC ushort8 select(ushort8 x, ushort8 y, bool8 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC ushort16 select(ushort16 x, ushort16 y, bool16 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+METAL_FUNC int select(int x, int y, bool c)
+{
+  return __metal_select(x, y, c);
+}
+METAL_FUNC int2 select(int2 x, int2 y, bool2 c)
+{
+  return __metal_select(x, y, c);
+}
+METAL_FUNC int3 select(int3 x, int3 y, bool3 c)
+{
+  return __metal_select(x, y, c);
+}
+METAL_FUNC int4 select(int4 x, int4 y, bool4 c)
+{
+  return __metal_select(x, y, c);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC int8 select(int8 x, int8 y, bool8 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC int16 select(int16 x, int16 y, bool16 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+METAL_FUNC uint select(uint x, uint y, bool c)
+{
+  return __metal_select(x, y, c);
+}
+METAL_FUNC uint2 select(uint2 x, uint2 y, bool2 c)
+{
+  return __metal_select(x, y, c);
+}
+METAL_FUNC uint3 select(uint3 x, uint3 y, bool3 c)
+{
+  return __metal_select(x, y, c);
+}
+METAL_FUNC uint4 select(uint4 x, uint4 y, bool4 c)
+{
+  return __metal_select(x, y, c);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC uint8 select(uint8 x, uint8 y, bool8 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC uint16 select(uint16 x, uint16 y, bool16 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+#if defined(__HAVE_INTEGER_LONG_FUNCTIONS__)
+METAL_FUNC long select(long x, long y, bool c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+#if defined(__HAVE_INTEGER_LONG_FUNCTIONS__)
+METAL_FUNC long2 select(long2 x, long2 y, bool2 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+#if defined(__HAVE_INTEGER_LONG_FUNCTIONS__)
+METAL_FUNC long3 select(long3 x, long3 y, bool3 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+#if defined(__HAVE_INTEGER_LONG_FUNCTIONS__)
+METAL_FUNC long4 select(long4 x, long4 y, bool4 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+#if defined(__HAVE_INTEGER_LONG_FUNCTIONS__)
+METAL_FUNC long8 select(long8 x, long8 y, bool8 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+#if defined(__HAVE_INTEGER_LONG_FUNCTIONS__)
+METAL_FUNC long16 select(long16 x, long16 y, bool16 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+#endif
+#if defined(__HAVE_INTEGER_LONG_FUNCTIONS__)
+METAL_FUNC ulong select(ulong x, ulong y, bool c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+#if defined(__HAVE_INTEGER_LONG_FUNCTIONS__)
+METAL_FUNC ulong2 select(ulong2 x, ulong2 y, bool2 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+#if defined(__HAVE_INTEGER_LONG_FUNCTIONS__)
+METAL_FUNC ulong3 select(ulong3 x, ulong3 y, bool3 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+#if defined(__HAVE_INTEGER_LONG_FUNCTIONS__)
+METAL_FUNC ulong4 select(ulong4 x, ulong4 y, bool4 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+#if defined(__HAVE_INTEGER_LONG_FUNCTIONS__)
+METAL_FUNC ulong8 select(ulong8 x, ulong8 y, bool8 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+#if defined(__HAVE_INTEGER_LONG_FUNCTIONS__)
+METAL_FUNC ulong16 select(ulong16 x, ulong16 y, bool16 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+#endif
+METAL_FUNC half select(half x, half y, bool c)
+{
+  return __metal_select(x, y, c);
+}
+METAL_FUNC half2 select(half2 x, half2 y, bool2 c)
+{
+  return __metal_select(x, y, c);
+}
+METAL_FUNC half3 select(half3 x, half3 y, bool3 c)
+{
+  return __metal_select(x, y, c);
+}
+METAL_FUNC half4 select(half4 x, half4 y, bool4 c)
+{
+  return __metal_select(x, y, c);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC half8 select(half8 x, half8 y, bool8 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC half16 select(half16 x, half16 y, bool16 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+METAL_FUNC float select(float x, float y, bool c)
+{
+  return __metal_select(x, y, c);
+}
+METAL_FUNC float2 select(float2 x, float2 y, bool2 c)
+{
+  return __metal_select(x, y, c);
+}
+METAL_FUNC float3 select(float3 x, float3 y, bool3 c)
+{
+  return __metal_select(x, y, c);
+}
+METAL_FUNC float4 select(float4 x, float4 y, bool4 c)
+{
+  return __metal_select(x, y, c);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC float8 select(float8 x, float8 y, bool8 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC float16 select(float16 x, float16 y, bool16 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double select(double x, double y, bool c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double2 select(double2 x, double2 y, bool2 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double3 select(double3 x, double3 y, bool3 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double4 select(double4 x, double4 y, bool4 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double8 select(double8 x, double8 y, bool8 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+#if defined(__HAVE_NATIVE_DOUBLE__)
+METAL_FUNC double16 select(double16 x, double16 y, bool16 c)
+{
+  return __metal_select(x, y, c);
+}
+#endif
+#endif
+} // namespace metal
+#pragma METAL internals : disable
+
+#endif // __METAL_RELATIONAL

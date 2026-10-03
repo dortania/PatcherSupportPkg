@@ -1,0 +1,124 @@
+// -*- Metal -*-
+//===-- metal_mesh --------------------------------------------------------===//
+// Copyright (c) 2021 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_MESH
+#define __METAL_MESH
+
+#if defined(__HAVE_MESH__)
+#include <metal_graphics>
+
+#pragma METAL internals : enable
+namespace metal
+{
+template <typename M, typename V>
+struct _mesh_vertex_ext
+{
+  METAL_FUNC void set_vertex(uint i, V v) thread
+  {
+    thread auto *derived = static_cast<thread M *>(this);
+    __metal_set_vertex_mesh(derived->m, i, v);
+  }
+};
+
+template <typename M>
+struct _mesh_vertex_ext<M, void>
+{
+};
+
+template <typename M, typename P>
+struct _mesh_primitive_ext
+{
+  METAL_FUNC void set_primitive(uint i, P p) thread
+  {
+    thread auto *derived = static_cast<thread M *>(this);
+    __metal_set_primitive_mesh(derived->m, i, p);
+  }
+};
+
+template <typename M>
+struct _mesh_primitive_ext<M, void>
+{
+};
+
+template <typename V, typename P, uint NV, uint NP, topology t>
+struct mesh
+    : _mesh_vertex_ext<mesh<V, P, NV, NP, t>, conditional_t<__is_metal_mesh_vertex(V), V, void>>,
+      _mesh_primitive_ext<mesh<V, P, NV, NP, t>, conditional_t<__is_metal_mesh_primitive(P), P, void>>
+{
+private:
+  static constexpr uint get_indices_per_primitive()
+  {
+    switch (t)
+    {
+    case topology::point:
+      return 1;
+    case topology::line:
+      return 2;
+    case topology::triangle:
+      return 3;
+    }
+  }
+
+public:
+  typedef V vertex_type;
+  typedef P primitive_type;
+
+  static constexpr constant uint max_vertices = NV;
+  static constexpr constant uint max_primitives = NP;
+  static constexpr constant uint indices_per_primitive = get_indices_per_primitive();
+  static constexpr constant uint max_indices = indices_per_primitive * max_primitives;
+
+  METAL_FUNC mesh() thread = delete;
+  METAL_FUNC mesh(const thread mesh &) thread = default;
+  METAL_FUNC thread mesh &operator=(const thread mesh &) thread = default;
+
+  METAL_FUNC void set_index(uint i, uchar v) thread
+  {
+    __metal_set_index_mesh(m, i, v);
+  }
+
+  METAL_FUNC void set_indices(uint i, uchar2 v) thread
+  {
+    __metal_set_indices_mesh(m, i, v);
+  }
+
+  METAL_FUNC void set_indices(uint i, uchar4 v) thread
+  {
+    __metal_set_indices_mesh(m, i, v);
+  }
+
+  METAL_FUNC void set_primitive_count(uint n) thread
+  {
+    __metal_set_primitive_count_mesh(m, n);
+  }
+
+private:
+  __metal_mesh_t m;
+
+  template <typename, typename>
+  friend struct _mesh_vertex_ext;
+  template <typename, typename>
+  friend struct _mesh_primitive_ext;
+};
+
+struct mesh_grid_properties
+{
+  METAL_FUNC mesh_grid_properties() thread = delete;
+  METAL_FUNC mesh_grid_properties(const thread mesh_grid_properties &) thread = default;
+  METAL_FUNC thread mesh_grid_properties &operator=(const thread mesh_grid_properties &) thread = default;
+
+  METAL_FUNC void set_threadgroups_per_grid(uint3 tgs) thread
+  {
+    __metal_set_threadgroups_per_grid_mesh_grid_properties(p, tgs);
+  }
+
+private:
+  __metal_mesh_grid_properties_t p;
+};
+} // namespace metal
+#pragma METAL internals : disable
+#endif
+
+#endif // __METAL_MESH

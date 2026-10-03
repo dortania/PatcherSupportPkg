@@ -1,0 +1,270 @@
+// -*- Metal -*-
+//===-- metal_simdgroup ---------------------------------------------------===//
+// Copyright (c) 2014-2020 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_SIMDGROUP
+#define __METAL_SIMDGROUP
+
+#if defined(__HAVE_SIMDGROUP__)
+#include <metal_relational>
+
+namespace metal
+{
+#pragma METAL internals : enable
+template <typename T, typename _E = void>
+struct __is_valid_simdgroup_type : false_type
+{
+};
+
+template <typename T>
+struct __is_valid_simdgroup_type<T, typename enable_if<is_same_v<make_scalar_t<T>, half> ||
+                                                       is_same_v<make_scalar_t<T>, float> ||
+#if defined(__HAVE_NATIVE_DOUBLE__)
+                                                       is_same_v<make_scalar_t<T>, double> ||
+#endif
+                                                       is_same_v<make_scalar_t<T>, char> ||
+                                                       is_same_v<make_scalar_t<T>, uchar> ||
+                                                       is_same_v<make_scalar_t<T>, signed char> ||
+                                                       is_same_v<make_scalar_t<T>, short> ||
+                                                       is_same_v<make_scalar_t<T>, ushort> ||
+                                                       is_same_v<make_scalar_t<T>, int> ||
+                                                       is_same_v<make_scalar_t<T>, uint>>::type> : true_type
+{
+};
+
+template <typename T, typename _E = void>
+struct __is_valid_simdgroup_integral_type : false_type
+{
+};
+
+template <typename T>
+struct __is_valid_simdgroup_integral_type<T, typename enable_if<is_same_v<make_scalar_t<T>, char> ||
+                                                                is_same_v<make_scalar_t<T>, uchar> ||
+                                                                is_same_v<make_scalar_t<T>, signed char> ||
+                                                                is_same_v<make_scalar_t<T>, short> ||
+                                                                is_same_v<make_scalar_t<T>, ushort> ||
+                                                                is_same_v<make_scalar_t<T>, int> ||
+                                                                is_same_v<make_scalar_t<T>, uint>>::type> : true_type
+{
+};
+#pragma METAL internals : disable
+
+#if defined(__HAVE_SIMDGROUP_BALLOT__)
+struct simd_vote
+{
+  typedef __METAL_VOTE_T__ vote_t;
+
+  METAL_FUNC explicit constexpr simd_vote(vote_t v = 0) thread : v(v)
+  {
+  }
+
+  METAL_FUNC explicit constexpr operator vote_t() const thread
+  {
+    return v;
+  }
+
+  METAL_FUNC bool all() const thread
+  {
+    return __metal_simd_vote_all(v);
+  }
+
+  METAL_FUNC bool any() const thread
+  {
+    return __metal_simd_vote_any(v);
+  }
+
+private:
+  vote_t v;
+};
+
+METAL_FUNC simd_vote simd_active_threads_mask()
+{
+  return simd_vote(__metal_simd_active_threads_mask(simd_vote::vote_t(0)));
+}
+
+METAL_FUNC bool simd_all(bool expr)
+{
+  return __metal_simd_all(expr);
+}
+
+METAL_FUNC bool simd_any(bool expr)
+{
+  return __metal_simd_any(expr);
+}
+
+METAL_FUNC simd_vote simd_ballot(bool expr)
+{
+  return simd_vote(__metal_simd_ballot(expr, simd_vote::vote_t(0)));
+}
+#endif
+
+#if defined(__HAVE_SIMDGROUP_REDUCTION__)
+template <typename T, typename _E = typename enable_if<__is_valid_simdgroup_integral_type<T>::value>::type>
+METAL_FUNC T simd_and(T data)
+{
+  return __metal_simd_and(data);
+}
+#endif
+
+template <typename T, typename _E = typename enable_if<__is_valid_simdgroup_type<T>::value>::type>
+METAL_FUNC T simd_broadcast(T data, ushort broadcast_lane_id)
+{
+  return __metal_simd_broadcast(data, broadcast_lane_id);
+}
+
+#if defined(__HAVE_SIMDGROUP_BROADCAST_FIRST__)
+template <typename T, typename _E = typename enable_if<__is_valid_simdgroup_type<T>::value>::type>
+METAL_FUNC T simd_broadcast_first(T data)
+{
+  return __metal_simd_broadcast_first(data);
+}
+#endif
+
+#if defined(__HAVE_SIMDGROUP_IS_FIRST__)
+METAL_FUNC bool simd_is_first()
+{
+  return __metal_simd_is_first();
+}
+#endif
+
+#if defined(__HAVE_SIMDGROUP_REDUCTION__)
+METAL_FUNC bool simd_is_helper_thread()
+{
+  return __metal_simd_is_helper_thread();
+}
+
+template <typename T, typename _E = typename enable_if<__is_valid_simdgroup_type<T>::value>::type>
+METAL_FUNC T simd_max(T data)
+{
+  return __metal_simd_max(data);
+}
+
+template <typename T, typename _E = typename enable_if<__is_valid_simdgroup_type<T>::value>::type>
+METAL_FUNC T simd_min(T data)
+{
+  return __metal_simd_min(data);
+}
+#endif
+
+#if defined(__HAVE_SIMDGROUP_REDUCTION__)
+template <typename T, typename _E = typename enable_if<__is_valid_simdgroup_integral_type<T>::value>::type>
+METAL_FUNC T simd_or(T data)
+{
+  return __metal_simd_or(data);
+}
+
+template <typename T, typename _E = typename enable_if<__is_valid_simdgroup_type<T>::value>::type>
+METAL_FUNC T simd_prefix_exclusive_product(T data)
+{
+  return __metal_simd_prefix_exclusive_product(data);
+}
+
+template <typename T, typename _E = typename enable_if<__is_valid_simdgroup_type<T>::value>::type>
+METAL_FUNC T simd_prefix_exclusive_sum(T data)
+{
+  return __metal_simd_prefix_exclusive_sum(data);
+}
+
+template <typename T, typename _E = typename enable_if<__is_valid_simdgroup_type<T>::value>::type>
+METAL_FUNC T simd_prefix_inclusive_product(T data)
+{
+  return __metal_simd_prefix_inclusive_product(data);
+}
+
+template <typename T, typename _E = typename enable_if<__is_valid_simdgroup_type<T>::value>::type>
+METAL_FUNC T simd_prefix_inclusive_sum(T data)
+{
+  return __metal_simd_prefix_inclusive_sum(data);
+}
+
+template <typename T, typename _E = typename enable_if<__is_valid_simdgroup_type<T>::value>::type>
+METAL_FUNC T simd_product(T data)
+{
+  return __metal_simd_product(data);
+}
+#endif
+
+template <typename T, typename _E = typename enable_if<__is_valid_simdgroup_type<T>::value>::type>
+METAL_FUNC T simd_shuffle(T data, ushort simd_lane_id)
+{
+  return __metal_simd_shuffle(data, simd_lane_id);
+}
+
+#if defined(__HAVE_SIMDGROUP_SHUFFLE_AND_FILL__)
+template <typename T, typename _E = typename enable_if<__is_valid_simdgroup_type<T>::value>::type>
+METAL_FUNC T simd_shuffle_and_fill_down(T data, T filling_data, ushort delta, ushort modulo)
+{
+  return __metal_simd_shuffle_and_fill_down(data, filling_data, delta, modulo);
+}
+
+template <typename T, typename _E = typename enable_if<__is_valid_simdgroup_type<T>::value>::type>
+METAL_FUNC T simd_shuffle_and_fill_down(T data, T filling_data, ushort delta)
+{
+  return __metal_simd_shuffle_and_fill_down(data, filling_data, delta, __metal_get_simdgroup_size(ushort()));
+}
+
+template <typename T, typename _E = typename enable_if<__is_valid_simdgroup_type<T>::value>::type>
+METAL_FUNC T simd_shuffle_and_fill_up(T data, T filling_data, ushort delta, ushort modulo)
+{
+  return __metal_simd_shuffle_and_fill_up(data, filling_data, delta, modulo);
+}
+
+template <typename T, typename _E = typename enable_if<__is_valid_simdgroup_type<T>::value>::type>
+METAL_FUNC T simd_shuffle_and_fill_up(T data, T filling_data, ushort delta)
+{
+  return __metal_simd_shuffle_and_fill_up(data, filling_data, delta, __metal_get_simdgroup_size(ushort()));
+}
+#endif
+
+template <typename T, typename _E = typename enable_if<__is_valid_simdgroup_type<T>::value>::type>
+METAL_FUNC T simd_shuffle_down(T data, ushort delta)
+{
+  return __metal_simd_shuffle_down(data, delta);
+}
+
+#if defined(__HAVE_SIMDGROUP_SHUFFLE_ROTATE_DOWN__)
+template <typename T, typename _E = typename enable_if<__is_valid_simdgroup_type<T>::value>::type>
+METAL_FUNC T simd_shuffle_rotate_down(T data, ushort delta)
+{
+  return __metal_simd_shuffle_rotate_down(data, delta);
+}
+#endif
+
+#if defined(__HAVE_SIMDGROUP_SHUFFLE_ROTATE_UP__)
+template <typename T, typename _E = typename enable_if<__is_valid_simdgroup_type<T>::value>::type>
+METAL_FUNC T simd_shuffle_rotate_up(T data, ushort delta)
+{
+  return __metal_simd_shuffle_rotate_up(data, delta);
+}
+#endif
+
+template <typename T, typename _E = typename enable_if<__is_valid_simdgroup_type<T>::value>::type>
+METAL_FUNC T simd_shuffle_up(T data, ushort delta)
+{
+  return __metal_simd_shuffle_up(data, delta);
+}
+
+template <typename T, typename _E = typename enable_if<__is_valid_simdgroup_type<T>::value>::type>
+METAL_FUNC T simd_shuffle_xor(T data, ushort mask)
+{
+  return __metal_simd_shuffle_xor(data, mask);
+}
+
+#if defined(__HAVE_SIMDGROUP_REDUCTION__)
+template <typename T, typename _E = typename enable_if<__is_valid_simdgroup_type<T>::value>::type>
+METAL_FUNC T simd_sum(T data)
+{
+  return __metal_simd_sum(data);
+}
+
+template <typename T, typename _E = typename enable_if<__is_valid_simdgroup_integral_type<T>::value>::type>
+METAL_FUNC T simd_xor(T data)
+{
+  return __metal_simd_xor(data);
+}
+#endif
+} // namespace metal
+#endif
+
+#endif // __METAL_SIMDGROUP

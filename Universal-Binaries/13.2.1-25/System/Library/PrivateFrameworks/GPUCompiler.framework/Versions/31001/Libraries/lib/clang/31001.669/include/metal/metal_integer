@@ -1,0 +1,5024 @@
+// -*- Metal -*-
+//===-- metal_integer -----------------------------------------------------===//
+// Copyright (c) 2014-2018 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_INTEGER
+#define __METAL_INTEGER
+
+namespace metal
+{
+// Metal 1.1 s5.3: Integer Functions.
+
+METAL_FUNC char abs(char x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC uchar absdiff(char x, char y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC char addsat(char x, char y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC char clamp(char x, char minval, char maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC char clz(char x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC char ctz(char x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC char extract_bits(char x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC char hadd(char x, char y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC char insert_bits(char base, char insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC char madhi(char x, char y, char z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC char madsat(char x, char y, char z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC char max(char x, char y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC char max3(char x, char y, char z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC char median3(char x, char y, char z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC char min(char x, char y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC char min3(char x, char y, char z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC char mulhi(char x, char y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC char popcount(char x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC char reverse_bits(char x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC char rhadd(char x, char y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC char rotate(char x, char y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC char subsat(char x, char y)
+{
+  return __metal_subsat(x, y);
+}
+METAL_FUNC char2 abs(char2 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC uchar2 absdiff(char2 x, char2 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC char2 addsat(char2 x, char2 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC char2 clamp(char2 x, char2 minval, char2 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC char2 clz(char2 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC char2 ctz(char2 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC char2 extract_bits(char2 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC char2 hadd(char2 x, char2 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC char2 insert_bits(char2 base, char2 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC char2 madhi(char2 x, char2 y, char2 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC char2 madsat(char2 x, char2 y, char2 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC char2 max(char2 x, char2 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC char2 max3(char2 x, char2 y, char2 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC char2 median3(char2 x, char2 y, char2 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC char2 min(char2 x, char2 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC char2 min3(char2 x, char2 y, char2 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC char2 mulhi(char2 x, char2 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC char2 popcount(char2 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC char2 reverse_bits(char2 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC char2 rhadd(char2 x, char2 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC char2 rotate(char2 x, char2 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC char2 subsat(char2 x, char2 y)
+{
+  return __metal_subsat(x, y);
+}
+METAL_FUNC char3 abs(char3 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC uchar3 absdiff(char3 x, char3 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC char3 addsat(char3 x, char3 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC char3 clamp(char3 x, char3 minval, char3 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC char3 clz(char3 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC char3 ctz(char3 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC char3 extract_bits(char3 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC char3 hadd(char3 x, char3 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC char3 insert_bits(char3 base, char3 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC char3 madhi(char3 x, char3 y, char3 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC char3 madsat(char3 x, char3 y, char3 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC char3 max(char3 x, char3 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC char3 max3(char3 x, char3 y, char3 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC char3 median3(char3 x, char3 y, char3 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC char3 min(char3 x, char3 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC char3 min3(char3 x, char3 y, char3 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC char3 mulhi(char3 x, char3 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC char3 popcount(char3 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC char3 reverse_bits(char3 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC char3 rhadd(char3 x, char3 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC char3 rotate(char3 x, char3 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC char3 subsat(char3 x, char3 y)
+{
+  return __metal_subsat(x, y);
+}
+METAL_FUNC char4 abs(char4 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC uchar4 absdiff(char4 x, char4 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC char4 addsat(char4 x, char4 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC char4 clamp(char4 x, char4 minval, char4 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC char4 clz(char4 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC char4 ctz(char4 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC char4 extract_bits(char4 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC char4 hadd(char4 x, char4 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC char4 insert_bits(char4 base, char4 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC char4 madhi(char4 x, char4 y, char4 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC char4 madsat(char4 x, char4 y, char4 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC char4 max(char4 x, char4 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC char4 max3(char4 x, char4 y, char4 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC char4 median3(char4 x, char4 y, char4 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC char4 min(char4 x, char4 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC char4 min3(char4 x, char4 y, char4 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC char4 mulhi(char4 x, char4 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC char4 popcount(char4 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC char4 reverse_bits(char4 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC char4 rhadd(char4 x, char4 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC char4 rotate(char4 x, char4 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC char4 subsat(char4 x, char4 y)
+{
+  return __metal_subsat(x, y);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC char8 abs(char8 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC uchar8 absdiff(char8 x, char8 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC char8 addsat(char8 x, char8 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC char8 clamp(char8 x, char8 minval, char8 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC char8 clz(char8 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC char8 ctz(char8 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC char8 extract_bits(char8 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC char8 hadd(char8 x, char8 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC char8 insert_bits(char8 base, char8 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC char8 madhi(char8 x, char8 y, char8 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC char8 madsat(char8 x, char8 y, char8 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC char8 max(char8 x, char8 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC char8 max3(char8 x, char8 y, char8 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC char8 median3(char8 x, char8 y, char8 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC char8 min(char8 x, char8 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC char8 min3(char8 x, char8 y, char8 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC char8 mulhi(char8 x, char8 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC char8 popcount(char8 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC char8 reverse_bits(char8 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC char8 rhadd(char8 x, char8 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC char8 rotate(char8 x, char8 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC char8 subsat(char8 x, char8 y)
+{
+  return __metal_subsat(x, y);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC char16 abs(char16 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC uchar16 absdiff(char16 x, char16 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC char16 addsat(char16 x, char16 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC char16 clamp(char16 x, char16 minval, char16 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC char16 clz(char16 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC char16 ctz(char16 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC char16 extract_bits(char16 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC char16 hadd(char16 x, char16 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC char16 insert_bits(char16 base, char16 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC char16 madhi(char16 x, char16 y, char16 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC char16 madsat(char16 x, char16 y, char16 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC char16 max(char16 x, char16 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC char16 max3(char16 x, char16 y, char16 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC char16 median3(char16 x, char16 y, char16 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC char16 min(char16 x, char16 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC char16 min3(char16 x, char16 y, char16 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC char16 mulhi(char16 x, char16 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC char16 popcount(char16 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC char16 reverse_bits(char16 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC char16 rhadd(char16 x, char16 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC char16 rotate(char16 x, char16 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC char16 subsat(char16 x, char16 y)
+{
+  return __metal_subsat(x, y);
+}
+#endif
+METAL_FUNC uchar abs(uchar x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC uchar absdiff(uchar x, uchar y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC uchar addsat(uchar x, uchar y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC uchar clamp(uchar x, uchar minval, uchar maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC uchar clz(uchar x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC uchar ctz(uchar x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uchar extract_bits(uchar x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC uchar hadd(uchar x, uchar y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uchar insert_bits(uchar base, uchar insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC uchar madhi(uchar x, uchar y, uchar z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC uchar madsat(uchar x, uchar y, uchar z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC uchar max(uchar x, uchar y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC uchar max3(uchar x, uchar y, uchar z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC uchar median3(uchar x, uchar y, uchar z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC uchar min(uchar x, uchar y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC uchar min3(uchar x, uchar y, uchar z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC uchar mulhi(uchar x, uchar y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC uchar popcount(uchar x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uchar reverse_bits(uchar x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC uchar rhadd(uchar x, uchar y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC uchar rotate(uchar x, uchar y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC uchar subsat(uchar x, uchar y)
+{
+  return __metal_subsat(x, y);
+}
+METAL_FUNC uchar2 abs(uchar2 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC uchar2 absdiff(uchar2 x, uchar2 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC uchar2 addsat(uchar2 x, uchar2 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC uchar2 clamp(uchar2 x, uchar2 minval, uchar2 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC uchar2 clz(uchar2 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC uchar2 ctz(uchar2 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uchar2 extract_bits(uchar2 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC uchar2 hadd(uchar2 x, uchar2 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uchar2 insert_bits(uchar2 base, uchar2 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC uchar2 madhi(uchar2 x, uchar2 y, uchar2 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC uchar2 madsat(uchar2 x, uchar2 y, uchar2 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC uchar2 max(uchar2 x, uchar2 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC uchar2 max3(uchar2 x, uchar2 y, uchar2 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC uchar2 median3(uchar2 x, uchar2 y, uchar2 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC uchar2 min(uchar2 x, uchar2 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC uchar2 min3(uchar2 x, uchar2 y, uchar2 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC uchar2 mulhi(uchar2 x, uchar2 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC uchar2 popcount(uchar2 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uchar2 reverse_bits(uchar2 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC uchar2 rhadd(uchar2 x, uchar2 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC uchar2 rotate(uchar2 x, uchar2 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC uchar2 subsat(uchar2 x, uchar2 y)
+{
+  return __metal_subsat(x, y);
+}
+METAL_FUNC uchar3 abs(uchar3 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC uchar3 absdiff(uchar3 x, uchar3 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC uchar3 addsat(uchar3 x, uchar3 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC uchar3 clamp(uchar3 x, uchar3 minval, uchar3 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC uchar3 clz(uchar3 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC uchar3 ctz(uchar3 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uchar3 extract_bits(uchar3 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC uchar3 hadd(uchar3 x, uchar3 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uchar3 insert_bits(uchar3 base, uchar3 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC uchar3 madhi(uchar3 x, uchar3 y, uchar3 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC uchar3 madsat(uchar3 x, uchar3 y, uchar3 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC uchar3 max(uchar3 x, uchar3 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC uchar3 max3(uchar3 x, uchar3 y, uchar3 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC uchar3 median3(uchar3 x, uchar3 y, uchar3 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC uchar3 min(uchar3 x, uchar3 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC uchar3 min3(uchar3 x, uchar3 y, uchar3 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC uchar3 mulhi(uchar3 x, uchar3 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC uchar3 popcount(uchar3 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uchar3 reverse_bits(uchar3 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC uchar3 rhadd(uchar3 x, uchar3 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC uchar3 rotate(uchar3 x, uchar3 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC uchar3 subsat(uchar3 x, uchar3 y)
+{
+  return __metal_subsat(x, y);
+}
+METAL_FUNC uchar4 abs(uchar4 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC uchar4 absdiff(uchar4 x, uchar4 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC uchar4 addsat(uchar4 x, uchar4 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC uchar4 clamp(uchar4 x, uchar4 minval, uchar4 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC uchar4 clz(uchar4 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC uchar4 ctz(uchar4 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uchar4 extract_bits(uchar4 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC uchar4 hadd(uchar4 x, uchar4 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uchar4 insert_bits(uchar4 base, uchar4 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC uchar4 madhi(uchar4 x, uchar4 y, uchar4 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC uchar4 madsat(uchar4 x, uchar4 y, uchar4 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC uchar4 max(uchar4 x, uchar4 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC uchar4 max3(uchar4 x, uchar4 y, uchar4 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC uchar4 median3(uchar4 x, uchar4 y, uchar4 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC uchar4 min(uchar4 x, uchar4 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC uchar4 min3(uchar4 x, uchar4 y, uchar4 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC uchar4 mulhi(uchar4 x, uchar4 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC uchar4 popcount(uchar4 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uchar4 reverse_bits(uchar4 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC uchar4 rhadd(uchar4 x, uchar4 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC uchar4 rotate(uchar4 x, uchar4 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC uchar4 subsat(uchar4 x, uchar4 y)
+{
+  return __metal_subsat(x, y);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC uchar8 abs(uchar8 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC uchar8 absdiff(uchar8 x, uchar8 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC uchar8 addsat(uchar8 x, uchar8 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC uchar8 clamp(uchar8 x, uchar8 minval, uchar8 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC uchar8 clz(uchar8 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC uchar8 ctz(uchar8 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uchar8 extract_bits(uchar8 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC uchar8 hadd(uchar8 x, uchar8 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uchar8 insert_bits(uchar8 base, uchar8 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC uchar8 madhi(uchar8 x, uchar8 y, uchar8 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC uchar8 madsat(uchar8 x, uchar8 y, uchar8 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC uchar8 max(uchar8 x, uchar8 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC uchar8 max3(uchar8 x, uchar8 y, uchar8 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC uchar8 median3(uchar8 x, uchar8 y, uchar8 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC uchar8 min(uchar8 x, uchar8 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC uchar8 min3(uchar8 x, uchar8 y, uchar8 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC uchar8 mulhi(uchar8 x, uchar8 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC uchar8 popcount(uchar8 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uchar8 reverse_bits(uchar8 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC uchar8 rhadd(uchar8 x, uchar8 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC uchar8 rotate(uchar8 x, uchar8 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC uchar8 subsat(uchar8 x, uchar8 y)
+{
+  return __metal_subsat(x, y);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC uchar16 abs(uchar16 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC uchar16 absdiff(uchar16 x, uchar16 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC uchar16 addsat(uchar16 x, uchar16 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC uchar16 clamp(uchar16 x, uchar16 minval, uchar16 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC uchar16 clz(uchar16 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC uchar16 ctz(uchar16 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uchar16 extract_bits(uchar16 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC uchar16 hadd(uchar16 x, uchar16 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uchar16 insert_bits(uchar16 base, uchar16 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC uchar16 madhi(uchar16 x, uchar16 y, uchar16 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC uchar16 madsat(uchar16 x, uchar16 y, uchar16 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC uchar16 max(uchar16 x, uchar16 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC uchar16 max3(uchar16 x, uchar16 y, uchar16 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC uchar16 median3(uchar16 x, uchar16 y, uchar16 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC uchar16 min(uchar16 x, uchar16 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC uchar16 min3(uchar16 x, uchar16 y, uchar16 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC uchar16 mulhi(uchar16 x, uchar16 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC uchar16 popcount(uchar16 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uchar16 reverse_bits(uchar16 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC uchar16 rhadd(uchar16 x, uchar16 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC uchar16 rotate(uchar16 x, uchar16 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC uchar16 subsat(uchar16 x, uchar16 y)
+{
+  return __metal_subsat(x, y);
+}
+#endif
+METAL_FUNC short abs(short x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC ushort absdiff(short x, short y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC short addsat(short x, short y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC short clamp(short x, short minval, short maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC short clz(short x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC short ctz(short x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC short extract_bits(short x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC short hadd(short x, short y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC short insert_bits(short base, short insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC short madhi(short x, short y, short z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC short madsat(short x, short y, short z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC short max(short x, short y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC short max3(short x, short y, short z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC short median3(short x, short y, short z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC short min(short x, short y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC short min3(short x, short y, short z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC short mulhi(short x, short y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC short popcount(short x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC short reverse_bits(short x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC short rhadd(short x, short y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC short rotate(short x, short y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC short subsat(short x, short y)
+{
+  return __metal_subsat(x, y);
+}
+METAL_FUNC short2 abs(short2 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC ushort2 absdiff(short2 x, short2 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC short2 addsat(short2 x, short2 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC short2 clamp(short2 x, short2 minval, short2 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC short2 clz(short2 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC short2 ctz(short2 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC short2 extract_bits(short2 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC short2 hadd(short2 x, short2 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC short2 insert_bits(short2 base, short2 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC short2 madhi(short2 x, short2 y, short2 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC short2 madsat(short2 x, short2 y, short2 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC short2 max(short2 x, short2 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC short2 max3(short2 x, short2 y, short2 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC short2 median3(short2 x, short2 y, short2 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC short2 min(short2 x, short2 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC short2 min3(short2 x, short2 y, short2 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC short2 mulhi(short2 x, short2 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC short2 popcount(short2 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC short2 reverse_bits(short2 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC short2 rhadd(short2 x, short2 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC short2 rotate(short2 x, short2 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC short2 subsat(short2 x, short2 y)
+{
+  return __metal_subsat(x, y);
+}
+METAL_FUNC short3 abs(short3 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC ushort3 absdiff(short3 x, short3 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC short3 addsat(short3 x, short3 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC short3 clamp(short3 x, short3 minval, short3 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC short3 clz(short3 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC short3 ctz(short3 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC short3 extract_bits(short3 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC short3 hadd(short3 x, short3 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC short3 insert_bits(short3 base, short3 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC short3 madhi(short3 x, short3 y, short3 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC short3 madsat(short3 x, short3 y, short3 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC short3 max(short3 x, short3 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC short3 max3(short3 x, short3 y, short3 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC short3 median3(short3 x, short3 y, short3 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC short3 min(short3 x, short3 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC short3 min3(short3 x, short3 y, short3 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC short3 mulhi(short3 x, short3 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC short3 popcount(short3 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC short3 reverse_bits(short3 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC short3 rhadd(short3 x, short3 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC short3 rotate(short3 x, short3 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC short3 subsat(short3 x, short3 y)
+{
+  return __metal_subsat(x, y);
+}
+METAL_FUNC short4 abs(short4 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC ushort4 absdiff(short4 x, short4 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC short4 addsat(short4 x, short4 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC short4 clamp(short4 x, short4 minval, short4 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC short4 clz(short4 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC short4 ctz(short4 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC short4 extract_bits(short4 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC short4 hadd(short4 x, short4 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC short4 insert_bits(short4 base, short4 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC short4 madhi(short4 x, short4 y, short4 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC short4 madsat(short4 x, short4 y, short4 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC short4 max(short4 x, short4 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC short4 max3(short4 x, short4 y, short4 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC short4 median3(short4 x, short4 y, short4 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC short4 min(short4 x, short4 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC short4 min3(short4 x, short4 y, short4 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC short4 mulhi(short4 x, short4 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC short4 popcount(short4 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC short4 reverse_bits(short4 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC short4 rhadd(short4 x, short4 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC short4 rotate(short4 x, short4 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC short4 subsat(short4 x, short4 y)
+{
+  return __metal_subsat(x, y);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC short8 abs(short8 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC ushort8 absdiff(short8 x, short8 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC short8 addsat(short8 x, short8 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC short8 clamp(short8 x, short8 minval, short8 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC short8 clz(short8 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC short8 ctz(short8 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC short8 extract_bits(short8 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC short8 hadd(short8 x, short8 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC short8 insert_bits(short8 base, short8 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC short8 madhi(short8 x, short8 y, short8 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC short8 madsat(short8 x, short8 y, short8 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC short8 max(short8 x, short8 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC short8 max3(short8 x, short8 y, short8 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC short8 median3(short8 x, short8 y, short8 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC short8 min(short8 x, short8 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC short8 min3(short8 x, short8 y, short8 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC short8 mulhi(short8 x, short8 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC short8 popcount(short8 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC short8 reverse_bits(short8 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC short8 rhadd(short8 x, short8 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC short8 rotate(short8 x, short8 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC short8 subsat(short8 x, short8 y)
+{
+  return __metal_subsat(x, y);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC short16 abs(short16 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC ushort16 absdiff(short16 x, short16 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC short16 addsat(short16 x, short16 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC short16 clamp(short16 x, short16 minval, short16 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC short16 clz(short16 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC short16 ctz(short16 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC short16 extract_bits(short16 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC short16 hadd(short16 x, short16 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC short16 insert_bits(short16 base, short16 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC short16 madhi(short16 x, short16 y, short16 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC short16 madsat(short16 x, short16 y, short16 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC short16 max(short16 x, short16 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC short16 max3(short16 x, short16 y, short16 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC short16 median3(short16 x, short16 y, short16 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC short16 min(short16 x, short16 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC short16 min3(short16 x, short16 y, short16 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC short16 mulhi(short16 x, short16 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC short16 popcount(short16 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC short16 reverse_bits(short16 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC short16 rhadd(short16 x, short16 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC short16 rotate(short16 x, short16 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC short16 subsat(short16 x, short16 y)
+{
+  return __metal_subsat(x, y);
+}
+#endif
+METAL_FUNC ushort abs(ushort x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC ushort absdiff(ushort x, ushort y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC ushort addsat(ushort x, ushort y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC ushort clamp(ushort x, ushort minval, ushort maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC ushort clz(ushort x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC ushort ctz(ushort x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ushort extract_bits(ushort x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC ushort hadd(ushort x, ushort y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ushort insert_bits(ushort base, ushort insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC ushort madhi(ushort x, ushort y, ushort z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC ushort madsat(ushort x, ushort y, ushort z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC ushort max(ushort x, ushort y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC ushort max3(ushort x, ushort y, ushort z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC ushort median3(ushort x, ushort y, ushort z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC ushort min(ushort x, ushort y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC ushort min3(ushort x, ushort y, ushort z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC ushort mulhi(ushort x, ushort y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC ushort popcount(ushort x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ushort reverse_bits(ushort x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC ushort rhadd(ushort x, ushort y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC ushort rotate(ushort x, ushort y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC ushort subsat(ushort x, ushort y)
+{
+  return __metal_subsat(x, y);
+}
+METAL_FUNC ushort2 abs(ushort2 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC ushort2 absdiff(ushort2 x, ushort2 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC ushort2 addsat(ushort2 x, ushort2 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC ushort2 clamp(ushort2 x, ushort2 minval, ushort2 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC ushort2 clz(ushort2 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC ushort2 ctz(ushort2 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ushort2 extract_bits(ushort2 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC ushort2 hadd(ushort2 x, ushort2 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ushort2 insert_bits(ushort2 base, ushort2 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC ushort2 madhi(ushort2 x, ushort2 y, ushort2 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC ushort2 madsat(ushort2 x, ushort2 y, ushort2 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC ushort2 max(ushort2 x, ushort2 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC ushort2 max3(ushort2 x, ushort2 y, ushort2 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC ushort2 median3(ushort2 x, ushort2 y, ushort2 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC ushort2 min(ushort2 x, ushort2 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC ushort2 min3(ushort2 x, ushort2 y, ushort2 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC ushort2 mulhi(ushort2 x, ushort2 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC ushort2 popcount(ushort2 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ushort2 reverse_bits(ushort2 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC ushort2 rhadd(ushort2 x, ushort2 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC ushort2 rotate(ushort2 x, ushort2 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC ushort2 subsat(ushort2 x, ushort2 y)
+{
+  return __metal_subsat(x, y);
+}
+METAL_FUNC ushort3 abs(ushort3 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC ushort3 absdiff(ushort3 x, ushort3 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC ushort3 addsat(ushort3 x, ushort3 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC ushort3 clamp(ushort3 x, ushort3 minval, ushort3 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC ushort3 clz(ushort3 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC ushort3 ctz(ushort3 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ushort3 extract_bits(ushort3 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC ushort3 hadd(ushort3 x, ushort3 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ushort3 insert_bits(ushort3 base, ushort3 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC ushort3 madhi(ushort3 x, ushort3 y, ushort3 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC ushort3 madsat(ushort3 x, ushort3 y, ushort3 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC ushort3 max(ushort3 x, ushort3 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC ushort3 max3(ushort3 x, ushort3 y, ushort3 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC ushort3 median3(ushort3 x, ushort3 y, ushort3 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC ushort3 min(ushort3 x, ushort3 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC ushort3 min3(ushort3 x, ushort3 y, ushort3 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC ushort3 mulhi(ushort3 x, ushort3 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC ushort3 popcount(ushort3 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ushort3 reverse_bits(ushort3 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC ushort3 rhadd(ushort3 x, ushort3 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC ushort3 rotate(ushort3 x, ushort3 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC ushort3 subsat(ushort3 x, ushort3 y)
+{
+  return __metal_subsat(x, y);
+}
+METAL_FUNC ushort4 abs(ushort4 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC ushort4 absdiff(ushort4 x, ushort4 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC ushort4 addsat(ushort4 x, ushort4 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC ushort4 clamp(ushort4 x, ushort4 minval, ushort4 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC ushort4 clz(ushort4 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC ushort4 ctz(ushort4 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ushort4 extract_bits(ushort4 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC ushort4 hadd(ushort4 x, ushort4 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ushort4 insert_bits(ushort4 base, ushort4 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC ushort4 madhi(ushort4 x, ushort4 y, ushort4 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC ushort4 madsat(ushort4 x, ushort4 y, ushort4 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC ushort4 max(ushort4 x, ushort4 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC ushort4 max3(ushort4 x, ushort4 y, ushort4 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC ushort4 median3(ushort4 x, ushort4 y, ushort4 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC ushort4 min(ushort4 x, ushort4 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC ushort4 min3(ushort4 x, ushort4 y, ushort4 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC ushort4 mulhi(ushort4 x, ushort4 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC ushort4 popcount(ushort4 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ushort4 reverse_bits(ushort4 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC ushort4 rhadd(ushort4 x, ushort4 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC ushort4 rotate(ushort4 x, ushort4 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC ushort4 subsat(ushort4 x, ushort4 y)
+{
+  return __metal_subsat(x, y);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC ushort8 abs(ushort8 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC ushort8 absdiff(ushort8 x, ushort8 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC ushort8 addsat(ushort8 x, ushort8 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC ushort8 clamp(ushort8 x, ushort8 minval, ushort8 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC ushort8 clz(ushort8 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC ushort8 ctz(ushort8 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ushort8 extract_bits(ushort8 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC ushort8 hadd(ushort8 x, ushort8 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ushort8 insert_bits(ushort8 base, ushort8 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC ushort8 madhi(ushort8 x, ushort8 y, ushort8 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC ushort8 madsat(ushort8 x, ushort8 y, ushort8 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC ushort8 max(ushort8 x, ushort8 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC ushort8 max3(ushort8 x, ushort8 y, ushort8 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC ushort8 median3(ushort8 x, ushort8 y, ushort8 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC ushort8 min(ushort8 x, ushort8 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC ushort8 min3(ushort8 x, ushort8 y, ushort8 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC ushort8 mulhi(ushort8 x, ushort8 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC ushort8 popcount(ushort8 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ushort8 reverse_bits(ushort8 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC ushort8 rhadd(ushort8 x, ushort8 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC ushort8 rotate(ushort8 x, ushort8 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC ushort8 subsat(ushort8 x, ushort8 y)
+{
+  return __metal_subsat(x, y);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC ushort16 abs(ushort16 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC ushort16 absdiff(ushort16 x, ushort16 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC ushort16 addsat(ushort16 x, ushort16 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC ushort16 clamp(ushort16 x, ushort16 minval, ushort16 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC ushort16 clz(ushort16 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC ushort16 ctz(ushort16 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ushort16 extract_bits(ushort16 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC ushort16 hadd(ushort16 x, ushort16 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ushort16 insert_bits(ushort16 base, ushort16 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC ushort16 madhi(ushort16 x, ushort16 y, ushort16 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC ushort16 madsat(ushort16 x, ushort16 y, ushort16 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC ushort16 max(ushort16 x, ushort16 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC ushort16 max3(ushort16 x, ushort16 y, ushort16 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC ushort16 median3(ushort16 x, ushort16 y, ushort16 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC ushort16 min(ushort16 x, ushort16 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC ushort16 min3(ushort16 x, ushort16 y, ushort16 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC ushort16 mulhi(ushort16 x, ushort16 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC ushort16 popcount(ushort16 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ushort16 reverse_bits(ushort16 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC ushort16 rhadd(ushort16 x, ushort16 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC ushort16 rotate(ushort16 x, ushort16 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC ushort16 subsat(ushort16 x, ushort16 y)
+{
+  return __metal_subsat(x, y);
+}
+#endif
+METAL_FUNC int abs(int x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC uint absdiff(int x, int y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC int addsat(int x, int y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC int clamp(int x, int minval, int maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC int clz(int x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC int ctz(int x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC int extract_bits(int x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC int hadd(int x, int y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC int insert_bits(int base, int insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC int madhi(int x, int y, int z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC int madsat(int x, int y, int z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC int max(int x, int y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC int max3(int x, int y, int z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC int median3(int x, int y, int z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC int min(int x, int y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC int min3(int x, int y, int z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC int mulhi(int x, int y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC int popcount(int x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC int reverse_bits(int x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC int rhadd(int x, int y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC int rotate(int x, int y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC int subsat(int x, int y)
+{
+  return __metal_subsat(x, y);
+}
+METAL_FUNC int2 abs(int2 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC uint2 absdiff(int2 x, int2 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC int2 addsat(int2 x, int2 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC int2 clamp(int2 x, int2 minval, int2 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC int2 clz(int2 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC int2 ctz(int2 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC int2 extract_bits(int2 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC int2 hadd(int2 x, int2 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC int2 insert_bits(int2 base, int2 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC int2 madhi(int2 x, int2 y, int2 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC int2 madsat(int2 x, int2 y, int2 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC int2 max(int2 x, int2 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC int2 max3(int2 x, int2 y, int2 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC int2 median3(int2 x, int2 y, int2 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC int2 min(int2 x, int2 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC int2 min3(int2 x, int2 y, int2 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC int2 mulhi(int2 x, int2 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC int2 popcount(int2 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC int2 reverse_bits(int2 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC int2 rhadd(int2 x, int2 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC int2 rotate(int2 x, int2 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC int2 subsat(int2 x, int2 y)
+{
+  return __metal_subsat(x, y);
+}
+METAL_FUNC int3 abs(int3 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC uint3 absdiff(int3 x, int3 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC int3 addsat(int3 x, int3 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC int3 clamp(int3 x, int3 minval, int3 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC int3 clz(int3 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC int3 ctz(int3 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC int3 extract_bits(int3 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC int3 hadd(int3 x, int3 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC int3 insert_bits(int3 base, int3 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC int3 madhi(int3 x, int3 y, int3 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC int3 madsat(int3 x, int3 y, int3 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC int3 max(int3 x, int3 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC int3 max3(int3 x, int3 y, int3 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC int3 median3(int3 x, int3 y, int3 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC int3 min(int3 x, int3 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC int3 min3(int3 x, int3 y, int3 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC int3 mulhi(int3 x, int3 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC int3 popcount(int3 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC int3 reverse_bits(int3 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC int3 rhadd(int3 x, int3 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC int3 rotate(int3 x, int3 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC int3 subsat(int3 x, int3 y)
+{
+  return __metal_subsat(x, y);
+}
+METAL_FUNC int4 abs(int4 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC uint4 absdiff(int4 x, int4 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC int4 addsat(int4 x, int4 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC int4 clamp(int4 x, int4 minval, int4 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC int4 clz(int4 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC int4 ctz(int4 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC int4 extract_bits(int4 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC int4 hadd(int4 x, int4 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC int4 insert_bits(int4 base, int4 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC int4 madhi(int4 x, int4 y, int4 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC int4 madsat(int4 x, int4 y, int4 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC int4 max(int4 x, int4 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC int4 max3(int4 x, int4 y, int4 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC int4 median3(int4 x, int4 y, int4 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC int4 min(int4 x, int4 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC int4 min3(int4 x, int4 y, int4 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC int4 mulhi(int4 x, int4 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC int4 popcount(int4 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC int4 reverse_bits(int4 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC int4 rhadd(int4 x, int4 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC int4 rotate(int4 x, int4 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC int4 subsat(int4 x, int4 y)
+{
+  return __metal_subsat(x, y);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC int8 abs(int8 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC uint8 absdiff(int8 x, int8 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC int8 addsat(int8 x, int8 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC int8 clamp(int8 x, int8 minval, int8 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC int8 clz(int8 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC int8 ctz(int8 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC int8 extract_bits(int8 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC int8 hadd(int8 x, int8 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC int8 insert_bits(int8 base, int8 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC int8 madhi(int8 x, int8 y, int8 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC int8 madsat(int8 x, int8 y, int8 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC int8 max(int8 x, int8 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC int8 max3(int8 x, int8 y, int8 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC int8 median3(int8 x, int8 y, int8 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC int8 min(int8 x, int8 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC int8 min3(int8 x, int8 y, int8 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC int8 mulhi(int8 x, int8 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC int8 popcount(int8 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC int8 reverse_bits(int8 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC int8 rhadd(int8 x, int8 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC int8 rotate(int8 x, int8 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC int8 subsat(int8 x, int8 y)
+{
+  return __metal_subsat(x, y);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC int16 abs(int16 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC uint16 absdiff(int16 x, int16 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC int16 addsat(int16 x, int16 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC int16 clamp(int16 x, int16 minval, int16 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC int16 clz(int16 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC int16 ctz(int16 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC int16 extract_bits(int16 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC int16 hadd(int16 x, int16 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC int16 insert_bits(int16 base, int16 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC int16 madhi(int16 x, int16 y, int16 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC int16 madsat(int16 x, int16 y, int16 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC int16 max(int16 x, int16 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC int16 max3(int16 x, int16 y, int16 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC int16 median3(int16 x, int16 y, int16 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC int16 min(int16 x, int16 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC int16 min3(int16 x, int16 y, int16 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC int16 mulhi(int16 x, int16 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC int16 popcount(int16 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC int16 reverse_bits(int16 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC int16 rhadd(int16 x, int16 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC int16 rotate(int16 x, int16 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC int16 subsat(int16 x, int16 y)
+{
+  return __metal_subsat(x, y);
+}
+#endif
+METAL_FUNC uint abs(uint x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC uint absdiff(uint x, uint y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC uint addsat(uint x, uint y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC uint clamp(uint x, uint minval, uint maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC uint clz(uint x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC uint ctz(uint x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uint extract_bits(uint x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC uint hadd(uint x, uint y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uint insert_bits(uint base, uint insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC uint madhi(uint x, uint y, uint z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC uint madsat(uint x, uint y, uint z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC uint max(uint x, uint y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC uint max3(uint x, uint y, uint z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC uint median3(uint x, uint y, uint z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC uint min(uint x, uint y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC uint min3(uint x, uint y, uint z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC uint mulhi(uint x, uint y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC uint popcount(uint x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uint reverse_bits(uint x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC uint rhadd(uint x, uint y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC uint rotate(uint x, uint y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC uint subsat(uint x, uint y)
+{
+  return __metal_subsat(x, y);
+}
+METAL_FUNC uint2 abs(uint2 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC uint2 absdiff(uint2 x, uint2 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC uint2 addsat(uint2 x, uint2 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC uint2 clamp(uint2 x, uint2 minval, uint2 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC uint2 clz(uint2 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC uint2 ctz(uint2 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uint2 extract_bits(uint2 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC uint2 hadd(uint2 x, uint2 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uint2 insert_bits(uint2 base, uint2 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC uint2 madhi(uint2 x, uint2 y, uint2 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC uint2 madsat(uint2 x, uint2 y, uint2 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC uint2 max(uint2 x, uint2 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC uint2 max3(uint2 x, uint2 y, uint2 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC uint2 median3(uint2 x, uint2 y, uint2 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC uint2 min(uint2 x, uint2 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC uint2 min3(uint2 x, uint2 y, uint2 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC uint2 mulhi(uint2 x, uint2 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC uint2 popcount(uint2 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uint2 reverse_bits(uint2 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC uint2 rhadd(uint2 x, uint2 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC uint2 rotate(uint2 x, uint2 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC uint2 subsat(uint2 x, uint2 y)
+{
+  return __metal_subsat(x, y);
+}
+METAL_FUNC uint3 abs(uint3 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC uint3 absdiff(uint3 x, uint3 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC uint3 addsat(uint3 x, uint3 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC uint3 clamp(uint3 x, uint3 minval, uint3 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC uint3 clz(uint3 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC uint3 ctz(uint3 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uint3 extract_bits(uint3 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC uint3 hadd(uint3 x, uint3 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uint3 insert_bits(uint3 base, uint3 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC uint3 madhi(uint3 x, uint3 y, uint3 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC uint3 madsat(uint3 x, uint3 y, uint3 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC uint3 max(uint3 x, uint3 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC uint3 max3(uint3 x, uint3 y, uint3 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC uint3 median3(uint3 x, uint3 y, uint3 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC uint3 min(uint3 x, uint3 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC uint3 min3(uint3 x, uint3 y, uint3 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC uint3 mulhi(uint3 x, uint3 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC uint3 popcount(uint3 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uint3 reverse_bits(uint3 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC uint3 rhadd(uint3 x, uint3 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC uint3 rotate(uint3 x, uint3 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC uint3 subsat(uint3 x, uint3 y)
+{
+  return __metal_subsat(x, y);
+}
+METAL_FUNC uint4 abs(uint4 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC uint4 absdiff(uint4 x, uint4 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC uint4 addsat(uint4 x, uint4 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC uint4 clamp(uint4 x, uint4 minval, uint4 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC uint4 clz(uint4 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC uint4 ctz(uint4 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uint4 extract_bits(uint4 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC uint4 hadd(uint4 x, uint4 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uint4 insert_bits(uint4 base, uint4 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC uint4 madhi(uint4 x, uint4 y, uint4 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC uint4 madsat(uint4 x, uint4 y, uint4 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC uint4 max(uint4 x, uint4 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC uint4 max3(uint4 x, uint4 y, uint4 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC uint4 median3(uint4 x, uint4 y, uint4 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC uint4 min(uint4 x, uint4 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC uint4 min3(uint4 x, uint4 y, uint4 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC uint4 mulhi(uint4 x, uint4 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC uint4 popcount(uint4 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uint4 reverse_bits(uint4 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC uint4 rhadd(uint4 x, uint4 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC uint4 rotate(uint4 x, uint4 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC uint4 subsat(uint4 x, uint4 y)
+{
+  return __metal_subsat(x, y);
+}
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC uint8 abs(uint8 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC uint8 absdiff(uint8 x, uint8 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC uint8 addsat(uint8 x, uint8 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC uint8 clamp(uint8 x, uint8 minval, uint8 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC uint8 clz(uint8 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC uint8 ctz(uint8 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uint8 extract_bits(uint8 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC uint8 hadd(uint8 x, uint8 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uint8 insert_bits(uint8 base, uint8 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC uint8 madhi(uint8 x, uint8 y, uint8 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC uint8 madsat(uint8 x, uint8 y, uint8 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC uint8 max(uint8 x, uint8 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC uint8 max3(uint8 x, uint8 y, uint8 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC uint8 median3(uint8 x, uint8 y, uint8 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC uint8 min(uint8 x, uint8 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC uint8 min3(uint8 x, uint8 y, uint8 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC uint8 mulhi(uint8 x, uint8 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC uint8 popcount(uint8 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uint8 reverse_bits(uint8 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC uint8 rhadd(uint8 x, uint8 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC uint8 rotate(uint8 x, uint8 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC uint8 subsat(uint8 x, uint8 y)
+{
+  return __metal_subsat(x, y);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+METAL_FUNC uint16 abs(uint16 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC uint16 absdiff(uint16 x, uint16 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC uint16 addsat(uint16 x, uint16 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC uint16 clamp(uint16 x, uint16 minval, uint16 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC uint16 clz(uint16 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC uint16 ctz(uint16 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uint16 extract_bits(uint16 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC uint16 hadd(uint16 x, uint16 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uint16 insert_bits(uint16 base, uint16 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC uint16 madhi(uint16 x, uint16 y, uint16 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC uint16 madsat(uint16 x, uint16 y, uint16 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC uint16 max(uint16 x, uint16 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC uint16 max3(uint16 x, uint16 y, uint16 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC uint16 median3(uint16 x, uint16 y, uint16 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC uint16 min(uint16 x, uint16 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC uint16 min3(uint16 x, uint16 y, uint16 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC uint16 mulhi(uint16 x, uint16 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC uint16 popcount(uint16 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC uint16 reverse_bits(uint16 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC uint16 rhadd(uint16 x, uint16 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC uint16 rotate(uint16 x, uint16 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC uint16 subsat(uint16 x, uint16 y)
+{
+  return __metal_subsat(x, y);
+}
+#endif
+#if defined(__HAVE_INTEGER_LONG_FUNCTIONS__)
+METAL_FUNC long abs(long x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC ulong absdiff(long x, long y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC long addsat(long x, long y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC long clamp(long x, long minval, long maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC long clz(long x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC long ctz(long x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC long extract_bits(long x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC long hadd(long x, long y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC long insert_bits(long base, long insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC long madhi(long x, long y, long z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC long madsat(long x, long y, long z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC long max(long x, long y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC long max3(long x, long y, long z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC long median3(long x, long y, long z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC long min(long x, long y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC long min3(long x, long y, long z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC long mulhi(long x, long y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC long popcount(long x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC long reverse_bits(long x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC long rhadd(long x, long y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC long rotate(long x, long y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC long subsat(long x, long y)
+{
+  return __metal_subsat(x, y);
+}
+#endif
+#if defined(__HAVE_INTEGER_LONG_FUNCTIONS__)
+METAL_FUNC long2 abs(long2 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC ulong2 absdiff(long2 x, long2 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC long2 addsat(long2 x, long2 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC long2 clamp(long2 x, long2 minval, long2 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC long2 clz(long2 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC long2 ctz(long2 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC long2 extract_bits(long2 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC long2 hadd(long2 x, long2 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC long2 insert_bits(long2 base, long2 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC long2 madhi(long2 x, long2 y, long2 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC long2 madsat(long2 x, long2 y, long2 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC long2 max(long2 x, long2 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC long2 max3(long2 x, long2 y, long2 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC long2 median3(long2 x, long2 y, long2 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC long2 min(long2 x, long2 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC long2 min3(long2 x, long2 y, long2 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC long2 mulhi(long2 x, long2 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC long2 popcount(long2 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC long2 reverse_bits(long2 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC long2 rhadd(long2 x, long2 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC long2 rotate(long2 x, long2 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC long2 subsat(long2 x, long2 y)
+{
+  return __metal_subsat(x, y);
+}
+#endif
+#if defined(__HAVE_INTEGER_LONG_FUNCTIONS__)
+METAL_FUNC long3 abs(long3 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC ulong3 absdiff(long3 x, long3 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC long3 addsat(long3 x, long3 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC long3 clamp(long3 x, long3 minval, long3 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC long3 clz(long3 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC long3 ctz(long3 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC long3 extract_bits(long3 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC long3 hadd(long3 x, long3 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC long3 insert_bits(long3 base, long3 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC long3 madhi(long3 x, long3 y, long3 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC long3 madsat(long3 x, long3 y, long3 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC long3 max(long3 x, long3 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC long3 max3(long3 x, long3 y, long3 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC long3 median3(long3 x, long3 y, long3 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC long3 min(long3 x, long3 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC long3 min3(long3 x, long3 y, long3 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC long3 mulhi(long3 x, long3 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC long3 popcount(long3 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC long3 reverse_bits(long3 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC long3 rhadd(long3 x, long3 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC long3 rotate(long3 x, long3 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC long3 subsat(long3 x, long3 y)
+{
+  return __metal_subsat(x, y);
+}
+#endif
+#if defined(__HAVE_INTEGER_LONG_FUNCTIONS__)
+METAL_FUNC long4 abs(long4 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC ulong4 absdiff(long4 x, long4 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC long4 addsat(long4 x, long4 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC long4 clamp(long4 x, long4 minval, long4 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC long4 clz(long4 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC long4 ctz(long4 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC long4 extract_bits(long4 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC long4 hadd(long4 x, long4 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC long4 insert_bits(long4 base, long4 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC long4 madhi(long4 x, long4 y, long4 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC long4 madsat(long4 x, long4 y, long4 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC long4 max(long4 x, long4 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC long4 max3(long4 x, long4 y, long4 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC long4 median3(long4 x, long4 y, long4 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC long4 min(long4 x, long4 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC long4 min3(long4 x, long4 y, long4 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC long4 mulhi(long4 x, long4 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC long4 popcount(long4 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC long4 reverse_bits(long4 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC long4 rhadd(long4 x, long4 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC long4 rotate(long4 x, long4 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC long4 subsat(long4 x, long4 y)
+{
+  return __metal_subsat(x, y);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+#if defined(__HAVE_INTEGER_LONG_FUNCTIONS__)
+METAL_FUNC long8 abs(long8 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC ulong8 absdiff(long8 x, long8 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC long8 addsat(long8 x, long8 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC long8 clamp(long8 x, long8 minval, long8 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC long8 clz(long8 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC long8 ctz(long8 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC long8 extract_bits(long8 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC long8 hadd(long8 x, long8 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC long8 insert_bits(long8 base, long8 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC long8 madhi(long8 x, long8 y, long8 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC long8 madsat(long8 x, long8 y, long8 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC long8 max(long8 x, long8 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC long8 max3(long8 x, long8 y, long8 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC long8 median3(long8 x, long8 y, long8 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC long8 min(long8 x, long8 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC long8 min3(long8 x, long8 y, long8 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC long8 mulhi(long8 x, long8 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC long8 popcount(long8 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC long8 reverse_bits(long8 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC long8 rhadd(long8 x, long8 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC long8 rotate(long8 x, long8 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC long8 subsat(long8 x, long8 y)
+{
+  return __metal_subsat(x, y);
+}
+#endif
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+#if defined(__HAVE_INTEGER_LONG_FUNCTIONS__)
+METAL_FUNC long16 abs(long16 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC ulong16 absdiff(long16 x, long16 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC long16 addsat(long16 x, long16 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC long16 clamp(long16 x, long16 minval, long16 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC long16 clz(long16 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC long16 ctz(long16 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC long16 extract_bits(long16 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC long16 hadd(long16 x, long16 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC long16 insert_bits(long16 base, long16 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC long16 madhi(long16 x, long16 y, long16 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC long16 madsat(long16 x, long16 y, long16 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC long16 max(long16 x, long16 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC long16 max3(long16 x, long16 y, long16 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC long16 median3(long16 x, long16 y, long16 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC long16 min(long16 x, long16 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC long16 min3(long16 x, long16 y, long16 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC long16 mulhi(long16 x, long16 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC long16 popcount(long16 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC long16 reverse_bits(long16 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC long16 rhadd(long16 x, long16 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC long16 rotate(long16 x, long16 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC long16 subsat(long16 x, long16 y)
+{
+  return __metal_subsat(x, y);
+}
+#endif
+#endif
+#if defined(__HAVE_INTEGER_LONG_FUNCTIONS__)
+METAL_FUNC ulong abs(ulong x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC ulong absdiff(ulong x, ulong y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC ulong addsat(ulong x, ulong y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC ulong clamp(ulong x, ulong minval, ulong maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC ulong clz(ulong x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC ulong ctz(ulong x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ulong extract_bits(ulong x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC ulong hadd(ulong x, ulong y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ulong insert_bits(ulong base, ulong insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC ulong madhi(ulong x, ulong y, ulong z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC ulong madsat(ulong x, ulong y, ulong z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC ulong max(ulong x, ulong y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC ulong max3(ulong x, ulong y, ulong z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC ulong median3(ulong x, ulong y, ulong z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC ulong min(ulong x, ulong y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC ulong min3(ulong x, ulong y, ulong z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC ulong mulhi(ulong x, ulong y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC ulong popcount(ulong x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ulong reverse_bits(ulong x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC ulong rhadd(ulong x, ulong y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC ulong rotate(ulong x, ulong y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC ulong subsat(ulong x, ulong y)
+{
+  return __metal_subsat(x, y);
+}
+#endif
+#if defined(__HAVE_INTEGER_LONG_FUNCTIONS__)
+METAL_FUNC ulong2 abs(ulong2 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC ulong2 absdiff(ulong2 x, ulong2 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC ulong2 addsat(ulong2 x, ulong2 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC ulong2 clamp(ulong2 x, ulong2 minval, ulong2 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC ulong2 clz(ulong2 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC ulong2 ctz(ulong2 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ulong2 extract_bits(ulong2 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC ulong2 hadd(ulong2 x, ulong2 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ulong2 insert_bits(ulong2 base, ulong2 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC ulong2 madhi(ulong2 x, ulong2 y, ulong2 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC ulong2 madsat(ulong2 x, ulong2 y, ulong2 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC ulong2 max(ulong2 x, ulong2 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC ulong2 max3(ulong2 x, ulong2 y, ulong2 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC ulong2 median3(ulong2 x, ulong2 y, ulong2 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC ulong2 min(ulong2 x, ulong2 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC ulong2 min3(ulong2 x, ulong2 y, ulong2 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC ulong2 mulhi(ulong2 x, ulong2 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC ulong2 popcount(ulong2 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ulong2 reverse_bits(ulong2 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC ulong2 rhadd(ulong2 x, ulong2 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC ulong2 rotate(ulong2 x, ulong2 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC ulong2 subsat(ulong2 x, ulong2 y)
+{
+  return __metal_subsat(x, y);
+}
+#endif
+#if defined(__HAVE_INTEGER_LONG_FUNCTIONS__)
+METAL_FUNC ulong3 abs(ulong3 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC ulong3 absdiff(ulong3 x, ulong3 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC ulong3 addsat(ulong3 x, ulong3 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC ulong3 clamp(ulong3 x, ulong3 minval, ulong3 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC ulong3 clz(ulong3 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC ulong3 ctz(ulong3 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ulong3 extract_bits(ulong3 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC ulong3 hadd(ulong3 x, ulong3 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ulong3 insert_bits(ulong3 base, ulong3 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC ulong3 madhi(ulong3 x, ulong3 y, ulong3 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC ulong3 madsat(ulong3 x, ulong3 y, ulong3 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC ulong3 max(ulong3 x, ulong3 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC ulong3 max3(ulong3 x, ulong3 y, ulong3 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC ulong3 median3(ulong3 x, ulong3 y, ulong3 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC ulong3 min(ulong3 x, ulong3 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC ulong3 min3(ulong3 x, ulong3 y, ulong3 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC ulong3 mulhi(ulong3 x, ulong3 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC ulong3 popcount(ulong3 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ulong3 reverse_bits(ulong3 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC ulong3 rhadd(ulong3 x, ulong3 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC ulong3 rotate(ulong3 x, ulong3 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC ulong3 subsat(ulong3 x, ulong3 y)
+{
+  return __metal_subsat(x, y);
+}
+#endif
+#if defined(__HAVE_INTEGER_LONG_FUNCTIONS__)
+METAL_FUNC ulong4 abs(ulong4 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC ulong4 absdiff(ulong4 x, ulong4 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC ulong4 addsat(ulong4 x, ulong4 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC ulong4 clamp(ulong4 x, ulong4 minval, ulong4 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC ulong4 clz(ulong4 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC ulong4 ctz(ulong4 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ulong4 extract_bits(ulong4 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC ulong4 hadd(ulong4 x, ulong4 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ulong4 insert_bits(ulong4 base, ulong4 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC ulong4 madhi(ulong4 x, ulong4 y, ulong4 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC ulong4 madsat(ulong4 x, ulong4 y, ulong4 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC ulong4 max(ulong4 x, ulong4 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC ulong4 max3(ulong4 x, ulong4 y, ulong4 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC ulong4 median3(ulong4 x, ulong4 y, ulong4 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC ulong4 min(ulong4 x, ulong4 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC ulong4 min3(ulong4 x, ulong4 y, ulong4 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC ulong4 mulhi(ulong4 x, ulong4 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC ulong4 popcount(ulong4 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ulong4 reverse_bits(ulong4 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC ulong4 rhadd(ulong4 x, ulong4 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC ulong4 rotate(ulong4 x, ulong4 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC ulong4 subsat(ulong4 x, ulong4 y)
+{
+  return __metal_subsat(x, y);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+#if defined(__HAVE_INTEGER_LONG_FUNCTIONS__)
+METAL_FUNC ulong8 abs(ulong8 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC ulong8 absdiff(ulong8 x, ulong8 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC ulong8 addsat(ulong8 x, ulong8 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC ulong8 clamp(ulong8 x, ulong8 minval, ulong8 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC ulong8 clz(ulong8 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC ulong8 ctz(ulong8 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ulong8 extract_bits(ulong8 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC ulong8 hadd(ulong8 x, ulong8 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ulong8 insert_bits(ulong8 base, ulong8 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC ulong8 madhi(ulong8 x, ulong8 y, ulong8 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC ulong8 madsat(ulong8 x, ulong8 y, ulong8 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC ulong8 max(ulong8 x, ulong8 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC ulong8 max3(ulong8 x, ulong8 y, ulong8 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC ulong8 median3(ulong8 x, ulong8 y, ulong8 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC ulong8 min(ulong8 x, ulong8 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC ulong8 min3(ulong8 x, ulong8 y, ulong8 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC ulong8 mulhi(ulong8 x, ulong8 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC ulong8 popcount(ulong8 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ulong8 reverse_bits(ulong8 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC ulong8 rhadd(ulong8 x, ulong8 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC ulong8 rotate(ulong8 x, ulong8 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC ulong8 subsat(ulong8 x, ulong8 y)
+{
+  return __metal_subsat(x, y);
+}
+#endif
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+#if defined(__HAVE_INTEGER_LONG_FUNCTIONS__)
+METAL_FUNC ulong16 abs(ulong16 x)
+{
+  return __metal_abs(x);
+}
+METAL_FUNC ulong16 absdiff(ulong16 x, ulong16 y)
+{
+  return __metal_absdiff(x, y);
+}
+METAL_FUNC ulong16 addsat(ulong16 x, ulong16 y)
+{
+  return __metal_addsat(x, y);
+}
+METAL_FUNC ulong16 clamp(ulong16 x, ulong16 minval, ulong16 maxval)
+{
+  return __metal_clamp(x, minval, maxval);
+}
+METAL_FUNC ulong16 clz(ulong16 x)
+{
+  return __metal_clz(x);
+}
+METAL_FUNC ulong16 ctz(ulong16 x)
+{
+  return __metal_ctz(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ulong16 extract_bits(ulong16 x, uint offset, uint bits)
+{
+  return __metal_extract_bits(x, offset, bits);
+}
+#endif
+METAL_FUNC ulong16 hadd(ulong16 x, ulong16 y)
+{
+  return __metal_hadd(x, y);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ulong16 insert_bits(ulong16 base, ulong16 insert, uint offset, uint bits)
+{
+  return __metal_insert_bits(base, insert, offset, bits);
+}
+#endif
+METAL_FUNC ulong16 madhi(ulong16 x, ulong16 y, ulong16 z)
+{
+  return __metal_madhi(x, y, z);
+}
+METAL_FUNC ulong16 madsat(ulong16 x, ulong16 y, ulong16 z)
+{
+  return __metal_madsat(x, y, z);
+}
+METAL_FUNC ulong16 max(ulong16 x, ulong16 y)
+{
+  return __metal_max(x, y);
+}
+#if defined(__HAVE_MAX3__)
+METAL_FUNC ulong16 max3(ulong16 x, ulong16 y, ulong16 z)
+{
+  return __metal_max3(x, y, z);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+METAL_FUNC ulong16 median3(ulong16 x, ulong16 y, ulong16 z)
+{
+  return __metal_median3(x, y, z);
+}
+#endif
+METAL_FUNC ulong16 min(ulong16 x, ulong16 y)
+{
+  return __metal_min(x, y);
+}
+#if defined(__HAVE_MIN3__)
+METAL_FUNC ulong16 min3(ulong16 x, ulong16 y, ulong16 z)
+{
+  return __metal_min3(x, y, z);
+}
+#endif
+METAL_FUNC ulong16 mulhi(ulong16 x, ulong16 y)
+{
+  return __metal_mulhi(x, y);
+}
+METAL_FUNC ulong16 popcount(ulong16 x)
+{
+  return __metal_popcount(x);
+}
+#if defined(__HAVE_INTEGER_BIT_EDIT_FUNCTIONS__)
+METAL_FUNC ulong16 reverse_bits(ulong16 x)
+{
+  return __metal_reverse_bits(x);
+}
+#endif
+METAL_FUNC ulong16 rhadd(ulong16 x, ulong16 y)
+{
+  return __metal_rhadd(x, y);
+}
+METAL_FUNC ulong16 rotate(ulong16 x, ulong16 y)
+{
+  return __metal_rotate(x, y);
+}
+METAL_FUNC ulong16 subsat(ulong16 x, ulong16 y)
+{
+  return __metal_subsat(x, y);
+}
+#endif
+#endif
+
+#if defined(__HAVE_MAD24__)
+METAL_FUNC int mad24(int x, int y, int z)
+{
+  return __metal_mad24(x, y, z);
+}
+#endif
+#if defined(__HAVE_MUL24__)
+METAL_FUNC int mul24(int x, int y)
+{
+  return __metal_mul24(x, y);
+}
+#endif
+#if defined(__HAVE_MAD24__)
+METAL_FUNC int2 mad24(int2 x, int2 y, int2 z)
+{
+  return __metal_mad24(x, y, z);
+}
+#endif
+#if defined(__HAVE_MUL24__)
+METAL_FUNC int2 mul24(int2 x, int2 y)
+{
+  return __metal_mul24(x, y);
+}
+#endif
+#if defined(__HAVE_MAD24__)
+METAL_FUNC int3 mad24(int3 x, int3 y, int3 z)
+{
+  return __metal_mad24(x, y, z);
+}
+#endif
+#if defined(__HAVE_MUL24__)
+METAL_FUNC int3 mul24(int3 x, int3 y)
+{
+  return __metal_mul24(x, y);
+}
+#endif
+#if defined(__HAVE_MAD24__)
+METAL_FUNC int4 mad24(int4 x, int4 y, int4 z)
+{
+  return __metal_mad24(x, y, z);
+}
+#endif
+#if defined(__HAVE_MUL24__)
+METAL_FUNC int4 mul24(int4 x, int4 y)
+{
+  return __metal_mul24(x, y);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+#if defined(__HAVE_MAD24__)
+METAL_FUNC int8 mad24(int8 x, int8 y, int8 z)
+{
+  return __metal_mad24(x, y, z);
+}
+#endif
+#if defined(__HAVE_MUL24__)
+METAL_FUNC int8 mul24(int8 x, int8 y)
+{
+  return __metal_mul24(x, y);
+}
+#endif
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+#if defined(__HAVE_MAD24__)
+METAL_FUNC int16 mad24(int16 x, int16 y, int16 z)
+{
+  return __metal_mad24(x, y, z);
+}
+#endif
+#if defined(__HAVE_MUL24__)
+METAL_FUNC int16 mul24(int16 x, int16 y)
+{
+  return __metal_mul24(x, y);
+}
+#endif
+#endif
+#if defined(__HAVE_MAD24__)
+METAL_FUNC uint mad24(uint x, uint y, uint z)
+{
+  return __metal_mad24(x, y, z);
+}
+#endif
+#if defined(__HAVE_MUL24__)
+METAL_FUNC uint mul24(uint x, uint y)
+{
+  return __metal_mul24(x, y);
+}
+#endif
+#if defined(__HAVE_MAD24__)
+METAL_FUNC uint2 mad24(uint2 x, uint2 y, uint2 z)
+{
+  return __metal_mad24(x, y, z);
+}
+#endif
+#if defined(__HAVE_MUL24__)
+METAL_FUNC uint2 mul24(uint2 x, uint2 y)
+{
+  return __metal_mul24(x, y);
+}
+#endif
+#if defined(__HAVE_MAD24__)
+METAL_FUNC uint3 mad24(uint3 x, uint3 y, uint3 z)
+{
+  return __metal_mad24(x, y, z);
+}
+#endif
+#if defined(__HAVE_MUL24__)
+METAL_FUNC uint3 mul24(uint3 x, uint3 y)
+{
+  return __metal_mul24(x, y);
+}
+#endif
+#if defined(__HAVE_MAD24__)
+METAL_FUNC uint4 mad24(uint4 x, uint4 y, uint4 z)
+{
+  return __metal_mad24(x, y, z);
+}
+#endif
+#if defined(__HAVE_MUL24__)
+METAL_FUNC uint4 mul24(uint4 x, uint4 y)
+{
+  return __metal_mul24(x, y);
+}
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+#if defined(__HAVE_MAD24__)
+METAL_FUNC uint8 mad24(uint8 x, uint8 y, uint8 z)
+{
+  return __metal_mad24(x, y, z);
+}
+#endif
+#if defined(__HAVE_MUL24__)
+METAL_FUNC uint8 mul24(uint8 x, uint8 y)
+{
+  return __metal_mul24(x, y);
+}
+#endif
+#endif
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+#if defined(__HAVE_MAD24__)
+METAL_FUNC uint16 mad24(uint16 x, uint16 y, uint16 z)
+{
+  return __metal_mad24(x, y, z);
+}
+#endif
+#if defined(__HAVE_MUL24__)
+METAL_FUNC uint16 mul24(uint16 x, uint16 y)
+{
+  return __metal_mul24(x, y);
+}
+#endif
+#endif
+} // namespace metal
+
+#endif // __METAL_INTEGER
