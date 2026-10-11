@@ -1,0 +1,787 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Version</key>
+	<string>1.0</string>
+	<key>Bottlenecks</key>
+	<dict>
+		<key>analysis_pbe_bound</key>
+		<dict>
+			<key>name</key>
+			<string>Pixel Backend bound</string>
+			<key>description</key>
+			<string>is Pixel rate bound</string>
+		</dict>
+		<key>analysis_memory_bound</key>
+		<dict>
+			<key>name</key>
+			<string>Memory bound</string>
+			<key>description</key>
+			<string>is memory bound</string>
+		</dict>
+		<key>analysis_shader_bound</key>
+		<dict>
+			<key>name</key>
+			<string>Shader bound</string>
+			<key>description</key>
+			<string>is Shader bound</string>
+		</dict>
+		<key>analysis_vertex_bound</key>
+		<dict>
+			<key>name</key>
+			<string>Vertex bound</string>
+			<key>description</key>
+			<string>is vertex rate bound</string>
+		</dict>
+	</dict>
+	<key>DerivedCounters</key>
+	<dict>
+		<key>GPUUtilization</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>GPU_BusyTics</string>
+				<string>GPU_CoreClocks</string>
+			</array>
+			<key>name</key>
+			<string>GPU Utilization</string>
+			<key>description</key>
+			<string>Percentage of time the GPU was busy</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>ShaderCoreActive</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>EuActive_Flex0</string>
+				<string>GPU_BusyTics</string>
+				<string>EUCoreCount</string>
+			</array>
+			<key>name</key>
+			<string>Shader Core Active</string>
+			<key>description</key>
+			<string>Percentage of GPU time the Shader Core did active work</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>ShaderCoreStall</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>EuStall_Flex1</string>
+				<string>GPU_BusyTics</string>
+				<string>EUCoreCount</string>
+			</array>
+			<key>name</key>
+			<string>Shader Core Stall</string>
+			<key>description</key>
+			<string>Percentage of GPU time the Shader Core was stalled</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>VertexCost</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>VSEuActive_Flex6</string>
+				<string>VSEuStall_Flex7</string>
+				<string>EuActive_Flex0</string>
+				<string>EuStall_Flex1</string>
+			</array>
+			<key>name</key>
+			<string>Vertex Cost</string>
+			<key>description</key>
+			<string>Ratio of Vertex Shader to Shader Core time as a percentage</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>PixelCost</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>PSEuActive_Flex12</string>
+				<string>PSEuStall_Flex13</string>
+				<string>EuActive_Flex0</string>
+				<string>EuStall_Flex1</string>
+			</array>
+			<key>name</key>
+			<string>Pixel Cost</string>
+			<key>description</key>
+			<string>Ratio of Pixel Shader to Shader Core time as a percentage</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>GTRingBW</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>gam_total_reads2ring</string>
+				<string>gam_total_writes2ring</string>
+				<string>GTRequestQueueFull</string>
+				<string>GPU_delta_timestamp</string>
+			</array>
+			<key>name</key>
+			<string>GPU Ring Bandwidth</string>
+			<key>description</key>
+			<string>GPU Ring Bandwidth in GB/s</string>
+			<key>type</key>
+			<string>Rate</string>
+		</dict>
+		<key>DRAMBW</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>DRAMReads</string>
+				<string>DRAMWrites</string>
+				<string>GPU_delta_timestamp</string>
+			</array>
+			<key>name</key>
+			<string>GPU DRAM Bandwidth</string>
+			<key>description</key>
+			<string>GPU DRAM Bandwidth in GB/s</string>
+			<key>type</key>
+			<string>Rate</string>
+		</dict>
+		<key>PixelShaderInvocations</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>PsInvocations</string>
+			</array>
+			<key>name</key>
+			<string>Pixel Shader Invocations</string>
+			<key>description</key>
+			<string>Number of pixel shader invocations</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>VertexShaderInvocations</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>VsInvocations</string>
+			</array>
+			<key>name</key>
+			<string>Vertex Shader Invocations</string>
+			<key>description</key>
+			<string>Number of vertex shader invocations</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>ComputeShaderInvocations</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>CsInvocations</string>
+			</array>
+			<key>name</key>
+			<string>Compute Shader Invocations</string>
+			<key>description</key>
+			<string>Number of compute shader invocations</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>PixelToVertexRatio</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>PsInvocations</string>
+				<string>VsInvocations</string>
+			</array>
+			<key>name</key>
+			<string>Pixel to Vertex Ratio</string>
+			<key>description</key>
+			<string>Ratio of pixels to vertices in the pipeline</string>
+			<key>type</key>
+			<string>Ratio</string>
+		</dict>
+		<key>PixelsPerPrimitive</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>PsInvocations</string>
+				<string>IAPrimitives</string>
+			</array>
+			<key>name</key>
+			<string>Pixel to Primitive Ratio</string>
+			<key>description</key>
+			<string>Ratio of pixels to primitives in the pipeline</string>
+			<key>type</key>
+			<string>Ratio</string>
+		</dict>
+		<key>VerticesSubmitted</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>IAVertices</string>
+			</array>
+			<key>name</key>
+			<string>Vertices Submitted</string>
+			<key>description</key>
+			<string>Number of vertices submitted to the 3D pipeline</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>VerticesRendered</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>ClipperPrimitives</string>
+				<string>IAVertices</string>
+				<string>IAPrimitives</string>
+			</array>
+			<key>name</key>
+			<string>Vertices Rendered</string>
+			<key>description</key>
+			<string>Number of vertices rendered to the 3D pipeline</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>VerticesRenderedPercent</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>ClipperPrimitives</string>
+				<string>IAVertices</string>
+				<string>IAPrimitives</string>
+			</array>
+			<key>name</key>
+			<string>Vertices Rendered %</string>
+			<key>description</key>
+			<string>Percentage of vertices rendered to the 3D pipeline</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>VerticesPerClock</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>IAVertices</string>
+				<string>GPU_BusyTics</string>
+			</array>
+			<key>name</key>
+			<string>Vertices per clock</string>
+			<key>description</key>
+			<string>Number of vertices processed per clock tic</string>
+			<key>type</key>
+			<string>Rate</string>
+		</dict>
+		<key>PrimitivesSubmitted</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>IAPrimitives</string>
+				<string>TessDomain</string>
+			</array>
+			<key>name</key>
+			<string>Primitives Submitted</string>
+			<key>description</key>
+			<string>Number of primitives submitted to the 3D pipeline</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>PrimitivesRendered</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>ClipperPrimitives</string>
+			</array>
+			<key>name</key>
+			<string>Primitives Rendered</string>
+			<key>description</key>
+			<string>Number of primitives rendered to the 3D pipeline</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>PrimitivesRenderedPercent</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>ClipperPrimitives</string>
+				<string>IAPrimitives</string>
+			</array>
+			<key>name</key>
+			<string>Primitives Rendered %</string>
+			<key>description</key>
+			<string>Percentage of primitives rendered  post-clip</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>PrimitivesClipped</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>ClipperPrimitives</string>
+				<string>IAPrimitives</string>
+			</array>
+			<key>name</key>
+			<string>Primitives Clipped</string>
+			<key>description</key>
+			<string>Number of primitives discarded by the clipper</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>PrimitivesClippedPercent</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>ClipperPrimitives</string>
+				<string>IAPrimitives</string>
+			</array>
+			<key>name</key>
+			<string>Primitives Clipped %</string>
+			<key>description</key>
+			<string>Percentage of primitives discarded by the clipper</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>PixelsFailingHiZ</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>Pixels_2x2_Fail_HiZ_PrePS</string>
+				<string>Pixels_2x2_Fail_Early_PrePS</string>
+			</array>
+			<key>name</key>
+			<string>Pixels Failing HiZ Tests</string>
+			<key>description</key>
+			<string>Number of pixels rejected due to HiZ tests</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>PixelsFailingHiZPercent</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>Pixels_2x2_Fail_HiZ_PrePS</string>
+				<string>Pixels_2x2_Fail_Early_PrePS</string>
+			</array>
+			<key>name</key>
+			<string>Pixels Failing HiZ Tests %</string>
+			<key>description</key>
+			<string>Percentage of pixels rejected due to HiZ tests</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>PixelsFailingPostPS</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>Pixels_2x2_Fail_PostPS</string>
+			</array>
+			<key>name</key>
+			<string>Pixels Failing Post-PS Tests</string>
+			<key>description</key>
+			<string>Number of pixels rejected due to post pixel shader tests</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>PixelsFailingPostPSPercent</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>Pixels_2x2_Fail_PostPS</string>
+			</array>
+			<key>name</key>
+			<string>Pixels Failing Post-PS Tests %</string>
+			<key>description</key>
+			<string>Percentage of pixels rejected due to post pixel shader tests</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>PixelsWrittenToMemory</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>Samples_2x2_Written</string>
+				<string>Samples_2x2_Blended_Written</string>
+			</array>
+			<key>name</key>
+			<string>Pixels Written to Memory</string>
+			<key>description</key>
+			<string>Number of pixels written out to memory by the output merger</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>PixelsProcessed</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>Pixels_2x2_Rasterized</string>
+				<string>Pixels_2x2_Fail_HiZ_PrePS</string>
+				<string>Pixels_2x2_Fail_Early_PrePS</string>
+			</array>
+			<key>name</key>
+			<string>Pixels Processed</string>
+			<key>description</key>
+			<string>Number of pixels processed by the shader core</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>PixelsProcessedPercent</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>Pixels_2x2_Rasterized</string>
+				<string>Pixels_2x2_Fail_HiZ_PrePS</string>
+				<string>Pixels_2x2_Fail_Early_PrePS</string>
+			</array>
+			<key>name</key>
+			<string>Pixels Processed %</string>
+			<key>description</key>
+			<string>Percentage of pixels processed by the shader core</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>PixelsDiscarded</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>Samples_2x2_Killed_PS</string>
+			</array>
+			<key>name</key>
+			<string>Pixels Discarded</string>
+			<key>description</key>
+			<string>Number of pixels discarded by the shader core</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>PixelsDiscardedPercent</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>Samples_2x2_Killed_PS</string>
+			</array>
+			<key>name</key>
+			<string>Pixels Discarded %</string>
+			<key>description</key>
+			<string>Percentage of pixels discarded by the shader core</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>PixelsWrittenPerClock</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>Samples_2x2_Written</string>
+				<string>Samples_2x2_Blended_Written</string>
+				<string>GPU_BusyTics</string>
+			</array>
+			<key>name</key>
+			<string>Pixels Written to Memory per clock tic</string>
+			<key>description</key>
+			<string>Number of pixels written out to memory per GPU clock tic</string>
+			<key>type</key>
+			<string>Rate</string>
+		</dict>
+		<key>TextureUnitBusy</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>s0_ss0_sampler_is_busy</string>
+				<string>s0_ss1_sampler_is_busy</string>
+				<string>GPU_BusyTics</string>
+			</array>
+			<key>name</key>
+			<string>Texture Unit Busy</string>
+			<key>description</key>
+			<string>Percentage of GPU time the texture unit was doing active work</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>TextureUnitStalled</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>s0_ss0_sampler_is_bottleneck</string>
+				<string>s0_ss1_sampler_is_bottleneck</string>
+				<string>GPU_BusyTics</string>
+			</array>
+			<key>name</key>
+			<string>Texture Unit Stalled</string>
+			<key>description</key>
+			<string>Percentage of GPU time the texture unit was stalled</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>SamplerL3Throughput</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>s0_ss0_sampler_cache_miss</string>
+				<string>s0_ss1_sampler_cache_miss</string>
+			</array>
+			<key>name</key>
+			<string>Sampler to L3 Throughput</string>
+			<key>description</key>
+			<string>Throughput in bytes between Sampler and L3 cache</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>L3GtiThroughput</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>gam_l3_tlb_hit</string>
+				<string>gam_l3_tlb_miss</string>
+			</array>
+			<key>name</key>
+			<string>L3 to memory Throughput</string>
+			<key>description</key>
+			<string>Throughput in bytes between L3 and memory caches</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>L3HitRate</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>s0_ss0_sampler_cache_miss</string>
+				<string>s0_ss1_sampler_cache_miss</string>
+				<string>Shader_HDC_MemoryAccess</string>
+				<string>gam_l3_tlb_hit</string>
+				<string>gam_l3_tlb_miss</string>
+			</array>
+			<key>name</key>
+			<string>L3 Hit Rate</string>
+			<key>description</key>
+			<string>Percentage of cache hits in L3 cache</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>NumberOfPatches</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>HsInvocations</string>
+				<string>VsInvocations</string>
+			</array>
+			<key>name</key>
+			<string>Number of Patches</string>
+			<key>description</key>
+			<string>Number of patches submitted to the Tessellator</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>TessFactor</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>HsInvocations</string>
+				<string>VsInvocations</string>
+				<string>DsInvocations</string>
+			</array>
+			<key>name</key>
+			<string>Average Tessellation Factor</string>
+			<key>description</key>
+			<string>Average factor to tessellate the patches by</string>
+			<key>type</key>
+			<string>Ratio</string>
+		</dict>
+		<key>ALULimiter</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>EuActive</string>
+				<string>EuStall</string>
+				<string>GpuCoreClocks</string>
+				<string>GpuTime</string>
+			</array>
+			<key>name</key>
+			<string>ALU Limiter</string>
+			<key>description</key>
+			<string>Cycles during which ALU work is attempted to execute as a percentage of peak ALU performance.</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>ALUStall</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>EuActive</string>
+				<string>EuStall</string>
+				<string>GpuCoreClocks</string>
+				<string>GpuTime</string>
+			</array>
+			<key>name</key>
+			<string>ALU Stall</string>
+			<key>description</key>
+			<string>Cycles during which ALU work is stalled as a percentage of peak ALU performance.</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>Sampler0Limiter</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>Sampler0Busy</string>
+				<string>GpuCoreClocks</string>
+				<string>GpuTime</string>
+			</array>
+			<key>description</key>
+			<string>Cycles during which Sampler 0 work is attempted to execute as a percentage of peak Sampler 0 performance.</string>
+			<key>name</key>
+			<string>Sampler 0 Limiter</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>Sampler1Limiter</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>Sampler1Busy</string>
+				<string>GpuCoreClocks</string>
+				<string>GpuTime</string>
+			</array>
+			<key>name</key>
+			<string>Sampler 1 Limiter</string>
+			<key>description</key>
+			<string>Cycles during which Sampler 1 work is attempted to execute as a percentage of peak Sampler 1 performance.</string>
+			<key>type</key>
+			<string>Percentage</string>
+		</dict>
+		<key>PixelsWritten</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>SamplesWritten</string>
+				<string>GpuCoreClocks</string>
+				<string>GpuTime</string>
+			</array>
+			<key>name</key>
+			<string>Samples Written</string>
+			<key>description</key>
+			<string>The total number of samples or pixels written to all render targets.</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>PixelsBlended</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>SamplesBlended</string>
+				<string>GpuCoreClocks</string>
+				<string>GpuTime</string>
+			</array>
+			<key>name</key>
+			<string>Samples Blended</string>
+			<key>description</key>
+			<string>The total number of blended samples or pixels written to all render targets.</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>SharedLocalMemoryReadBytes</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>SlmBytesRead</string>
+				<string>GpuTime</string>
+			</array>
+			<key>name</key>
+			<string>Shared Local Memory Bytes Read</string>
+			<key>description</key>
+			<string>The total number of GPU memory bytes read from shared local memory.</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>SharedLocalMemoryWriteBytes</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>SlmBytesWritten</string>
+				<string>GpuTime</string>
+			</array>
+			<key>name</key>
+			<string>Shared Local Memory Bytes Write</string>
+			<key>description</key>
+			<string>The total number of GPU memory bytes written to shared local memory.</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>GtiReadBytes</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>GtiReadThroughput</string>
+				<string>GpuTime</string>
+			</array>
+			<key>name</key>
+			<string>Main Memory Bytes Read</string>
+			<key>description</key>
+			<string>The total number of GPU memory bytes read from Graphics Technology Interface.</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+		<key>GtiWriteBytes</key>
+		<dict>
+			<key>counters</key>
+			<array>
+				<string>GtiWriteThroughput</string>
+				<string>GpuTime</string>
+			</array>
+			<key>name</key>
+			<string>Main Memory Bytes Written</string>
+			<key>description</key>
+			<string>The total number of GPU memory bytes written to Graphics Technology Interface.</string>
+			<key>type</key>
+			<string>Count</string>
+		</dict>
+	</dict>
+	<key>Instruments</key>
+	<dict>
+		<key>DefaultSamplingInterval</key>
+		<integer>1500</integer>
+		<key>Profiles</key>
+		<dict>
+			<key>Render Basic</key>
+			<dict>
+				<key>DerivedCounters</key>
+				<array>
+					<dict>
+						<key>Name</key>
+						<string>ALULimiter</string>
+					</dict>
+					<dict>
+						<key>Name</key>
+						<string>ALUStall</string>
+					</dict>
+					<dict>
+						<key>Name</key>
+						<string>Sampler0Limiter</string>
+					</dict>
+					<dict>
+						<key>Name</key>
+						<string>Sampler1Limiter</string>
+					</dict>
+					<dict>
+						<key>Name</key>
+						<string>PixelsWritten</string>
+					</dict>
+					<dict>
+						<key>Name</key>
+						<string>PixelsBlended</string>
+					</dict>
+					<dict>
+						<key>Name</key>
+						<string>SharedLocalMemoryReadBytes</string>
+					</dict>
+					<dict>
+						<key>Name</key>
+						<string>SharedLocalMemoryWriteBytes</string>
+					</dict>
+					<dict>
+						<key>Name</key>
+						<string>GtiReadBytes</string>
+					</dict>
+					<dict>
+						<key>Name</key>
+						<string>GtiWriteBytes</string>
+					</dict>
+				</array>
+			</dict>
+		</dict>
+	</dict>
+</dict>
+</plist>

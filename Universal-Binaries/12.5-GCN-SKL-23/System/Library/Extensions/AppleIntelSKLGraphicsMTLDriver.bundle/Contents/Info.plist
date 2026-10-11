@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>English</string>
+	<key>CFBundleExecutable</key>
+	<string>AppleIntelSKLGraphicsMTLDriver</string>
+	<key>CFBundleGetInfoString</key>
+	<string>AppleIntelSKLGraphicsMTLDriver 18.8.4 10</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.apple.driver.AppleIntelSKLGraphicsMTLDriver</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Intel g9 Metal Driver</string>
+	<key>CFBundlePackageType</key>
+	<string>BNDL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>18.8.4</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleVersion</key>
+	<string>18.0.8</string>
+	<key>ComputeFeatureList</key>
+	<dict>
+		<key>CLHangOnL3ParityErr</key>
+		<integer>0</integer>
+		<key>ComputeSSKernelDebugEnable</key>
+		<integer>0</integer>
+		<key>PipeSelectAfterMediaClear</key>
+		<integer>0</integer>
+	</dict>
+	<key>Development</key>
+	<dict>
+		<key>ClampMaxWorkGroupSizeTo1024Disable</key>
+		<integer>0</integer>
+		<key>HizDisable</key>
+		<integer>0</integer>
+	</dict>
+	<key>MPSIntelPluginFeatureList</key>
+	<dict>
+		<key>MPSIntelCNNConvolutionDepthwiseEnable</key>
+		<integer>1</integer>
+		<key>MPSIntelCNNConvolutionEnable</key>
+		<integer>1</integer>
+		<key>MPSIntelCNNConvolutionGEMMAccumEnable</key>
+		<integer>1</integer>
+		<key>MPSIntelCNNConvolutionGEMMEnable</key>
+		<integer>0</integer>
+		<key>MPSIntelCNNConvolutionGradientEnable</key>
+		<integer>1</integer>
+		<key>MPSIntelCNNConvolutionWinogradFP16AccumEnable</key>
+		<integer>0</integer>
+		<key>MPSIntelCNNConvolutionWinogradFP16Enable</key>
+		<integer>0</integer>
+		<key>MPSIntelCNNConvolutionWinogradFusedEnable</key>
+		<integer>1</integer>
+		<key>MPSIntelCNNConvolutionWinogradSeparableEnable</key>
+		<integer>1</integer>
+		<key>MPSIntelCNNForceReducedPrecision</key>
+		<integer>0</integer>
+		<key>MPSIntelCNNInitWeightsOnGPUEnable</key>
+		<integer>0</integer>
+		<key>MPSIntelCNNPoolingEnable</key>
+		<integer>1</integer>
+		<key>MPSIntelFusedbatchnormEnable</key>
+		<integer>0</integer>
+		<key>MPSIntelGEMMBlockIOEnable</key>
+		<integer>1</integer>
+		<key>MPSIntelGEMMEnable</key>
+		<integer>1</integer>
+		<key>MPSIntelGEMMVUseAccumF16Enable</key>
+		<integer>0</integer>
+		<key>MPSIntelGEMVEnable</key>
+		<integer>1</integer>
+		<key>MPSIntelOutOfOrderDispatchEnable</key>
+		<integer>1</integer>
+		<key>MPSIntelPluginEnable</key>
+		<integer>1</integer>
+	</dict>
+	<key>NSPrincipalClass</key>
+	<string>MTLIGAccelDevice</string>
+</dict>
+</plist>

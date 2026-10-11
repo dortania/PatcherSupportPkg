@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+      <key>Version</key>
+      <string>1.0</string>
+      <key>DerivedCounters</key>
+      <dict>
+            <key>GpuTime</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>GpuTimeMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>GpuTimeMD</string>
+                  <key>description</key>
+                  <string>Time elapsed on the GPU during the measurement.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                              <string>Memory</string>
+                              <string>Vertex Processing</string>
+                              <string>Fragment Processing</string>
+                  </array>
+            </dict>
+            <key>GpuCoreClocks</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>GpuCoreClocksMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>GpuCoreClocksMD</string>
+                  <key>description</key>
+                  <string>The total number of GPU core clocks elapsed during the measurement.</string>
+                  <key>type</key>
+                  <string>Count</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                              <string>Memory</string>
+                              <string>Vertex Processing</string>
+                              <string>Fragment Processing</string>
+                  </array>
+            </dict>
+            <key>AvgGpuCoreFrequencyMHz</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>AvgGpuCoreFrequencyMHzMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>AvgGpuCoreFrequencyMHzMD</string>
+                  <key>description</key>
+                  <string>Average GPU Core Frequency in the measurement.</string>
+                  <key>type</key>
+                  <string>Rate</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                              <string>Memory</string>
+                              <string>Vertex Processing</string>
+                              <string>Fragment Processing</string>
+                  </array>
+            </dict>
+            <key>Fpu1Active</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>Fpu1ActiveMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>Fpu1ActiveMD</string>
+                  <key>description</key>
+                  <string>The percentage of time in which EU FPU1 pipeline was actively processing.</string>
+                  <key>type</key>
+                  <string>Percentage</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                  </array>
+            </dict>
+            <key>Fpu1ActiveAdjusted</key>
+            <dict>
+                  <key>counters</key>
+                  <array>
+                              <string>Fpu1ActiveAdjustedMD</string>
+                  </array>
+                  <key>name</key>
+                  <string>Fpu1ActiveAdjustedMD</string>
+                  <key>description</key>
+                  <string>The percentage of time in which EU FPU1 pipeline was actively processing including Extended Math processing</string>
+                  <key>type</key>
+                  <string>Percentage</string>
+                  <key>groups</key>
+                  <array>
+                              <string>Shader Core</string>
+                  </array>
+            </dict>
+      </dict>
+</dict>
+</plist>
