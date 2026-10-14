@@ -14,18 +14,34 @@ jobs:
   build_mojave:
     name: Zip and Upload Binaries
     runs-on: macos-14
+    env:
+      # Signing secrets are not available in forks; fall back to ad-hoc signing
+      HAS_SIGNING_CERT: ${{ secrets.CERTIFICATES_P12 != '' }}
     steps:
       - uses: actions/checkout@v3
-      - uses: apple-actions/import-codesign-certs@8f3fb608891dd2244cdab3d69cd68c0d37a7fe93
+      - name: Import signing certificate
+        if: env.HAS_SIGNING_CERT == 'true'
+        uses: apple-actions/import-codesign-certs@8f3fb608891dd2244cdab3d69cd68c0d37a7fe93
         with:
           p12-file-base64: ${{ secrets.CERTIFICATES_P12 }}
           p12-password: ${{ secrets.CERTIFICATES_P12_PASSWORD }}
       - name: Clean, strip, and sign binaries
-        run: python3 ci.py
+        run: |
+          if [ "$HAS_SIGNING_CERT" != "true" ]; then
+            echo "No signing certificate configured - using ad-hoc signing"
+            export SIGNING_IDENTITY="-"
+          fi
+          python3 ci.py
       - name: Tag folder
+        if: env.HAS_SIGNING_CERT == 'true'
         run: touch Universal-Binaries/.signed
       - name: Build DMG
-        run: python3 Generate-DMG.command --sign
+        run: |
+          if [ "$HAS_SIGNING_CERT" == "true" ]; then
+            python3 Generate-DMG.command --sign
+          else
+            python3 Generate-DMG.command
+          fi
       - name: Generate Checksums
         run: shasum -a 256 Universal-Binaries.dmg > sha256sum.txt
       - name: Upload Universal Binaries to Artifacts
