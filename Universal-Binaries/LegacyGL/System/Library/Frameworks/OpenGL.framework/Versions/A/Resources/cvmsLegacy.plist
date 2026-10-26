@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>OpenGL</key>
+	<dict>
+		<key>bytecode</key>
+		<string>/System/Library/Frameworks/OpenGL.framework/Resources/GLByteCodes</string>
+		<key>options</key>
+		<integer>1</integer>
+		<key>plugin</key>
+		<string>/System/Library/Frameworks/OpenGL.framework/Libraries/libGLVMPlugin.dylib</string>
+	</dict>
+</dict>
+</plist>

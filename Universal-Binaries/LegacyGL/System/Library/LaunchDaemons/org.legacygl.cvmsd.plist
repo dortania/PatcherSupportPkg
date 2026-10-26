@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnableTransactions</key>
+	<true/>
+	<key>Label</key>
+	<string>org.legacygl.cvmsd</string>
+	<key>MachServices</key>
+	<dict>
+		<key>legacygl._OpenStep</key>
+		<true/>
+	</dict>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/System/Library/Frameworks/OpenGL.framework/Versions/A/Libraries/CVMServerLion</string>
+	</array>
+</dict>
+</plist>

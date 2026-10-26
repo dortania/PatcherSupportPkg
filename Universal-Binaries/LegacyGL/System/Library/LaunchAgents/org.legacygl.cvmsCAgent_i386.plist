@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>BinaryOrderPreference</key>
+	<array>
+		<integer>7</integer>
+	</array>
+	<key>EnableTransactions</key>
+	<true/>
+	<key>Label</key>
+	<string>org.legacygl.cvmsCAgent_i386</string>
+	<key>LimitLoadToSessionType</key>
+	<string>Background</string>
+	<key>MachServices</key>
+	<dict>
+		<key>org.legacygl.cvmsCAgent_i386</key>
+		<true/>
+	</dict>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/System/Library/Frameworks/OpenGL.framework/Versions/A/Libraries/CVMCompilerLion</string>
+		<string>1</string>
+	</array>
+</dict>
+</plist>
