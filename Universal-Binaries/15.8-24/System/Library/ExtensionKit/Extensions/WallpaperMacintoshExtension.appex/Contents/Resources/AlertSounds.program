@@ -1,0 +1,61 @@
+//
+//  Alert Sounds
+//  Macintosh 40th Anniversary
+//
+//  Copyright © 2024 Apple. All rights reserved.
+//
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+start simultaneous
+	scale out
+	let image = "AlertSounds"
+	let cursor = "None"
+	let ramp = "None"
+	add radiobuttongroup
+	add radiobutton at 255, 86 size 138, 12 value 1 name "None"
+	add radiobutton at 255, 98 size 138, 12 value 0 name "None"
+	add radiobutton at 255, 110 size 138, 12 value 0 name "None"
+	add radiobutton at 255, 122 size 138, 12 value 0 name "None"
+end simultaneous
+
+gosub alerts
+
+exit
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+alerts:
+
+	start simultaneous
+		let scene = "alerts"
+		let cursor = "Crosshair"
+		let ramp = "Down"
+		camera to 22.5, 45
+		scroll to 285, 40
+		mouse to 430, 140
+	end simultaneous
+
+	scroll to 285, 130 over 18 seconds async "scroll"
+	scale in over 3 seconds
+
+	wait for 4 seconds
+
+	mouse to 316, 96 over 1 second curve easeout
+	mouse click
+
+	wait for 0.5 seconds
+
+	mouse to 314, 106 over 1 second curve easeout
+	mouse click
+
+	wait for 0.6 seconds
+
+	mouse to 307, 119 over 1 second curve easeout
+	mouse click
+
+	wait until 3 seconds before "scroll" completes
+	scale out over 3 seconds
+
+	return
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------

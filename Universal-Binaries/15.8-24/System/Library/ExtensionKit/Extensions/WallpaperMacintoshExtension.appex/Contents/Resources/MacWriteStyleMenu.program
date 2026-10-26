@@ -1,0 +1,56 @@
+//
+//  MacWrite Style Menu
+//  Macintosh 40th Anniversary
+//
+//  Copyright © 2024 Apple. All rights reserved.
+//
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+start simultaneous
+	scale out
+	let image = "MacWriteCrazyOnes"
+	let cursor = "Arrow"
+	let ramp = "None"
+	add menu at 266, 0
+end simultaneous
+
+gosub stylemenu
+
+exit
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+stylemenu:
+
+	start simultaneous
+		let scene = "stylemenu"
+		let ramp = "Right"
+		camera to -22.5, 45
+		scroll to 208, 30
+		mouse to 283, 100
+		reset controls
+	end simultaneous
+
+	scroll to 308, 30 over 10 seconds curve easeout async "scroll1"
+	scale in over 3 seconds
+
+	wait for 4 seconds
+
+	mouse to 314, 10 over 2 seconds curve easeinout
+
+	wait for "scroll1" to complete
+
+	mouse down
+	wait for 0.5 seconds
+
+	scroll to 308, 199 over 17 seconds curve easeinout async "scroll2"
+	mouse to 314, 209 over 17 seconds curve easeinout
+	wait for 0.1 seconds
+	mouse up
+	wait for 0.5 seconds
+
+	scale out over 3 seconds
+
+	return
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------

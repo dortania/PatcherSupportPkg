@@ -1,0 +1,39 @@
+//
+//  Startup Welcome
+//  Macintosh 40th Anniversary
+//
+//  Copyright © 2024 Apple. All rights reserved.
+//
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+start simultaneous
+	scale out
+	let image = "StartupWelcome"
+	let cursor = "None"
+	let ramp = "None"
+end simultaneous
+
+gosub welcome
+
+exit
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+welcome:
+
+	start simultaneous
+		let scene = "welcome"
+		let ramp = "Right"
+		camera to -22.5, 45
+		scroll to 40, 103
+	end simultaneous
+
+	scroll to 400, 103 over 36 seconds async "scroll"
+	scale in over 3 seconds
+
+	wait until 3 seconds before "scroll" completes
+	scale out over 3 seconds
+
+	return
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------

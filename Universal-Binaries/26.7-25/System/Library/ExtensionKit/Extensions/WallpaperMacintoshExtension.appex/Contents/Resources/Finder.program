@@ -1,0 +1,79 @@
+//
+//  Finder
+//  Macintosh 40th Anniversary
+//
+//  Copyright © 2024 Apple. All rights reserved.
+//
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+start simultaneous
+	scale out
+	let cursor = "Arrow"
+	let ramp = "None"
+end simultaneous
+
+gosub window
+gosub trash
+
+exit
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+window:
+
+	start simultaneous
+		let image = "FinderWindow"
+		let scene = "window"
+		let ramp = "Right"
+		camera to -22.5, 45
+		scroll to 300, 145
+		mouse to 400, 205
+	end simultaneous
+
+	scroll to 500, 145 over 20 seconds async "scroll"
+	scale in over 3 seconds
+
+	wait until 3 seconds before "scroll" completes
+	scale out over 3 seconds
+
+	return
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+trash:
+
+	start simultaneous
+		let image = "FinderTrash"
+		let scene = "trash"
+		let ramp = "Down"
+		camera to -22.5, 45
+		scroll to 460, 110
+		mouse to 400, 205
+		add findericon at 418, 184 size 64, 48 name "FolderIcon"
+		add findericon at 440, 326 size 64, 48 name "TrashIcon"
+	end simultaneous
+
+	scroll to 460, 310 over 22 seconds async "scroll"
+	scale in over 3 seconds
+
+	wait for 4 seconds
+
+	mouse to 450, 165 over 1 second curve easeout
+
+	mouse down
+
+	wait for 0.2 seconds
+
+	mouse to 470, 290 over 10 seconds curve easeinout
+	mouse up
+
+	wait for 0.2 seconds
+
+	mouse to 495, 306 over 1 second curve easeout
+
+	wait until 3 seconds before "scroll" completes
+	scale out over 3 seconds
+
+	return
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
