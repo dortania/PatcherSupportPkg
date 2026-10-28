@@ -4,13 +4,14 @@ Postprocess binaries on CI
 
 # TODO: We need a proper way to identify and sign bundles. Unfortunately Apple does not make this easy.
 
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 # Configurable options
 
-IDENTITY = "OpenCore Legacy Patcher Software Signing"
+IDENTITY = os.environ.get("SIGNING_IDENTITY", "OpenCore Legacy Patcher Software Signing")
 TARGET_DIR = Path("Universal-Binaries")
 UNUSED = [
     # Mojave and Catalina non-Metal Patches
