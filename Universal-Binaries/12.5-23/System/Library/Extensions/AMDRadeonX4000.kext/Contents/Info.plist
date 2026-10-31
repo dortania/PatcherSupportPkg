@@ -68,6 +68,8 @@
 			<string>0.0.0.0.0</string>
 			<key>IOVARendererID</key>
 			<integer>16908288</integer>
+			<key>ZeroFillPattern</key>
+			<integer>0</integer>
 			<key>cail_properties</key>
 			<dict>
 				<key>CAIL_DisableQuickGfxMGPowerGating</key>
@@ -105,6 +107,8 @@
 			<string>0.0.0.0.0</string>
 			<key>IOVARendererID</key>
 			<integer>16908288</integer>
+			<key>ZeroFillPattern</key>
+			<integer>0</integer>
 		</dict>
 		<key>AMDEllesmereGraphicsAccelerator</key>
 		<dict>
@@ -144,6 +148,8 @@
 			<string>0.0.0.0.0</string>
 			<key>IOVARendererID</key>
 			<integer>16908288</integer>
+			<key>ZeroFillPattern</key>
+			<integer>0</integer>
 			<key>cail_properties</key>
 			<dict>
 				<key>CAIL_EnableLBPWSupport</key>
@@ -181,6 +187,8 @@
 			<string>0.0.0.0.0</string>
 			<key>IOVARendererID</key>
 			<integer>16908288</integer>
+			<key>ZeroFillPattern</key>
+			<integer>0</integer>
 		</dict>
 		<key>AMDHawaiiGraphicsAccelerator</key>
 		<dict>
@@ -209,6 +217,8 @@
 			<string>0.0.0.0.0</string>
 			<key>IOVARendererID</key>
 			<integer>16908288</integer>
+			<key>ZeroFillPattern</key>
+			<integer>0</integer>
 		</dict>
 		<key>AMDPitcairnGraphicsAccelerator</key>
 		<dict>
@@ -237,6 +247,8 @@
 			<string>0.0.0.0.0</string>
 			<key>IOVARendererID</key>
 			<integer>16908288</integer>
+			<key>ZeroFillPattern</key>
+			<integer>0</integer>
 		</dict>
 		<key>AMDTahitiGraphicsAccelerator</key>
 		<dict>
@@ -265,6 +277,8 @@
 			<string>0.0.0.0.0</string>
 			<key>IOVARendererID</key>
 			<integer>16908288</integer>
+			<key>ZeroFillPattern</key>
+			<integer>0</integer>
 		</dict>
 		<key>AMDTongaGraphicsAccelerator</key>
 		<dict>
@@ -293,6 +307,8 @@
 			<string>0.0.0.0.0</string>
 			<key>IOVARendererID</key>
 			<integer>16908288</integer>
+			<key>ZeroFillPattern</key>
+			<integer>0</integer>
 			<key>cail_properties</key>
 			<dict>
 				<key>CAIL_DisableAcpPowerGating</key>
@@ -336,6 +352,8 @@
 			<string>0.0.0.0.0</string>
 			<key>IOVARendererID</key>
 			<integer>16908288</integer>
+			<key>ZeroFillPattern</key>
+			<integer>0</integer>
 			<key>cail_properties</key>
 			<dict>
 				<key>CAIL_DisableDrmdmaPowerGating</key>
