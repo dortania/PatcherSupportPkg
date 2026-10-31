@@ -1,0 +1,28 @@
+--- !tapi-tbd
+tbd-version:     4
+targets:         [ x86_64-macos ]
+install-name:    '/System/Library/PrivateFrameworks/GPUCompiler.framework/Versions/3802/Libraries/libLLVM.dylib'
+exports:
+  - targets:     [ x86_64-macos ]
+    symbols:     [ '__ZN4llvm6legacy11PassManager3runERNS_6ModuleE', _LLVMGetNamedFunction, _LLVMGetFirstFunction,
+                   _LLVMGetNextFunction, _LLVMGetValueName, _LLVMGetFirstBasicBlock, _LLVMGetNextBasicBlock,
+                   _LLVMGetFirstInstruction, _LLVMGetNextInstruction, _LLVMIsALoadInst, _LLVMIsAStoreInst, _LLVMGetAlignment,
+                   _LLVMSetAlignment, _LLVMGetPointerAddressSpace, _LLVMGetIntTypeWidth, _LLVMGetFirstUse, _LLVMGetNextUse, _LLVMGetUser,
+                   _LLVMGetNumOperands, _LLVMGetOperand, _LLVMCountBasicBlocks, _LLVMPrintModuleToString,
+                   _LLVMDisposeMessage, _LLVMBuildCall, _LLVMCreateBuilderInContext, _LLVMPositionBuilderBefore,
+                   _LLVMDisposeBuilder, _LLVMReplaceAllUsesWith, _LLVMInstructionEraseFromParent, _LLVMAddFunction,
+                   _LLVMFunctionType, _LLVMGetModuleContext, _LLVMTypeOf, _LLVMInt32TypeInContext, _LLVMConstInt,
+                   _LLVMBuildBitCast, _LLVMBuildExtractElement, _LLVMBuildInsertElement, _LLVMGetUndef,
+                   _LLVMVectorType, _LLVMPointerType, _LLVMGetElementType, _LLVMGetTypeKind, _LLVMBuildLoad,
+                   _LLVMBuildStore, _LLVMBuildICmp, _LLVMGetParam, _LLVMCountParams, _LLVMGetReturnType,
+                   _LLVMGetIntrinsicID, _LLVMPrintTypeToString, _LLVMPrintValueToString, _LLVMGetTypeByName,
+                   _LLVMGetNamedGlobal, _LLVMInt64TypeInContext, _LLVMBuildZExt, _LLVMBuildShuffleVector, _LLVMDumpType, _LLVMBuildPtrToInt, _LLVMBuildSub, _LLVMBuildNeg, _LLVMGetFirstInstruction, _LLVMGetNextInstruction, _LLVMGetInstructionOpcode, _LLVMGetCalledValue, _LLVMConstNull, _LLVMGetVectorSize, _LLVMIsAArgument, _LLVMGetParamParent,
+                   '__ZN4llvm12SelectionDAG11getConstantEyRKNS_5SDLocENS_3EVTEbb', '__ZN4llvm12SelectionDAG18UpdateNodeOperandsEPNS_6SDNodeENS_8ArrayRefINS_7SDValueEEE',
+                   '__ZN4llvm11raw_ostream5writeEPKcm', _LLVMGetNamedMetadataNumOperands, _LLVMGetNamedMetadataOperands,
+                   _LLVMGetMDNodeNumOperands, _LLVMGetMDNodeOperands, _LLVMGetMDString, _LLVMIsAMDNode, _LLVMIsAMDString,
+                   _LLVMIsAConstantInt, _LLVMConstIntGetZExtValue, _LLVMMDNodeInContext,
+                   '__ZN4llvm6MDNode18replaceOperandWithEjPNS_8MetadataE',
+                   _LLVMIsAAllocaInst, _LLVMIsAGetElementPtrInst, _LLVMIsABitCastInst, _LLVMIsASelectInst, _LLVMIsAConstant,
+                   _LLVMIsDeclaration, _LLVMGetAttribute, _LLVMGetArrayLength, _LLVMGetStructName, _LLVMBuildInBoundsGEP,
+                   _LLVMBuildSelect ]
+...
