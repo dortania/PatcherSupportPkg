@@ -1,0 +1,8 @@
+--- !tapi-tbd
+tbd-version:     4
+targets:         [ x86_64-macos ]
+install-name:    '/System/Library/Extensions/AMDRadeonX4000GLDriver.bundle/Contents/MacOS/ATIRadeonX4000SCLib.dylib'
+exports:
+  - targets:     [ x86_64-macos ]
+    symbols:     [ _ilXltTextToBinary, _SCCompileShader, _SCDumpILShader, _SCDumpHwShader, _SCDumpHwShaderData, _SCGetInstructionSet ]
+...
