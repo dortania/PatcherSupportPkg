@@ -52,6 +52,13 @@ static void shimLog(const char *format, ...) {
     else fputs(line, stderr);
 }
 
+// Tahoe's wrapper is the one that exports Metal 4 symbols (uname and sysctl are no use: WebKit's GPU process sandbox blocks them).
+static BOOL onTahoeStack(void) {
+    static int tahoe = -1;
+    if (tahoe < 0) tahoe = dlsym(RTLD_DEFAULT, "MTL4CommandQueueErrorDomain") != NULL;
+    return tahoe;
+}
+
 static char kMaximizeKey;
 
 static void setShouldMaximize(id self, SEL _cmd, BOOL value) {
@@ -314,7 +321,8 @@ static void setLanguageVersion(id self, SEL _cmd, NSUInteger version) {
 // `coherent device` / `coherent(device)` -> `volatile`, `coherent(threadgroup)` (the default) and the texture argument
 // `memory_coherence_device` / `_threadgroup` dropped.
 static NSString *downgradeSource(NSString *source, id options) {
-    if (!source || !options || !objc_getAssociatedObject(options, kNewerVersionRequested)) return source;
+    // On Tahoe the wrapper makes setLanguageVersion: a no-op, in a hook above ours, so the request never shows here.
+    if (!source || (!onTahoeStack() && (!options || !objc_getAssociatedObject(options, kNewerVersionRequested)))) return source;
     if ([source rangeOfString:@"coheren"].location == NSNotFound) return source;
     static NSArray<NSArray *> *rules;
     static dispatch_once_t once;

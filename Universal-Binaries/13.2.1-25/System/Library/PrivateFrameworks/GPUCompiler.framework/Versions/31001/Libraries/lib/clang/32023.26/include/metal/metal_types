@@ -1,0 +1,360 @@
+// -*- Metal -*-
+//===-- metal_types -------------------------------------------------------===//
+// Copyright (c) 2014-2019 Apple Inc. All rights reserved
+//
+// This header is for internal use only. This header may disappear between
+// releases.
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_TYPES
+#define __METAL_TYPES
+
+#include <metal_config>
+
+#define METAL_ALIGN(L) __attribute__((aligned(L)))
+#define METAL_ASM
+#define METAL_CONST __attribute__((const))
+#define METAL_DEPRECATED(M) __attribute__((deprecated(M)))
+#define METAL_ENABLE_IF(P, M) __attribute__((enable_if(P, M)))
+#define METAL_FORMAT(T, F, A) __attribute__((format(T, F, A)))
+#define METAL_FUNC inline __attribute__((__always_inline__))
+#define METAL_INTERNAL
+#define METAL_MAYBE_UNDEF __attribute__((__maybe_undef__))
+#define METAL_NON_NULL_RETURN __attribute__((returns_nonnull))
+#define METAL_NOTHROW __attribute__((nothrow))
+#define METAL_PURE __attribute__((pure))
+#define METAL_UNAVAILABLE(M) __attribute__((unavailable(M)))
+#define METAL_IMPLICIT
+#define METAL_EXPLICIT explicit METAL_ENABLE_IF(true, "")
+
+// Metal 1.1 s2.1: Scalar Data Types.
+typedef unsigned char uchar;
+typedef unsigned short ushort;
+typedef unsigned int uint;
+typedef unsigned long ulong;
+typedef struct __Reserved_Name__Do_not_use_llong llong;
+typedef struct __Reserved_Name__Do_not_use_ullong ullong;
+typedef struct __Reserved_Name__Do_not_use_quad quad;
+typedef struct __Reserved_Name__Do_not_use_complex complex;
+typedef struct __Reserved_Name__Do_not_use_imaginary imaginary;
+
+typedef __INT8_TYPE__ int8_t;
+typedef __UINT8_TYPE__ uint8_t;
+typedef __INT16_TYPE__ int16_t;
+typedef __UINT16_TYPE__ uint16_t;
+typedef __INT32_TYPE__ int32_t;
+typedef __UINT32_TYPE__ uint32_t;
+typedef __INT64_TYPE__ int64_t;
+typedef __UINT64_TYPE__ uint64_t;
+
+typedef __PTRDIFF_TYPE__ ptrdiff_t;
+typedef __SIZE_TYPE__ size_t;
+typedef __INTPTR_TYPE__ intptr_t;
+typedef __UINTPTR_TYPE__ uintptr_t;
+
+namespace metal
+{
+typedef ::uchar uchar;
+typedef ::ushort ushort;
+typedef ::uint uint;
+typedef ::ulong ulong;
+typedef ::llong llong;
+typedef ::ullong ullong;
+typedef ::quad quad;
+typedef ::complex complex;
+typedef ::imaginary imaginary;
+
+typedef ::int8_t int8_t;
+typedef ::uint8_t uint8_t;
+typedef ::int16_t int16_t;
+typedef ::uint16_t uint16_t;
+typedef ::int32_t int32_t;
+typedef ::uint32_t uint32_t;
+typedef ::int64_t int64_t;
+typedef ::uint64_t uint64_t;
+
+typedef ::ptrdiff_t ptrdiff_t;
+typedef ::size_t size_t;
+typedef ::intptr_t intptr_t;
+typedef ::uintptr_t uintptr_t;
+
+#if defined(__HAVE_NULLPTR_T__)
+typedef decltype(nullptr) nullptr_t;
+#endif
+}
+
+#if defined(__HAVE_NULLPTR_T__)
+using ::metal::nullptr_t;
+#endif
+
+#include <metal_extended_vector>
+#include <metal_packed_vector>
+
+#include <metal_type_traits>
+
+#pragma METAL internals : enable
+namespace metal
+{
+// This is intended to be used by the METAL_CONST_ARG macro. Each type that may
+// be interested in being used in constant argument checks must specialize this
+// trait.
+template <typename T, typename = void>
+struct _constarg_traits
+{
+  // Must return true if T is a constant argument, false otherwise. A possible
+  // specialization would be to force a constexpr computation on t, such as
+  // the t == t expression.
+  constexpr static bool check(const thread T &t)
+  {
+    return false;
+  }
+  constexpr static bool check(const device T &t)
+  {
+    return false;
+  }
+  constexpr static bool check(const constant T &t)
+  {
+    return false;
+  }
+  constexpr static bool check(const threadgroup T &t)
+  {
+    return false;
+  }
+#if defined(__HAVE_IMAGEBLOCKS__)
+  constexpr static bool check(const threadgroup_imageblock T &t)
+  {
+    return false;
+  }
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  constexpr static bool check(const ray_data T &t)
+  {
+    return false;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  constexpr static bool check(const object_data T &t)
+  {
+    return false;
+  }
+#endif
+};
+#define METAL_CONST_ARG(A) METAL_ENABLE_IF(_constarg_traits<decltype(A)>::check(A), "'" #A "' argument must be known at compile-time")
+
+template <typename T>
+struct _constarg_traits<T, typename enable_if<is_arithmetic<T>::value && !is_vector<T>::value>::type>
+{
+  constexpr static bool check(T a)
+  {
+    return a != 0 || a == 0;
+  }
+};
+template <typename T>
+struct _constarg_traits<T, typename enable_if<is_enum<T>::value>::type>
+{
+  constexpr static bool check(T a)
+  {
+    return _constarg_traits<underlying_type_t<T>>::check(static_cast<underlying_type_t<T>>(a));
+  }
+};
+} // namespace metal
+#pragma METAL internals : disable
+
+#if defined(__HAVE_TESSELLATION__)
+#include <metal_tessellation>
+#endif
+
+#if defined(__HAVE_FUNCTION_CONSTANTS__)
+#define is_function_constant_defined(c) __metal_is_function_constant_defined(c)
+#endif
+
+namespace metal
+{
+// Metal 1.0 s2.5: Textures.
+enum class access
+{
+  sample = __METAL_ACCESS_SAMPLE__,
+  read = __METAL_ACCESS_READ__,
+  write = __METAL_ACCESS_WRITE__,
+#if defined(__HAVE_TEXTURE_READWRITE__)
+  read_write = __METAL_ACCESS_READ_WRITE__
+#endif
+};
+
+// Metal 2.0 s5.12.1: Memory Order.
+enum memory_order
+{
+  memory_order_relaxed = __METAL_MEMORY_ORDER_RELAXED__,
+};
+
+
+#if defined (__HAVE_RASTERIZATION_RATE__)
+// Metal 2.2 s6.15: Variable Rasterization Rate.
+struct rasterization_rate_map_data;
+#endif
+
+#if __HAVE_MTL_RESOURCE_ID__
+struct MTLResourceID
+{
+  uintptr_t _impl;
+};
+#endif
+} // namespace metal
+
+#define CHAR_BIT __CHAR_BIT__
+#define SCHAR_MAX __SCHAR_MAX__
+#define SCHAR_MIN (-__SCHAR_MAX__ - 1)
+#define UCHAR_MAX (__SCHAR_MAX__ * 2 + 1)
+#define CHAR_MAX SCHAR_MAX
+#define CHAR_MIN SCHAR_MIN
+#define USHRT_MAX (__SHRT_MAX__ * 2 + 1)
+#define SHRT_MAX __SHRT_MAX__
+#define SHRT_MIN (-__SHRT_MAX__ - 1)
+#define UINT_MAX (__INT_MAX__ * 2U + 1U)
+#define INT_MAX __INT_MAX__
+#define INT_MIN (-__INT_MAX__ - 1)
+#define ULONG_MAX (__LONG_MAX__ * 2UL + 1UL)
+#define LONG_MAX __LONG_MAX__
+#define LONG_MIN (-__LONG_MAX__ - 1L)
+#if defined(__HAVE_NATIVE_LONG_LONG__)
+#define ULLONG_MAX (__LONG_LONG_MAX__ * 2ULL + 1ULL)
+#define LLONG_MAX __LONG_LONG_MAX__
+#define LLONG_MIN (-__LONG_LONG_MAX__ - 1LL)
+#endif
+
+#define FLT_DIG __FLT_DIG__
+#define FLT_MANT_DIG __FLT_MANT_DIG__
+#define FLT_MAX_10_EXP __FLT_MAX_10_EXP__
+#define FLT_MAX_EXP __FLT_MAX_EXP__
+#define FLT_MIN_10_EXP __FLT_MIN_10_EXP__
+#define FLT_MIN_EXP __FLT_MIN_EXP__
+#define FLT_RADIX __FLT_RADIX__
+#define FLT_MAX __FLT_MAX__
+#define FLT_MIN __FLT_MIN__
+#define FLT_EPSILON __FLT_EPSILON__
+#define FLT_DECIMAL_DIG __FLT_DECIMAL_DIG__
+
+#if defined(__FP_ILOGB0__)
+#define FP_ILOGB0 __FP_ILOGB0__
+#else
+#define FP_ILOGB0 INT_MIN
+#endif
+#if defined(__FP_ILOGBNAN__)
+#define FP_ILOGBNAN __FP_ILOGBNAN__
+#else
+#define FP_ILOGBNAN INT_MAX
+#endif
+
+#define MAXFLOAT __FLT_MAX__
+#define HUGE_VALF __builtin_huge_valf()
+#define INFINITY __builtin_inff()
+#define NAN __builtin_nanf("")
+
+#define M_E_F __FLT_M_E__
+#define M_LOG2E_F __FLT_M_LOG2E__
+#define M_LOG10E_F __FLT_M_LOG10E__
+#define M_LN2_F __FLT_M_LN2__
+#define M_LN10_F __FLT_M_LN10__
+#define M_PI_F __FLT_M_PI__
+#define M_PI_2_F __FLT_M_PI_2__
+#define M_PI_4_F __FLT_M_PI_4__
+#define M_1_PI_F __FLT_M_1_PI__
+#define M_2_PI_F __FLT_M_2_PI__
+#define M_2_SQRTPI_F __FLT_M_2_SQRTPI__
+#define M_SQRT2_F __FLT_M_SQRT2__
+#define M_SQRT1_2_F __FLT_M_SQRT1_2__
+
+#if defined(__HAVE_BFLOAT__)
+#define BFLT_DIG __BFLT16_DIG__
+#define BFLT_MANT_DIG __BFLT16_MANT_DIG__
+#define BFLT_MAX_10_EXP __BFLT16_MAX_10_EXP__
+#define BFLT_MAX_EXP __BFLT16_MAX_EXP__
+#define BFLT_MIN_10_EXP __BFLT16_MIN_10_EXP__
+#define BFLT_MIN_EXP __BFLT16_MIN_EXP__
+#define BFLT_RADIX __BFLT16_RADIX__
+#define BFLT_MAX __BFLT16_MAX__
+#define BFLT_MIN __BFLT16_MIN__
+#define BFLT_EPSILON __BFLT16_EPSILON__
+#define BFLT_DECIMAL_DIG __BFLT16_DECIMAL_DIG__
+
+#define MAXBFLOAT __BFLT16_MAX__
+#define HUGE_VALBF __builtin_huge_valf16b()
+
+#define M_E_BF __BFLT16_M_E__
+#define M_LOG2E_BF __BFLT16_M_LOG2E__
+#define M_LOG10E_BF __BFLT16_M_LOG10E__
+#define M_LN2_BF __BFLT16_M_LN2__
+#define M_LN10_BF __BFLT16_M_LN10__
+#define M_PI_BF __BFLT16_M_PI__
+#define M_PI_2_BF __BFLT16_M_PI_2__
+#define M_PI_4_BF __BFLT16_M_PI_4__
+#define M_1_PI_BF __BFLT16_M_1_PI__
+#define M_2_PI_BF __BFLT16_M_2_PI__
+#define M_2_SQRTPI_BF __BFLT16_M_2_SQRTPI__
+#define M_SQRT2_BF __BFLT16_M_SQRT2__
+#define M_SQRT1_2_BF __BFLT16_M_SQRT1_2__
+#endif
+
+#define HALF_DIG __HALF_DIG__
+#define HALF_MANT_DIG __HALF_MANT_DIG__
+#define HALF_MAX_10_EXP __HALF_MAX_10_EXP__
+#define HALF_MAX_EXP __HALF_MAX_EXP__
+#define HALF_MIN_10_EXP __HALF_MIN_10_EXP__
+#define HALF_MIN_EXP __HALF_MIN_EXP__
+#define HALF_RADIX __HALF_RADIX__
+#define HALF_MAX __HALF_MAX__
+#define HALF_MIN __HALF_MIN__
+#define HALF_EPSILON __HALF_EPSILON__
+#define HALF_DECIMAL_DIG __HALF_DECIMAL_DIG__
+
+#define MAXHALF __HALF_MAX__
+#define HUGE_VALH __builtin_huge_valh()
+
+#define M_E_H __HALF_M_E__
+#define M_LOG2E_H __HALF_M_LOG2E__
+#define M_LOG10E_H __HALF_M_LOG10E__
+#define M_LN2_H __HALF_M_LN2__
+#define M_LN10_H __HALF_M_LN10__
+#define M_PI_H __HALF_M_PI__
+#define M_PI_2_H __HALF_M_PI_2__
+#define M_PI_4_H __HALF_M_PI_4__
+#define M_1_PI_H __HALF_M_1_PI__
+#define M_2_PI_H __HALF_M_2_PI__
+#define M_2_SQRTPI_H __HALF_M_2_SQRTPI__
+#define M_SQRT2_H __HALF_M_SQRT2__
+#define M_SQRT1_2_H __HALF_M_SQRT1_2__
+
+#if defined(__HAVE_NATIVE_DOUBLE__)
+#define DBL_DIG __DBL_DIG__
+#define DBL_MANT_DIG __DBL_MANT_DIG__
+#define DBL_MAX_10_EXP __DBL_MAX_10_EXP__
+#define DBL_MAX_EXP __DBL_MAX_EXP__
+#define DBL_MIN_10_EXP __DBL_MIN_10_EXP__
+#define DBL_MIN_EXP __DBL_MIN_EXP__
+#define DBL_RADIX __DBL_RADIX__
+#define DBL_MAX __DBL_MAX__
+#define DBL_MIN __DBL_MIN__
+#define DBL_EPSILON __DBL_EPSILON__
+#define DBL_DECIMAL_DIG __DBL_DECIMAL_DIG__
+
+#define MAXDOUBLE __DBL_MAX__
+#define HUGE_VAL __builtin_huge_val()
+
+#define M_E __DBL_M_E__
+#define M_LOG2E __DBL_M_LOG2E__
+#define M_LOG10E __DBL_M_LOG10E__
+#define M_LN2 __DBL_M_LN2__
+#define M_LN10 __DBL_M_LN10__
+#define M_PI __DBL_M_PI__
+#define M_PI_2 __DBL_M_PI_2__
+#define M_PI_4 __DBL_M_PI_4__
+#define M_1_PI __DBL_M_1_PI__
+#define M_2_PI __DBL_M_2_PI__
+#define M_2_SQRTPI __DBL_M_2_SQRTPI__
+#define M_SQRT2 __DBL_M_SQRT2__
+#define M_SQRT1_2 __DBL_M_SQRT1_2__
+#endif
+
+namespace simd = metal;
+
+#endif // __METAL_TYPES

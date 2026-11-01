@@ -1,0 +1,228 @@
+// -*- Metal -*-
+//===-- metal_visible_function_table --------------------------------------===//
+// Copyright (c) 2020 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_VISIBLE_FUNCTION_TABLE
+#define __METAL_VISIBLE_FUNCTION_TABLE
+
+#if defined(__HAVE_VISIBLE_FUNCTION_TABLE__)
+#pragma METAL internals : enable
+namespace metal
+{
+template <typename T>
+struct visible_function_table;
+
+
+template <typename T>
+METAL_FUNC bool is_null_visible_function_table(visible_function_table<T> vft);
+
+template <typename R, typename... Args>
+struct visible_function_table<R(Args...)>
+{
+  using function_pointer_type = R(*)(Args...) [[visible]];
+
+  static METAL_FUNC visible_function_table __get_from_opaque_handle(__metal_visible_function_table_t t) {
+    return visible_function_table(t);
+  }
+
+  __metal_visible_function_table_t __get_opaque_handle() thread { return t; }
+
+public:
+  METAL_FUNC visible_function_table() thread : t(__metal_get_null_visible_function_table())
+  {
+  }
+  METAL_FUNC visible_function_table() constant : t(__metal_get_null_visible_function_table())
+  {
+  }
+  METAL_FUNC visible_function_table() ray_data : t(__metal_get_null_visible_function_table())
+  {
+  }
+
+  METAL_FUNC visible_function_table(const thread visible_function_table &) thread = default;
+  METAL_FUNC visible_function_table(const device visible_function_table &) thread = default;
+  METAL_FUNC visible_function_table(const constant visible_function_table &) thread = default;
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC visible_function_table(const ray_data visible_function_table &) thread = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC visible_function_table(const object_data visible_function_table &) thread = default;
+#endif
+  METAL_FUNC visible_function_table(const thread visible_function_table &) constant = default;
+  METAL_FUNC visible_function_table(const device visible_function_table &) constant = default;
+  METAL_FUNC visible_function_table(const constant visible_function_table &) constant = default;
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC visible_function_table(const ray_data visible_function_table &) constant = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC visible_function_table(const object_data visible_function_table &) constant = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC visible_function_table(const thread visible_function_table &) ray_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC visible_function_table(const device visible_function_table &) ray_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC visible_function_table(const constant visible_function_table &) ray_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC visible_function_table(const ray_data visible_function_table &) ray_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC visible_function_table(const object_data visible_function_table &) ray_data = default;
+#endif
+#endif
+
+  METAL_FUNC thread visible_function_table &operator=(const thread visible_function_table &) thread = default;
+  METAL_FUNC thread visible_function_table &operator=(const device visible_function_table &) thread = default;
+  METAL_FUNC thread visible_function_table &operator=(const constant visible_function_table &) thread = default;
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC thread visible_function_table &operator=(const ray_data visible_function_table &) thread = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC thread visible_function_table &operator=(const object_data visible_function_table &) thread = default;
+#endif
+  METAL_FUNC device visible_function_table &operator=(const thread visible_function_table &) device = default;
+  METAL_FUNC device visible_function_table &operator=(const device visible_function_table &) device = default;
+  METAL_FUNC device visible_function_table &operator=(const constant visible_function_table &) device = default;
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC device visible_function_table &operator=(const ray_data visible_function_table &) device = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC device visible_function_table &operator=(const object_data visible_function_table &) device = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC ray_data visible_function_table &operator=(const thread visible_function_table &) ray_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC ray_data visible_function_table &operator=(const device visible_function_table &) ray_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC ray_data visible_function_table &operator=(const constant visible_function_table &) ray_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC ray_data visible_function_table &operator=(const ray_data visible_function_table &) ray_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC ray_data visible_function_table &operator=(const object_data visible_function_table &) ray_data = default;
+#endif
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data visible_function_table &operator=(const thread visible_function_table &) object_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data visible_function_table &operator=(const device visible_function_table &) object_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data visible_function_table &operator=(const constant visible_function_table &) object_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data visible_function_table &operator=(const ray_data visible_function_table &) object_data = default;
+#endif
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data visible_function_table &operator=(const object_data visible_function_table &) object_data = default;
+#endif
+
+private:
+  METAL_FUNC visible_function_table(__metal_visible_function_table_t t) thread : t(t) {};
+  METAL_FUNC visible_function_table(__metal_visible_function_table_t t) constant : t(t) {};
+  METAL_FUNC visible_function_table(__metal_visible_function_table_t t) ray_data : t(t) {};
+
+public:
+  METAL_FUNC function_pointer_type operator[](uint idx) const thread
+  {
+    return reinterpret_cast<function_pointer_type>(__metal_get_function_pointer_visible_function_table(t, idx));
+  }
+  METAL_FUNC function_pointer_type operator[](uint idx) const device
+  {
+    return reinterpret_cast<function_pointer_type>(__metal_get_function_pointer_visible_function_table(t, idx));
+  }
+  METAL_FUNC function_pointer_type operator[](uint idx) const constant
+  {
+    return reinterpret_cast<function_pointer_type>(__metal_get_function_pointer_visible_function_table(t, idx));
+  }
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC function_pointer_type operator[](uint idx) const ray_data
+  {
+    return reinterpret_cast<function_pointer_type>(__metal_get_function_pointer_visible_function_table(t, idx));
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC function_pointer_type operator[](uint idx) const object_data
+  {
+    return reinterpret_cast<function_pointer_type>(__metal_get_function_pointer_visible_function_table(t, idx));
+  }
+#endif
+
+
+  METAL_FUNC bool empty() const thread
+  {
+    return size() == 0;
+  }
+  METAL_FUNC bool empty() const device
+  {
+    return size() == 0;
+  }
+  METAL_FUNC bool empty() const constant
+  {
+    return size() == 0;
+  }
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC bool empty() const ray_data
+  {
+    return size() == 0;
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC bool empty() const object_data
+  {
+    return size() == 0;
+  }
+#endif
+
+  METAL_FUNC uint size() const thread
+  {
+    return __metal_get_size_visible_function_table(t);
+  }
+  METAL_FUNC uint size() const device
+  {
+    return __metal_get_size_visible_function_table(t);
+  }
+  METAL_FUNC uint size() const constant
+  {
+    return __metal_get_size_visible_function_table(t);
+  }
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC uint size() const ray_data
+  {
+    return __metal_get_size_visible_function_table(t);
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC uint size() const object_data
+  {
+    return __metal_get_size_visible_function_table(t);
+  }
+#endif
+
+private:
+  __metal_visible_function_table_t t;
+
+  friend bool metal::is_null_visible_function_table<R(Args...)>(visible_function_table<R(Args...)>);
+};
+
+template <typename T>
+METAL_FUNC bool is_null_visible_function_table(visible_function_table<T> vft)
+{
+  return __metal_is_null_visible_function_table(vft.t);
+}
+} // namespace metal
+#pragma METAL internals : disable
+#endif
+
+#endif // __METAL_VISIBLE_FUNCTION_TABLE

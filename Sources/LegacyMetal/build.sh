@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # build.sh: builds MetalOldCompat, AMDTextureAtomics and IntelTextureAtomics from source and regenerates the patched
 # payload files in Universal-Binaries/ from PatcherSupportPkg's stock copies:
-#   13.2.1-24 Metal.framework/Versions/A/   Metal (+ weak load of MetalOldCompat.dylib), MetalOldCompat.dylib
+#   13.2.1-24 and 13.2.1-25 (Tahoe) Metal.framework/Versions/A/
+#                                           Metal (+ weak load of MetalOldCompat.dylib), MetalOldCompat.dylib
+#   13.6-25 MTLCompiler.framework and 13.2.1-25 GPUCompiler.framework, Versions/31001/
+#                                           Tahoe's compiler: 14.2 Beta 1 under the 31001 paths (tools/make_tahoe_compiler.py)
 #   12.5 AMDShared.bundle/Contents/         MacOS/AMDShared (+ weak load of AMDTextureAtomics.dylib),
 #                                           MacOS/AMDTextureAtomics.dylib, PlugIns/libAMDIL902.dylib (patches 1-4)
 #   12.5-GCN-25 AMDShared.bundle/Contents/  the same for Tahoe, from OCLP's GCN-25 copies (libAMDIL902: patches 2-4,
@@ -12,7 +15,7 @@
 #                                           AMDMTLBronzeDriver (+ weak load of AMDBronzeCompat.dylib), AMDBronzeCompat.dylib
 # The stock inputs come from git (STOCK_REF, default: the merge base with origin/HEAD, the upstream default branch), never from the patched files
 # in the working tree, so re-running it gives the same output. STOCK_DIR=<dir> takes them from a folder instead
-# (files: Metal MetalOld.dylib AMDShared libAMDIL902.dylib AMDShared-GCN-25 libAMDIL902-GCN-25.dylib
+# (files: Metal Metal-25 MetalOld.dylib AMDShared libAMDIL902.dylib AMDShared-GCN-25 libAMDIL902-GCN-25.dylib
 # libMTLIntelCompilerPlugin.dylib AMDMTLBronzeDriver-<variant>).
 # Everything is ad-hoc signed; release signing happens as for the rest of the payload. Needs Xcode command-line tools.
 set -euo pipefail
@@ -20,6 +23,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 UB=$ROOT/Universal-Binaries B=$HERE/build
 WRAPPER=13.2.1-24/System/Library/Frameworks/Metal.framework/Versions/A
+WRAPPER25=13.2.1-25/System/Library/Frameworks/Metal.framework/Versions/A
 AMD=12.5/System/Library/Extensions/AMDShared.bundle/Contents
 GCN25=12.5-GCN-25/System/Library/Extensions/AMDShared.bundle/Contents
 BRONZE=System/Library/Extensions/AMDMTLBronzeDriver.bundle/Contents/MacOS
@@ -32,6 +36,7 @@ stock() {  # <path under Universal-Binaries> <file name>
     git -C "$ROOT" show "$ref:Universal-Binaries/$1" > "$B/stock/$2"
 }
 stock "$WRAPPER/Metal" Metal
+stock "$WRAPPER25/Metal" Metal-25
 stock "$WRAPPER/MetalOld.dylib" MetalOld.dylib
 stock "$AMD/MacOS/AMDShared" AMDShared
 stock "$AMD/PlugIns/libAMDIL902.dylib" libAMDIL902.dylib
@@ -71,18 +76,21 @@ weak() {  # <stock file> <output> <dylib path>
     python3 -I "$HERE/tools/add_weak_dylib.py" "$B/$1.unsigned" "$B/$2" "$3"
 }
 weak Metal Metal /System/Library/Frameworks/Metal.framework/Versions/A/MetalOldCompat.dylib
+weak Metal-25 Metal-25 @loader_path/MetalOldCompat.dylib  # this wrapper has no room for the full path
 weak AMDShared AMDShared @loader_path/AMDTextureAtomics.dylib
 weak AMDShared-GCN-25 AMDShared-GCN-25 @loader_path/AMDTextureAtomics.dylib
 weak libMTLIntelCompilerPlugin.dylib libMTLIntelCompilerPlugin.dylib @loader_path/IntelTextureAtomics.dylib
 for v in $BRONZE_VARIANTS; do weak "AMDMTLBronzeDriver-$v" "AMDMTLBronzeDriver-$v" @loader_path/AMDBronzeCompat.dylib; done
 cd "$B"
 codesign -f -s - MetalOldCompat.dylib MetalOldCompat-noop.dylib AMDTextureAtomics.dylib IntelTextureAtomics.dylib \
-    libAMDIL902.dylib libAMDIL902-GCN-25.dylib Metal AMDShared AMDShared-GCN-25 libMTLIntelCompilerPlugin.dylib \
+    libAMDIL902.dylib libAMDIL902-GCN-25.dylib Metal Metal-25 AMDShared AMDShared-GCN-25 libMTLIntelCompilerPlugin.dylib \
     2>/dev/null
 codesign -f -s - AMDBronzeCompat.dylib 2>/dev/null
 for v in $BRONZE_VARIANTS; do codesign -f -s - "AMDMTLBronzeDriver-$v" 2>/dev/null; done
 # 6. into the payload
 cp Metal MetalOldCompat.dylib "$UB/$WRAPPER/"
+cp Metal-25 "$UB/$WRAPPER25/Metal"
+cp MetalOldCompat.dylib "$UB/$WRAPPER25/"
 cp AMDShared AMDTextureAtomics.dylib "$UB/$AMD/MacOS/"
 cp libAMDIL902.dylib "$UB/$AMD/PlugIns/"
 cp AMDShared-GCN-25 "$UB/$GCN25/MacOS/AMDShared"
@@ -93,5 +101,6 @@ for v in $BRONZE_VARIANTS; do
     cp "AMDMTLBronzeDriver-$v" "$UB/$v/$BRONZE/AMDMTLBronzeDriver"
     cp AMDBronzeCompat.dylib "$UB/$v/$BRONZE/"
 done
+[ -n "${STOCK_DIR:-}" ] || python3 -I "$HERE/tools/make_tahoe_compiler.py" "$ROOT" "${STOCK_REF:-$(git -C "$ROOT" merge-base HEAD origin/HEAD)}"
 shasum -a 256 MetalOldCompat.dylib AMDTextureAtomics.dylib IntelTextureAtomics.dylib AMDBronzeCompat.dylib libAMDIL902.dylib Metal \
-    AMDShared libAMDIL902-GCN-25.dylib AMDShared-GCN-25 libMTLIntelCompilerPlugin.dylib
+    Metal-25 AMDShared libAMDIL902-GCN-25.dylib AMDShared-GCN-25 libMTLIntelCompilerPlugin.dylib

@@ -1,0 +1,205 @@
+// -*- Metal -*-
+//===-- metal_simdgroup_matrix --------------------------------------------===//
+// Copyright (c) 2018 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_SIMDGROUP_MATRIX
+#define __METAL_SIMDGROUP_MATRIX
+
+#if defined(__HAVE_SIMDGROUP_MATRIX__)
+#pragma METAL internals : enable
+namespace metal
+{
+template <typename T>
+struct _is_simdgroup_matrix_element_impl : bool_constant<__is_metal_simdgroup_matrix_element(T)>
+{
+};
+template <typename T>
+struct is_simdgroup_matrix_element : _is_simdgroup_matrix_element_impl<remove_cv_t<T>>
+{
+};
+
+template <typename T, int Cols, int Rows, typename StorageType>
+struct _simdgroup_init_diag_impl
+{
+};
+template <typename T, typename StorageType>
+struct _simdgroup_init_diag_impl<T, 8, 8, StorageType>
+{
+  METAL_FUNC StorageType operator()(T value) thread
+  {
+    return __metal_simdgroup_matrix_8x8_init_diag(value);
+  }
+};
+
+METAL_FUNC constexpr bool _valid_simdgroup_matrix_size(int cols, int rows)
+{
+  return cols == 8 && rows == 8
+      ;
+}
+
+template <typename T, int Cols, int Rows = Cols>
+struct simdgroup_matrix
+{
+  static_assert(is_simdgroup_matrix_element<T>::value, "invalid element type 'T' for 'simdgroup_matrix'");
+  static_assert(_valid_simdgroup_matrix_size(Cols, Rows), "invalid size for 'simdgroup_matrix'");
+
+  typedef vec<T, Cols * Rows> storage_type;
+
+  METAL_FUNC simdgroup_matrix() thread = default;
+  METAL_FUNC simdgroup_matrix(const thread simdgroup_matrix &that) thread = default;
+  METAL_FUNC explicit simdgroup_matrix(T value) thread : t(_simdgroup_init_diag_impl<T, Cols, Rows, storage_type>()(value))
+  {
+  }
+
+  METAL_FUNC thread simdgroup_matrix &operator=(const thread simdgroup_matrix &that) thread = default;
+
+  METAL_FUNC thread storage_type &thread_elements() thread
+  {
+    return t;
+  }
+  METAL_FUNC storage_type thread_elements() const thread
+  {
+    return t;
+  }
+
+private:
+  storage_type t;
+};
+
+#if defined(__HAVE_BFLOAT__)
+typedef simdgroup_matrix<bfloat, 8, 8> simdgroup_bfloat8x8;
+#endif
+typedef simdgroup_matrix<half, 8, 8> simdgroup_half8x8;
+typedef simdgroup_matrix<float, 8, 8> simdgroup_float8x8;
+
+template <typename T, int Cols, int Rows>
+struct _make_filled_simdgroup_matrix_impl
+{
+};
+template <typename T>
+struct _make_filled_simdgroup_matrix_impl<T, 8, 8>
+{
+  METAL_FUNC simdgroup_matrix<T, 8, 8> operator()(T value) thread
+  {
+    simdgroup_matrix<T, 8, 8> d;
+    d.thread_elements() = __metal_simdgroup_matrix_8x8_init_filled(value);
+    return d;
+  };
+};
+template <typename T, int Cols, int Rows = Cols, typename U, typename _E = typename enable_if<is_convertible_v<U, T>>::type>
+METAL_FUNC simdgroup_matrix<T, Cols, Rows> make_filled_simdgroup_matrix(U value)
+{
+  return _make_filled_simdgroup_matrix_impl<T, Cols, Rows>()(T(value));
+}
+
+template <typename T, int Cols, int Rows>
+struct _simdgroup_load_impl
+{
+};
+template <typename T>
+struct _simdgroup_load_impl<T, 8, 8>
+{
+  METAL_FUNC void operator()(thread simdgroup_matrix<T, 8, 8> &d, const threadgroup T *src, ulong elements_per_row, ulong2 matrix_origin, bool transpose_matrix) thread
+  {
+    d.thread_elements() = __metal_simdgroup_matrix_8x8_load(src, elements_per_row, matrix_origin, transpose_matrix);
+  }
+  METAL_FUNC void operator()(thread simdgroup_matrix<T, 8, 8> &d, const device T *src, ulong elements_per_row, ulong2 matrix_origin, bool transpose_matrix) thread
+  {
+    d.thread_elements() = __metal_simdgroup_matrix_8x8_load(src, elements_per_row, matrix_origin, transpose_matrix);
+  }
+};
+template <typename T, int Cols, int Rows>
+METAL_FUNC void simdgroup_load(thread simdgroup_matrix<T, Cols, Rows> &d, const threadgroup T *src, ulong elements_per_row = Cols, ulong2 matrix_origin = ulong2(0, 0), bool transpose_matrix = false)
+{
+  _simdgroup_load_impl<T, Cols, Rows>()(d, src, elements_per_row, matrix_origin, transpose_matrix);
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC void simdgroup_load(thread simdgroup_matrix<T, Cols, Rows> &d, const device T *src, ulong elements_per_row = Cols, ulong2 matrix_origin = ulong2(0, 0), bool transpose_matrix = false)
+{
+  _simdgroup_load_impl<T, Cols, Rows>()(d, src, elements_per_row, matrix_origin, transpose_matrix);
+}
+
+template <typename T, int Cols, int Rows>
+struct _simdgroup_store_impl
+{
+};
+template <typename T>
+struct _simdgroup_store_impl<T, 8, 8>
+{
+  METAL_FUNC void operator()(simdgroup_matrix<T, 8, 8> a, threadgroup T *dst, ulong elements_per_row, ulong2 matrix_origin, bool transpose_matrix) thread
+  {
+    __metal_simdgroup_matrix_8x8_store(a.thread_elements(), dst, elements_per_row, matrix_origin, transpose_matrix);
+  }
+  METAL_FUNC void operator()(simdgroup_matrix<T, 8, 8> a, device T *dst, ulong elements_per_row, ulong2 matrix_origin, bool transpose_matrix) thread
+  {
+    __metal_simdgroup_matrix_8x8_store(a.thread_elements(), dst, elements_per_row, matrix_origin, transpose_matrix);
+  }
+};
+template <typename T, int Cols, int Rows>
+METAL_FUNC void simdgroup_store(simdgroup_matrix<T, Cols, Rows> a, threadgroup T *dst, ulong elements_per_row = Cols, ulong2 matrix_origin = ulong2(0, 0), bool transpose_matrix = false)
+{
+  _simdgroup_store_impl<T, Cols, Rows>()(a, dst, elements_per_row, matrix_origin, transpose_matrix);
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC void simdgroup_store(simdgroup_matrix<T, Cols, Rows> a, device T *dst, ulong elements_per_row = Cols, ulong2 matrix_origin = ulong2(0, 0), bool transpose_matrix = false)
+{
+  _simdgroup_store_impl<T, Cols, Rows>()(a, dst, elements_per_row, matrix_origin, transpose_matrix);
+}
+
+template <typename R, typename T, typename U, typename V, int K, int Rows, int Cols>
+struct _simdgroup_multiply_accumulate_impl
+{
+};
+template <typename R, typename T, typename U, typename V>
+struct _simdgroup_multiply_accumulate_impl<R, T, U, V, 8, 8, 8>
+{
+  METAL_FUNC void operator()(thread simdgroup_matrix<R, 8, 8> &d, simdgroup_matrix<T, 8, 8> a, simdgroup_matrix<U, 8, 8> b, simdgroup_matrix<V, 8, 8> c) thread
+  {
+    d.thread_elements() = __metal_simdgroup_matrix_8x8_multiply_accumulate(a.thread_elements(), b.thread_elements(), c.thread_elements(), typename simdgroup_matrix<R, 8, 8>::storage_type());
+  }
+};
+
+template <typename R, typename T, typename U, typename V>
+struct _valid_simdgroup_multiply_accumulate_args : conjunction<is_floating_point<R>, is_floating_point<T>, is_floating_point<U>, is_floating_point<V>>
+{
+};
+template <typename R, typename T, typename U, typename V, int K, int Rows, int Cols>
+METAL_FUNC typename enable_if<_valid_simdgroup_multiply_accumulate_args<R, T, U, V>::value>::type
+simdgroup_multiply_accumulate(thread simdgroup_matrix<R, Cols, Rows> &d, simdgroup_matrix<T, K, Rows> a, simdgroup_matrix<U, Cols, K> b, simdgroup_matrix<V, Cols, Rows> c)
+{
+  _simdgroup_multiply_accumulate_impl<R, T, U, V, K, Rows, Cols>()(d, a, b, c);
+}
+
+template <typename R, typename T, typename U>
+struct _valid_simdgroup_multiply_args : conjunction<is_floating_point<R>, is_floating_point<T>, is_floating_point<U>>
+{
+};
+template <typename R, typename T, typename U, int K, int Rows, int Cols>
+METAL_FUNC typename enable_if<_valid_simdgroup_multiply_args<R, T, U>::value>::type
+simdgroup_multiply(thread simdgroup_matrix<R, Cols, Rows> &d, simdgroup_matrix<T, K, Rows> a, simdgroup_matrix<U, Cols, K> b)
+{
+  return simdgroup_multiply_accumulate(d, a, b, simdgroup_matrix<R, Cols, Rows>());
+}
+
+template <typename T, typename U, int K, int Rows, int Cols>
+METAL_FUNC typename enable_if<conjunction_v<is_floating_point<T>, is_floating_point<U>>, simdgroup_matrix<T, Cols, Rows>>::type
+operator*(simdgroup_matrix<T, K, Rows> a, simdgroup_matrix<U, Cols, K> b)
+{
+  simdgroup_matrix<T, Cols, Rows> d;
+  simdgroup_multiply(d, a, b);
+  return d;
+}
+
+template <typename T, typename U, int Rows, int Cols>
+METAL_FUNC typename enable_if<conjunction_v<is_floating_point<T>, is_floating_point<U>>, thread simdgroup_matrix<T, Cols, Rows> &>::type
+operator*=(thread simdgroup_matrix<T, Cols, Rows> &a, simdgroup_matrix<U, Rows, Cols> b)
+{
+  return a = a * b;
+}
+
+} // namespace metal
+#pragma METAL internals : disable
+#endif
+
+#endif // __METAL_SIMDGROUP_MATRIX
