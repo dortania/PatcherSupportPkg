@@ -6,6 +6,8 @@
 //   1. stencil through texture views of mip 1+ (written to the wrong level and slice)
 //   2. sRGB mipmaps (the driver's blit averages the encoded bytes)
 //   3. trilinear filtering (blends between mip levels only in the middle of the interval)
+//   4. sRGB MSAA resolve (the hardware resolve averages the encoded bytes)
+//   5. depth or stencil copied to a buffer with row pitch 0 (nothing gets written)
 // 1 and 2 come from riptidewave93's bronzefix, found and tested on Tahoe with a MacPro6,1's FirePro D700s.
 // AMD_BRONZE_COMPAT=0 turns everything off for a process, AMD_EXACT_TRILINEAR=0 only item 3; AMD_BRONZE_VERBOSE=1 logs.
 #import <Foundation/Foundation.h>
@@ -22,7 +24,10 @@
 
 static BOOL verbose(void) {
     static int v = -1;
-    if (v < 0) v = getenv("AMD_BRONZE_VERBOSE") != NULL;
+    if (v < 0) {
+        const char *setting = getenv("AMD_BRONZE_VERBOSE");
+        v = setting && strcmp(setting, "0");
+    }
     return v;
 }
 
@@ -78,12 +83,9 @@ static void *viewInit(void *self, SEL _cmd, void *parent, MTLPixelFormat format,
     return view;
 }
 
-typedef id (*RenderEncoderIMP)(id, SEL, MTLRenderPassDescriptor *);
-static RenderEncoderIMP origRenderEncoder;
-
-static id renderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor) {
+static MTLRenderPassDescriptor *stencilViewToParent(MTLRenderPassDescriptor *descriptor) {
     id<MTLTexture> view = descriptor.stencilAttachment.texture;
-    if (view.pixelFormat != MTLPixelFormatStencil8 || !view.parentTexture) return origRenderEncoder(self, _cmd, descriptor);
+    if (!origViewInit || view.pixelFormat != MTLPixelFormatStencil8 || !view.parentTexture) return descriptor;
     NSUInteger level = descriptor.stencilAttachment.level, slice = descriptor.stencilAttachment.slice;
     id<MTLTexture> root = view;
     while (root.parentTexture && root.parentTexture.pixelFormat == root.pixelFormat) {
@@ -91,14 +93,14 @@ static id renderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor) 
         slice += root.parentRelativeSlice;
         root = root.parentTexture;
     }
-    if (root == view || root.textureType == MTLTextureType3D) return origRenderEncoder(self, _cmd, descriptor);
+    if (root == view || root.textureType == MTLTextureType3D) return descriptor;
     MTLRenderPassDescriptor *rewritten = [descriptor copy];
     rewritten.stencilAttachment.texture = root;
     rewritten.stencilAttachment.level = level;
     rewritten.stencilAttachment.slice = slice;
     if (verbose()) fprintf(stderr, "[bronzecompat] Stencil8 view attachment -> parent, level %lu slice %lu\n",
                            (unsigned long)level, (unsigned long)slice);
-    return origRenderEncoder(self, _cmd, rewritten);
+    return rewritten;
 }
 
 // The view init's `shl $0x15,%eax ; sub %eax,%edx`, at the same __TEXT offset in every copy of the driver.
@@ -118,13 +120,12 @@ static BOOL hasViewBug(const struct mach_header_64 *driver) {
 
 static void installViewFix(const struct mach_header_64 *driver) {
     if (!hasViewBug(driver)) return;
-    Class texture = objc_getClass("BronzeMtlTexture"), commandBuffer = objc_getClass("BronzeMtlCmdBuffer");
+    Class texture = objc_getClass("BronzeMtlTexture");
     Ivar members = texture ? class_getInstanceVariable(texture, "m_members") : NULL;
-    if (!members || !commandBuffer) return;
+    if (!members) return;
     membersOffset = ivar_getOffset(members);
     origViewInit = (ViewInitIMP)swizzle(texture, sel_registerName("initWithTexture:pixelFormat:textureType:levels:slices:swizzle:resourceIndex:"),
                                         (IMP)viewInit);
-    origRenderEncoder = (RenderEncoderIMP)swizzle(commandBuffer, @selector(renderCommandEncoderWithDescriptor:), (IMP)renderEncoder);
 }
 
 // ---- 2. sRGB mipmaps ---------------------------------------------------------------------------------------------
@@ -149,10 +150,10 @@ static BOOL needsMipFix(id<MTLTexture> t) {
            (type == MTLTextureType2D || type == MTLTextureType2DArray || type == MTLTextureTypeCube || type == MTLTextureTypeCubeArray);
 }
 
-static id<MTLRenderPipelineState> mipPipeline(id<MTLDevice> device, MTLPixelFormat format) {
+static id<MTLRenderPipelineState> srgbPipeline(id<MTLDevice> device, MTLPixelFormat format, NSString *fragment) {
     static NSMutableDictionary *pipelines;
     static os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
-    NSString *key = [NSString stringWithFormat:@"%p-%lu", device, (unsigned long)format];
+    NSString *key = [NSString stringWithFormat:@"%p-%lu-%@", device, (unsigned long)format, fragment];
     os_unfair_lock_lock(&lock);
     id<MTLRenderPipelineState> pipeline = pipelines[key];
     os_unfair_lock_unlock(&lock);
@@ -166,16 +167,21 @@ static id<MTLRenderPipelineState> mipPipeline(id<MTLDevice> device, MTLPixelForm
         "fragment float4 srgbMipFragment(V in [[stage_in]], texture2d<float> source [[texture(0)]]) {\n"
         "    constexpr sampler s(filter::linear, address::clamp_to_edge);\n"
         "    return source.sample(s, in.uv);\n"
+        "}\n"
+        "fragment float4 srgbResolveFragment(float4 position [[position]], texture2d_ms<float> source [[texture(0)]]) {\n"
+        "    float4 sum = 0;\n"
+        "    for (uint i = 0; i < source.get_num_samples(); i++) sum += source.read(uint2(position.xy), i);\n"
+        "    return sum / source.get_num_samples();\n"
         "}\n";
     NSError *error = nil;
     id<MTLLibrary> library = [device newLibraryWithSource:source options:nil error:&error];
     MTLRenderPipelineDescriptor *descriptor = [MTLRenderPipelineDescriptor new];
     descriptor.vertexFunction = [library newFunctionWithName:@"srgbMipVertex"];
-    descriptor.fragmentFunction = [library newFunctionWithName:@"srgbMipFragment"];
+    descriptor.fragmentFunction = [library newFunctionWithName:fragment];
     descriptor.colorAttachments[0].pixelFormat = format;
     pipeline = library ? [device newRenderPipelineStateWithDescriptor:descriptor error:&error] : nil;
     if (!pipeline) {
-        if (verbose()) fprintf(stderr, "[bronzecompat] sRGB mip pipeline: %s\n", error.localizedDescription.UTF8String ?: "?");
+        if (verbose()) fprintf(stderr, "[bronzecompat] %s pipeline: %s\n", fragment.UTF8String, error.localizedDescription.UTF8String ?: "?");
         return nil;
     }
     os_unfair_lock_lock(&lock);
@@ -186,7 +192,7 @@ static id<MTLRenderPipelineState> mipPipeline(id<MTLDevice> device, MTLPixelForm
 }
 
 static void redoMips(id<MTLCommandBuffer> commandBuffer, id<MTLTexture> texture) {
-    id<MTLRenderPipelineState> pipeline = mipPipeline(texture.device, texture.pixelFormat);
+    id<MTLRenderPipelineState> pipeline = srgbPipeline(texture.device, texture.pixelFormat, @"srgbMipFragment");
     if (!pipeline) return;
     BOOL cube = texture.textureType == MTLTextureTypeCube || texture.textureType == MTLTextureTypeCubeArray;
     NSUInteger slices = texture.arrayLength * (cube ? 6 : 1), levels = texture.mipmapLevelCount;
@@ -313,6 +319,105 @@ static void installTrilinearFix(const char *driverPath) {
     origSamplerInit = (SamplerInitIMP)swizzle(sampler, sel_registerName("initWithDevice:samplerDescriptor:"), (IMP)samplerInit);
 }
 
+// ---- 4. sRGB MSAA resolve ------------------------------------------------------------------------------------------
+// The driver's resolve averages the encoded bytes of an sRGB attachment instead of the linear values, so antialiased
+// edges come out too dark (WebGPU conformance render_pass,resolve:render_pass_resolve). The resolve is taken off the pass,
+// which stores its samples instead, and when the encoder ends one render pass per attachment reads the samples (decoded),
+// averages them and writes the target (encoded). Only 2D multisample attachments whose store action is known when the
+// pass starts; a deferred store action or a parallel encoder keeps the driver's resolve. Test: s25.
+typedef id (*RenderEncoderIMP)(id, SEL, MTLRenderPassDescriptor *);
+static RenderEncoderIMP origRenderEncoder;
+static EndEncodingIMP origRenderEndEncoding;
+static const void *kPendingResolves = &kPendingResolves, *kResolveCommandBuffer = &kResolveCommandBuffer;
+
+static MTLRenderPassDescriptor *takeSrgbResolves(MTLRenderPassDescriptor *descriptor, NSMutableArray **resolves) {
+    MTLRenderPassDescriptor *rewritten = nil;
+    for (NSUInteger i = 0; origRenderEndEncoding && i < 8; i++) {
+        MTLRenderPassColorAttachmentDescriptor *attachment = descriptor.colorAttachments[i];
+        id<MTLTexture> texture = attachment.texture;
+        MTLPixelFormat f = texture.pixelFormat;
+        MTLStoreAction store = attachment.storeAction;
+        if (!attachment.resolveTexture || texture.textureType != MTLTextureType2DMultisample ||
+            (f != MTLPixelFormatRGBA8Unorm_sRGB && f != MTLPixelFormatBGRA8Unorm_sRGB) ||
+            (store != MTLStoreActionMultisampleResolve && store != MTLStoreActionStoreAndMultisampleResolve) ||
+            !srgbPipeline(texture.device, f, @"srgbResolveFragment"))
+            continue;
+        if (!rewritten) {
+            rewritten = [descriptor copy];
+            *resolves = [NSMutableArray array];
+        }
+        [*resolves addObject:[attachment copy]];
+        rewritten.colorAttachments[i].resolveTexture = nil;
+        rewritten.colorAttachments[i].storeAction = MTLStoreActionStore;
+    }
+    return rewritten ?: descriptor;
+}
+
+static id renderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor) {
+    NSMutableArray *resolves = nil;
+    MTLRenderPassDescriptor *fixed = takeSrgbResolves(stencilViewToParent(descriptor), &resolves);
+    id encoder = origRenderEncoder(self, _cmd, fixed);
+    if (encoder && resolves) {
+        objc_setAssociatedObject(encoder, kPendingResolves, resolves, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(encoder, kResolveCommandBuffer, self, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    return encoder;
+}
+
+static void renderEndEncoding(id self, SEL _cmd) {
+    NSArray *resolves = objc_getAssociatedObject(self, kPendingResolves);
+    id<MTLCommandBuffer> commandBuffer = objc_getAssociatedObject(self, kResolveCommandBuffer);
+    origRenderEndEncoding(self, _cmd);
+    if (!resolves) return;
+    objc_setAssociatedObject(self, kPendingResolves, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, kResolveCommandBuffer, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (verbose()) fprintf(stderr, "[bronzecompat] %lu sRGB attachment(s) resolved in a shader\n", (unsigned long)resolves.count);
+    for (MTLRenderPassColorAttachmentDescriptor *attachment in resolves) {
+        MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+        pass.colorAttachments[0].texture = attachment.resolveTexture;
+        pass.colorAttachments[0].level = attachment.resolveLevel;
+        pass.colorAttachments[0].slice = attachment.resolveSlice;
+        pass.colorAttachments[0].depthPlane = attachment.resolveDepthPlane;
+        pass.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+        pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+        id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:pass];
+        [encoder setRenderPipelineState:srgbPipeline(attachment.texture.device, attachment.texture.pixelFormat, @"srgbResolveFragment")];
+        [encoder setFragmentTexture:attachment.texture atIndex:0];
+        [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+        [encoder endEncoding];
+    }
+}
+
+static void installRenderPassHooks(void) {
+    Class commandBuffer = objc_getClass("BronzeMtlCmdBuffer"), encoder = objc_getClass("BronzeMtlRenderCmdEncoder");
+    if (!definesMethod(commandBuffer, @selector(renderCommandEncoderWithDescriptor:))) return;
+    if (definesMethod(encoder, @selector(endEncoding)))
+        origRenderEndEncoding = (EndEncodingIMP)swizzle(encoder, @selector(endEncoding), (IMP)renderEndEncoding);
+    if (origViewInit || origRenderEndEncoding)
+        origRenderEncoder = (RenderEncoderIMP)swizzle(commandBuffer, @selector(renderCommandEncoderWithDescriptor:), (IMP)renderEncoder);
+}
+
+// ---- 5. Depth or stencil to a buffer with row pitch 0 --------------------------------------------------------------
+// wgpu passes destinationBytesPerRow 0 when WebGPU leaves bytesPerRow out, as it may for a single row. The driver takes that
+// for colour, but for one aspect of a combined depth/stencil texture it writes nothing (WebGPU conformance
+// render_pass,clear_value:stencil_clear_value in Firefox). A zero pitch becomes the tightly packed one. Test: s26.
+typedef void (*CopyToBufferIMP)(id, SEL, id, NSUInteger, NSUInteger, MTLOrigin, MTLSize, id, NSUInteger, NSUInteger, NSUInteger, MTLBlitOption);
+static CopyToBufferIMP origCopyToBuffer;
+
+static void copyToBuffer(id self, SEL _cmd, id texture, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLSize size, id buffer,
+                         NSUInteger offset, NSUInteger bytesPerRow, NSUInteger bytesPerImage, MTLBlitOption options) {
+    NSUInteger bytes = options & MTLBlitOptionStencilFromDepthStencil ? 1 : options & MTLBlitOptionDepthFromDepthStencil ? 4 : 0;
+    if (bytes && !bytesPerRow) bytesPerRow = size.width * bytes;
+    if (bytes && !bytesPerImage) bytesPerImage = bytesPerRow * size.height;
+    origCopyToBuffer(self, _cmd, texture, slice, level, origin, size, buffer, offset, bytesPerRow, bytesPerImage, options);
+}
+
+static void installCopyFix(void) {
+    Class blit = objc_getClass("BronzeMtlBlitCmdEncoder");
+    SEL selector = @selector(copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:options:);
+    if (definesMethod(blit, selector)) origCopyToBuffer = (CopyToBufferIMP)swizzle(blit, selector, (IMP)copyToBuffer);
+}
+
 // This library is a dependency of the driver, so its initializer runs after the driver is mapped and its classes are
 // registered with the ObjC runtime, but before any driver code runs. No driver loaded: nothing to do.
 __attribute__((constructor)) static void init(void) {
@@ -324,9 +429,12 @@ __attribute__((constructor)) static void init(void) {
         if (length < sizeof kSuffix - 1 || strcmp(name + length - (sizeof kSuffix - 1), kSuffix)) continue;
         installViewFix((const struct mach_header_64 *)_dyld_get_image_header(i));
         installMipFix();
+        installRenderPassHooks();
+        installCopyFix();
         if (!disabled("AMD_EXACT_TRILINEAR")) installTrilinearFix(name);
-        if (verbose()) fprintf(stderr, "[bronzecompat] view fix %s, sRGB mipmaps %s, trilinear %s\n", origViewInit ? "on" : "off",
-                               origGenerateMipmaps ? "on" : "off", origSamplerInit ? "on" : "off");
+        if (verbose()) fprintf(stderr, "[bronzecompat] view fix %s, sRGB mipmaps %s, trilinear %s, sRGB resolve %s, copy pitch %s\n", origViewInit ? "on" : "off",
+                               origGenerateMipmaps ? "on" : "off", origSamplerInit ? "on" : "off", origRenderEndEncoding ? "on" : "off",
+                               origCopyToBuffer ? "on" : "off");
         return;
     }
 }
