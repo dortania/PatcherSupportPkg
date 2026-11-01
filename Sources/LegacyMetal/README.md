@@ -1,8 +1,9 @@
 # LegacyMetal
 
-Sources for the legacy Metal fixes in `Universal-Binaries/13.2.1-24` (Metal.framework) and `Universal-Binaries/12.5`
-(AMDShared.bundle, AppleIntelHD5000GraphicsMTLDriver.bundle): a compatibility library for MetalOld, adapters for the
-12.5 AMD and 3802 Intel shader compilers, and the libAMDIL902 patches.
+Sources for the legacy Metal fixes in `Universal-Binaries/13.2.1-24` (Metal.framework), `Universal-Binaries/12.5`
+(AMDShared.bundle, AppleIntelHD5000GraphicsMTLDriver.bundle) and `Universal-Binaries/12.5-GCN-25` (Tahoe's
+AMDShared.bundle): a compatibility library for MetalOld, adapters for the 12.5 AMD and 3802 Intel shader compilers,
+and the libAMDIL902 patches.
 
 ## Build
 
@@ -16,5 +17,6 @@ On a Mac with OCLP's legacy Metal stack:
 
     cd Tests && ./build.sh && ./verify.sh
 
-`verify.sh` runs each test without and with its fix, without installing anything. `run.sh` runs them against what is
+`verify.sh` runs each test without and with its fix, without installing anything. `PAYLOAD=12.5-GCN-25 ./verify.sh`
+runs the AMD compiler tests with Tahoe's AMDShared files (they load on Sequoia too). `run.sh` runs them against what is
 installed.

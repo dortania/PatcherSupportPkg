@@ -4,11 +4,14 @@
 #   13.2.1-24 Metal.framework/Versions/A/   Metal (+ weak load of MetalOldCompat.dylib), MetalOldCompat.dylib
 #   12.5 AMDShared.bundle/Contents/         MacOS/AMDShared (+ weak load of AMDTextureAtomics.dylib),
 #                                           MacOS/AMDTextureAtomics.dylib, PlugIns/libAMDIL902.dylib (patches 1-4)
+#   12.5-GCN-25 AMDShared.bundle/Contents/  the same for Tahoe, from OCLP's GCN-25 copies (libAMDIL902: patches 2-4,
+#                                           OCLP's initializeIABArgTypeSet stub kept instead of patch 1)
 #   12.5 AppleIntelHD5000GraphicsMTLDriver.bundle/Contents/MacOS/
 #                                           libMTLIntelCompilerPlugin.dylib (+ weak load), IntelTextureAtomics.dylib
 # The stock inputs come from git (STOCK_REF, default: the merge base with origin/HEAD, the upstream default branch), never from the patched files
 # in the working tree, so re-running it gives the same output. STOCK_DIR=<dir> takes them from a folder instead
-# (files: Metal MetalOld.dylib AMDShared libAMDIL902.dylib libMTLIntelCompilerPlugin.dylib).
+# (files: Metal MetalOld.dylib AMDShared libAMDIL902.dylib AMDShared-GCN-25 libAMDIL902-GCN-25.dylib
+# libMTLIntelCompilerPlugin.dylib).
 # Everything is ad-hoc signed; release signing happens as for the rest of the payload. Needs Xcode command-line tools.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -16,6 +19,7 @@ ROOT=$(cd "$HERE/../.." && pwd)
 UB=$ROOT/Universal-Binaries B=$HERE/build
 WRAPPER=13.2.1-24/System/Library/Frameworks/Metal.framework/Versions/A
 AMD=12.5/System/Library/Extensions/AMDShared.bundle/Contents
+GCN25=12.5-GCN-25/System/Library/Extensions/AMDShared.bundle/Contents
 INTEL=12.5/System/Library/Extensions/AppleIntelHD5000GraphicsMTLDriver.bundle/Contents/MacOS
 rm -rf "$B"; mkdir -p "$B/stock"
 stock() {  # <path under Universal-Binaries> <file name>
@@ -27,6 +31,8 @@ stock "$WRAPPER/Metal" Metal
 stock "$WRAPPER/MetalOld.dylib" MetalOld.dylib
 stock "$AMD/MacOS/AMDShared" AMDShared
 stock "$AMD/PlugIns/libAMDIL902.dylib" libAMDIL902.dylib
+stock "$GCN25/MacOS/AMDShared" AMDShared-GCN-25
+stock "$GCN25/PlugIns/libAMDIL902.dylib" libAMDIL902-GCN-25.dylib
 stock "$INTEL/libMTLIntelCompilerPlugin.dylib" libMTLIntelCompilerPlugin.dylib
 
 # 1. MetalOldCompat, and the no-op build the tests use for "without the fix" (same load commands, does nothing)
@@ -36,7 +42,7 @@ for variant in "" -noop; do
         -framework Foundation -framework IOKit -Wl,-no_warn_inits -Wl,-not_for_dyld_shared_cache \
         "$B/stock/MetalOld.dylib" "$HERE/MetalOldCompat/MetalOldCompat.m" -o "$B/MetalOldCompat$variant.dylib"
 done
-# 2. AMD adapter (the 12.5 AMDShared and Intel bundles are also installed on macOS 13 and 14)
+# 2. AMD adapter, for both AMDShared copies (the 12.5 AMDShared and Intel bundles are also installed on macOS 13 and 14)
 clang -arch x86_64 -mmacosx-version-min=13.0 -dynamiclib -O2 -Wall -Wl,-no_warn_inits \
     -install_name /System/Library/Extensions/AMDShared.bundle/Contents/MacOS/AMDTextureAtomics.dylib \
     "$HERE/AMDAdapter/texatomic.c" "$HERE/AMDAdapter/sihazard.c" "$HERE/AMDAdapter/SCLib.tbd" \
@@ -49,6 +55,7 @@ clang++ -arch x86_64 -mmacosx-version-min=13.0 -std=c++17 -dynamiclib -O2 -Wall 
     "$HERE/IntelAdapter/intelatomics.cpp" "$HERE/IntelAdapter/libLLVM3802.tbd" -o "$B/IntelTextureAtomics.dylib"
 # 4. vendor files: libAMDIL902 patches, weak load commands
 python3 -I "$HERE/libAMDIL902/make_parser_fix.py" "$B/stock/libAMDIL902.dylib" "$B/libAMDIL902.dylib"
+python3 -I "$HERE/libAMDIL902/make_parser_fix.py" "$B/stock/libAMDIL902-GCN-25.dylib" "$B/libAMDIL902-GCN-25.dylib"
 weak() {  # <stock file> <output> <dylib path>
     cp "$B/stock/$1" "$B/$1.unsigned"
     codesign --remove-signature "$B/$1.unsigned"
@@ -56,14 +63,19 @@ weak() {  # <stock file> <output> <dylib path>
 }
 weak Metal Metal /System/Library/Frameworks/Metal.framework/Versions/A/MetalOldCompat.dylib
 weak AMDShared AMDShared @loader_path/AMDTextureAtomics.dylib
+weak AMDShared-GCN-25 AMDShared-GCN-25 @loader_path/AMDTextureAtomics.dylib
 weak libMTLIntelCompilerPlugin.dylib libMTLIntelCompilerPlugin.dylib @loader_path/IntelTextureAtomics.dylib
 cd "$B"
 codesign -f -s - MetalOldCompat.dylib MetalOldCompat-noop.dylib AMDTextureAtomics.dylib IntelTextureAtomics.dylib \
-    libAMDIL902.dylib Metal AMDShared libMTLIntelCompilerPlugin.dylib 2>/dev/null
+    libAMDIL902.dylib libAMDIL902-GCN-25.dylib Metal AMDShared AMDShared-GCN-25 libMTLIntelCompilerPlugin.dylib \
+    2>/dev/null
 # 5. into the payload
 cp Metal MetalOldCompat.dylib "$UB/$WRAPPER/"
 cp AMDShared AMDTextureAtomics.dylib "$UB/$AMD/MacOS/"
 cp libAMDIL902.dylib "$UB/$AMD/PlugIns/"
+cp AMDShared-GCN-25 "$UB/$GCN25/MacOS/AMDShared"
+cp AMDTextureAtomics.dylib "$UB/$GCN25/MacOS/"
+cp libAMDIL902-GCN-25.dylib "$UB/$GCN25/PlugIns/libAMDIL902.dylib"
 cp libMTLIntelCompilerPlugin.dylib IntelTextureAtomics.dylib "$UB/$INTEL/"
 shasum -a 256 MetalOldCompat.dylib AMDTextureAtomics.dylib IntelTextureAtomics.dylib libAMDIL902.dylib Metal AMDShared \
-    libMTLIntelCompilerPlugin.dylib
+    libAMDIL902-GCN-25.dylib AMDShared-GCN-25 libMTLIntelCompilerPlugin.dylib

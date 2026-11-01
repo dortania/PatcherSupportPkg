@@ -7,7 +7,9 @@
 #                      a02, a04-a06, r01   the AMD adapter's own switch (AMD_SI_HAZARD_FIX=0, AMD_LDS_BASE_FIX=0,
 #                                          AMD_HANDLE_FIX=0 + INTEL_HANDLE_FIX=0, AMD_NAN_FIX=0)
 #                      c01, c02            the stock libAMDIL902
-#                      c03                 libAMDIL902 with patches 1-3 only
+#                      c03                 libAMDIL902 without patch 4
+# PAYLOAD=12.5-GCN-25 runs only the AMD compiler tests, with Tahoe's AMDShared copies (built for macOS 12.5, so they
+# load on Sequoia too), and writes RESULTS-12.5-GCN-25.md.
 # Needs: ../build.sh run first (its build/ folder, including build/stock/), an OCLP-patched Mac with the legacy Metal
 # stack (the tests drive the real GPUs), Xcode command-line tools.
 # How it works without installing: tools/localcc.dylib runs Metal's GPU-compiler requests inside the test process
@@ -22,13 +24,18 @@ B=$(cd .. && pwd)/build
 [ -f tools/localcc.dylib ] || clang++ -std=c++17 -fblocks -dynamiclib tools/localcc.cpp -o tools/localcc.dylib
 # The shim sets MTL_USE_AIRNT_BA=0 (s18's fix) in the processes it loads into, and children inherit it.
 unset MTL_USE_AIRNT_BA
+V=  # the AMDShared copy: "" (12.5) or -GCN-25
+case ${PAYLOAD:-12.5} in 12.5) ;; 12.5-GCN-25) V=-GCN-25 ;; *) echo "PAYLOAD: 12.5 or 12.5-GCN-25" >&2; exit 2 ;; esac
 FIXED=$(mktemp -d) NOADAPTER=$(mktemp -d) STOCK=$(mktemp -d) PATCH3=$(mktemp -d)
-cp "$B/AMDShared" "$B/AMDTextureAtomics.dylib" "$B/IntelTextureAtomics.dylib" "$B/libAMDIL902.dylib" \
-   "$B/libMTLIntelCompilerPlugin.dylib" "$FIXED/"
+cp "$B/AMDTextureAtomics.dylib" "$B/IntelTextureAtomics.dylib" "$B/libMTLIntelCompilerPlugin.dylib" "$FIXED/"
+cp "$B/AMDShared$V" "$FIXED/AMDShared"
+cp "$B/libAMDIL902$V.dylib" "$FIXED/libAMDIL902.dylib"
 for d in "$NOADAPTER" "$STOCK" "$PATCH3"; do cp "$FIXED"/* "$d/"; done
-cp "$B/stock/AMDShared" "$B/stock/libMTLIntelCompilerPlugin.dylib" "$NOADAPTER/"
-cp "$B/stock/libAMDIL902.dylib" "$STOCK/"
-PARSERFIX_SKIP_GEP_SELECT=1 python3 -I ../libAMDIL902/make_parser_fix.py "$B/stock/libAMDIL902.dylib" "$PATCH3/libAMDIL902.dylib" > /dev/null
+cp "$B/stock/AMDShared$V" "$NOADAPTER/AMDShared"
+cp "$B/stock/libMTLIntelCompilerPlugin.dylib" "$NOADAPTER/"
+cp "$B/stock/libAMDIL902$V.dylib" "$STOCK/libAMDIL902.dylib"
+PARSERFIX_SKIP_GEP_SELECT=1 python3 -I ../libAMDIL902/make_parser_fix.py "$B/stock/libAMDIL902$V.dylib" \
+    "$PATCH3/libAMDIL902.dylib" > /dev/null
 codesign -f -s - "$PATCH3/libAMDIL902.dylib" 2> /dev/null
 SHIM=$B/MetalOldCompat.dylib NOOP=$B/MetalOldCompat-noop.dylib CC=$PWD/tools/localcc.dylib
 
@@ -41,6 +48,8 @@ a01-texture-atomics@Intel:adapter a02-si-smrd-hazard:smrd a04-si-threadgroup-poi
 a05-escaped-texture-pointer:handle a05-escaped-texture-pointer@Intel:handle a06-fast-math-nan-compare:nan
 c01-amdil-argument-buffer:stock c02-amdil-color-input:stock c03-amdil-gep-select:patch3
 i01-intel-array-struct-arg:adapter r01-amd-slot8-data-segment:ldsbase"
+
+[ -n "$V" ] && CASES=$(for c in $CASES; do case $c in (*@*|i*|s*) ;; (*) echo "$c" ;; esac; done)
 
 run() {  # <test[@gpu]> <removed fix or "fixed">
     local t=${1%%@*} gpu= shim=$SHIM libs=$FIXED
@@ -57,7 +66,8 @@ run() {  # <test[@gpu]> <removed fix or "fixed">
 }
 
 {
-    echo "# Test results on $(sysctl -n hw.model), macOS $(sw_vers -productVersion) ($(date '+%Y-%m-%d %H:%M'))"
+    echo "# Test results on $(sysctl -n hw.model), macOS $(sw_vers -productVersion) ($(date '+%Y-%m-%d %H:%M'))" \
+        "${V:+(AMDShared from 12.5$V)}"
     echo
     echo "Each test runs once without the fix it is about (everything else fixed) and once with all fixes; the GPU"
     echo "compilers run in the test process. \"crashed\" = the in-process compiler took the test down (a compile error out"
@@ -72,5 +82,5 @@ run() {  # <test[@gpu]> <removed fix or "fixed">
         echo "$t" >&2; echo "  without: $before" >&2; echo "  with:    $after" >&2
         echo "| ${t/@/ on } | $before | $after |"
     done
-} > RESULTS.md
+} > "RESULTS${V:+-12.5$V}.md"
 rm -rf "$FIXED" "$NOADAPTER" "$STOCK" "$PATCH3"

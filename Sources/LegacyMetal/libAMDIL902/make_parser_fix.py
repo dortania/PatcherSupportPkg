@@ -26,8 +26,11 @@ array (<= 4 elements, alloca) as loads of every element + selects on the index. 
 once and never moves it, so every expansion lands at the GEP: when one GEP serves several loads (LLVM computes
 &w[i].field once and reuses it), loads after stores to that field read the values from before the stores. Fix: when
 the pass picks up each load, the builder is moved to that load first (IRBuilderBase::SetInsertPoint(load)).
-usage: python3 make_parser_fix.py <stock libAMDIL902.dylib> <out>
-       PARSERFIX_SKIP_GEP_SELECT=1: patches 1-3 only (the tests' "without the fix" build for c03)
+The input is the stock 12.5 file or the 12.5-GCN-25 one (Tahoe), which is the stock file with OCLP's stub at the
+start of initializeIABArgTypeSet (0x7dbbc: return 0). The GCN-25 output keeps that stub and leaves out patch 1.
+
+usage: python3 make_parser_fix.py <stock 12.5 or 12.5-GCN-25 libAMDIL902.dylib> <out>
+       PARSERFIX_SKIP_GEP_SELECT=1: without patch 4 (the tests' "without the fix" build for c03)
 """
 
 import hashlib
@@ -44,6 +47,7 @@ CAVE = 0x4FFA0D372000  # zero padding between the load commands (end 0x8c8) and 
 # copies differ): LC_UUID + SHA-256 of the __TEXT bytes after the load commands (see AMDTextureAtomics' provider check).
 STOCK_UUID = "d5cf000789353193b3f1d0b3dd0dcc91"
 STOCK_TEXT_SHA = "e43893cb0b79ed8199ad298013b2e1ccc37ca55103469006406cbbb1a2769c49"
+GCN25_TEXT_SHA = "56df179a640a6355d76fd89065b57e5e3519a71e11d34693f5db32735ffc362a"  # 12.5-GCN-25: same UUID
 
 
 def text_pin(data):
@@ -136,12 +140,15 @@ for pos, target, size in fixups:
         code[pos : pos + 4] = struct.pack("<i", disp)
 
 data = bytearray(open(sys.argv[1], "rb").read())
-assert text_pin(data) == (STOCK_UUID, STOCK_TEXT_SHA), "not the stock 12.5 libAMDIL902"
+pin = text_pin(data)
+assert pin in ((STOCK_UUID, STOCK_TEXT_SHA), (STOCK_UUID, GCN25_TEXT_SHA)), "not a stock 12.5 / 12.5-GCN-25 libAMDIL902"
+gcn25 = pin[1] == GCN25_TEXT_SHA
 site, cave = SITE - BASE, CAVE - BASE
 assert data[site : site + 7] == SITE_BYTES
 assert data[cave : cave + len(code) + 16] == bytes(len(code) + 16), "cave is not free"
-data[cave : cave + len(code)] = code
-data[site : site + 7] = b"\xe9" + struct.pack("<i", CAVE - (SITE + 5)) + b"\x90\x90"
+if not gcn25:  # patch 1 (12.5-GCN-25 keeps OCLP's stub instead)
+    data[cave : cave + len(code)] = code
+    data[site : site + 7] = b"\xe9" + struct.pack("<i", CAVE - (SITE + 5)) + b"\x90\x90"
 
 # Patch 3: AIRRenderTargetType::AIRRenderTargetType(MDNode const*, unsigned&). After the attachment index has been
 # read (r9 = its operand index, r8d = r9 + 1, rdx = &index, rsi = node, rdi = this), continue in a second cave that
@@ -207,4 +214,5 @@ if os.environ.get("PARSERFIX_SKIP_GEP_SELECT") != "1":
     data[CAVE4 - BASE : CAVE4 - BASE + len(gs)] = gs
     data[off : off + 14] = b"\xe9" + struct.pack("<i", CAVE4 - (GS_SITE + 5)) + b"\x90" * 9
 open(sys.argv[2], "wb").write(data)
-print(f"cave {len(code)} bytes at {hex(cave)}; text pin {text_pin(data)[1]} (re-sign the output: its signature is stale)")
+patch1 = "OCLP's stub kept instead of patch 1" if gcn25 else f"cave {len(code)} bytes at {hex(cave)}"
+print(f"{patch1}; text pin {text_pin(data)[1]} (re-sign the output: its signature is stale)")
