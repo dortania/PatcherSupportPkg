@@ -2,14 +2,6 @@ from pathlib import Path
 import subprocess
 
 folders_to_delete = [
-    # Mojave and Catalina non-Metal Patches
-    # No longer used by us, but nice for reference
-    "10.13.6-18",
-    "10.13.6-19",
-    "10.14.4-18",
-    "10.14.4-19",
-    "10.14.6-19",
-
     # Nvidia Web Driver Patches
     # Remove .pkg, unused by patcher
     "WebDriver-387.10.10.10.40.140/WebDriver-387.10.10.10.40.140.pkg",
