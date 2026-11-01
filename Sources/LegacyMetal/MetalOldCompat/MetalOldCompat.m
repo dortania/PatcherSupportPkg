@@ -41,6 +41,7 @@
 #import <objc/runtime.h>
 #include <ctype.h>
 #include <dlfcn.h>
+#include <mach/mach.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
 #include <sys/mman.h>
@@ -1089,8 +1090,14 @@ static BOOL fromChromium(const void *returnAddress) {
     return n > 10 && !strcmp(base + n - 10, " Framework") && strstr(info.dli_fname, ".framework/") != NULL;
 }
 
+// OCLP's Tahoe wrapper makes supportsFamily: say yes to Mac2 for every GPU in WebKit's processes, when it loads. This library's
+// initializer runs first and keeps the real one.
+static BOOL (*realSupportsFamily)(id, SEL, NSInteger);
+
 static BOOL familyTwo(const void *device) {
-    return ((BOOL (*)(const void *, SEL, NSInteger))objc_msgSend)(device, @selector(supportsFamily:), MTLGPUFamilyMac2);
+    SEL selector = @selector(supportsFamily:);
+    if (realSupportsFamily) return realSupportsFamily((__bridge id)device, selector, MTLGPUFamilyMac2);
+    return ((BOOL (*)(const void *, SEL, NSInteger))objc_msgSend)(device, selector, MTLGPUFamilyMac2);
 }
 
 static CFArrayRef familyTwoOnly(CFArrayRef all) {  // consumes all; unchanged if no device qualifies
@@ -1329,6 +1336,51 @@ static void installAIR27Retargeting(void) {
     _dyld_register_func_for_add_image(interposeCompilerImage);  // also called for the images already loaded
 }
 
+// Item 11 for WebKit in the dyld shared cache, which is where it lives on Tahoe (Sequoia's Safari has its own copy on disk) and for
+// WKWebView apps: __interpose doesn't reach calls made from there, and ANGLE would run WebGL on the Intel iGPU. Those calls go
+// through __stubs and import slots outside the images, which several images can share; the replacements leave other callers alone.
+static void rebindStubs(const struct mach_header *mh, intptr_t slide, const void *from, const void *to) {
+    const struct mach_header_64 *header = (const struct mach_header_64 *)mh;
+    const struct load_command *command = (const struct load_command *)(header + 1);
+    for (uint32_t i = 0; i < header->ncmds; i++, command = (const void *)((const char *)command + command->cmdsize)) {
+        if (command->cmd != LC_SEGMENT_64 || strcmp(((const struct segment_command_64 *)command)->segname, SEG_TEXT)) continue;
+        const struct segment_command_64 *segment = (const struct segment_command_64 *)command;
+        const struct section_64 *section = (const struct section_64 *)(segment + 1);
+        for (uint32_t k = 0; k < segment->nsects; k++, section++) {
+            if (strcmp(section->sectname, "__stubs")) continue;
+            const uint8_t *code = (const uint8_t *)(section->addr + slide);
+            for (uint64_t at = 0; at + 6 <= section->size; at += 6) {
+                if (code[at] != 0xff || code[at + 1] != 0x25) continue;  // jmp *disp32(%rip)
+                const void **slot = (const void **)(code + at + 6 + *(const int32_t *)(code + at + 2));
+                if (*slot != from) continue;
+                vm_address_t page = (vm_address_t)slot & ~(vm_address_t)(getpagesize() - 1);
+                if (vm_protect(mach_task_self(), page, getpagesize(), FALSE, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY) != KERN_SUCCESS) continue;
+                *slot = to;
+                vm_protect(mach_task_self(), page, getpagesize(), FALSE, VM_PROT_READ);
+                if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] WebKit in the shared cache: import slot %p rebound\n", slot);
+            }
+        }
+    }
+}
+
+static void routeWebKitImage(const struct mach_header *mh, intptr_t slide) {
+    Dl_info info;
+    if (!(mh->flags & MH_DYLIB_IN_CACHE) || !dladdr(mh, &info) || !info.dli_fname) return;
+    const char *base = strrchr(info.dli_fname, '/');
+    base = base ? base + 1 : info.dli_fname;
+    if (strcmp(base, "libANGLE-shared.dylib") && strcmp(base, "WebGPU") && strcmp(base, "WebCore") && strcmp(base, "WebKit")) return;
+    rebindStubs(mh, slide, (const void *)MTLCreateSystemDefaultDevice, (const void *)interposedCreateSystemDefaultDevice);
+    rebindStubs(mh, slide, (const void *)MTLCopyAllDevices, (const void *)interposedCopyAllDevices);
+    rebindStubs(mh, slide, (const void *)MTLCopyAllDevicesWithObserver, (const void *)interposedCopyAllDevicesWithObserver);
+    rebindStubs(mh, slide, (const void *)IORegistryEntryCreateCFProperty, (const void *)interposedRegistryEntryCreateCFProperty);
+}
+
+static void installWebKitRouting(void) {
+    Method supportsFamily = class_getInstanceMethod(objc_getClass("_MTLDevice"), @selector(supportsFamily:));
+    if (supportsFamily) realSupportsFamily = (BOOL (*)(id, SEL, NSInteger))method_getImplementation(supportsFamily);
+    if (!strncmp(getprogname(), "com.apple.WebKit", 16)) _dyld_register_func_for_add_image(routeWebKitImage);
+}
+
 #ifndef METALOLDCOMPAT_NOOP
 __attribute__((used, section("__DATA,__interpose"))) static const struct { const void *replacement, *original; } interposers[] = {
     {(const void *)interposedRegistryEntryCreateCFProperty, (const void *)IORegistryEntryCreateCFProperty},
@@ -1345,7 +1397,9 @@ __attribute__((constructor)) static void init(void) {
 #ifndef METALOLDCOMPAT_NOOP
     patchDeviceBase();
     installAIR27Retargeting();
+    installWebKitRouting();
 #else
+    (void)installWebKitRouting;
     (void)patchDeviceBase;
     (void)installAIR27Retargeting;
 #endif
