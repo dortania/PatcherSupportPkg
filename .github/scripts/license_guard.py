@@ -100,7 +100,12 @@ def parse_diff(text):
 
 
 def main():
-    diff = git("diff", "-M", "-U0", "--no-color", "--no-ext-diff", DIFF_RANGE)
+    # Only pair files as renames when they're near-identical. With git's default 50% threshold,
+    # deleting one payload folder while adding another pairs up unrelated boilerplate Apple plists
+    # (e.g. an IOAccelerator Info.plist with an AMD GLDriver one), and their differing copyright
+    # lines are then reported as a stripped notice. A real move stays well above 90%; anything
+    # less is shown as a delete + add, so a deleted notice still surfaces as a warning.
+    diff = git("diff", "-M90%", "-U0", "--no-color", "--no-ext-diff", DIFF_RANGE)
     findings = []  # (severity, path, title, [detail lines])
     allow = load_allow()
 
