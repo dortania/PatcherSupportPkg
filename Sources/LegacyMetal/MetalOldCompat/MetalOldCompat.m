@@ -11,20 +11,17 @@
 //      qualifiers rewritten to their 3.1 equivalents)
 //  10. Metal devices pinned against over-release (Chromium's GPU process)
 //  11. ANGLE (Chromium, Safari's WebKit): past ANGLE's pre-2016-Mac gate, and only family-2 GPUs (the AMD dGPU) for it
-//  12. sRGB mipmaps on the 12.5 AMD driver (its blit averages the encoded bytes)
 //  13. Safari's ANGLE: its prebuilt internal-shader metallib (too new for this stack) replaced by the same shaders
 //      compiled from source
 //  14. argument encoders in Safari's processes (OCLP's wrapper stubs them out; WebGL 2 uniform blocks need them)
 //  15. 12.x Intel driver: MSAA resolves into a mip level / array slice other than 0 (lost, or a crash); fast clears of
 //      color targets at most 2 texels wide (rows missed)
 //  16. 2D-array texture views that don't start at slice 0 on the 12.x Intel driver (most of their layers unreachable)
-//  17. depth/stencil attachments that are views of mip 1+ on the 12.5 AMD driver (nothing rendered): parent attached
 //  18. pipeline cache keys that ignore the pipeline descriptor (a compute pipeline's maxTotalThreadsPerThreadgroup):
 //      MetalOld told to key by the driver's function key
-//  19. trilinear filtering on the 12.5 AMD driver: its samplers blend between mip levels only in the middle of the
-//      interval (PERF_MIP); now linear across it, as on Apple's GPUs
 //  25. precompiled libraries built for macOS 15.4+ (AIR 2.7, e.g. iMovie's): retargeted to AIR 2.6 in the compiler
 //      service, as MetallibSupportPkg does for the system's metallibs
+// (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
 // sends it to the unified log, for sandboxed XPC services such as WebKit's GPU process). Build with build.sh.
@@ -653,109 +650,7 @@ static id newLibraryData(id self, SEL _cmd, dispatch_data_t data, NSError **erro
 // (Haswell / Ivy Bridge), which automatic graphics switching often makes the active one. For calls from a Chromium
 // framework image ("<Product> Framework") or WebKit's ANGLE: report a post-2015 model, and list only family-2 GPUs (the
 // AMD dGPU) to ANGLE, Skia Graphite and Dawn. Everything else in the process sees the real model and all GPUs.
-// 12. sRGB mipmaps on the 12.5 AMD driver: -[BronzeMtlBlitCmdEncoder generateMipmapsForTexture:] averages the encoded
-// bytes of RGBA8/BGRA8Unorm_sRGB textures (its stretch blit treats them as linear), so every level below 0 is off
-// (WebGL 2 conformance tex-srgb-mipmap). Keep the driver's blit and, when that encoder ends, redo levels 1..n of those
-// textures with one render pass per level and slice: sampling the sRGB source decodes, the linear filter averages the
-// 2x2 texels, the sRGB render target encodes. Textures without MTLTextureUsageRenderTarget, and 3D ones, are unchanged.
-static const void *kPendingSRGBMips = &kPendingSRGBMips;
-typedef void (*GenerateMipmapsIMP)(id, SEL, id);
 typedef void (*EndEncodingIMP)(id, SEL);
-static GenerateMipmapsIMP origGenerateMipmaps;
-static EndEncodingIMP origBlitEndEncoding;
-
-static BOOL needsSRGBMipFix(id<MTLTexture> texture) {
-    MTLPixelFormat f = texture.pixelFormat;
-    MTLTextureType t = texture.textureType;
-    return (f == MTLPixelFormatRGBA8Unorm_sRGB || f == MTLPixelFormatBGRA8Unorm_sRGB) && texture.mipmapLevelCount > 1 &&
-           (texture.usage & MTLTextureUsageRenderTarget) &&
-           (t == MTLTextureType2D || t == MTLTextureType2DArray || t == MTLTextureTypeCube || t == MTLTextureTypeCubeArray);
-}
-
-static void generateMipmaps(id self, SEL _cmd, id<MTLTexture> texture) {
-    origGenerateMipmaps(self, _cmd, texture);
-    if (!needsSRGBMipFix(texture)) return;
-    NSMutableArray *pending = objc_getAssociatedObject(self, kPendingSRGBMips);
-    if (!pending) {
-        pending = [NSMutableArray array];
-        objc_setAssociatedObject(self, kPendingSRGBMips, pending, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    [pending addObject:texture];
-}
-
-static id<MTLRenderPipelineState> srgbMipPipeline(id<MTLDevice> device, MTLPixelFormat format) {
-    static NSMutableDictionary *pipelines;
-    static os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
-    NSString *key = [NSString stringWithFormat:@"%p-%lu", device, (unsigned long)format];
-    os_unfair_lock_lock(&lock);
-    id<MTLRenderPipelineState> pipeline = pipelines[key];
-    os_unfair_lock_unlock(&lock);
-    if (pipeline) return pipeline;
-    NSString *source = @"#include <metal_stdlib>\nusing namespace metal;\n"
-        "struct V { float4 position [[position]]; float2 uv; };\n"
-        "vertex V srgbMipVertex(uint id [[vertex_id]]) {\n"
-        "    float2 p = float2((id << 1) & 2, id & 2);\n"
-        "    return { float4(p * float2(2, -2) + float2(-1, 1), 0, 1), p };\n"
-        "}\n"
-        "fragment float4 srgbMipFragment(V in [[stage_in]], texture2d<float> source [[texture(0)]]) {\n"
-        "    constexpr sampler s(filter::linear, address::clamp_to_edge);\n"
-        "    return source.sample(s, in.uv);\n"
-        "}\n";
-    NSError *error = nil;
-    id<MTLLibrary> library = [device newLibraryWithSource:source options:nil error:&error];
-    MTLRenderPipelineDescriptor *descriptor = [MTLRenderPipelineDescriptor new];
-    descriptor.vertexFunction = [library newFunctionWithName:@"srgbMipVertex"];
-    descriptor.fragmentFunction = [library newFunctionWithName:@"srgbMipFragment"];
-    descriptor.colorAttachments[0].pixelFormat = format;
-    pipeline = library ? [device newRenderPipelineStateWithDescriptor:descriptor error:&error] : nil;
-    if (!pipeline) {
-        shimLog("[mtlshim] sRGB mipmap pipeline: %s\n", error.localizedDescription.UTF8String ?: "?");
-        return nil;
-    }
-    os_unfair_lock_lock(&lock);
-    if (!pipelines) pipelines = [NSMutableDictionary dictionary];
-    pipelines[key] = pipeline;
-    os_unfair_lock_unlock(&lock);
-    return pipeline;
-}
-
-static void regenerateSRGBMips(id<MTLCommandBuffer> commandBuffer, id<MTLTexture> texture) {
-    id<MTLRenderPipelineState> pipeline = srgbMipPipeline(texture.device, texture.pixelFormat);
-    if (!pipeline) return;
-    BOOL cube = texture.textureType == MTLTextureTypeCube || texture.textureType == MTLTextureTypeCubeArray;
-    NSUInteger slices = texture.arrayLength * (cube ? 6 : 1);
-    for (NSUInteger level = 1; level < texture.mipmapLevelCount; level++)
-        for (NSUInteger slice = 0; slice < slices; slice++) {
-            id<MTLTexture> source = [texture newTextureViewWithPixelFormat:texture.pixelFormat textureType:MTLTextureType2D
-                                                                     levels:NSMakeRange(level - 1, 1) slices:NSMakeRange(slice, 1)];
-            MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
-            pass.colorAttachments[0].texture = texture;
-            pass.colorAttachments[0].level = level;
-            pass.colorAttachments[0].slice = slice;
-            pass.colorAttachments[0].loadAction = MTLLoadActionDontCare;
-            pass.colorAttachments[0].storeAction = MTLStoreActionStore;
-            id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:pass];
-            [encoder setRenderPipelineState:pipeline];
-            [encoder setFragmentTexture:source atIndex:0];
-            [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
-            [encoder endEncoding];
-        }
-    if (texture.storageMode == MTLStorageModeManaged) {  // a synchronizeResource: in the original encoder saw old levels
-        id<MTLBlitCommandEncoder> blit = [commandBuffer blitCommandEncoder];
-        [blit synchronizeResource:texture];
-        [blit endEncoding];
-    }
-}
-
-static void blitEndEncoding(id self, SEL _cmd) {
-    NSArray *pending = objc_getAssociatedObject(self, kPendingSRGBMips);
-    id<MTLCommandBuffer> commandBuffer = pending.count ? ((id (*)(id, SEL))objc_msgSend)(self, @selector(commandBuffer)) : nil;
-    origBlitEndEncoding(self, _cmd);
-    if (!pending.count) return;
-    objc_setAssociatedObject(self, kPendingSRGBMips, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] sRGB mipmaps regenerated for %lu texture(s)\n", (unsigned long)pending.count);
-    for (id<MTLTexture> texture in pending) regenerateSRGBMips(commandBuffer, texture);
-}
 
 // 15. MSAA resolves on the 12.x Intel driver (Haswell / Ivy Bridge): IGRenderPass::generateResolveOptions always resolves
 // into level 0, slice 0 of the resolve texture. It ignores resolveLevel/resolveSlice and a view's offset into its parent
@@ -909,88 +804,6 @@ static void *igInitView(void *self, SEL _cmd, void *parent, MTLPixelFormat forma
     return view;
 }
 
-// 17. Depth/stencil attachments that are texture views on the 12.5 AMD driver: rendering stencil through a 2D view of mip
-// level 1+ of a texture writes nothing (wgpu zero_init "Stencil8 store to mip 1, layer 1 of a D2 view";
-// browsers/stencilslice/stencilview.m); attaching the texture itself with that level/slice works. Such attachments are
-// rewritten to the view's parent texture with the view's level/slice added (what rendering to the view means).
-static RenderEncoderIMP origBronzeRenderEncoder;
-
-static void attachRoot(MTLRenderPassAttachmentDescriptor *a) {
-    NSUInteger level = a.level, slice = a.slice;
-    id<MTLTexture> root = rootTexture(a.texture, &level, &slice);
-    if (root == a.texture || root.textureType == MTLTextureType3D) return;
-    a.texture = root;
-    a.level = level;
-    a.slice = slice;
-}
-
-static id bronzeRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor) {
-    if (!descriptor.depthAttachment.texture.parentTexture && !descriptor.stencilAttachment.texture.parentTexture)
-        return origBronzeRenderEncoder(self, _cmd, descriptor);
-    MTLRenderPassDescriptor *rewritten = [descriptor copy];
-    attachRoot(rewritten.depthAttachment);
-    attachRoot(rewritten.stencilAttachment);
-    if (getenv("MTLSHIM_VERBOSE")) {
-        id<MTLTexture> d = descriptor.depthAttachment.texture, s = descriptor.stencilAttachment.texture;
-        shimLog("[mtlshim] depth/stencil views -> parent: depth %s type %lu fmt %lu -> level %lu slice %lu; stencil %s type %lu fmt %lu "
-                "-> level %lu slice %lu\n", d.parentTexture ? "view" : "texture", (unsigned long)d.textureType, (unsigned long)d.pixelFormat,
-                (unsigned long)rewritten.depthAttachment.level, (unsigned long)rewritten.depthAttachment.slice, s.parentTexture ? "view" : "texture",
-                (unsigned long)s.textureType, (unsigned long)s.pixelFormat, (unsigned long)rewritten.stencilAttachment.level,
-                (unsigned long)rewritten.stencilAttachment.slice);
-    }
-    return origBronzeRenderEncoder(self, _cmd, rewritten);
-}
-
-// 19. Trilinear filtering on the 12.5 AMD driver: -[BronzeMtlSampler initWithDevice:samplerDescriptor:] sets
-// SQ_IMG_SAMP_WORD1.PERF_MIP = 6 in every sampler, so with mipFilter Linear the GPU reads a single level near whole
-// levels and blends only in between (a sample at level 0.25 returns 0.19 of the way to the next level, at 0.75 0.81).
-// Apple's GPUs blend linearly, and Blender EEVEE's horizon scan relies on it: it samples its depth pyramid just above
-// a whole level, and with the sharpened blend the light of bright emitters went missing on nearby surfaces. PERF_MIP
-// is cleared and the descriptor registered again in the driver's global table, which the GPU reads it from: samplers
-// with a resource index (argument buffers) own their slot, the others share a slot per distinct descriptor.
-// Samples near whole levels now read two levels: a kernel that does nothing but sample textures takes up to ~12% longer
-// (more only if nearly every sample sits just above a whole level); Blender's render times didn't change.
-// MTLSHIM_EXACT_TRILINEAR=0 turns this off.
-typedef id (*SamplerInitIMP)(id, SEL, id, id);
-static SamplerInitIMP origSamplerInit;
-static uint64_t (*setSharedSamplerSRD)(id device, unsigned kind, unsigned dwords, const unsigned *srd);
-static void (*setSamplerSRD)(id device, unsigned kind, unsigned index, unsigned dwords, const void *srd, bool unique);
-static ptrdiff_t samplerConstsOffset, samplerIndexOffset;
-enum { kPerfMipMask = 0x0f000000 };  // SQ_IMG_SAMP_WORD1 bits 24-27
-
-static id samplerInit(id self, SEL _cmd, id device, id descriptor) {
-    self = origSamplerInit(self, _cmd, device, descriptor);
-    if (!self) return self;
-    uint32_t *srd = (uint32_t *)((char *)(__bridge void *)self + samplerConstsOffset);
-    if (!(srd[1] & kPerfMipMask)) return self;
-    srd[1] &= ~(uint32_t)kPerfMipMask;
-    uint64_t *index = (uint64_t *)((char *)(__bridge void *)self + samplerIndexOffset);
-    NSUInteger resourceIndex = [descriptor respondsToSelector:sel_registerName("resourceIndex")]
-        ? ((NSUInteger (*)(id, SEL))objc_msgSend)(descriptor, sel_registerName("resourceIndex")) : 0;
-    if (resourceIndex)
-        setSamplerSRD(device, 1, (unsigned)resourceIndex, 4, srd, true);
-    else
-        *index = setSharedSamplerSRD(device, 1, 4, srd);
-    return self;
-}
-
-static void exactTrilinear(void) {
-    const char *setting = getenv("MTLSHIM_EXACT_TRILINEAR");
-    if (origSamplerInit || (setting && !strcmp(setting, "0"))) return;
-    Class sampler = objc_getClass("BronzeMtlSampler");
-    Ivar consts = sampler ? class_getInstanceVariable(sampler, "m_samplerConsts") : NULL;
-    Ivar rsrcIndex = sampler ? class_getInstanceVariable(sampler, "rsrcIndex") : NULL;
-    setSharedSamplerSRD = dlsym(RTLD_DEFAULT, "_Z39amdMtlBronzeDeviceSetNonUniqueGlobalSrdP15BronzeMtlDevicejjPKj");
-    setSamplerSRD = dlsym(RTLD_DEFAULT, "_Z30amdMtlBronzeDeviceSetGlobalSRDP15BronzeMtlDevicejjjPKvb");
-    if (!consts || !rsrcIndex || !setSharedSamplerSRD || !setSamplerSRD || strcmp(ivar_getTypeEncoding(rsrcIndex), "Q") ||
-        !strstr(ivar_getTypeEncoding(consts), "\"MIN_LOD\"b12\"MAX_LOD\"b12\"PERF_MIP\"b4\"PERF_Z\"b4") ||
-        !definesMethod("BronzeMtlSampler", "initWithDevice:samplerDescriptor:"))
-        return;
-    samplerConstsOffset = ivar_getOffset(consts);
-    samplerIndexOffset = ivar_getOffset(rsrcIndex);
-    origSamplerInit = (SamplerInitIMP)swizzle("BronzeMtlSampler", "initWithDevice:samplerDescriptor:", (IMP)samplerInit);
-}
-
 static BOOL definesMethod(const char *cls, const char *sel);
 static IMP swizzle(const char *cls, const char *sel, IMP imp);
 
@@ -999,18 +812,11 @@ static void patchDriverClasses(void) {
     if (patched) restoreArgumentEncoders();  // item 14: after the wrapper's initializer
     static os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
     os_unfair_lock_lock(&lock);
-    if (!origGenerateMipmaps && definesMethod("BronzeMtlBlitCmdEncoder", "generateMipmapsForTexture:") &&
-        definesMethod("BronzeMtlBlitCmdEncoder", "endEncoding")) {
-        origGenerateMipmaps = (GenerateMipmapsIMP)swizzle("BronzeMtlBlitCmdEncoder", "generateMipmapsForTexture:", (IMP)generateMipmaps);
-        origBlitEndEncoding = (EndEncodingIMP)swizzle("BronzeMtlBlitCmdEncoder", "endEncoding", (IMP)blitEndEncoding);
-    }
     if (!origIGRenderEncoder && definesMethod("MTLIGAccelCommandBuffer", "renderCommandEncoderWithDescriptor:") &&
         definesMethod("MTLIGAccelRenderCommandEncoder", "endEncoding")) {
         origIGRenderEncoder = (RenderEncoderIMP)swizzle("MTLIGAccelCommandBuffer", "renderCommandEncoderWithDescriptor:", (IMP)igRenderEncoder);
         origIGRenderEndEncoding = (EndEncodingIMP)swizzle("MTLIGAccelRenderCommandEncoder", "endEncoding", (IMP)igRenderEndEncoding);
     }
-    if (!origBronzeRenderEncoder && definesMethod("BronzeMtlCmdBuffer", "renderCommandEncoderWithDescriptor:"))
-        origBronzeRenderEncoder = (RenderEncoderIMP)swizzle("BronzeMtlCmdBuffer", "renderCommandEncoderWithDescriptor:", (IMP)bronzeRenderEncoder);
     Class igTexture = objc_getClass("MTLIGAccelTexture");
     Ivar info = igTexture ? class_getInstanceVariable(igTexture, "m_Info") : NULL;
     Ivar arrayLength = igTexture ? class_getInstanceVariable(igTexture, "_arrayLength") : NULL;
@@ -1022,7 +828,6 @@ static void patchDriverClasses(void) {
         igArrayLengthOffset = ivar_getOffset(arrayLength);
         origIGInitView = (InitViewIMP)swizzle("MTLIGAccelTexture", "initWithTexture:pixelFormat:textureType:levels:slices:", (IMP)igInitView);
     }
-    exactTrilinear();
     os_unfair_lock_unlock(&lock);
 }
 

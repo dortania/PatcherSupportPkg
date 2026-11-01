@@ -3,6 +3,7 @@
 #   with the fixes   the payload built by ../build.sh (shim, AMD and Intel adapters, patched libAMDIL902)
 #   without the fix  the same, minus only the fix the test is about:
 #                      shim tests          the no-op MetalOldCompat build (same load commands, does nothing)
+#                      s12, s17, s19       AMDBronzeCompat not loaded
 #                      a01, a05@Intel, i01 the stock AMDShared / libMTLIntelCompilerPlugin (adapters not loaded)
 #                      a02, a04-a06, r01   the AMD adapter's own switch (AMD_SI_HAZARD_FIX=0, AMD_LDS_BASE_FIX=0,
 #                                          AMD_HANDLE_FIX=0 + INTEL_HANDLE_FIX=0, AMD_NAN_FIX=0)
@@ -15,13 +16,16 @@
 # How it works without installing: tools/localcc.dylib runs Metal's GPU-compiler requests inside the test process
 # instead of in MTLCompilerService, so DYLD_LIBRARY_PATH picks the compiler files by name; the shim is loaded with
 # DYLD_INSERT_LIBRARIES. A crash inside the in-process compiler leaves no result line and counts as the bug reproducing
-# (out of process it is a compile error). a03 needs Blender: run a03-si-stale-l1-blender.sh separately.
+# (out of process it is a compile error). tools/bronzeload.dylib loads AMDBronzeCompat once Metal has loaded the AMD
+# driver, which the driver's load command does when installed. a03 needs Blender: run a03-si-stale-l1-blender.sh separately.
 set -u
 cd "$(dirname "$0")"
 B=$(cd .. && pwd)/build
 [ -f "$B/AMDTextureAtomics.dylib" ] || { echo "run ../build.sh first" >&2; exit 2; }
 [ -x build/s01-device-methods ] || ./build.sh > /dev/null
 [ -f tools/localcc.dylib ] || clang++ -std=c++17 -fblocks -dynamiclib tools/localcc.cpp -o tools/localcc.dylib
+[ -f tools/bronzeload.dylib ] || clang -fobjc-arc -dynamiclib tools/bronzeload.m -framework Foundation -framework Metal \
+    -o tools/bronzeload.dylib
 # The shim sets MTL_USE_AIRNT_BA=0 (s18's fix) in the processes it loads into, and children inherit it.
 unset MTL_USE_AIRNT_BA
 V=  # the AMDShared copy: "" (12.5) or -GCN-25
@@ -37,13 +41,13 @@ cp "$B/stock/libAMDIL902$V.dylib" "$STOCK/libAMDIL902.dylib"
 PARSERFIX_SKIP_GEP_SELECT=1 python3 -I ../libAMDIL902/make_parser_fix.py "$B/stock/libAMDIL902$V.dylib" \
     "$PATCH3/libAMDIL902.dylib" > /dev/null
 codesign -f -s - "$PATCH3/libAMDIL902.dylib" 2> /dev/null
-SHIM=$B/MetalOldCompat.dylib NOOP=$B/MetalOldCompat-noop.dylib CC=$PWD/tools/localcc.dylib
+SHIM=$B/MetalOldCompat.dylib NOOP=$B/MetalOldCompat-noop.dylib CC=$PWD/tools/localcc.dylib BRONZELOAD=$PWD/tools/bronzeload.dylib
 
 # <test[@gpu]>:<what "without the fix" removes>
 CASES="s01-device-methods:shim s02-reflection:shim s03-shader-atomic-usage:shim s07-vertex-descriptor:shim
-s08-sdk-properties:shim s09-msl-3.2:shim s10-device-over-release:shim s12-srgb-mipmaps:shim s13-new-air-metallib:shim
+s08-sdk-properties:shim s09-msl-3.2:shim s10-device-over-release:shim s12-srgb-mipmaps:bronze s13-new-air-metallib:shim
 s14-safari-argument-encoders:shim s15a-intel-msaa-resolve:shim s15b-intel-narrow-clear:shim s16-intel-array-view:shim
-s17-amd-depth-stencil-view:shim s18-pipeline-cache-key:shim s19-amd-trilinear-blend:shim a01-texture-atomics:adapter
+s17-amd-depth-stencil-view:bronze s18-pipeline-cache-key:shim s19-amd-trilinear-blend:bronze a01-texture-atomics:adapter
 a01-texture-atomics@Intel:adapter a02-si-smrd-hazard:smrd a04-si-threadgroup-pointer:ldsbase
 a05-escaped-texture-pointer:handle a05-escaped-texture-pointer@Intel:handle a06-fast-math-nan-compare:nan
 c01-amdil-argument-buffer:stock c02-amdil-color-input:stock c03-amdil-gep-select:patch3
@@ -54,16 +58,18 @@ i01-intel-array-struct-arg:adapter r01-amd-slot8-data-segment:ldsbase"
 run() {  # <test[@gpu]> <removed fix or "fixed">
     local t=${1%%@*} gpu= shim=$SHIM libs=$FIXED
     [[ $1 == *@* ]] && gpu=${1#*@}
+    local inject=$BRONZELOAD
     local -a env=()
     case $2 in
-        shim) shim=$NOOP ;; adapter) libs=$NOADAPTER ;; stock) libs=$STOCK ;; patch3) libs=$PATCH3 ;;
+        bronze) inject= ;; shim) shim=$NOOP ;; adapter) libs=$NOADAPTER ;; stock) libs=$STOCK ;; patch3) libs=$PATCH3 ;;
         smrd) env=(AMD_SI_HAZARD_FIX=0) ;; ldsbase) env=(AMD_LDS_BASE_FIX=0) ;; handle) env=(AMD_HANDLE_FIX=0 INTEL_HANDLE_FIX=0) ;;
         nan) env=(AMD_NAN_FIX=0) ;;
     esac
     # s13's fix (item 25) works in MTLCompilerService, which gets the shim under test this way
     [ "$t" = s13-new-air-metallib ] && env+=(__XPC_DYLD_INSERT_LIBRARIES=$shim)
     rm -rf "$(getconf DARWIN_USER_CACHE_DIR)com.apple.metal"
-    env ${env[@]+"${env[@]}"} DYLD_INSERT_LIBRARIES=$shim:$CC DYLD_LIBRARY_PATH=$libs ./build/"$t" $gpu 2>/dev/null |
+    env ${env[@]+"${env[@]}"} AMD_BRONZE_COMPAT_PATH=$B/AMDBronzeCompat.dylib \
+        DYLD_INSERT_LIBRARIES=$shim:$CC${inject:+:$inject} DYLD_LIBRARY_PATH=$libs ./build/"$t" $gpu 2>/dev/null |
         grep -E '^(PASS|FAIL|SKIP) ' | tail -1
 }
 

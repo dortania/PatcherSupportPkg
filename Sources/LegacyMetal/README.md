@@ -3,7 +3,8 @@
 Sources for the legacy Metal fixes in `Universal-Binaries/13.2.1-24` (Metal.framework), `Universal-Binaries/12.5`
 (AMDShared.bundle, AppleIntelHD5000GraphicsMTLDriver.bundle) and `Universal-Binaries/12.5-GCN-25` (Tahoe's
 AMDShared.bundle): a compatibility library for MetalOld, adapters for the 12.5 AMD and 3802 Intel shader compilers,
-and the libAMDIL902 patches.
+the libAMDIL902 patches, and fixes for the 12.5 AMD Metal driver (`AMDBronzeCompat.dylib`, loaded by
+`AMDMTLBronzeDriver.bundle` in `12.5`, `12.5-24`, `12.5-25` and `12.5-GCN-SKL-*`).
 
 ## Build
 

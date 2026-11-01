@@ -1,4 +1,4 @@
-// s12-srgb-mipmaps (MetalOldCompat item 12): -[MTLBlitCommandEncoder generateMipmapsForTexture:] on an RGBA8Unorm_sRGB
+// s12-srgb-mipmaps (AMDBronzeCompat item 2): -[MTLBlitCommandEncoder generateMipmapsForTexture:] on an RGBA8Unorm_sRGB
 // texture with the 12.5 AMD driver. The driver averages the sRGB-encoded bytes instead of the linear values, so every
 // level below 0 is too dark (WebGL 2 conformance: conformance2/textures/misc/tex-srgb-mipmap). Level 0 is a
 // black/white checkerboard: the correct level 1 is linear 0.5 = sRGB byte 188; averaging the bytes gives 128.

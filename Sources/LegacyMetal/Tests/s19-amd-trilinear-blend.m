@@ -1,4 +1,4 @@
-// s19-amd-trilinear-blend (shim item 19): linear blending between mip levels on the 12.5 AMD driver. Its samplers set
+// s19-amd-trilinear-blend (AMDBronzeCompat item 3): linear blending between mip levels on the 12.5 AMD driver. Its samplers set
 // SQ_IMG_SAMP_WORD1.PERF_MIP = 6, so with mipFilter Linear the GPU reads one level near whole levels and blends only
 // in between: a sample at level 0.25 returns 0.19 of the way to the next level, at 0.75 0.81. Apple's GPUs blend
 // linearly (0.25, 0.75), and Blender EEVEE's horizon scan depends on it when it samples its depth pyramid just above a
