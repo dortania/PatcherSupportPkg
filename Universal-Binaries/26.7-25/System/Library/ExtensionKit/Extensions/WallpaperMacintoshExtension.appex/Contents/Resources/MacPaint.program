@@ -1,0 +1,105 @@
+//
+//  MacPaint
+//  Macintosh 40th Anniversary
+//
+//  Copyright © 2024 Apple. All rights reserved.
+//
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+start simultaneous
+	scale out
+	let image = "MacPaint"
+	let cursor = "None"
+	let ramp = "None"
+end simultaneous
+
+gosub tools
+gosub patterns
+gosub fatbits
+gosub menubar
+
+exit
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+tools:
+
+	start simultaneous
+		let scene = "tools"
+		let ramp = "Down"
+		camera to 22.5, 45
+		scroll to 42, 0
+		mouse to 0, 342
+	end simultaneous
+
+	scroll to 42, 282 over 28 seconds async "scroll"
+	scale in over 3 seconds
+
+	wait until 3 seconds before "scroll" completes
+	scale out over 3 seconds
+
+	return
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+patterns:
+
+	start simultaneous
+		let scene = "patterns"
+		let ramp = "Right"
+		camera to -22.5, 45
+		scroll to 155, 318
+	end simultaneous
+
+	scroll to 477, 318 over 32 seconds async "scroll"
+	scale in over 3 seconds
+
+	wait until 3 seconds before "scroll" completes
+	scale out over 3 seconds
+
+	return
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+fatbits:
+
+	start simultaneous
+		let scene = "fatbits"
+		let ramp = "Down"
+		camera to 22.5, 45
+		scroll to 120, 0
+		mouse to 0, 342
+	end simultaneous
+
+	scroll to 120, 302 over 30 seconds async "scroll"
+	scale in over 3 seconds
+
+	wait until 3 seconds before "scroll" completes
+	scale out over 3 seconds
+
+	return
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+menubar:
+
+	start simultaneous
+		let scene = "menubar"
+		let cursor = "None"
+		let ramp = "Right"
+		camera to -22.5, 45
+		scroll to 0, 10
+		zoom in
+	end simultaneous
+
+	scroll to 100, 10 over 28 seconds async "scroll"
+	scale in over 6 seconds
+
+	wait until 6 seconds before "scroll" completes
+	scale out over 6 seconds
+
+	zoom out
+
+	return
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------

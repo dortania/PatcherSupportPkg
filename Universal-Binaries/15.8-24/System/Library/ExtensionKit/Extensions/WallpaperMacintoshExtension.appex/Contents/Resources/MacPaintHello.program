@@ -1,0 +1,222 @@
+//
+//  MacPaint Hello
+//  Macintosh 40th Anniversary
+//
+//  Copyright © 2024 Apple. All rights reserved.
+//
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+start simultaneous
+	scale out
+	let image = "MacPaintHello"
+	let cursor = "Automatic"
+	let ramp = "None"
+	add canvas at 81, 98 size 140, 50
+	add cursorrect at 80, 288 size 416, 240 name "Brush"
+	add radiobuttongroup
+	add radiobutton at 16, 115 size 25, 21 value 0 name "None"
+	add radiobutton at 42, 115 size 25, 21 value 1 name "None"
+end simultaneous
+
+gosub write
+gosub reveal
+
+exit
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+write:
+
+	start simultaneous
+		let scene = "hello"
+		let ramp = "Right"
+		camera to 22.5, 45
+		scroll to 20, 73
+		mouse to 18, 162
+	end simultaneous
+
+	scroll to 220, 73 over 30 seconds async "scroll"
+	scale in over 3 seconds
+
+	mouse to 38, 112 over 1 second curve easeout
+	mouse click
+	wait for 0.1 seconds
+
+	mouse to 88, 87 over 1.2 seconds curve easeout
+
+	mouse down
+	mouse to 93, 84 over 0.1667 seconds curve linear
+	mouse to 96, 81 over 0.1333 seconds curve linear
+	mouse to 100, 77 over 0.1667 seconds curve linear
+	mouse to 104, 73 over 0.1667 seconds curve linear
+	mouse to 106, 69 over 0.1333 seconds curve linear
+	mouse to 108, 66 over 0.1000 seconds curve linear
+	mouse to 110, 62 over 0.1333 seconds curve linear
+	mouse to 110, 59 over 0.1000 seconds curve linear
+	mouse to 110, 58 over 0.0333 seconds curve linear
+	mouse to 109, 56 over 0.0667 seconds curve linear
+	mouse to 108, 55 over 0.0333 seconds curve linear
+	mouse to 106, 55 over 0.0667 seconds curve linear
+	mouse to 104, 55 over 0.0667 seconds curve linear
+	mouse to 103, 56 over 0.0333 seconds curve linear
+	mouse to 102, 58 over 0.0667 seconds curve linear
+	mouse to 101, 61 over 0.1000 seconds curve linear
+	mouse to 100, 66 over 0.1667 seconds curve linear
+	mouse to 99, 71 over 0.1667 seconds curve linear
+	mouse to 98, 80 over 0.3000 seconds curve linear
+	mouse to 97, 91 over 0.3667 seconds curve linear
+	mouse up
+	mouse to 97, 90 over 0.0333 seconds curve linear
+	mouse down
+	mouse to 98, 83 over 0.2333 seconds curve linear
+	mouse to 101, 78 over 0.1667 seconds curve linear
+	mouse to 104, 74 over 0.1667 seconds curve linear
+	mouse to 108, 73 over 0.1333 seconds curve linear
+	mouse to 110, 73 over 0.0667 seconds curve linear
+	mouse to 111, 75 over 0.0667 seconds curve linear
+	mouse to 112, 77 over 0.0667 seconds curve linear
+	mouse to 112, 79 over 0.0667 seconds curve linear
+	mouse to 112, 81 over 0.0667 seconds curve linear
+	mouse to 112, 82 over 0.0333 seconds curve linear
+	mouse to 111, 84 over 0.0667 seconds curve linear
+	mouse to 111, 86 over 0.0667 seconds curve linear
+	mouse to 111, 88 over 0.0667 seconds curve linear
+	mouse to 112, 90 over 0.0667 seconds curve linear
+	mouse to 114, 91 over 0.0667 seconds curve linear
+	mouse to 116, 91 over 0.0667 seconds curve linear
+	mouse to 121, 91 over 0.1667 seconds curve linear
+	mouse to 126, 89 over 0.1667 seconds curve linear
+	mouse to 130, 86 over 0.1667 seconds curve linear
+	mouse to 134, 83 over 0.1667 seconds curve linear
+	mouse to 134, 81 over 0.0667 seconds curve linear
+	mouse to 135, 80 over 0.0333 seconds curve linear
+	mouse to 135, 79 over 0.0333 seconds curve linear
+	mouse to 135, 77 over 0.0667 seconds curve linear
+	mouse to 135, 75 over 0.0667 seconds curve linear
+	mouse to 134, 74 over 0.0333 seconds curve linear
+	mouse to 133, 72 over 0.0667 seconds curve linear
+	mouse to 131, 72 over 0.0667 seconds curve linear
+	mouse to 128, 73 over 0.1000 seconds curve linear
+	mouse to 126, 75 over 0.0667 seconds curve linear
+	mouse to 125, 78 over 0.1000 seconds curve linear
+	mouse to 124, 82 over 0.1333 seconds curve linear
+	mouse to 125, 86 over 0.1333 seconds curve linear
+	mouse to 126, 89 over 0.1000 seconds curve linear
+	mouse to 130, 91 over 0.1333 seconds curve linear
+	mouse to 134, 91 over 0.1333 seconds curve linear
+	mouse to 141, 90 over 0.2333 seconds curve linear
+	mouse to 148, 85 over 0.2667 seconds curve linear
+	mouse to 154, 77 over 0.3333 seconds curve linear
+	mouse to 158, 68 over 0.3000 seconds curve linear
+	mouse to 159, 66 over 0.0667 seconds curve linear
+	mouse to 160, 63 over 0.1000 seconds curve linear
+	mouse to 160, 61 over 0.0667 seconds curve linear
+	mouse to 160, 59 over 0.0667 seconds curve linear
+	mouse to 160, 58 over 0.0333 seconds curve linear
+	mouse to 159, 56 over 0.0667 seconds curve linear
+	mouse to 158, 55 over 0.0333 seconds curve linear
+	mouse to 157, 55 over 0.0333 seconds curve linear
+	mouse to 155, 55 over 0.0667 seconds curve linear
+	mouse to 154, 56 over 0.0333 seconds curve linear
+	mouse to 153, 57 over 0.0333 seconds curve linear
+	mouse to 151, 59 over 0.0667 seconds curve linear
+	mouse to 150, 62 over 0.1000 seconds curve linear
+	mouse to 149, 65 over 0.1000 seconds curve linear
+	mouse to 149, 69 over 0.1333 seconds curve linear
+	mouse to 148, 73 over 0.1333 seconds curve linear
+	mouse to 148, 82 over 0.3000 seconds curve linear
+	mouse to 149, 87 over 0.1667 seconds curve linear
+	mouse to 152, 91 over 0.1667 seconds curve linear
+	mouse to 156, 91 over 0.1333 seconds curve linear
+	mouse to 162, 90 over 0.2000 seconds curve linear
+	mouse to 168, 85 over 0.2333 seconds curve linear
+	mouse to 174, 77 over 0.3333 seconds curve linear
+	mouse to 178, 68 over 0.3000 seconds curve linear
+	mouse to 179, 66 over 0.0667 seconds curve linear
+	mouse to 179, 63 over 0.1000 seconds curve linear
+	mouse to 180, 61 over 0.0667 seconds curve linear
+	mouse to 180, 59 over 0.0667 seconds curve linear
+	mouse to 180, 58 over 0.0333 seconds curve linear
+	mouse to 179, 56 over 0.0667 seconds curve linear
+	mouse to 178, 55 over 0.0333 seconds curve linear
+	mouse to 177, 55 over 0.0333 seconds curve linear
+	mouse to 175, 55 over 0.0667 seconds curve linear
+	mouse to 173, 56 over 0.0667 seconds curve linear
+	mouse to 172, 57 over 0.0333 seconds curve linear
+	mouse to 171, 59 over 0.0667 seconds curve linear
+	mouse to 170, 62 over 0.1000 seconds curve linear
+	mouse to 169, 65 over 0.1000 seconds curve linear
+	mouse to 168, 69 over 0.1333 seconds curve linear
+	mouse to 168, 73 over 0.1333 seconds curve linear
+	mouse to 168, 82 over 0.3000 seconds curve linear
+	mouse to 169, 87 over 0.1667 seconds curve linear
+	mouse to 171, 91 over 0.1333 seconds curve linear
+	mouse to 175, 91 over 0.1333 seconds curve linear
+	mouse to 179, 91 over 0.1333 seconds curve linear
+	mouse to 182, 88 over 0.1333 seconds curve linear
+	mouse to 185, 85 over 0.1333 seconds curve linear
+	mouse to 186, 81 over 0.1333 seconds curve linear
+	mouse to 188, 77 over 0.1333 seconds curve linear
+	mouse to 190, 75 over 0.0667 seconds curve linear
+	mouse to 192, 73 over 0.0667 seconds curve linear
+	mouse to 196, 72 over 0.1333 seconds curve linear
+	mouse to 198, 73 over 0.0667 seconds curve linear
+	mouse to 201, 74 over 0.1000 seconds curve linear
+	mouse to 202, 77 over 0.1000 seconds curve linear
+	mouse to 203, 81 over 0.1333 seconds curve linear
+	mouse to 202, 85 over 0.1333 seconds curve linear
+	mouse to 200, 89 over 0.1333 seconds curve linear
+	mouse to 197, 91 over 0.1000 seconds curve linear
+	mouse to 194, 91 over 0.1000 seconds curve linear
+	mouse to 191, 91 over 0.1000 seconds curve linear
+	mouse to 188, 89 over 0.1000 seconds curve linear
+	mouse to 187, 87 over 0.0667 seconds curve linear
+	mouse to 187, 83 over 0.1333 seconds curve linear
+	mouse to 187, 79 over 0.1333 seconds curve linear
+	mouse to 189, 75 over 0.1333 seconds curve linear
+	mouse to 192, 73 over 0.1000 seconds curve linear
+	mouse to 195, 72 over 0.1000 seconds curve linear
+	mouse to 197, 72 over 0.0667 seconds curve linear
+	mouse to 199, 73 over 0.0667 seconds curve linear
+	mouse to 201, 74 over 0.0667 seconds curve linear
+	mouse to 202, 75 over 0.0333 seconds curve linear
+	mouse to 206, 77 over 0.1333 seconds curve linear
+	mouse to 209, 76 over 0.1000 seconds curve linear
+	mouse to 211, 75 over 0.0667 seconds curve linear
+	mouse to 213, 73 over 0.0667 seconds curve linear
+	mouse up
+
+	mouse to 214, 91 over 0.4 seconds curve easeinout
+	mouse click
+
+	wait for 0.2 seconds
+	mouse to 255, 128 over 2 seconds curve easeout
+
+	let cursor = "None"
+
+	wait until 3 seconds before "scroll" completes
+	scale out over 3 seconds
+
+	return
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+reveal:
+
+	start simultaneous
+		let scene = "reveal"
+		let ramp = "Right"
+		camera to -22.5, 45
+		scroll to 80, 73
+		mouse to 0, 342
+	end simultaneous
+
+	scroll to 300, 73 over 22 seconds async "scroll"
+	scale in over 3 seconds
+
+	wait until 3 seconds before "scroll" completes
+	scale out over 3 seconds
+
+	return
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------

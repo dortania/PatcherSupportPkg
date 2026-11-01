@@ -1,0 +1,49 @@
+//
+//  Quit Dialog
+//  Macintosh 40th Anniversary
+//
+//  Copyright © 2024 Apple. All rights reserved.
+//
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+start simultaneous
+	scale out
+	let image = "QuitDialog"
+	let cursor = "Arrow"
+	let ramp = "None"
+	add imagebutton at 304, 179 size 74, 18 name "CancelButton"
+end simultaneous
+
+gosub cancel
+
+exit
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+cancel:
+
+	start simultaneous
+		let scene = "cancel"
+		let ramp = "Right"
+		camera to -22.5, 45
+		scroll to 145, 150
+		mouse to 398, 238
+	end simultaneous
+
+	scroll to 365, 150 over 22 seconds async "scroll"
+	scale in over 3 seconds
+
+	wait for 15 seconds
+
+	mouse to 366, 175 over 1 second curve easeout
+
+	mouse down
+	wait for 0.2 seconds
+	mouse up
+
+	wait until 3 seconds before "scroll" completes
+	scale out over 3 seconds
+
+	return
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------

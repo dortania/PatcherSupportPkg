@@ -1,0 +1,32 @@
+//
+//  Icon Garden (Wallpaper)
+//  Macintosh 40th Anniversary
+//
+//  Copyright © 2024 Apple. All rights reserved.
+//
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+start simultaneous
+	let scene = "hero"
+	let image = "IconGarden"
+	let cursor = "None"
+	let ramp = "None"
+	add icon at 347, 208 value 120 name "Trash"
+	add icon at 279, 212 value 15 name "Clarus"
+	add icon at 241, 186 value 8 name "HappyMac"
+	add icon at 304, 159 value 45 name "Disks"
+	add icon at 263, 128 value 8 name "ResEdit"
+	add icon at 141, 162 value 45 name "CloseBox"
+	add icon at 340, 135 value 4 name "Bomb"
+	add caret at 241, 128 size 1, 15
+	add cursor at 215, 151 name "Watch"
+	add cursor at 171, 180 name "Ball"
+	add cursor at 406, 2451 name "Hand"
+	camera to -22.5, 45
+	scroll to 255, 176
+	scale in
+end simultaneous
+
+exit
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------

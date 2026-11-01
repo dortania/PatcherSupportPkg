@@ -1,0 +1,61 @@
+//
+//  MacWrite
+//  Macintosh 40th Anniversary
+//
+//  Copyright © 2024 Apple. All rights reserved.
+//
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+start simultaneous
+	scale out
+	let cursor = "None"
+	let ramp = "None"
+end simultaneous
+
+gosub text
+gosub ruler
+
+exit
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+text:
+
+	start simultaneous
+		let image = "MacWrite1984"
+		let scene = "text"
+		let ramp = "Right"
+		camera to 22.5, 45
+		scroll to 150, 131
+	end simultaneous
+
+	scroll to 352, 131 over 20 seconds async "scroll"
+	scale in over 3 seconds
+
+	wait until 3 seconds before "scroll" completes
+	scale out over 3 seconds
+
+	return
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+ruler:
+
+	start simultaneous
+		let image = "MacWriteCrazyOnes"
+		let scene = "ruler"
+		let ramp = "Right"
+		camera to -22.5, 45
+		scroll to 20, 62
+	end simultaneous
+
+	scroll to 492, 62 over 47 seconds async "scroll"
+	scale in over 3 seconds
+
+	wait until 3 seconds before "scroll" completes
+	scale out over 3 seconds
+
+	return
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+

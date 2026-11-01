@@ -1,0 +1,56 @@
+//
+//  MacWrite Text Input
+//  Macintosh 40th Anniversary
+//
+//  Copyright © 2024 Apple. All rights reserved.
+//
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+start simultaneous
+	scale out
+	let image = "MacWriteEmpty"
+	let cursor = "None"
+	let ramp = "None"
+	add text at 13, 90 value 1
+end simultaneous
+
+gosub textinput
+
+exit
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+textinput:
+
+	start simultaneous
+		let scene = "textinput"
+		let ramp = "Down"
+		camera to 22.5, 45
+		scroll to 40, 10
+		reset controls
+	end simultaneous
+
+	scroll to 40, 113 over 27 seconds curve easeout async "scroll"
+	scale in over 3 seconds
+
+	wait for 4 seconds
+	keyboard "Here's to the\ncrazy ones.\n"
+	wait for 1 second
+	keyboard "The misfits.\n"
+	wait for 1 second
+	keyboard "The rebels."
+
+	let cursor = "Text"
+	mouse to 13, 91 over 1.5 seconds curve easeout
+	mouse down
+	mouse to 70, 110 over 3 seconds curve easeinout
+	mouse up
+
+	wait for 2 seconds
+
+	//wait until 3 seconds before "scroll" completes
+	scale out over 3 seconds
+
+	return
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------

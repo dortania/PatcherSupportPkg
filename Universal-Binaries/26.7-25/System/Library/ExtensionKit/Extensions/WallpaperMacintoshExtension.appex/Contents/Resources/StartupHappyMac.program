@@ -1,0 +1,46 @@
+//
+//  Startup Happy Mac
+//  Macintosh 40th Anniversary
+//
+//  Copyright © 2024 Apple. All rights reserved.
+//
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+start simultaneous
+	scale out
+	let image = "StartupDesktop"
+	let cursor = "None"
+	let ramp = "None"
+	add startupicon at 240, 155 name "StartupIcons"
+end simultaneous
+
+gosub happymac
+
+exit
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+happymac:
+
+	start simultaneous
+		let scene = "happymac"
+		let ramp = "Right"
+		camera to -22.5, 45
+		mouse to 256, 171
+		scroll to 196, 171
+		reset controls
+	end simultaneous
+
+	scroll to 316, 171 over 14 seconds async "scroll"
+	scale in over 3 seconds
+
+	wait for 3.5 seconds
+
+	mouse click
+
+	wait until 3 seconds before "scroll" completes
+	scale out over 3 seconds
+
+	return
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------

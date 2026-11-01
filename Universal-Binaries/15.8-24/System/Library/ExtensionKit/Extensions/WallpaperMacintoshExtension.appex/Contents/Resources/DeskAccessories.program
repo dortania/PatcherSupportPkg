@@ -1,0 +1,149 @@
+//
+//  Desk Accessories
+//  Macintosh 40th Anniversary
+//
+//  Copyright © 2024 Apple. All rights reserved.
+//
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+start simultaneous
+	scale out
+	let image = "DeskAccessories"
+	let cursor = "Arrow"
+	let ramp = "None"
+	add button at 212, 219 size 18, 16 action "1"
+	add button at 256, 175 size 18, 16 action "9"
+	add button at 234, 175 size 18, 16 action "8"
+	add button at 212, 197 size 18, 16 action "4"
+	add puzzle at 400, 200
+end simultaneous
+
+gosub calculator
+gosub puzzle
+
+exit
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+calculator:
+
+	start simultaneous
+		let scene = "calculator"
+		let ramp = "Up"
+		camera to 22.5, 45
+		scroll to 256, 259
+		mouse to 180, 237
+		add text at 293, 118 value 6 action "0" name "Monaco9"
+		reset controls
+	end simultaneous
+
+	scroll to 256, 79 over 20 seconds async "scroll"
+	scale in over 3 seconds
+
+	mouse to 226, 216 over 1.5 seconds curve easeout
+	wait for 0.1 seconds
+	mouse down
+	wait for 0.25 seconds
+	mouse up
+
+	mouse to 270, 172 over 1.0 seconds curve easeout
+	wait for 0.1 seconds
+	mouse down
+	wait for 0.25 seconds
+	mouse up
+
+	mouse to 248, 172 over 0.5 seconds curve easeout
+	wait for 0.1 seconds
+	mouse down
+	wait for 0.25 seconds
+	mouse up
+
+	mouse to 226, 194 over 0.5 seconds curve easeout
+	wait for 0.1 seconds
+	mouse down
+	wait for 0.25 seconds
+	mouse up
+
+	wait until 3 seconds before "scroll" completes
+	scale out over 3 seconds
+
+	return
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+puzzle:
+
+	start simultaneous
+		let scene = "puzzle"
+		let ramp = "Down"
+		camera to -22.5, 45
+		scroll to 440, 120
+		scroll to 440, 120
+		mouse to 428, 191
+		reset controls
+	end simultaneous
+
+	scroll to 440, 160 over 18 seconds async "scroll"
+	scale in over 3 seconds
+
+	mouse to 414, 151 over 0.4 seconds
+	wait for 0.2 seconds
+	mouse click
+	wait for 0.2 seconds
+
+	mouse to 411, 133 over 0.3 seconds
+	wait for 0.2 seconds
+	mouse click
+	wait for 0.2 seconds
+
+	mouse to 426, 129 over 0.4 seconds
+	wait for 0.2 seconds
+	mouse click
+	wait for 0.2 seconds
+
+	mouse to 441, 131 over 0.4 seconds
+	wait for 0.2 seconds
+	mouse click
+	wait for 0.1 seconds
+
+	mouse to 449, 145 over 0.3 seconds
+	wait for 0.2 seconds
+	mouse click
+	wait for 0.2 seconds
+
+	mouse to 463, 147 over 0.5 seconds
+	wait for 0.2 seconds
+	mouse click
+	wait for 0.2 seconds
+
+	mouse to 465, 135 over 0.3 seconds
+	wait for 0.2 seconds
+	mouse click
+	wait for 0.2 seconds
+
+	mouse to 448, 129 over 0.4 seconds
+	wait for 0.2 seconds
+	mouse click
+	wait for 0.2 seconds
+
+	mouse to 431, 130 over 0.5 seconds
+	wait for 0.2 seconds
+	mouse click
+	wait for 0.1 seconds
+
+	mouse to 412, 132 over 0.4 seconds
+	wait for 0.2 seconds
+	mouse click
+	wait for 0.1 seconds
+
+	mouse to 414, 151 over 0.5 seconds
+	wait for 0.2 seconds
+	mouse click
+	wait for 0.1 seconds
+
+	wait until 3 seconds before "scroll" completes
+	scale out over 3 seconds
+
+	return
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------

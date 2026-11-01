@@ -1,0 +1,40 @@
+;; Sandbox for LegacyGL's copy of the 10.7.5 CVMServer.
+;; Same rules as the system's cvmsServer.sb, with our compile agents' names.
+(version 1)
+
+(deny default)
+(debug deny)
+
+(allow mach-per-user-lookup)
+
+; For syslog
+(allow ipc-posix-shm)
+
+(allow file-ioctl
+       (literal "/dev/dtracehelper"))
+
+(allow file-read-data)
+
+(allow file-read-metadata)
+
+(allow file-write-data
+       (literal "/dev/dtracehelper"))
+
+(allow file-write*
+       (literal "/private/var/log/cvms.log")
+       (subpath "/System/Library/Caches/com.apple.CVMS"))
+
+(allow mach-lookup
+       (global-name "com.apple.system.notification_center")
+       (global-name "com.apple.system.logger")
+       (global-name "com.apple.xpcd")
+       (global-name "com.apple.xpchelper")
+       (global-name "org.legacygl.cvmsCAgent_i386")
+       (global-name "org.legacygl.cvmsCAgent_x86_64"))
+
+(allow process-exec
+       (subpath "/System"))
+
+(allow sysctl-read)
+
+(allow signal)

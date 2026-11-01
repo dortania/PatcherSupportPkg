@@ -1,0 +1,180 @@
+//
+//  System 6 Control Panel
+//  Macintosh 40th Anniversary
+//
+//  Copyright © 2024 Apple. All rights reserved.
+//
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+start simultaneous
+	scale out
+	let image = "System6ControlPanel"
+	let cursor = "None"
+	let ramp = "None"
+	add caret at 364, 104 size 1, 15
+	add radiobuttongroup
+	add radiobutton at 333, 122 value 0 action "caretSlow"
+	add radiobutton at 357, 122 value 1 action "caretNormal"
+	add radiobutton at 381, 122 value 0 action "caretFast"
+	add radiobuttongroup
+	add radiobutton at 266, 207 value 1 action "time12Hour"
+	add radiobutton at 311, 207 value 0 action "time24Hour"
+	add slider at 384, 253
+	add time at 267, 165 name "Geneva12"
+	add date at 274, 239 name "Geneva12"
+	add cursorrect at 184, 303 size 232, 252 name "Crosshair"
+end simultaneous
+
+gosub categories
+gosub insertion_point
+gosub volume
+gosub time
+gosub date
+
+exit
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+categories:
+
+	start simultaneous
+		let scene = "categories"
+		let cursor = "None"
+		let ramp = "Down"
+		camera to 22.5, 45
+		scroll to 142, 40
+	end simultaneous
+
+	scroll to 142, 290 over 25 seconds async "scroll"
+	scale in over 3 seconds
+
+	wait until 3 seconds before "scroll" completes
+	scale out over 3 seconds
+
+	return
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+insertion_point:
+
+	start simultaneous
+		let scene = "insertion_point"
+		let cursor = "Automatic"
+		let ramp = "Right"
+		camera to -22.5, 45
+		mouse to 290, 214
+		scroll to 302, 100
+		reset controls
+	end simultaneous
+
+	scroll to 416, 100 over 19 seconds async "scroll"
+	scale in over 3 seconds
+
+	wait for 2 seconds
+
+	mouse to 341, 115 over 1.5 seconds curve easeout
+	wait for 0.5 seconds
+	mouse click
+
+	wait for 1.25 seconds
+
+	mouse to 367, 116 over 0.5 seconds curve easeout
+	wait for 0.5 seconds
+	mouse click
+
+	wait for 1 second
+
+	mouse to 388, 113 over 0.5 seconds curve easeout
+	wait for 0.5 seconds
+	mouse click
+
+	wait for 1.5 seconds
+
+	mouse to 428, 123 over 1 second curve easeout
+
+	wait until 3 seconds before "scroll" completes
+	scale out over 3 seconds
+
+	return
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+volume:
+
+	start simultaneous
+		let scene = "volume"
+		let cursor = "Automatic"
+		let ramp = "Up"
+		camera to 22.5, 45
+		mouse to 450, 199
+		scroll to 395, 270
+		reset controls
+	end simultaneous
+
+	scroll to 395, 160 over 13 seconds async "scroll"
+	scale in over 3 seconds
+
+	wait for 1 seconds
+
+	mouse to 403, 225 over 1 second curve easeout
+
+	wait for 0.5 seconds
+
+	mouse down
+	mouse to 403, 201 over 1 second curve easeout
+	mouse up
+
+	wait for 0.5 seconds
+
+	mouse down
+	mouse to 403, 177 over 1 second curve easeout
+	mouse up
+
+	mouse to 440, 189 over 1 second curve easeout
+
+	wait until 3 seconds before "scroll" completes
+	scale out over 3 seconds
+
+	return
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+time:
+
+	start simultaneous
+		let scene = "time"
+		let cursor = "None"
+		let ramp = "Right"
+		camera to 22.5, 45
+		scroll to 228, 170
+	end simultaneous
+
+	scroll to 368, 170 over 14 seconds async "scroll"
+	scale in over 3 seconds
+
+	wait until 3 seconds before "scroll" completes
+	scale out over 3 seconds
+
+	return
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+date:
+
+	start simultaneous
+		let scene = "date"
+		let cursor = "None"
+		let ramp = "Left"
+		camera to -22.5, 45
+		scroll to 388, 244
+	end simultaneous
+
+	scroll to 228, 244 over 16 seconds async "scroll"
+	scale in over 3 seconds
+
+	wait until 3 seconds before "scroll" completes
+	scale out over 3 seconds
+
+	return
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------

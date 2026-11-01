@@ -1,0 +1,138 @@
+//
+//  System 1 Control Panel
+//  Macintosh 40th Anniversary
+//
+//  Copyright © 2024 Apple. All rights reserved.
+//
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+start simultaneous
+	scale out
+	let image = "System1ControlPanel"
+	let cursor = "None"
+	let ramp = "None"
+	add caret at 381, 164 size 1, 18
+	add time at 239, 112 name "Chicago12"
+	add date at 153, 112 name "Chicago12"
+	add slider at 119, 224 value 24
+	add radiobuttongroup
+	add radiobutton at 155, 247 value 0 name "RadioButtonSystem1Number1"
+	add radiobutton at 174, 247 value 1 name "RadioButtonSystem1Number0"
+	add cursorrect at 101, 254 size 310, 154 name "Crosshair"
+end simultaneous
+
+gosub sound
+gosub time
+gosub mouse
+gosub keyboard
+
+exit
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+sound:
+
+	start simultaneous
+		let scene = "sound"
+		let ramp = "Up"
+		let cursor = "Automatic"
+		camera to -22.5, 45
+		mouse to 80, 169
+		scroll to 125, 257
+		reset controls
+	end simultaneous
+
+	scroll to 125, 99 over 15 seconds async "scroll"
+	scale in over 3 seconds curve easein
+
+	wait for 2 seconds
+
+	mouse to 132, 195 over 1 second curve easeout
+
+	wait for 0.5 seconds
+
+	mouse down
+	mouse to 132, 171 over 1 second curve easeout
+	mouse up
+
+	wait for 0.5 seconds
+
+	mouse down
+	mouse to 132, 147 over 1 second curve easeout
+	mouse up
+
+	mouse to 40, 169 over 2 seconds curve easeout
+
+	wait until 3 seconds before "scroll" completes
+	scale out over 3 seconds
+
+	return
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+time:
+
+	start simultaneous
+		let scene = "time"
+		let ramp = "Right"
+		let cursor = "None"
+		camera to -22.5, 45
+		scroll to 140, 120
+	end simultaneous
+
+	scroll to 406, 120 over 26 seconds async "scroll"
+	scale in over 3 seconds
+
+	wait until 3 seconds before "scroll" completes
+	scale out over 3 seconds
+
+	return
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+mouse:
+
+	start simultaneous
+		let scene = "mouse"
+		let ramp = "Right"
+		let cursor = "Automatic"
+		camera to 22.5, 45
+		scroll to 120, 220
+		mouse to 120, 270
+	end simultaneous
+
+	scroll to 386, 220 over 26 seconds async "scroll"
+	scale in over 3 seconds
+
+	mouse to 164, 242 over 3 seconds curve easeout
+	wait for 0.5 seconds
+	mouse click
+	wait for 0.5 seconds
+	mouse to 220, 140 over 3 seconds curve easeout
+
+	wait until 3 seconds before "scroll" completes
+	scale out over 3 seconds
+
+	return
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
+
+keyboard:
+
+	start simultaneous
+		let scene = "keyboard"
+		let ramp = "Right"
+		let cursor = "None"
+		camera to -22.5, 45
+		scroll to 140, 165
+	end simultaneous
+
+	scroll to 406, 165 over 26 seconds async "scroll"
+	scale in over 3 seconds
+
+	wait until 3 seconds before "scroll" completes
+	scale out over 3 seconds
+
+	return
+
+//-------------------------------------------------------------------------------------------------------------------------------------------------
