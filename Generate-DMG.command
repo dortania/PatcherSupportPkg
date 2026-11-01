@@ -10,11 +10,11 @@ import subprocess
 
 UB_DIRECTORY:     str = "Universal-Binaries"
 DMG_NAME:         str = "Universal-Binaries.dmg"
-DMG_VOLNAME:      str = "OpenCore Patcher Resources (Root Patching)"
+DMG_VOLNAME:      str = "BridgePatcher Resources (Root Patching)"
 DMG_SIZE:         str = "4096"
 DMG_FORMAT:       str = "UDRO"
 DMG_PASSPHRASE:   str = "password"
-SIGNING_IDENTITY: str = "OpenCore Legacy Patcher Software Signing"
+SIGNING_IDENTITY: str = "OCLP Self Signed"
 
 
 class GenerateDiskImage:
