@@ -62,13 +62,6 @@ static void shimLog(const char *format, ...) {
     else fputs(line, stderr);
 }
 
-// Tahoe's wrapper is the one that exports Metal 4 symbols (uname and sysctl are no use: WebKit's GPU process sandbox blocks them).
-static BOOL onTahoeStack(void) {
-    static int tahoe = -1;
-    if (tahoe < 0) tahoe = dlsym(RTLD_DEFAULT, "MTL4CommandQueueErrorDomain") != NULL;
-    return tahoe;
-}
-
 static char kMaximizeKey;
 
 static void setShouldMaximize(id self, SEL _cmd, BOOL value) {
@@ -331,8 +324,7 @@ static void setLanguageVersion(id self, SEL _cmd, NSUInteger version) {
 // `coherent device` / `coherent(device)` -> `volatile`, `coherent(threadgroup)` (the default) and the texture argument
 // `memory_coherence_device` / `_threadgroup` dropped.
 static NSString *downgradeSource(NSString *source, id options) {
-    // On Tahoe the wrapper makes setLanguageVersion: a no-op, in a hook above ours, so the request never shows here.
-    if (!source || (!onTahoeStack() && (!options || !objc_getAssociatedObject(options, kNewerVersionRequested)))) return source;
+    if (!source || !options || !objc_getAssociatedObject(options, kNewerVersionRequested)) return source;
     if ([source rangeOfString:@"coheren"].location == NSNotFound) return source;
     static NSArray<NSArray *> *rules;
     static dispatch_once_t once;
@@ -394,7 +386,12 @@ static void newLibraryAsync(id self, SEL _cmd, NSString *source, id options, id 
     });
 }
 
+// OCLP's Tahoe wrapper makes setLanguageVersion: a no-op when it loads, which is after this library's initializer. Apps then can't
+// pick an older version than the default, and shaders only valid there stop compiling (Blender's EEVEE has a variable called
+// ray_data, a keyword since MSL 2.3). The hook goes back in here, before anyone can call the setter.
 static id compileOptionsInit(id self, SEL _cmd) {
+    Method setter = class_getInstanceMethod(object_getClass(self), @selector(setLanguageVersion:));
+    if (setter && method_getImplementation(setter) != (IMP)setLanguageVersion) method_setImplementation(setter, (IMP)setLanguageVersion);
     self = origCompileOptionsInit(self, _cmd);
     if (self && ((NSUInteger (*)(id, SEL))objc_msgSend)(self, @selector(languageVersion)) < kNewestLanguageVersion)
         origSetLanguageVersion(self, @selector(setLanguageVersion:), kNewestLanguageVersion);
