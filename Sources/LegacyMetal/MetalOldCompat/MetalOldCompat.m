@@ -19,6 +19,15 @@
 //  16. 2D-array texture views that don't start at slice 0 on the 12.x Intel driver (most of their layers unreachable)
 //  18. pipeline cache keys that ignore the pipeline descriptor (a compute pipeline's maxTotalThreadsPerThreadgroup):
 //      MetalOld told to key by the driver's function key
+//  20. 8-byte buffer fills at an offset of 4 mod 8 on the 12.x Intel driver (filled the 8 bytes below instead)
+//  21. depth-only render pipelines on the 12.x Intel driver: without a fragment function they write no usable depth;
+//      they get an empty one
+//  22. HiZ on the 12.x Intel driver for depth textures with several mip levels or slices: blits leave it out of step
+//      with the depth data; such textures are created without HiZ
+//  23. rendering into a depth plane of a 3D texture's mip level 1+ on the 12.x Intel driver (wrong planes written):
+//      through a temporary 2D texture
+//  24. clears of R8Unorm / RG8Unorm targets at mip level 1+ on the 12.x Intel driver (nothing cleared): through a
+//      temporary texture
 //  25. precompiled libraries built for macOS 15.4+ (AIR 2.7, e.g. iMovie's): retargeted to AIR 2.6 in the compiler
 //      service, as MetallibSupportPkg does for the system's metallibs
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
@@ -36,6 +45,7 @@
 #include <mach-o/loader.h>
 #include <sys/mman.h>
 #include <os/lock.h>
+#include <pthread.h>
 #import <IOKit/IOKitLib.h>
 #include <os/log.h>
 #include <stdarg.h>
@@ -540,6 +550,79 @@ static void restoreArgumentEncoders(void) {
 
 static BOOL patched;
 
+// 21. Depth-only render pipelines on the 12.x Intel driver: a pipeline without a fragment function leaves its depth
+// attachment unusable: a later draw of the same triangles with compare Equal passes nowhere, single- or multisampled
+// (WebGPU CTS copyTextureToTexture copy_depth_stencil / copy_multisampled_depth, rendering/stencil). With an empty
+// fragment function the same pipeline writes correct depth, so on the Intel GPU a rasterizing pipeline with no
+// fragment function, no color attachments and a depth or stencil attachment gets one (compiled once per device).
+// Pipelines with color attachments are left as they are.
+static const void *kEmptyFragmentKey = &kEmptyFragmentKey;
+typedef id (*NewRenderPipelineIMP)(id, SEL, MTLRenderPipelineDescriptor *, NSError **);
+typedef id (*NewRenderPipelineReflIMP)(id, SEL, MTLRenderPipelineDescriptor *, MTLPipelineOption,
+                                       MTLAutoreleasedRenderPipelineReflection *, NSError **);
+typedef void (*NewRenderPipelineAsyncIMP)(id, SEL, MTLRenderPipelineDescriptor *, id);
+typedef void (*NewRenderPipelineOptAsyncIMP)(id, SEL, MTLRenderPipelineDescriptor *, MTLPipelineOption, id);
+static NewRenderPipelineIMP origNewRenderPipeline;
+static NewRenderPipelineReflIMP origNewRenderPipelineRefl;
+static NewRenderPipelineAsyncIMP origNewRenderPipelineAsync;
+static NewRenderPipelineOptAsyncIMP origNewRenderPipelineOptAsync;
+
+static MTLRenderPipelineDescriptor *withEmptyFragment(id<MTLDevice> device, MTLRenderPipelineDescriptor *descriptor) {
+    static Class intel;
+    if (!intel) intel = objc_getClass("MTLIGAccelDevice");
+    if (!intel || ![(id)device isKindOfClass:intel] || !descriptor || descriptor.fragmentFunction || !descriptor.rasterizationEnabled ||
+        (descriptor.depthAttachmentPixelFormat == MTLPixelFormatInvalid && descriptor.stencilAttachmentPixelFormat == MTLPixelFormatInvalid))
+        return descriptor;
+    for (NSUInteger i = 0; i < 8; i++)
+        if (descriptor.colorAttachments[i].pixelFormat != MTLPixelFormatInvalid) return descriptor;
+    id<MTLFunction> empty;
+    @synchronized((id)device) {
+        empty = objc_getAssociatedObject(device, kEmptyFragmentKey);
+        if (!empty) {
+            id<MTLLibrary> library = [device newLibraryWithSource:@"fragment void mtlshim_empty_fragment() {}" options:nil error:nil];
+            empty = [library newFunctionWithName:@"mtlshim_empty_fragment"];
+            if (empty) objc_setAssociatedObject(device, kEmptyFragmentKey, empty, OBJC_ASSOCIATION_RETAIN);
+        }
+    }
+    if (!empty) return descriptor;
+    MTLRenderPipelineDescriptor *copy = [descriptor copy];
+    copy.fragmentFunction = empty;
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] depth-only render pipeline given an empty fragment function\n");
+    return copy;
+}
+
+static id newRenderPipeline(id self, SEL _cmd, MTLRenderPipelineDescriptor *descriptor, NSError **error) {
+    return origNewRenderPipeline(self, _cmd, withEmptyFragment(self, descriptor), error);
+}
+
+static id newRenderPipelineRefl(id self, SEL _cmd, MTLRenderPipelineDescriptor *descriptor, MTLPipelineOption options,
+                                MTLAutoreleasedRenderPipelineReflection *reflection, NSError **error) {
+    return origNewRenderPipelineRefl(self, _cmd, withEmptyFragment(self, descriptor), options, reflection, error);
+}
+
+static void newRenderPipelineAsync(id self, SEL _cmd, MTLRenderPipelineDescriptor *descriptor, id handler) {
+    origNewRenderPipelineAsync(self, _cmd, withEmptyFragment(self, descriptor), handler);
+}
+
+static void newRenderPipelineOptAsync(id self, SEL _cmd, MTLRenderPipelineDescriptor *descriptor, MTLPipelineOption options,
+                                      id handler) {
+    origNewRenderPipelineOptAsync(self, _cmd, withEmptyFragment(self, descriptor), options, handler);
+}
+
+static void fillEmptyFragments(void) {
+    if (definesMethod("_MTLDevice", "newRenderPipelineStateWithDescriptor:error:"))
+        origNewRenderPipeline = (NewRenderPipelineIMP)swizzle("_MTLDevice", "newRenderPipelineStateWithDescriptor:error:", (IMP)newRenderPipeline);
+    if (definesMethod("_MTLDevice", "newRenderPipelineStateWithDescriptor:options:reflection:error:"))
+        origNewRenderPipelineRefl = (NewRenderPipelineReflIMP)swizzle(
+            "_MTLDevice", "newRenderPipelineStateWithDescriptor:options:reflection:error:", (IMP)newRenderPipelineRefl);
+    if (definesMethod("_MTLDevice", "newRenderPipelineStateWithDescriptor:completionHandler:"))
+        origNewRenderPipelineAsync = (NewRenderPipelineAsyncIMP)swizzle(
+            "_MTLDevice", "newRenderPipelineStateWithDescriptor:completionHandler:", (IMP)newRenderPipelineAsync);
+    if (definesMethod("_MTLDevice", "newRenderPipelineStateWithDescriptor:options:completionHandler:"))
+        origNewRenderPipelineOptAsync = (NewRenderPipelineOptAsyncIMP)swizzle(
+            "_MTLDevice", "newRenderPipelineStateWithDescriptor:options:completionHandler:", (IMP)newRenderPipelineOptAsync);
+}
+
 // MetalOld keys its shader cache for AMD/Intel GPUs (target cpuType 0x1000013-15) by an AIRNT "function id": the
 // bitcode hash plus hashes of the pipeline script: its own framework hash (all zero for compute), GPUCompiler 31001's
 // libGPUCompilerUtils hash (weak-linked and absent on Sequoia: zero) and the driver's vendor plugin id (the 12.x drivers
@@ -583,6 +666,7 @@ static void patchDeviceBase(void) {
     addNewerSDKAPI();
     ignoreMeshStageBindings();
     restoreArgumentEncoders();
+    fillEmptyFragments();
     // Only methods the class defines itself: swizzling an inherited -init would change -[NSObject init].
     if (definesMethod("MTLCompileOptionsInternal", "setLanguageVersion:") && definesMethod("MTLCompileOptionsInternal", "init")) {
         origSetLanguageVersion = (SetLanguageVersionIMP)swizzle("MTLCompileOptionsInternal", "setLanguageVersion:", (IMP)setLanguageVersion);
@@ -699,10 +783,23 @@ static BOOL clearsNarrowly(MTLRenderPassColorAttachmentDescriptor *a, id<MTLText
     return YES;
 }
 
-static void clearThroughWideTexture(id<MTLCommandBuffer> commandBuffer, MTLRenderPassColorAttachmentDescriptor *a, id<MTLTexture> root,
-                                    NSUInteger level, NSUInteger slice) {
+// 24. The same driver doesn't clear R8Unorm or RG8Unorm targets at mip level 1 or higher at all (fast or slow clear;
+// draws to those levels work, as do level 0 and the other formats, R8Uint and RG8Snorm included; WebGPU CTS texture_zero
+// r8unorm/rg8unorm). Such a clear also goes through a temporary texture, of the level's size.
+static BOOL clearsNarrowFormatMip(MTLRenderPassColorAttachmentDescriptor *a, id<MTLTexture> *root, NSUInteger *level, NSUInteger *slice) {
+    if (!a.texture || a.loadAction != MTLLoadActionClear || a.texture.sampleCount > 1) return NO;
+    *level = a.level;
+    *slice = a.slice;
+    *root = rootTexture(a.texture, level, slice);
+    MTLPixelFormat format = (*root).pixelFormat;
+    return *level > 0 && (format == MTLPixelFormatR8Unorm || format == MTLPixelFormatRG8Unorm);
+}
+
+static void clearThroughTemporary(id<MTLCommandBuffer> commandBuffer, MTLRenderPassColorAttachmentDescriptor *a, id<MTLTexture> root,
+                                  NSUInteger level, NSUInteger slice, NSUInteger temporaryWidth) {
     NSUInteger width = MAX(root.width >> level, 1), height = MAX(root.height >> level, 1);
-    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:root.pixelFormat width:4 height:height mipmapped:NO];
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:root.pixelFormat width:temporaryWidth
+                                                                                 height:height mipmapped:NO];
     td.usage = MTLTextureUsageRenderTarget;
     td.storageMode = MTLStorageModePrivate;
     id<MTLTexture> wide = [commandBuffer.device newTextureWithDescriptor:td];
@@ -724,14 +821,15 @@ static id igRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor
     for (NSUInteger i = 0; descriptor && i < 8; i++) {
         id<MTLTexture> root = nil;
         NSUInteger level = 0, slice = 0;
-        if (!clearsNarrowly(descriptor.colorAttachments[i], &root, &level, &slice)) continue;
-        clearThroughWideTexture(self, descriptor.colorAttachments[i], root, level, slice);
+        BOOL narrow = clearsNarrowly(descriptor.colorAttachments[i], &root, &level, &slice);
+        if (!narrow && !clearsNarrowFormatMip(descriptor.colorAttachments[i], &root, &level, &slice)) continue;
+        clearThroughTemporary(self, descriptor.colorAttachments[i], root, level, slice, narrow ? 4 : MAX(root.width >> level, 1));
         if (!redirected) {
             redirected = [descriptor copy];
             copies = [NSMutableArray array];
         }
         redirected.colorAttachments[i].loadAction = MTLLoadActionLoad;
-        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] narrow color target cleared through a 4-wide texture\n");
+        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] color target cleared through a temporary texture\n");
     }
     for (NSUInteger i = 0; descriptor && i < 8; i++) {
         MTLRenderPassColorAttachmentDescriptor *a = descriptor.colorAttachments[i];
@@ -756,9 +854,42 @@ static id igRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor
         r.resolveLevel = r.resolveSlice = r.resolveDepthPlane = 0;
         [copies addObject:@[temporary, target, @(level), @(slice), @(a.resolveDepthPlane)]];
     }
+    // 23. A 3D color target at mip level 1 or higher on the same driver: a pass on depth plane 0 also writes plane 1,
+    // and one on plane 1 writes neither (clears and draws; through views too; WebGPU CTS 3d_texture_slices with mip
+    // levels; browsers/... view3d.m). Level 0 and blits are right. The pass renders into a temporary 2D texture of the
+    // level's size instead, loaded from the plane first if the pass loads, and copied to the plane when the encoder ends.
+    for (NSUInteger i = 0; descriptor && i < 8; i++) {
+        MTLRenderPassColorAttachmentDescriptor *a = (redirected ?: descriptor).colorAttachments[i];
+        NSUInteger level = a.level, slice = a.slice;
+        id<MTLTexture> root = a.texture ? rootTexture(a.texture, &level, &slice) : nil;
+        if (!root || root.textureType != MTLTextureType3D || !level) continue;
+        MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:root.pixelFormat
+            width:MAX(root.width >> level, 1) height:MAX(root.height >> level, 1) mipmapped:NO];
+        td.usage = MTLTextureUsageRenderTarget;
+        td.storageMode = MTLStorageModePrivate;
+        id<MTLTexture> temporary = [((id<MTLCommandBuffer>)self).device newTextureWithDescriptor:td];
+        if (!temporary) continue;
+        NSUInteger plane = a.depthPlane;
+        if (a.loadAction == MTLLoadActionLoad) {
+            id<MTLBlitCommandEncoder> blit = [(id<MTLCommandBuffer>)self blitCommandEncoder];
+            [blit copyFromTexture:root sourceSlice:0 sourceLevel:level sourceOrigin:MTLOriginMake(0, 0, plane)
+                       sourceSize:MTLSizeMake(temporary.width, temporary.height, 1) toTexture:temporary destinationSlice:0
+                 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
+            [blit endEncoding];
+        }
+        if (!redirected) {
+            redirected = [descriptor copy];
+            copies = [NSMutableArray array];
+        }
+        MTLRenderPassColorAttachmentDescriptor *r = redirected.colorAttachments[i];
+        r.texture = temporary;
+        r.level = r.slice = r.depthPlane = 0;
+        if (a.storeAction == MTLStoreActionStore) [copies addObject:@[temporary, root, @(level), @0, @(plane)]];
+        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] 3D target (level %lu, plane %lu) rendered through a 2D texture\n", (unsigned long)level, (unsigned long)plane);
+    }
     id encoder = origIGRenderEncoder(self, _cmd, redirected ?: descriptor);
     if (encoder && copies.count) {
-        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] %lu MSAA resolve(s) redirected through a temporary texture\n", (unsigned long)copies.count);
+        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] %lu attachment(s) copied out of temporary textures at the end\n", (unsigned long)copies.count);
         objc_setAssociatedObject(encoder, kPendingResolveCopies, @[self, copies], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     return encoder;
@@ -812,6 +943,95 @@ static void *igInitView(void *self, SEL _cmd, void *parent, MTLPixelFormat forma
     return view;
 }
 
+// 20. Buffer fills on the 12.x Intel driver: -[MTLIGAccelBlitCommandEncoder fillBuffer:range:value:] fills the wrong
+// bytes when the length is exactly 8 and the offset is 4 mod 8: it fills the 8-aligned bytes below (offset 4 -> 0..7).
+// Other lengths and offsets are right. wgpu (Firefox's WebGPU) zero-fills buffer tails this way: a 4-byte copy into
+// a 12-byte buffer was wiped by the clear of bytes 4..11 (WebGPU CTS clearBuffer, copyBufferToBuffer). Such a fill is
+// issued as two 4-byte fills.
+typedef void (*FillBufferIMP)(id, SEL, id, NSRange, uint8_t);
+static FillBufferIMP origIGFillBuffer;
+
+static void igFillBuffer(id self, SEL _cmd, id buffer, NSRange range, uint8_t value) {
+    if (range.length != 8 || (range.location & 7) != 4) {
+        origIGFillBuffer(self, _cmd, buffer, range, value);
+        return;
+    }
+    origIGFillBuffer(self, _cmd, buffer, NSMakeRange(range.location, 4), value);
+    origIGFillBuffer(self, _cmd, buffer, NSMakeRange(range.location + 4, 4), value);
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] 8-byte fill at offset %lu split in two\n", (unsigned long)range.location);
+}
+
+// 22. HiZ on the 12.x Intel driver: for a depth texture with more than one mip level or slice, blits don't keep the
+// hierarchical depth buffer in step with the depth data of levels and slices other than 0. Depth copied into such a
+// level fails every later depth test against it, and a depth clear there isn't seen by a later copy out (WebGPU CTS
+// copy_depth_stencil, texture_zero with depth formats). The driver creates a texture without HiZ while its device's
+// bHizDisable is set (read at creation), and these depth textures are created that way. Single-level depth buffers,
+// almost every renderer's main depth buffer, keep HiZ. Multisampled depth has the same problem with blits but is left
+// alone: copying it is rare, and HiZ matters most to multisampled rendering.
+typedef id (*NewTextureIMP)(id, SEL, MTLTextureDescriptor *);
+static NewTextureIMP origIGNewTexture, origIGHeapNewTexture;
+static ptrdiff_t igHizDisableOffset;
+
+static BOOL needsNoHiZ(MTLTextureDescriptor *descriptor) {
+    switch (descriptor.pixelFormat) {
+        case MTLPixelFormatDepth16Unorm:
+        case MTLPixelFormatDepth32Float:
+        case MTLPixelFormatDepth24Unorm_Stencil8:
+        case MTLPixelFormatDepth32Float_Stencil8:
+            break;
+        default:
+            return NO;
+    }
+    MTLTextureType type = descriptor.textureType;
+    return descriptor.sampleCount <= 1 && (descriptor.mipmapLevelCount > 1 || descriptor.arrayLength > 1 ||
+                                           type == MTLTextureType2DArray || type == MTLTextureTypeCube ||
+                                           type == MTLTextureTypeCubeArray || type == MTLTextureType3D);
+}
+
+static id createWithoutHiZ(id device, id (^create)(void)) {
+    static pthread_mutex_t lock;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        pthread_mutexattr_t attributes;
+        pthread_mutexattr_init(&attributes);
+        pthread_mutexattr_settype(&attributes, PTHREAD_MUTEX_RECURSIVE);
+        pthread_mutex_init(&lock, &attributes);
+    });
+    bool *hizDisable = (bool *)((char *)(__bridge void *)device + igHizDisableOffset);
+    pthread_mutex_lock(&lock);
+    bool saved = *hizDisable;
+    *hizDisable = true;
+    id texture = create();
+    *hizDisable = saved;
+    pthread_mutex_unlock(&lock);
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] depth texture with several levels/slices created without HiZ\n");
+    return texture;
+}
+
+static id igNewTexture(id self, SEL _cmd, MTLTextureDescriptor *descriptor) {
+    if (!needsNoHiZ(descriptor)) return origIGNewTexture(self, _cmd, descriptor);
+    return createWithoutHiZ(self, ^{ return origIGNewTexture(self, _cmd, descriptor); });
+}
+
+static id igHeapNewTexture(id self, SEL _cmd, MTLTextureDescriptor *descriptor) {
+    id device = [(id<MTLHeap>)self device];
+    if (!needsNoHiZ(descriptor) || ![device isKindOfClass:objc_getClass("MTLIGAccelDevice")])
+        return origIGHeapNewTexture(self, _cmd, descriptor);
+    return createWithoutHiZ(device, ^{ return origIGHeapNewTexture(self, _cmd, descriptor); });
+}
+
+static void intelDepthWithoutHiZ(void) {
+    Class device = objc_getClass("MTLIGAccelDevice");
+    Ivar hiz = device ? class_getInstanceVariable(device, "bHizDisable") : NULL;
+    if (origIGNewTexture || !hiz || strcmp(ivar_getTypeEncoding(hiz), "B") ||
+        !definesMethod("MTLIGAccelDevice", "newTextureWithDescriptor:"))
+        return;
+    igHizDisableOffset = ivar_getOffset(hiz);
+    origIGNewTexture = (NewTextureIMP)swizzle("MTLIGAccelDevice", "newTextureWithDescriptor:", (IMP)igNewTexture);
+    if (definesMethod("MTLIGAccelHeap", "newTextureWithDescriptor:"))
+        origIGHeapNewTexture = (NewTextureIMP)swizzle("MTLIGAccelHeap", "newTextureWithDescriptor:", (IMP)igHeapNewTexture);
+}
+
 static BOOL definesMethod(const char *cls, const char *sel);
 static IMP swizzle(const char *cls, const char *sel, IMP imp);
 
@@ -836,6 +1056,9 @@ static void patchDriverClasses(void) {
         igArrayLengthOffset = ivar_getOffset(arrayLength);
         origIGInitView = (InitViewIMP)swizzle("MTLIGAccelTexture", "initWithTexture:pixelFormat:textureType:levels:slices:", (IMP)igInitView);
     }
+    intelDepthWithoutHiZ();
+    if (!origIGFillBuffer && definesMethod("MTLIGAccelBlitCommandEncoder", "fillBuffer:range:value:"))
+        origIGFillBuffer = (FillBufferIMP)swizzle("MTLIGAccelBlitCommandEncoder", "fillBuffer:range:value:", (IMP)igFillBuffer);
     os_unfair_lock_unlock(&lock);
 }
 

@@ -48,7 +48,8 @@ CASES="s01-device-methods:shim s02-reflection:shim s03-shader-atomic-usage:shim 
 s08-sdk-properties:shim s09-msl-3.2:shim s10-device-over-release:shim s12-srgb-mipmaps:bronze s13-new-air-metallib:shim
 s14-safari-argument-encoders:shim s15a-intel-msaa-resolve:shim s15b-intel-narrow-clear:shim s16-intel-array-view:shim
 s17-amd-depth-stencil-view:bronze s18-pipeline-cache-key:shim s19-amd-trilinear-blend:bronze s25-amd-srgb-resolve:bronze s26-amd-depth-stencil-copy-pitch:bronze
-a01-texture-atomics:adapter
+s20-intel-fill-buffer:shim s21-intel-depth-only-pipeline:shim s22-intel-depth-hiz-levels:shim s23-intel-3d-mip-plane:shim
+s24-intel-narrow-mip-clear:shim a01-texture-atomics:adapter
 a01-texture-atomics@Intel:adapter a02-si-smrd-hazard:smrd a04-si-threadgroup-pointer:ldsbase
 a05-escaped-texture-pointer:handle a05-escaped-texture-pointer@Intel:handle a06-fast-math-nan-compare:nan
 c01-amdil-argument-buffer:stock c02-amdil-color-input:stock c03-amdil-gep-select:patch3
