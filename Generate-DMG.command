@@ -5,16 +5,22 @@ Note password encryption required to pass Apple's notarization.
 """
 
 import os
+import math
 import argparse
 import subprocess
 
 UB_DIRECTORY:     str = "Universal-Binaries"
 DMG_NAME:         str = "Universal-Binaries.dmg"
 DMG_VOLNAME:      str = "BridgePatcher Resources (Root Patching)"
-DMG_SIZE:         str = "4096"
 DMG_FORMAT:       str = "UDRO"
 DMG_PASSPHRASE:   str = "password"
 SIGNING_IDENTITY: str = "OCLP Self Signed"
+
+# Headroom added on top of the measured payload size so HFS+ metadata
+# (catalog/extents B-trees, journal, etc.) always fits
+DMG_HEADROOM_PERCENT: int = 10
+DMG_HEADROOM_MB:      int = 256
+HFS_BLOCK_SIZE:       int = 4096
 
 
 class GenerateDiskImage:
@@ -55,18 +61,40 @@ class GenerateDiskImage:
         subprocess.run(["/usr/bin/find", UB_DIRECTORY, "-name", ".DS_Store", "-delete"], capture_output=True)
 
 
+    def _calculate_dmg_size(self) -> str:
+        """
+        Calculate the DMG size (in megabytes) from the contents of UB_DIRECTORY,
+        instead of hardcoding it, so the image grows with the payloads.
+
+        Each file is rounded up to the HFS+ allocation block size, then a
+        percentage-based and fixed headroom is added for filesystem metadata.
+        """
+        total_bytes = 0
+        for root, dirs, files in os.walk(UB_DIRECTORY):
+            for name in dirs + files:
+                st = os.lstat(os.path.join(root, name))
+                # Every entry costs at least one block of catalog/metadata space
+                total_bytes += max(math.ceil(st.st_size / HFS_BLOCK_SIZE), 1) * HFS_BLOCK_SIZE
+
+        size_mb = math.ceil(total_bytes / (1024 * 1024))
+        size_mb += math.ceil(size_mb * DMG_HEADROOM_PERCENT / 100) + DMG_HEADROOM_MB
+        print(f"    - Payload size: {total_bytes / (1024 * 1024):.0f} MB, DMG size: {size_mb} MB")
+        return str(size_mb)
+
+
     def _create_dmg(self, raise_on_error: bool = False) -> None:
         """
         raise_on_error: If false, attempts to reset hdiutil and try again
         """
         print("  - Creating DMG")
+        dmg_size = self._calculate_dmg_size()
         result = subprocess.run([
             "/usr/bin/hdiutil", "create",
             "-srcfolder", UB_DIRECTORY, "tmp.dmg",
             "-volname", DMG_VOLNAME,
             "-fs", "HFS+", "-ov",
             "-format", DMG_FORMAT,
-            "-megabytes", DMG_SIZE
+            "-megabytes", dmg_size
         ], capture_output=True)
         if result.returncode != 0:
             print("    - Failed to create DMG")
