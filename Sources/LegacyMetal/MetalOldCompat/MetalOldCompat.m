@@ -21,6 +21,8 @@
 //  17. depth/stencil attachments that are views of mip 1+ on the 12.5 AMD driver (nothing rendered): parent attached
 //  18. pipeline cache keys that ignore the pipeline descriptor (a compute pipeline's maxTotalThreadsPerThreadgroup):
 //      MetalOld told to key by the driver's function key
+//  19. trilinear filtering on the 12.5 AMD driver: its samplers blend between mip levels only in the middle of the
+//      interval (PERF_MIP); now linear across it, as on Apple's GPUs
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
 // sends it to the unified log, for sandboxed XPC services such as WebKit's GPU process). Build with build.sh.
@@ -934,6 +936,56 @@ static id bronzeRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descri
     return origBronzeRenderEncoder(self, _cmd, rewritten);
 }
 
+// 19. Trilinear filtering on the 12.5 AMD driver: -[BronzeMtlSampler initWithDevice:samplerDescriptor:] sets
+// SQ_IMG_SAMP_WORD1.PERF_MIP = 6 in every sampler, so with mipFilter Linear the GPU reads a single level near whole
+// levels and blends only in between (a sample at level 0.25 returns 0.19 of the way to the next level, at 0.75 0.81).
+// Apple's GPUs blend linearly, and Blender EEVEE's horizon scan relies on it: it samples its depth pyramid just above
+// a whole level, and with the sharpened blend the light of bright emitters went missing on nearby surfaces. PERF_MIP
+// is cleared and the descriptor registered again in the driver's global table, which the GPU reads it from: samplers
+// with a resource index (argument buffers) own their slot, the others share a slot per distinct descriptor.
+// Samples near whole levels now read two levels: a kernel that does nothing but sample textures takes up to ~12% longer
+// (more only if nearly every sample sits just above a whole level); Blender's render times didn't change.
+// MTLSHIM_EXACT_TRILINEAR=0 turns this off.
+typedef id (*SamplerInitIMP)(id, SEL, id, id);
+static SamplerInitIMP origSamplerInit;
+static uint64_t (*setSharedSamplerSRD)(id device, unsigned kind, unsigned dwords, const unsigned *srd);
+static void (*setSamplerSRD)(id device, unsigned kind, unsigned index, unsigned dwords, const void *srd, bool unique);
+static ptrdiff_t samplerConstsOffset, samplerIndexOffset;
+enum { kPerfMipMask = 0x0f000000 };  // SQ_IMG_SAMP_WORD1 bits 24-27
+
+static id samplerInit(id self, SEL _cmd, id device, id descriptor) {
+    self = origSamplerInit(self, _cmd, device, descriptor);
+    if (!self) return self;
+    uint32_t *srd = (uint32_t *)((char *)(__bridge void *)self + samplerConstsOffset);
+    if (!(srd[1] & kPerfMipMask)) return self;
+    srd[1] &= ~(uint32_t)kPerfMipMask;
+    uint64_t *index = (uint64_t *)((char *)(__bridge void *)self + samplerIndexOffset);
+    NSUInteger resourceIndex = [descriptor respondsToSelector:sel_registerName("resourceIndex")]
+        ? ((NSUInteger (*)(id, SEL))objc_msgSend)(descriptor, sel_registerName("resourceIndex")) : 0;
+    if (resourceIndex)
+        setSamplerSRD(device, 1, (unsigned)resourceIndex, 4, srd, true);
+    else
+        *index = setSharedSamplerSRD(device, 1, 4, srd);
+    return self;
+}
+
+static void exactTrilinear(void) {
+    const char *setting = getenv("MTLSHIM_EXACT_TRILINEAR");
+    if (origSamplerInit || (setting && !strcmp(setting, "0"))) return;
+    Class sampler = objc_getClass("BronzeMtlSampler");
+    Ivar consts = sampler ? class_getInstanceVariable(sampler, "m_samplerConsts") : NULL;
+    Ivar rsrcIndex = sampler ? class_getInstanceVariable(sampler, "rsrcIndex") : NULL;
+    setSharedSamplerSRD = dlsym(RTLD_DEFAULT, "_Z39amdMtlBronzeDeviceSetNonUniqueGlobalSrdP15BronzeMtlDevicejjPKj");
+    setSamplerSRD = dlsym(RTLD_DEFAULT, "_Z30amdMtlBronzeDeviceSetGlobalSRDP15BronzeMtlDevicejjjPKvb");
+    if (!consts || !rsrcIndex || !setSharedSamplerSRD || !setSamplerSRD || strcmp(ivar_getTypeEncoding(rsrcIndex), "Q") ||
+        !strstr(ivar_getTypeEncoding(consts), "\"MIN_LOD\"b12\"MAX_LOD\"b12\"PERF_MIP\"b4\"PERF_Z\"b4") ||
+        !definesMethod("BronzeMtlSampler", "initWithDevice:samplerDescriptor:"))
+        return;
+    samplerConstsOffset = ivar_getOffset(consts);
+    samplerIndexOffset = ivar_getOffset(rsrcIndex);
+    origSamplerInit = (SamplerInitIMP)swizzle("BronzeMtlSampler", "initWithDevice:samplerDescriptor:", (IMP)samplerInit);
+}
+
 static BOOL definesMethod(const char *cls, const char *sel);
 static IMP swizzle(const char *cls, const char *sel, IMP imp);
 
@@ -965,6 +1017,7 @@ static void patchDriverClasses(void) {
         igArrayLengthOffset = ivar_getOffset(arrayLength);
         origIGInitView = (InitViewIMP)swizzle("MTLIGAccelTexture", "initWithTexture:pixelFormat:textureType:levels:slices:", (IMP)igInitView);
     }
+    exactTrilinear();
     os_unfair_lock_unlock(&lock);
 }
 
