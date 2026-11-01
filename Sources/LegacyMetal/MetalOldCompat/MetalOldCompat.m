@@ -23,6 +23,8 @@
 //      MetalOld told to key by the driver's function key
 //  19. trilinear filtering on the 12.5 AMD driver: its samplers blend between mip levels only in the middle of the
 //      interval (PERF_MIP); now linear across it, as on Apple's GPUs
+//  25. precompiled libraries built for macOS 15.4+ (AIR 2.7, e.g. iMovie's): retargeted to AIR 2.6 in the compiler
+//      service, as MetallibSupportPkg does for the system's metallibs
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
 // sends it to the unified log, for sandboxed XPC services such as WebKit's GPU process). Build with build.sh.
@@ -33,6 +35,9 @@
 #import <objc/runtime.h>
 #include <ctype.h>
 #include <dlfcn.h>
+#include <mach-o/dyld.h>
+#include <mach-o/loader.h>
+#include <sys/mman.h>
 #include <os/lock.h>
 #import <IOKit/IOKitLib.h>
 #include <os/log.h>
@@ -1154,6 +1159,143 @@ __attribute__((unused)) static CFArrayRef interposedCopyAllDevices(void) {
 __attribute__((unused)) static CFArrayRef interposedCopyAllDevicesWithObserver(id<NSObject> __strong *observer, MTLDeviceNotificationHandler handler) {
     return onMetalOld() ? compatCopyAllDevicesWithObserver(observer, handler) : (__bridge_retained CFArrayRef)MTLCopyAllDevicesWithObserver(observer, handler);
 }
+// 25. Precompiled libraries built for macOS 15.4 or later (AIR 2.7: iMovie 10.4.4, Safari's ANGLE, apps built with
+// Xcode 16.3+). This stack's compiler service runs Sequoia's own compiler (GPUCompiler 32023), which reads AIR 2.7, but
+// MetalOld asks it for the macOS 14.2 target (AIR 2.6), so it rejects such a module: "incompatible module ... not
+// compatible with the target", then "air version set to 2.7.0 ... but expecting 2.6", and function-constant
+// predicates of predicated arguments (__metal_implicit_fc_pred_*) stay unresolved while the triple says 2.7. In
+// MTLCompilerService, each AIR 2.7 module is retargeted when the compiler first looks at it (upgradeAIRModule reads
+// !air.version first): triple air64_v26-apple-macosx14.0.0, !air.version 2.6.0, !air.language_version Metal 3.1, the
+// same changes dortania/MetallibSupportPkg makes when it rebuilds Sequoia's system metallibs for these GPUs. Hooked by
+// pointing the 32023 libGPUCompilerImpl images' import slots for llvm::Module::getNamedMetadata at a wrapper (these
+// libraries come extracted from a shared cache, with their imports in a "dsce.got" segment that dyld's own
+// interposing doesn't reach), LLVM resolved with dlsym (no link-time dependency on libLLVM). MTLSHIM_AIR27=0 turns
+// this off.
+typedef struct { const char *data; size_t length; } LLVMStringRef;
+typedef void *LLVMRef;
+static struct {
+    LLVMRef (*getNamedMetadata)(const void *module, const void *name);  // llvm::Module::getNamedMetadata(Twine const&)
+    LLVMStringRef (*nodeName)(const void *node);                          // llvm::NamedMDNode::getName()
+    unsigned (*nodeOperandCount)(const void *node);
+    LLVMRef (*nodeOperand)(const void *node, unsigned i);
+    void (*setNodeOperand)(void *node, unsigned i, LLVMRef md);
+    const char *(*getTarget)(const void *module);                        // LLVM C API from here on
+    void (*setTarget)(void *module, const char *triple);
+    LLVMRef (*moduleContext)(const void *module);
+    LLVMRef (*metadataAsValue)(LLVMRef context, LLVMRef md);
+    LLVMRef (*valueAsMetadata)(LLVMRef value);
+    unsigned (*mdNodeOperandCount)(LLVMRef value);
+    void (*mdNodeOperands)(LLVMRef value, LLVMRef *out);
+    LLVMRef (*isAConstantInt)(LLVMRef value);
+    unsigned long long (*constIntValue)(LLVMRef value);
+    LLVMRef (*constInt)(LLVMRef type, unsigned long long n, int signExtend);
+    LLVMRef (*int32Type)(LLVMRef context);
+    LLVMRef (*mdNode)(LLVMRef context, LLVMRef *mds, size_t count);
+} llvm32023;
+_Static_assert(sizeof llvm32023 == 17 * sizeof(void *), "one slot per name in resolveLLVM32023");
+static const char kGPUCompiler32023[] =
+    "/System/Library/PrivateFrameworks/GPUCompiler.framework/Versions/32023/Libraries/";
+
+static bool resolveLLVM32023(void) {
+    static int resolved;  // 0 not yet, 1 ok, -1 failed
+    if (resolved) return resolved > 0;
+    char path[256];
+    snprintf(path, sizeof path, "%slibLLVM.dylib", kGPUCompiler32023);
+    void *h = dlopen(path, RTLD_NOLOAD | RTLD_LAZY);
+    const char *names[] = {"_ZNK4llvm6Module16getNamedMetadataERKNS_5TwineE", "_ZNK4llvm11NamedMDNode7getNameEv",
+                           "_ZNK4llvm11NamedMDNode14getNumOperandsEv", "_ZNK4llvm11NamedMDNode10getOperandEj",
+                           "_ZN4llvm11NamedMDNode10setOperandEjPNS_6MDNodeE", "LLVMGetTarget", "LLVMSetTarget",
+                           "LLVMGetModuleContext", "LLVMMetadataAsValue", "LLVMValueAsMetadata",
+                           "LLVMGetMDNodeNumOperands", "LLVMGetMDNodeOperands", "LLVMIsAConstantInt",
+                           "LLVMConstIntGetZExtValue", "LLVMConstInt", "LLVMInt32TypeInContext",
+                           "LLVMMDNodeInContext2"};
+    void **slots = (void **)&llvm32023;
+    resolved = 1;
+    for (size_t i = 0; i < sizeof names / sizeof *names; i++)
+        if (!h || !(slots[i] = dlsym(h, names[i]))) resolved = -1;
+    return resolved > 0;
+}
+
+// Operand 0 of a named node {..., major, minor, ...} (integers from `first` on): minor `from` -> `to`, subminor 0.
+static void lowerVersionNode(const void *module, void *node, unsigned first, unsigned major, unsigned from,
+                             unsigned to) {
+    if (llvm32023.nodeOperandCount(node) < 1) return;
+    LLVMRef context = llvm32023.moduleContext(module);
+    LLVMRef value = llvm32023.metadataAsValue(context, llvm32023.nodeOperand(node, 0));
+    unsigned count = llvm32023.mdNodeOperandCount(value);
+    LLVMRef ops[8], mds[8];
+    if (count < first + 2 || count > 8) return;
+    llvm32023.mdNodeOperands(value, ops);
+    if (!llvm32023.isAConstantInt(ops[first]) || !llvm32023.isAConstantInt(ops[first + 1]) ||
+        llvm32023.constIntValue(ops[first]) != major || llvm32023.constIntValue(ops[first + 1]) != from)
+        return;
+    for (unsigned i = 0; i < count; i++) mds[i] = llvm32023.valueAsMetadata(ops[i]);
+    LLVMRef i32 = llvm32023.int32Type(context);
+    mds[first + 1] = llvm32023.valueAsMetadata(llvm32023.constInt(i32, to, 0));
+    if (count > first + 2 && llvm32023.isAConstantInt(ops[first + 2]))
+        mds[first + 2] = llvm32023.valueAsMetadata(llvm32023.constInt(i32, 0, 0));
+    llvm32023.setNodeOperand(node, 0, llvm32023.mdNode(context, mds, count));
+}
+
+static LLVMRef retargetingGetNamedMetadata(const void *module, const void *name) {
+    LLVMRef node = llvm32023.getNamedMetadata(module, name);
+    if (!node) return node;
+    LLVMStringRef nodeName = llvm32023.nodeName(node);
+    if (nodeName.length != 11 || memcmp(nodeName.data, "air.version", 11)) return node;
+    const char *triple = llvm32023.getTarget(module);
+    static const char kAIR27[] = "air64_v27-apple-macosx";
+    if (!triple || strncmp(triple, kAIR27, sizeof kAIR27 - 1)) return node;
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] AIR 2.7 module (%s) retargeted to AIR 2.6 / macOS 14\n", triple);
+    llvm32023.setTarget((void *)module, "air64_v26-apple-macosx14.0.0");
+    lowerVersionNode(module, node, 0, 2, 7, 6);
+    // Twine("air.language_version"): a C string on the left, nothing on the right (CStringKind / EmptyKind). This
+    // LLVM's Twine children are 16 bytes (pointer + length), so the kinds sit at +32, where the compiler writes them.
+    struct { const char *lhs; size_t lhsLength; const void *rhs; size_t rhsLength; unsigned char lhsKind, rhsKind; }
+        language = {"air.language_version", 0, NULL, 0, 3, 1};
+    LLVMRef languageNode = llvm32023.getNamedMetadata(module, &language);
+    if (languageNode) lowerVersionNode(module, languageNode, 1, 3, 2, 1);
+    return node;
+}
+
+// Points every import slot of `mh` (outside __TEXT/__LINKEDIT) that holds `from` at `to`; returns how many.
+static int rebindImports(const struct mach_header *mh, intptr_t slide, const void *from, const void *to) {
+    const struct mach_header_64 *header = (const struct mach_header_64 *)mh;
+    const struct load_command *command = (const struct load_command *)(header + 1);
+    int count = 0;
+    for (uint32_t i = 0; i < header->ncmds; i++, command = (const void *)((const char *)command + command->cmdsize)) {
+        if (command->cmd != LC_SEGMENT_64) continue;
+        const struct segment_command_64 *segment = (const struct segment_command_64 *)command;
+        if (!strcmp(segment->segname, SEG_TEXT) || !strcmp(segment->segname, SEG_LINKEDIT)) continue;
+        const void **slot = (const void **)(segment->vmaddr + slide), **end = slot + segment->vmsize / sizeof(void *);
+        for (; slot < end; slot++) {
+            if (*slot != from) continue;
+            uintptr_t page = (uintptr_t)slot & ~(uintptr_t)(getpagesize() - 1);
+            bool writable = segment->initprot & VM_PROT_WRITE;
+            if (!writable && mprotect((void *)page, getpagesize(), PROT_READ | PROT_WRITE)) continue;
+            *slot = to;
+            if (!writable) mprotect((void *)page, getpagesize(), PROT_READ);
+            count++;
+        }
+    }
+    return count;
+}
+static void interposeCompilerImage(const struct mach_header *mh, intptr_t slide) {
+    Dl_info info;
+    const size_t dirLength = sizeof kGPUCompiler32023 - 1;
+    if (!dladdr(mh, &info) || !info.dli_fname || strncmp(info.dli_fname, kGPUCompiler32023, dirLength) ||
+        strncmp(info.dli_fname + dirLength, "libGPUCompilerImpl", 18) || !resolveLLVM32023())
+        return;
+    int slots = rebindImports(mh, slide, (const void *)llvm32023.getNamedMetadata, (const void *)retargetingGetNamedMetadata);
+    if (getenv("MTLSHIM_VERBOSE"))
+        shimLog("[mtlshim] AIR 2.7 retargeting: %d import slot(s) in %s\n", slots, info.dli_fname + dirLength);
+}
+
+static void installAIR27Retargeting(void) {
+    const char *setting = getenv("MTLSHIM_AIR27");
+    if ((setting && !strcmp(setting, "0")) || strcmp(getprogname(), "MTLCompilerService")) return;
+    _dyld_register_func_for_add_image(interposeCompilerImage);  // also called for the images already loaded
+}
+
 #ifndef METALOLDCOMPAT_NOOP
 __attribute__((used, section("__DATA,__interpose"))) static const struct { const void *replacement, *original; } interposers[] = {
     {(const void *)interposedRegistryEntryCreateCFProperty, (const void *)IORegistryEntryCreateCFProperty},
@@ -1169,7 +1311,9 @@ __attribute__((used, section("__DATA,__interpose"))) static const struct { const
 __attribute__((constructor)) static void init(void) {
 #ifndef METALOLDCOMPAT_NOOP
     patchDeviceBase();
+    installAIR27Retargeting();
 #else
     (void)patchDeviceBase;
+    (void)installAIR27Retargeting;
 #endif
 }

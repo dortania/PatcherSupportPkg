@@ -60,6 +60,8 @@ run() {  # <test[@gpu]> <removed fix or "fixed">
         smrd) env=(AMD_SI_HAZARD_FIX=0) ;; ldsbase) env=(AMD_LDS_BASE_FIX=0) ;; handle) env=(AMD_HANDLE_FIX=0 INTEL_HANDLE_FIX=0) ;;
         nan) env=(AMD_NAN_FIX=0) ;;
     esac
+    # s13's fix (item 25) works in MTLCompilerService, which gets the shim under test this way
+    [ "$t" = s13-new-air-metallib ] && env+=(__XPC_DYLD_INSERT_LIBRARIES=$shim)
     rm -rf "$(getconf DARWIN_USER_CACHE_DIR)com.apple.metal"
     env ${env[@]+"${env[@]}"} DYLD_INSERT_LIBRARIES=$shim:$CC DYLD_LIBRARY_PATH=$libs ./build/"$t" $gpu 2>/dev/null |
         grep -E '^(PASS|FAIL|SKIP) ' | tail -1
@@ -70,8 +72,8 @@ run() {  # <test[@gpu]> <removed fix or "fixed">
         "${V:+(AMDShared from 12.5$V)}"
     echo
     echo "Each test runs once without the fix it is about (everything else fixed) and once with all fixes; the GPU"
-    echo "compilers run in the test process. \"crashed\" = the in-process compiler took the test down (a compile error out"
-    echo "of process). s13 shows a limitation that only Safari's case works around, so it fails both times."
+    echo "compilers run in the test process. \"crashed\" = the in-process compiler took the test down (a compile"
+    echo "error out of process)."
     echo
     echo "| test | without the fix | with the fixes |"
     echo "|---|---|---|"
