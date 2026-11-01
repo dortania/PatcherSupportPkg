@@ -18,6 +18,9 @@
 // address (Blender EEVEE's scratch-memory G-buffer writer -> black blocks behind glass). AMD_SI_HAZARD_FIX=0 turns
 // both off, AMD_SI_L1_FIX=0 only the L1 bypass.
 //
+// Third job: keep compares false for NaN under fast math, as Apple's current compilers do (keepCompareNaNs; Blender
+// EEVEE's volume lighting depends on it). AMD_NAN_FIX=0 turns it off.
+//
 // Installed: AMDShared.bundle/Contents/MacOS/AMDTextureAtomics.dylib, loaded by a weak load command in AMDShared.
 // Test use (in-process compiling): DYLD_INSERT_LIBRARIES=Tests/tools/localcc.dylib:build/texatomic.dylib <app>
 //   TEXATOMIC_LOG=1   log what is rewritten
@@ -130,6 +133,7 @@ static struct {
     bool (*hasByValAttr)(void *argument);
     StringRef (*structName)(void *structType);
     void (*buildLazyArguments)(void *function);
+    void (*addFnAttr)(void *function, const char *kind, size_t kindSize, const char *value, size_t valueSize);
 } api;
 
 static void *resolveIn(const char *bytes, size_t length, const struct symtab_command *table, uint64_t textAddress,
@@ -206,6 +210,7 @@ static bool resolveAPI(void) {
         RESOLVE(hasByValAttr, "__ZNK4llvm8Argument12hasByValAttrEv");
         RESOLVE(structName, "__ZNK4llvm10StructType7getNameEv");
         RESOLVE(buildLazyArguments, "__ZNK4llvm8Function18BuildLazyArgumentsEv");
+        RESOLVE(addFnAttr, "__ZN4llvm8Function9addFnAttrENS_9StringRefES1_");
 #undef RESOLVE
         api.valid = api.getFunction && api.getOrInsertFunction && api.functionTypeGet && api.constantIntGet &&
                     api.getInt32Ty && api.getVoidTy && api.getContext && api.getUser && api.replaceUsesOfWith &&
@@ -700,6 +705,29 @@ static unsigned fixEscapedHandleLoads(void *module) {
     return fixed;
 }
 
+// Metal compiles with fast math by default, which marks every function "no-nans-fp-math"="true". LLVM 5's instruction
+// selection takes that as NoNaNsFPMath and treats compares as NaN-free, e.g. it branches on `x <= t` for `if (x > t)`,
+// so a NaN takes the other branch. Apple's current compilers keep compares false for NaN, and shaders rely on that:
+// Blender EEVEE's safe_normalize() of 0/0 returned NaN instead of its fallback, which made the world sun's direction
+// NaN and dropped all volume lighting. Setting the attribute to "false" keeps compares IEEE; the other fast-math
+// options stay. AMD_NAN_FIX=0 turns this off.
+static unsigned keepCompareNaNs(void *module) {
+    const char *setting = getenv("AMD_NAN_FIX");
+    if ((setting && !strcmp(setting, "0")) || !api.addFnAttr) return 0;
+    static const char kKind[] = "no-nans-fp-math", kValue[] = "false";
+    char *functions = (char *)module + kModuleFunctions;
+    unsigned changed = 0;
+    for (char *fn = nextNode(functions); fn != functions; fn = nextNode(fn)) {
+        char *function = fn - kFunctionNode;
+        if (*(void **)(function + kFunctionParent) != module) return changed;  // layout mismatch
+        char *blocks = function + kFunctionBlocks;
+        if (nextNode(blocks) == blocks) continue;  // a declaration
+        api.addFnAttr(function, kKind, sizeof kKind - 1, kValue, sizeof kValue - 1);
+        changed++;
+    }
+    return changed;
+}
+
 static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *c, void *d, void *e) {
     if (module && resolveAPI()) {
         static bool optionsParsed;  // TEXATOMIC_LLVM_ARGS="-print-after-all ...": libAMDIL902's LLVM options (diagnostics)
@@ -714,6 +742,8 @@ static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *
         }
         if (getenv("TEXATOMIC_DUMP_MODULE") && api.moduleDump) api.moduleDump(module);  // the AIR libAMDIL902 receives
         fixEscapedHandleLoads(module);
+        unsigned nanSafe = keepCompareNaNs(module);
+        if (nanSafe && logging()) fprintf(stderr, "[texatomic] %u function(s) compiled with NaN-safe compares\n", nanSafe);
         unsigned n = lowerTextureAtomics(module);
         if (logging()) fprintf(stderr, "[texatomic] compileShader: %u texture atomic call(s) lowered\n", n);
     } else if (logging()) {

@@ -4,8 +4,8 @@
 #   without the fix  the same, minus only the fix the test is about:
 #                      shim tests          the no-op MetalOldCompat build (same load commands, does nothing)
 #                      a01, a05@Intel, i01 the stock AMDShared / libMTLIntelCompilerPlugin (adapters not loaded)
-#                      a02, a04, a05, r01  the AMD adapter's own switch (AMD_SI_HAZARD_FIX=0, AMD_LDS_BASE_FIX=0,
-#                                          AMD_HANDLE_FIX=0 + INTEL_HANDLE_FIX=0)
+#                      a02, a04-a06, r01   the AMD adapter's own switch (AMD_SI_HAZARD_FIX=0, AMD_LDS_BASE_FIX=0,
+#                                          AMD_HANDLE_FIX=0 + INTEL_HANDLE_FIX=0, AMD_NAN_FIX=0)
 #                      c01, c02            the stock libAMDIL902
 #                      c03                 libAMDIL902 with patches 1-3 only
 # Needs: ../build.sh run first (its build/ folder, including build/stock/), an OCLP-patched Mac with the legacy Metal
@@ -38,8 +38,9 @@ s08-sdk-properties:shim s09-msl-3.2:shim s10-device-over-release:shim s12-srgb-m
 s14-safari-argument-encoders:shim s15a-intel-msaa-resolve:shim s15b-intel-narrow-clear:shim s16-intel-array-view:shim
 s17-amd-depth-stencil-view:shim s18-pipeline-cache-key:shim a01-texture-atomics:adapter a01-texture-atomics@Intel:adapter
 a02-si-smrd-hazard:smrd a04-si-threadgroup-pointer:ldsbase a05-escaped-texture-pointer:handle
-a05-escaped-texture-pointer@Intel:handle c01-amdil-argument-buffer:stock c02-amdil-color-input:stock
-c03-amdil-gep-select:patch3 i01-intel-array-struct-arg:adapter r01-amd-slot8-data-segment:ldsbase"
+a05-escaped-texture-pointer@Intel:handle a06-fast-math-nan-compare:nan c01-amdil-argument-buffer:stock
+c02-amdil-color-input:stock c03-amdil-gep-select:patch3 i01-intel-array-struct-arg:adapter
+r01-amd-slot8-data-segment:ldsbase"
 
 run() {  # <test[@gpu]> <removed fix or "fixed">
     local t=${1%%@*} gpu= shim=$SHIM libs=$FIXED
@@ -48,6 +49,7 @@ run() {  # <test[@gpu]> <removed fix or "fixed">
     case $2 in
         shim) shim=$NOOP ;; adapter) libs=$NOADAPTER ;; stock) libs=$STOCK ;; patch3) libs=$PATCH3 ;;
         smrd) env=(AMD_SI_HAZARD_FIX=0) ;; ldsbase) env=(AMD_LDS_BASE_FIX=0) ;; handle) env=(AMD_HANDLE_FIX=0 INTEL_HANDLE_FIX=0) ;;
+        nan) env=(AMD_NAN_FIX=0) ;;
     esac
     rm -rf "$(getconf DARWIN_USER_CACHE_DIR)com.apple.metal"
     env ${env[@]+"${env[@]}"} DYLD_INSERT_LIBRARIES=$shim:$CC DYLD_LIBRARY_PATH=$libs ./build/"$t" $gpu 2>/dev/null |
