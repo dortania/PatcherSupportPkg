@@ -21,6 +21,9 @@
 // Third job: keep compares false for NaN under fast math, as Apple's current compilers do (keepCompareNaNs; Blender
 // EEVEE's volume lighting depends on it). AMD_NAN_FIX=0 turns it off.
 //
+// Fourth job: compute ldexp on half as float (ldexpHalfAsFloat): libAMDIL902 crashes on half3 and returns wrong values
+// for the other widths. AMD_LDEXP_FIX=0 turns it off.
+//
 // Installed: AMDShared.bundle/Contents/MacOS/AMDTextureAtomics.dylib, loaded by a weak load command in AMDShared.
 // Test use (in-process compiling): DYLD_INSERT_LIBRARIES=Tests/tools/localcc.dylib:build/texatomic.dylib <app>
 //   TEXATOMIC_LOG=1   log what is rewritten
@@ -143,6 +146,8 @@ static struct {
     StringRef (*structName)(void *structType);
     void (*buildLazyArguments)(void *function);
     void (*addFnAttr)(void *function, const char *kind, size_t kindSize, const char *value, size_t valueSize);
+    void (*eraseFunction)(void *function);  // optional, ldexpHalfAsFloat only
+    void *(*getFloatTy)(void *context);     // same
 } api;
 
 static void *resolveIn(const char *bytes, size_t length, const struct symtab_command *table, uint64_t textAddress,
@@ -220,6 +225,8 @@ static bool resolveAPI(void) {
         RESOLVE(structName, "__ZNK4llvm10StructType7getNameEv");
         RESOLVE(buildLazyArguments, "__ZNK4llvm8Function18BuildLazyArgumentsEv");
         RESOLVE(addFnAttr, "__ZN4llvm8Function9addFnAttrENS_9StringRefES1_");
+        RESOLVE(eraseFunction, "__ZN4llvm8Function15eraseFromParentEv");
+        RESOLVE(getFloatTy, "__ZN4llvm4Type10getFloatTyERNS_11LLVMContextE");
 #undef RESOLVE
         api.valid = api.getFunction && api.getOrInsertFunction && api.functionTypeGet && api.constantIntGet &&
                     api.getInt32Ty && api.getVoidTy && api.getContext && api.getUser && api.replaceUsesOfWith &&
@@ -237,7 +244,7 @@ static bool resolveAPI(void) {
 // Use: Value *Val @0, Use *Next @8, Prev @16 (24 bytes). Fixed operands are co-allocated in front of the User.
 // Instruction is 56 bytes; CallInst adds AttributeList Attrs @56 and FunctionType *FTy @64.
 // FunctionType: ContainedTys @16, [0] = return type. GlobalValue::ValueType @24.
-enum { kUseSize = 24, kOpcodeZExt = 37, kOpcodeCall = 54, kOpcodeICmp = 51, kPredicateEQ = 32 };
+enum { kUseSize = 24, kOpcodeZExt = 37, kOpcodeFPTrunc = 43, kOpcodeFPExt = 44, kOpcodeCall = 54, kOpcodeICmp = 51, kPredicateEQ = 32 };
 static void *typeOf(void *value) { return *(void **)value; }
 static void *firstUse(void *value) { return *(void **)((char *)value + 8); }
 static void *nextUse(void *use) { return *(void **)((char *)use + 8); }
@@ -553,7 +560,7 @@ static unsigned lowerTextureAtomics(void *module) {
 // Arguments @0x58, NumArgs @0x60 (Argument = 40 bytes; lazily built while SubclassData bit 0 @0x12 is set);
 // BasicBlock: node @0x18, InstList sentinel @0x28, Parent @0x38; Instruction: node @0x18, Parent @0x28.
 // ilist nodes: Prev @0, Next @8. GetElementPtrInst: SourceElementType @0x38, ResultElementType @0x40.
-enum { kModuleFunctions = 0x18, kFunctionParent = 0x28, kFunctionNode = 0x38, kFunctionBlocks = 0x48,
+enum { kModuleFunctions = 0x18, kFunctionValueType = 0x18, kFunctionParent = 0x28, kFunctionNode = 0x38, kFunctionBlocks = 0x48,
        kFunctionArgs = 0x58, kFunctionNumArgs = 0x60, kArgumentSize = 40, kBlockNode = 0x18, kBlockInstructions = 0x28,
        kBlockParent = 0x38, kInstructionNode = 0x18, kInstructionParent = 0x28 };
 enum { kTypeStruct = 13, kTypeArray = 14, kTypePointer = 15 };  // Type::TypeID @8
@@ -737,6 +744,51 @@ static unsigned keepCompareNaNs(void *module) {
     return changed;
 }
 
+// ldexp on half is broken in libAMDIL902 at every width (WebGPU CTS builtin,ldexp:f16). half, half2 and half4 reach a
+// runtime.amdil.builtin routine that returns wrong values (0, inf). half3 crashes MTLCompilerService: PrepareIR renames
+// air.ldexp.* to air.fast_ldexp.*, then IntrinsicsActionWidenVec3 looks up the vec4 form by name, and its table has no
+// air.fast_ldexp.v4f16, so lookupName returns 0 and getDeclaration reads out of bounds. The float forms work, and every
+// half is exact as a float, so compute there. The half declarations have to go too: a vec3 one is widened even with no
+// calls left. AMD_LDEXP_FIX=0 turns this off.
+static unsigned ldexpHalfAsFloat(void *module) {
+    const char *setting = getenv("AMD_LDEXP_FIX");
+    if ((setting && !strcmp(setting, "0")) || !api.eraseFunction || !api.getFloatTy) return 0;
+    static const struct { const char *half, *wide; unsigned width; } kForms[] = {
+        {"air.ldexp.f16", "air.ldexp.f32", 1},
+        {"air.ldexp.v2f16", "air.ldexp.v2f32", 2},
+        {"air.ldexp.v3f16", "air.ldexp.v3f32", 3},
+        {"air.ldexp.v4f16", "air.ldexp.v4f32", 4},
+    };
+    unsigned changed = 0;
+    for (size_t f = 0; f < sizeof kForms / sizeof kForms[0]; f++) {
+        void *half = api.getFunction(module, kForms[f].half, strlen(kForms[f].half));
+        if (!half) continue;
+        void *context = api.getContext(half);
+        void *wide = api.getFloatTy(context), *i32 = api.getInt32Ty(context);
+        void *exponent = i32;
+        if (kForms[f].width > 1) {
+            wide = api.vectorTypeGet(wide, kForms[f].width);
+            exponent = api.vectorTypeGet(i32, kForms[f].width);
+        }
+        void *params[2] = {wide, exponent};
+        void *type = api.functionTypeGet(wide, params, 2, false);
+        void *floatForm = api.getOrInsertFunction(module, kForms[f].wide, strlen(kForms[f].wide), type);
+        if (!floatForm || subclassID(floatForm) != subclassID(half)) continue;  // a bitcast: existing declaration of another type
+        for (void *use = firstUse(half); use;) {
+            void *call = api.getUser(use);
+            use = nextUse(use);
+            if (!isCall(call, half, 3) || typeOf(operand(call, 1)) != exponent) continue;
+            void *args[2] = {api.castCreate(kOpcodeFPExt, operand(call, 0), wide, &kNoName, call), operand(call, 1)};
+            void *result = createCall(floatForm, type, args, 2, call);
+            api.replaceAllUsesWith(call, api.castCreate(kOpcodeFPTrunc, result, typeOf(call), &kNoName, call));
+            api.eraseFromParent(call);
+            changed++;
+        }
+        if (!firstUse(half)) api.eraseFunction(half);
+    }
+    return changed;
+}
+
 static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *c, void *d, void *e) {
     if (module && resolveAPI()) {
         static bool optionsParsed;  // TEXATOMIC_LLVM_ARGS="-print-after-all ...": libAMDIL902's LLVM options (diagnostics)
@@ -753,6 +805,8 @@ static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *
         fixEscapedHandleLoads(module);
         unsigned nanSafe = keepCompareNaNs(module);
         if (nanSafe && logging()) fprintf(stderr, "[texatomic] %u function(s) compiled with NaN-safe compares\n", nanSafe);
+        unsigned ldexps = ldexpHalfAsFloat(module);
+        if (ldexps && logging()) fprintf(stderr, "[texatomic] %u half ldexp call(s) computed as float\n", ldexps);
         unsigned n = lowerTextureAtomics(module);
         if (logging()) fprintf(stderr, "[texatomic] compileShader: %u texture atomic call(s) lowered\n", n);
     } else if (logging()) {
