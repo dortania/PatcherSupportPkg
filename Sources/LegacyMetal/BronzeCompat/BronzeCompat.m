@@ -8,6 +8,7 @@
 //   3. trilinear filtering (blends between mip levels only in the middle of the interval)
 //   4. sRGB MSAA resolve (the hardware resolve averages the encoded bytes)
 //   5. depth or stencil copied to a buffer with row pitch 0 (nothing gets written)
+//   6. WebKit's one-vertex pipelines, whose stride the driver refuses (Safari's GPU process crashes on the draw)
 // 1 and 2 come from riptidewave93's bronzefix, found and tested on Tahoe with a MacPro6,1's FirePro D700s.
 // AMD_BRONZE_COMPAT=0 turns everything off for a process, AMD_EXACT_TRILINEAR=0 only item 3; AMD_BRONZE_VERBOSE=1 logs.
 #import <Foundation/Foundation.h>
@@ -418,6 +419,25 @@ static void installCopyFix(void) {
     if (definesMethod(blit, selector)) origCopyToBuffer = (CopyToBufferIMP)swizzle(blit, selector, (IMP)copyToBuffer);
 }
 
+// ---- 6. Vertex strides that aren't a multiple of 4, in WebKit -----------------------------------------------------------
+// For a draw of one vertex, WebKit's WebGPU (RenderPipeline::recomputeLastStrideAsStride) copies the pipeline with the stride
+// set to the end of the last attribute, which can be any size: 2 for snorm8x2. This driver refuses that ("Buffer stride is
+// not a multiple of 4 bytes"), WebKit then draws with no pipeline set, and the driver crashes on a null pointer, which takes
+// down Safari's GPU process (WebGPU CTS api,validation,encoding,cmds,render,draw:vertex_buffer_OOB). The next multiple of 4
+// fetches the same vertex. Only in WebKit: for anyone else the error is the API's answer. Test: s29.
+typedef void (*SetStrideIMP)(id, SEL, NSUInteger);
+static SetStrideIMP origSetStride;
+
+static void setStride(id self, SEL _cmd, NSUInteger stride) {
+    if (stride != NSUIntegerMax) stride = (stride + 3) & ~(NSUInteger)3;  // NSUIntegerMax: MTLBufferLayoutStrideDynamic
+    origSetStride(self, _cmd, stride);
+}
+
+static void installStrideFix(void) {
+    if (strncmp(getprogname(), "com.apple.WebKit", 16)) return;
+    origSetStride = (SetStrideIMP)swizzle(objc_getClass("MTLVertexBufferLayoutDescriptorInternal"), @selector(setStride:), (IMP)setStride);
+}
+
 // This library is a dependency of the driver, so its initializer runs after the driver is mapped and its classes are
 // registered with the ObjC runtime, but before any driver code runs. No driver loaded: nothing to do.
 __attribute__((constructor)) static void init(void) {
@@ -431,6 +451,7 @@ __attribute__((constructor)) static void init(void) {
         installMipFix();
         installRenderPassHooks();
         installCopyFix();
+        installStrideFix();
         if (!disabled("AMD_EXACT_TRILINEAR")) installTrilinearFix(name);
         if (verbose()) fprintf(stderr, "[bronzecompat] view fix %s, sRGB mipmaps %s, trilinear %s, sRGB resolve %s, copy pitch %s\n", origViewInit ? "on" : "off",
                                origGenerateMipmaps ? "on" : "off", origSamplerInit ? "on" : "off", origRenderEndEncoding ? "on" : "off",
