@@ -30,6 +30,8 @@
 //      temporary texture
 //  25. precompiled libraries built for macOS 15.4+ (AIR 2.7, e.g. iMovie's): retargeted to AIR 2.6 in the compiler
 //      service, as MetallibSupportPkg does for the system's metallibs
+//  26. divide by zero in WebKit's WebGPU, which only traps on Intel Macs (kills Safari's GPU process): gives the result
+//      Apple silicon gets
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -46,6 +48,8 @@
 #include <mach-o/loader.h>
 #include <sys/mman.h>
 #include <os/lock.h>
+#include <signal.h>
+#include <sys/ucontext.h>
 #include <pthread.h>
 #import <IOKit/IOKitLib.h>
 #include <os/log.h>
@@ -1380,10 +1384,88 @@ static void routeWebKitImage(const struct mach_header *mh, intptr_t slide) {
     rebindStubs(mh, slide, (const void *)IORegistryEntryCreateCFProperty, (const void *)interposedRegistryEntryCreateCFProperty);
 }
 
+// Item 26. WebKit's WebGPU divides by zero on Intel Macs: CommandEncoder::beginRenderPass rounds up to a multiple of
+// Texture::renderTargetPixelByteAlignment(format), which is 0 when the attachment has no usable format, such as a canvas
+// texture destroyed by a resize (WebGPU CTS web_platform,canvas,getCurrentTexture:resize). On Apple silicon `udiv` by zero
+// gives 0 and validation goes on to report the error; on x86 `div` traps, the SIGFPE kills the GPU process, and every page
+// gets a null adapter from then on. So give the Apple silicon result. All of this framework's divides have register operands.
+static uintptr_t webGPUTextStart, webGPUTextEnd;
+
+// Back to the interrupted code. Returning from the handler doesn't work there: sigreturn fails in WebKit's GPU process and
+// _sigtramp ends in ud2. Leaves the red zone alone. The handler uses no floating point registers, so those need no restoring.
+__attribute__((naked, noreturn)) static void resumeThread(const _STRUCT_X86_THREAD_STATE64 *state) {
+    __asm__("movq 0x38(%rdi), %rax\n"   // rsp
+            "subq $144, %rax\n"
+            "movq 0x88(%rdi), %rcx\n"   // rflags
+            "movq %rcx, (%rax)\n"
+            "movq 0x80(%rdi), %rcx\n"   // rip
+            "movq %rcx, 8(%rax)\n"
+            "movq %rax, %rsp\n"
+            "movq 0x00(%rdi), %rax\n"
+            "movq 0x08(%rdi), %rbx\n"
+            "movq 0x10(%rdi), %rcx\n"
+            "movq 0x18(%rdi), %rdx\n"
+            "movq 0x28(%rdi), %rsi\n"
+            "movq 0x30(%rdi), %rbp\n"
+            "movq 0x40(%rdi), %r8\n"
+            "movq 0x48(%rdi), %r9\n"
+            "movq 0x50(%rdi), %r10\n"
+            "movq 0x58(%rdi), %r11\n"
+            "movq 0x60(%rdi), %r12\n"
+            "movq 0x68(%rdi), %r13\n"
+            "movq 0x70(%rdi), %r14\n"
+            "movq 0x78(%rdi), %r15\n"
+            "movq 0x20(%rdi), %rdi\n"
+            "popfq\n"
+            "retq $128\n");
+}
+
+static void webGPUDivideByZero(int number, siginfo_t *info, void *context) {
+    _STRUCT_X86_THREAD_STATE64 *s = &((ucontext_t *)context)->uc_mcontext->__ss;
+    if (s->__rip >= webGPUTextStart && s->__rip < webGPUTextEnd) {
+        const uint8_t *code = (const uint8_t *)s->__rip;
+        unsigned rex = (code[0] & 0xf0) == 0x40 ? code[0] : 0;
+        uint8_t opcode = code[rex ? 1 : 0], modrm = code[rex ? 2 : 1];
+        if (opcode == 0xf7 && modrm >= 0xf0) {  // div or idiv of a register
+            // Thread state order, indexed by x86 register number: rax rcx rdx rbx rsp rbp rsi rdi r8-r15
+            static const uint8_t kSlot[16] = {0, 2, 3, 1, 7, 6, 5, 4, 8, 9, 10, 11, 12, 13, 14, 15};
+            uint64_t divisor = (&s->__rax)[kSlot[(modrm & 7) | (rex & 1) << 3]];
+            if (!(rex & 8)) divisor = (uint32_t)divisor;
+            if (!divisor) {
+                s->__rax = s->__rdx = 0;
+                s->__rip += rex ? 3 : 2;
+                resumeThread(s);
+            }
+        }
+    }
+    signal(SIGFPE, SIG_DFL);  // not this case: the instruction traps again, and the process crashes as it would have
+}
+
+static void guardWebGPUImage(const struct mach_header *mh, intptr_t slide) {
+    Dl_info info;
+    if (webGPUTextStart || !dladdr(mh, &info) || !info.dli_fname) return;
+    const char *base = strrchr(info.dli_fname, '/');
+    if (!base || strcmp(base + 1, "WebGPU")) return;
+    const struct mach_header_64 *header = (const struct mach_header_64 *)mh;
+    const struct load_command *command = (const struct load_command *)(header + 1);
+    for (uint32_t i = 0; i < header->ncmds; i++, command = (const void *)((const char *)command + command->cmdsize)) {
+        if (command->cmd != LC_SEGMENT_64 || strcmp(((const struct segment_command_64 *)command)->segname, SEG_TEXT)) continue;
+        const struct segment_command_64 *segment = (const struct segment_command_64 *)command;
+        webGPUTextStart = segment->vmaddr + slide;
+        webGPUTextEnd = webGPUTextStart + segment->vmsize;
+        struct sigaction action = {.sa_flags = SA_SIGINFO | SA_NODEFER};  // SA_NODEFER: resumeThread doesn't unblock SIGFPE
+        action.sa_sigaction = webGPUDivideByZero;
+        sigaction(SIGFPE, &action, NULL);
+        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] WebGPU: divide by zero handled like Apple silicon\n");
+    }
+}
+
 static void installWebKitRouting(void) {
     Method supportsFamily = class_getInstanceMethod(objc_getClass("_MTLDevice"), @selector(supportsFamily:));
     if (supportsFamily) realSupportsFamily = (BOOL (*)(id, SEL, NSInteger))method_getImplementation(supportsFamily);
-    if (!strncmp(getprogname(), "com.apple.WebKit", 16)) _dyld_register_func_for_add_image(routeWebKitImage);
+    if (strncmp(getprogname(), "com.apple.WebKit", 16)) return;
+    _dyld_register_func_for_add_image(routeWebKitImage);
+    _dyld_register_func_for_add_image(guardWebGPUImage);
 }
 
 #ifndef METALOLDCOMPAT_NOOP
