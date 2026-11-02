@@ -24,6 +24,9 @@
 // Fourth job: compute ldexp on half as float (ldexpHalfAsFloat): libAMDIL902 crashes on half3 and returns wrong values
 // for the other widths. AMD_LDEXP_FIX=0 turns it off.
 //
+// Fifth job: make gather on integer textures read the right texels (shiftIntegerGatherCoords, normalizeFetch4).
+// AMD_GATHER_FIX=0 turns it off.
+//
 // Installed: AMDShared.bundle/Contents/MacOS/AMDTextureAtomics.dylib, loaded by a weak load command in AMDShared.
 // Test use (in-process compiling): DYLD_INSERT_LIBRARIES=Tests/tools/localcc.dylib:build/texatomic.dylib <app>
 //   TEXATOMIC_LOG=1   log what is rewritten
@@ -147,7 +150,9 @@ static struct {
     void (*buildLazyArguments)(void *function);
     void (*addFnAttr)(void *function, const char *kind, size_t kindSize, const char *value, size_t valueSize);
     void (*eraseFunction)(void *function);  // optional, ldexpHalfAsFloat only
-    void *(*getFloatTy)(void *context);     // same
+    void *(*getFloatTy)(void *context);     // ldexpHalfAsFloat and shiftIntegerGatherCoords
+    void *(*binaryCreate)(unsigned opcode, void *lhs, void *rhs, const void *name, void *insertBefore);  // shiftIntegerGatherCoords
+    void *(*constantFP)(void *type, double value);  // same
 } api;
 
 static void *resolveIn(const char *bytes, size_t length, const struct symtab_command *table, uint64_t textAddress,
@@ -227,6 +232,8 @@ static bool resolveAPI(void) {
         RESOLVE(addFnAttr, "__ZN4llvm8Function9addFnAttrENS_9StringRefES1_");
         RESOLVE(eraseFunction, "__ZN4llvm8Function15eraseFromParentEv");
         RESOLVE(getFloatTy, "__ZN4llvm4Type10getFloatTyERNS_11LLVMContextE");
+        RESOLVE(binaryCreate, "__ZN4llvm14BinaryOperator6CreateENS_11Instruction9BinaryOpsEPNS_5ValueES4_RKNS_5TwineEPS1_");
+        RESOLVE(constantFP, "__ZN4llvm10ConstantFP3getEPNS_4TypeEd");
 #undef RESOLVE
         api.valid = api.getFunction && api.getOrInsertFunction && api.functionTypeGet && api.constantIntGet &&
                     api.getInt32Ty && api.getVoidTy && api.getContext && api.getUser && api.replaceUsesOfWith &&
@@ -244,7 +251,7 @@ static bool resolveAPI(void) {
 // Use: Value *Val @0, Use *Next @8, Prev @16 (24 bytes). Fixed operands are co-allocated in front of the User.
 // Instruction is 56 bytes; CallInst adds AttributeList Attrs @56 and FunctionType *FTy @64.
 // FunctionType: ContainedTys @16, [0] = return type. GlobalValue::ValueType @24.
-enum { kUseSize = 24, kOpcodeZExt = 37, kOpcodeFPTrunc = 43, kOpcodeFPExt = 44, kOpcodeCall = 54, kOpcodeICmp = 51, kPredicateEQ = 32 };
+enum { kUseSize = 24, kOpcodeFSub = 14, kOpcodeFDiv = 19, kOpcodeZExt = 37, kOpcodeUIToFP = 41, kOpcodeFPTrunc = 43, kOpcodeFPExt = 44, kOpcodeCall = 54, kOpcodeICmp = 51, kPredicateEQ = 32 };
 static void *typeOf(void *value) { return *(void **)value; }
 static void *firstUse(void *value) { return *(void **)((char *)value + 8); }
 static void *nextUse(void *use) { return *(void **)((char *)use + 8); }
@@ -789,6 +796,55 @@ static unsigned ldexpHalfAsFloat(void *module) {
     return changed;
 }
 
+static bool gatherFixEnabled(void) {
+    const char *setting = getenv("AMD_GATHER_FIX");
+    return !(setting && !strcmp(setting, "0"));
+}
+
+// Gather on integer textures (WebGPU CTS builtin,textureGather) has two problems. libAMDIL902 asks fetch4 for unnormalized
+// coordinates but passes the shader's normalized ones, so every gather returns the texels at the texture's corner;
+// normalizeFetch4 turns that back. And GCN hardware forces nearest filtering on integer formats, which leaves gather half
+// a texel off (AMD's open-source drivers subtract 0.5 / size for the same reason), so do that here. It takes normalized
+// coordinates because unnormalized ones can't wrap. Cube textures aren't covered: their faces need another shift.
+static unsigned shiftIntegerGatherCoords(void *module) {
+    if (!gatherFixEnabled() || !api.getFloatTy || !api.binaryCreate || !api.constantFP) return 0;
+    static const char *const kDimensions[] = {"2d", "2d_array"}, *const kTypes[] = {"s.v4i32", "u.v4i32", "s.v4i16", "u.v4i16"};
+    unsigned shifted = 0;
+    for (size_t dim = 0; dim < sizeof kDimensions / sizeof kDimensions[0]; dim++)
+    for (size_t t = 0; t < sizeof kTypes / sizeof kTypes[0]; t++) {
+        char name[64];
+        snprintf(name, sizeof name, "air.gather_texture_%s.%s", kDimensions[dim], kTypes[t]);
+        void *gather = api.getFunction(module, name, strlen(name));
+        if (!gather) continue;
+        void *context = api.getContext(gather);
+        void *i32 = api.getInt32Ty(context), *f32 = api.getFloatTy(context);
+        void *half = api.constantFP(f32, 0.5), *zero = api.constantIntGet(i32, 0, false);
+        for (void *use = firstUse(gather); use; use = nextUse(use)) {
+            void *call = api.getUser(use);
+            if (hungOffUses(call) || numOperands(call) < 3 || operand(call, numOperands(call) - 1) != gather) continue;
+            void *texture = operand(call, 0), *coord = operand(call, 2), *result = coord;
+            for (unsigned c = 0; c < 2; c++) {
+                char sizeName[64];
+                snprintf(sizeName, sizeof sizeName, "air.get_%s_texture_%s", c ? "height" : "width", kDimensions[dim]);
+                void *params[2] = {typeOf(texture), i32}, *args[2] = {texture, zero};
+                void *type = api.functionTypeGet(i32, params, 2, false);
+                void *size = api.getOrInsertFunction(module, sizeName, strlen(sizeName), type);
+                if (!size || subclassID(size) != subclassID(gather)) return shifted;  // a bitcast: existing declaration of another type
+                void *index = api.constantIntGet(i32, c, false);
+                void *value = api.userNew(96, 2), *merged = api.userNew(96, 3);
+                void *texels = api.castCreate(kOpcodeUIToFP, createCall(size, type, args, 2, call), f32, &kNoName, call);
+                void *delta = api.binaryCreate(kOpcodeFDiv, half, texels, &kNoName, call);
+                api.extractElement(value, coord, index, &kNoName, call);
+                api.insertElement(merged, result, api.binaryCreate(kOpcodeFSub, value, delta, &kNoName, call), index, &kNoName, call);
+                result = merged;
+            }
+            api.replaceUsesOfWith(call, coord, result);
+            shifted++;
+        }
+    }
+    return shifted;
+}
+
 static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *c, void *d, void *e) {
     if (module && resolveAPI()) {
         static bool optionsParsed;  // TEXATOMIC_LLVM_ARGS="-print-after-all ...": libAMDIL902's LLVM options (diagnostics)
@@ -807,6 +863,8 @@ static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *
         if (nanSafe && logging()) fprintf(stderr, "[texatomic] %u function(s) compiled with NaN-safe compares\n", nanSafe);
         unsigned ldexps = ldexpHalfAsFloat(module);
         if (ldexps && logging()) fprintf(stderr, "[texatomic] %u half ldexp call(s) computed as float\n", ldexps);
+        unsigned gathers = shiftIntegerGatherCoords(module);
+        if (gathers && logging()) fprintf(stderr, "[texatomic] %u integer gather(s): coordinates shifted half a texel\n", gathers);
         unsigned n = lowerTextureAtomics(module);
         if (logging()) fprintf(stderr, "[texatomic] compileShader: %u texture atomic call(s) lowered\n", n);
     } else if (logging()) {
@@ -1091,6 +1149,21 @@ static int dropThreadgroupBase(const char *in, Text *out) {
     return n;
 }
 
+// See shiftIntegerGatherCoords: fetch4 on integer textures takes the normalized coordinates the shader computed.
+static int normalizeFetch4(char *il) {
+    static const char kFetch4[] = "fetch4", kUnnormalized[] = "coordtype(unnormalized)";
+    int n = 0;
+    for (char *p = il; (p = strstr(p, kFetch4)); p += sizeof kFetch4 - 1) {
+        char *eol = strchr(p, '\n'), *c = strstr(p, kUnnormalized);
+        if (!c || (eol && c > eol)) continue;
+        c += strlen("coordtype(");
+        memmove(c, c + 2, strlen(c + 2) + 1);  // "unnormalized" -> "normalized"
+        if (eol) eol -= 2;
+        n++;
+    }
+    return n;
+}
+
 static int hookedSCCompileShader(void *sc, void *src, void *out) {
     void **tokens = (void **)((char *)src + kSrcTokens);
     uint32_t *size = (uint32_t *)((char *)src + kSrcSize);
@@ -1100,17 +1173,19 @@ static int hookedSCCompileShader(void *sc, void *src, void *out) {
     bool atomics = il.buf && (strstr(il.buf, "0x7A70") || strstr(il.buf, "0x7A71"));
     bool ldsBase = scFamily == kFamilySI && il.buf && !strncmp(il.buf, "il_cs", 5) && strstr(il.buf, "dcl_lds_id(") &&
                    strstr(il.buf, kThreadgroupBaseSlot) && !(ldsSetting && !strcmp(ldsSetting, "0"));
-    if (atomics || ldsBase) {
+    int gathers = il.buf && gatherFixEnabled() ? normalizeFetch4(il.buf) : 0;
+    if (atomics || ldsBase || gathers) {
         Text edited = {0}, based = {0};
         int n = atomics ? rewriteIL(il.buf, &edited) : 0;
         int k = ldsBase && (!atomics || n > 0) ? dropThreadgroupBase(atomics ? edited.buf : il.buf, &based) : 0;
-        const char *text = k > 0 ? based.buf : atomics && n > 0 ? edited.buf : NULL;
+        const char *text = k > 0 ? based.buf : atomics && n > 0 ? edited.buf : gathers ? il.buf : NULL;
         void *binary = NULL;
         unsigned dwords = 0;
         int ok = text ? ilXltTextToBinary(text, &binary, &dwords) : 0;
         if (logging()) {
             if (atomics) fprintf(stderr, "[texatomic] IL: %d texture atomic(s) rewritten\n", n);
             if (k) fprintf(stderr, "[texatomic] IL: %d threadgroup address(es): data-segment base (API slot 8) dropped\n", k);
+            if (gathers) fprintf(stderr, "[texatomic] IL: %d integer gather(s) use normalized coordinates\n", gathers);
             if (text) fprintf(stderr, "[texatomic] IL: assembled %s\n", ok == 1 ? "ok" : "FAILED");
             if (getenv("TEXATOMIC_DUMP")) fprintf(stderr, "%s\n", text ? text : "");
         }

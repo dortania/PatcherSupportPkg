@@ -5,8 +5,8 @@
 #                      shim tests          the no-op MetalOldCompat build (same load commands, does nothing)
 #                      s12, s17, s19       AMDBronzeCompat not loaded
 #                      a01, a05@Intel, i01 the stock AMDShared / libMTLIntelCompilerPlugin (adapters not loaded)
-#                      a02, a04-a07, r01   the AMD adapter's own switch (AMD_SI_HAZARD_FIX=0, AMD_LDS_BASE_FIX=0,
-#                                          AMD_HANDLE_FIX=0 + INTEL_HANDLE_FIX=0, AMD_NAN_FIX=0, AMD_LDEXP_FIX=0)
+#                      a02, a04-a08, r01   the AMD adapter's own switch (AMD_SI_HAZARD_FIX=0, AMD_LDS_BASE_FIX=0,
+#                                          AMD_HANDLE_FIX=0 + INTEL_HANDLE_FIX=0, AMD_NAN_FIX=0, AMD_LDEXP_FIX=0, AMD_GATHER_FIX=0)
 #                      c01, c02            the stock libAMDIL902
 #                      c03                 libAMDIL902 without patch 4
 # PAYLOAD=12.5-GCN-25 runs only the AMD compiler tests, with Tahoe's AMDShared copies (built for macOS 12.5, so they
@@ -51,7 +51,7 @@ s17-amd-depth-stencil-view:bronze s18-pipeline-cache-key:shim s19-amd-trilinear-
 s20-intel-fill-buffer:shim s21-intel-depth-only-pipeline:shim s22-intel-depth-hiz-levels:shim s23-intel-3d-mip-plane:shim
 s24-intel-narrow-mip-clear:shim a01-texture-atomics:adapter
 a01-texture-atomics@Intel:adapter a02-si-smrd-hazard:smrd a04-si-threadgroup-pointer:ldsbase
-a05-escaped-texture-pointer:handle a05-escaped-texture-pointer@Intel:handle a06-fast-math-nan-compare:nan a07-half-ldexp:ldexp
+a05-escaped-texture-pointer:handle a05-escaped-texture-pointer@Intel:handle a06-fast-math-nan-compare:nan a07-half-ldexp:ldexp a08-integer-gather:gather
 c01-amdil-argument-buffer:stock c02-amdil-color-input:stock c03-amdil-gep-select:patch3
 i01-intel-array-struct-arg:adapter r01-amd-slot8-data-segment:ldsbase"
 
@@ -65,7 +65,7 @@ run() {  # <test[@gpu]> <removed fix or "fixed">
     case $2 in
         bronze) inject= ;; shim) shim=$NOOP ;; adapter) libs=$NOADAPTER ;; stock) libs=$STOCK ;; patch3) libs=$PATCH3 ;;
         smrd) env=(AMD_SI_HAZARD_FIX=0) ;; ldsbase) env=(AMD_LDS_BASE_FIX=0) ;; handle) env=(AMD_HANDLE_FIX=0 INTEL_HANDLE_FIX=0) ;;
-        nan) env=(AMD_NAN_FIX=0) ;; ldexp) env=(AMD_LDEXP_FIX=0) ;;
+        nan) env=(AMD_NAN_FIX=0) ;; ldexp) env=(AMD_LDEXP_FIX=0) ;; gather) env=(AMD_GATHER_FIX=0) ;;
     esac
     # s13's fix (item 25) works in MTLCompilerService, which gets the shim under test this way
     [ "$t" = s13-new-air-metallib ] && env+=(__XPC_DYLD_INSERT_LIBRARIES=$shim)
