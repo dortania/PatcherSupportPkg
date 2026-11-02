@@ -3,7 +3,7 @@
 // by the newer MTLCompiler (the AMD GCN dGPU of MacBookPro11,5 / iMac15,1):
 //   1. MTLDevice methods from the macOS 13.3+/15 SDK that MetalOld lacks ("unrecognized selector" crashes)
 //   2. reflection data wrapped in the newer CompilerOutputReflectionBlock container, which MetalOld can't read
-//   3. MTLTextureUsageShaderAtomic, which MetalOld rejects in texture validation
+//   3. MTLTextureUsageShaderAtomic and memoryless storage, which MetalOld rejects in texture validation
 //   7. serialized vertex descriptors, whose layout records changed size between MetalOld and the newer compiler
 //   8. properties and encoder calls from the macOS 13.3-15 SDKs (MTLCompileOptions.mathMode, shaderValidation, ...;
 //      object/mesh stage bindings on GPUs without mesh shaders)
@@ -232,6 +232,11 @@ static BOOL validateTexture(id self, SEL _cmd, id device) {
     if (desc.usage & MTLTextureUsageShaderAtomic) {
         if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] dropped MTLTextureUsageShaderAtomic (usage 0x%lx)\n", (unsigned long)desc.usage);
         desc.usage = (desc.usage & ~MTLTextureUsageShaderAtomic) | MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+    }
+    // Only Apple GPUs have memoryless storage, and MetalOld aborts on it. Safari 27's WebGPU asks for it for transient attachments.
+    if (desc.storageMode == MTLStorageModeMemoryless) {
+        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] memoryless texture made private\n");
+        desc.storageMode = MTLStorageModePrivate;
     }
     return origValidateTexture(self, _cmd, device);
 }

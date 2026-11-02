@@ -44,7 +44,7 @@ codesign -f -s - "$PATCH3/libAMDIL902.dylib" 2> /dev/null
 SHIM=$B/MetalOldCompat.dylib NOOP=$B/MetalOldCompat-noop.dylib CC=$PWD/tools/localcc.dylib BRONZELOAD=$PWD/tools/bronzeload.dylib
 
 # <test[@gpu]>:<what "without the fix" removes>
-CASES="s01-device-methods:shim s02-reflection:shim s03-shader-atomic-usage:shim s07-vertex-descriptor:shim
+CASES="s01-device-methods:shim s02-reflection:shim s03-shader-atomic-usage:shim s27-memoryless-texture:shim s07-vertex-descriptor:shim
 s08-sdk-properties:shim s09-msl-3.2:shim s10-device-over-release:shim s12-srgb-mipmaps:bronze s13-new-air-metallib:shim
 s14-safari-argument-encoders:shim s15a-intel-msaa-resolve:shim s15b-intel-narrow-clear:shim s16-intel-array-view:shim
 s17-amd-depth-stencil-view:bronze s18-pipeline-cache-key:shim s19-amd-trilinear-blend:bronze s25-amd-srgb-resolve:bronze s26-amd-depth-stencil-copy-pitch:bronze
