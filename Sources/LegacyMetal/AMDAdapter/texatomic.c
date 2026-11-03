@@ -30,6 +30,9 @@
 // Sixth job: clamp cube array indices (clampCubeArrayIndices): GCN reads the wrong face for one below 0.
 // AMD_CUBE_ARRAY_FIX=0 turns it off.
 //
+// Seventh job: load threadgroup bools as bytes (loadThreadgroupBoolsAsBytes): libAMDIL902 reads them as false.
+// AMD_LDS_BOOL_FIX=0 turns it off.
+//
 // Installed: AMDShared.bundle/Contents/MacOS/AMDTextureAtomics.dylib, loaded by a weak load command in AMDShared.
 // Test use (in-process compiling): DYLD_INSERT_LIBRARIES=Tests/tools/localcc.dylib:build/texatomic.dylib <app>
 //   TEXATOMIC_LOG=1   log what is rewritten
@@ -156,6 +159,8 @@ static struct {
     void *(*getFloatTy)(void *context);     // ldexpHalfAsFloat and shiftIntegerGatherCoords
     void *(*binaryCreate)(unsigned opcode, void *lhs, void *rhs, const void *name, void *insertBefore);  // shiftIntegerGatherCoords
     void *(*constantFP)(void *type, double value);  // same
+    void *(*getInt1Ty)(void *context);  // loadThreadgroupBoolsAsBytes
+    void *(*getInt8Ty)(void *context);  // same
 } api;
 
 static void *resolveIn(const char *bytes, size_t length, const struct symtab_command *table, uint64_t textAddress,
@@ -235,6 +240,8 @@ static bool resolveAPI(void) {
         RESOLVE(addFnAttr, "__ZN4llvm8Function9addFnAttrENS_9StringRefES1_");
         RESOLVE(eraseFunction, "__ZN4llvm8Function15eraseFromParentEv");
         RESOLVE(getFloatTy, "__ZN4llvm4Type10getFloatTyERNS_11LLVMContextE");
+        RESOLVE(getInt1Ty, "__ZN4llvm4Type9getInt1TyERNS_11LLVMContextE");
+        RESOLVE(getInt8Ty, "__ZN4llvm4Type9getInt8TyERNS_11LLVMContextE");
         RESOLVE(binaryCreate, "__ZN4llvm14BinaryOperator6CreateENS_11Instruction9BinaryOpsEPNS_5ValueES4_RKNS_5TwineEPS1_");
         RESOLVE(constantFP, "__ZN4llvm10ConstantFP3getEPNS_4TypeEd");
 #undef RESOLVE
@@ -254,7 +261,7 @@ static bool resolveAPI(void) {
 // Use: Value *Val @0, Use *Next @8, Prev @16 (24 bytes). Fixed operands are co-allocated in front of the User.
 // Instruction is 56 bytes; CallInst adds AttributeList Attrs @56 and FunctionType *FTy @64.
 // FunctionType: ContainedTys @16, [0] = return type. GlobalValue::ValueType @24.
-enum { kUseSize = 24, kOpcodeFSub = 14, kOpcodeFDiv = 19, kOpcodeZExt = 37, kOpcodeUIToFP = 41, kOpcodeFPTrunc = 43, kOpcodeFPExt = 44, kOpcodeCall = 54, kOpcodeICmp = 51, kPredicateEQ = 32 };
+enum { kUseSize = 24, kOpcodeFSub = 14, kOpcodeFDiv = 19, kOpcodeZExt = 37, kOpcodeUIToFP = 41, kOpcodeFPTrunc = 43, kOpcodeFPExt = 44, kOpcodeCall = 54, kOpcodeICmp = 51, kPredicateEQ = 32, kPredicateNE = 33 };
 static void *typeOf(void *value) { return *(void **)value; }
 static void *firstUse(void *value) { return *(void **)((char *)value + 8); }
 static void *nextUse(void *use) { return *(void **)((char *)use + 8); }
@@ -897,6 +904,52 @@ static unsigned clampCubeArrayIndices(void *module) {
     return clamped;
 }
 
+// LLVM shrinks a threadgroup variable that only ever holds two values to an i1 global, and libAMDIL902 then miscompiles zext
+// of its load: `iand load, r` with r holding whatever 0 it last materialized, so the variable always reads as false (WebGPU CTS
+// builtin,workgroupUniformLoad:types, type="bool", in Safari). Its stores write the byte as 0 or 0xFF, so load the byte and
+// compare it with 0. AMD_LDS_BOOL_FIX=0 turns this off.
+static unsigned loadThreadgroupBoolsAsBytes(void *module) {
+    const char *setting = getenv("AMD_LDS_BOOL_FIX");
+    if ((setting && !strcmp(setting, "0")) || !api.getInt1Ty || !api.getInt8Ty) return 0;
+    enum { kAddressSpaceThreadgroup = 3, kMaxLoads = 256 };
+    void *loads[kMaxLoads];
+    unsigned numLoads = 0;
+    void *i1 = NULL, *i8 = NULL, *boolPointer = NULL, *bytePointer = NULL, *zero = NULL;
+    char *functions = (char *)module + kModuleFunctions;
+    for (char *fn = nextNode(functions); fn != functions; fn = nextNode(fn)) {
+        char *function = fn - kFunctionNode, *blocks = function + kFunctionBlocks;
+        if (*(void **)(function + kFunctionParent) != module) return 0;  // layout mismatch: leave the module alone
+        if (nextNode(blocks) == blocks) continue;  // a declaration
+        if (!i1) {
+            void *context = api.getContext(function);
+            i1 = api.getInt1Ty(context);
+            i8 = api.getInt8Ty(context);
+            boolPointer = api.pointerTypeGet(i1, kAddressSpaceThreadgroup);
+            bytePointer = api.pointerTypeGet(i8, kAddressSpaceThreadgroup);
+            zero = api.constantIntGet(i8, 0, false);
+        }
+        for (char *bn = nextNode(blocks); bn != blocks; bn = nextNode(bn)) {
+            char *block = bn - kBlockNode, *insts = block + kBlockInstructions;
+            if (*(void **)(block + kBlockParent) != function) return 0;
+            for (char *in = nextNode(insts); in != insts; in = nextNode(in)) {
+                char *inst = in - kInstructionNode;
+                if (*(void **)(inst + kInstructionParent) != block) return 0;
+                if (isInstruction(inst, kOpcodeLoad) && !hungOffUses(inst) && numOperands(inst) == 1 && typeOf(inst) == i1 &&
+                    typeOf(operand(inst, 0)) == boolPointer && numLoads < kMaxLoads)
+                    loads[numLoads++] = inst;
+            }
+        }
+    }
+    for (unsigned l = 0; l < numLoads; l++) {
+        void *pointer = api.castCreate(kOpcodeBitCast, operand(loads[l], 0), bytePointer, &kNoName, loads[l]);
+        void *byte = api.userNew(96, 1);  // sizeof(LoadInst) is 56 in LLVM 5; extra room is harmless
+        api.loadInst(byte, i8, pointer, &kNoName, false, loads[l]);
+        api.replaceAllUsesWith(loads[l], api.cmpCreate(kOpcodeICmp, kPredicateNE, byte, zero, &kNoName, loads[l]));
+        api.eraseFromParent(loads[l]);
+    }
+    return numLoads;
+}
+
 static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *c, void *d, void *e) {
     if (module && resolveAPI()) {
         static bool optionsParsed;  // TEXATOMIC_LLVM_ARGS="-print-after-all ...": libAMDIL902's LLVM options (diagnostics)
@@ -919,6 +972,8 @@ static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *
         if (gathers && logging()) fprintf(stderr, "[texatomic] %u integer gather(s): coordinates shifted half a texel\n", gathers);
         unsigned cubeArrays = clampCubeArrayIndices(module);
         if (cubeArrays && logging()) fprintf(stderr, "[texatomic] %u cube array index(es) clamped\n", cubeArrays);
+        unsigned bools = loadThreadgroupBoolsAsBytes(module);
+        if (bools && logging()) fprintf(stderr, "[texatomic] %u threadgroup bool load(s) done as bytes\n", bools);
         unsigned n = lowerTextureAtomics(module);
         if (logging()) fprintf(stderr, "[texatomic] compileShader: %u texture atomic call(s) lowered\n", n);
     } else if (logging()) {
