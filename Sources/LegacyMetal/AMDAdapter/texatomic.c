@@ -27,6 +27,9 @@
 // Fifth job: make gather on integer textures read the right texels (shiftIntegerGatherCoords, normalizeFetch4).
 // AMD_GATHER_FIX=0 turns it off.
 //
+// Sixth job: clamp cube array indices (clampCubeArrayIndices): GCN reads the wrong face for one below 0.
+// AMD_CUBE_ARRAY_FIX=0 turns it off.
+//
 // Installed: AMDShared.bundle/Contents/MacOS/AMDTextureAtomics.dylib, loaded by a weak load command in AMDShared.
 // Test use (in-process compiling): DYLD_INSERT_LIBRARIES=Tests/tools/localcc.dylib:build/texatomic.dylib <app>
 //   TEXATOMIC_LOG=1   log what is rewritten
@@ -845,6 +848,55 @@ static unsigned shiftIntegerGatherCoords(void *module) {
     return shifted;
 }
 
+// A cube array index below 0 reads the wrong face: the hardware clamps the slice, 8 * index + face, so -1 reads the first
+// face of the first cube whatever the direction. (2D arrays and indices past the end come out right.) WebKit passes WGSL's
+// array index on as it is, and WebGPU asks for the nearest layer (CTS builtin,textureSample and the others, every cube array
+// case with a negative index), so raise the index to 0 first.
+static unsigned clampCubeArrayIndices(void *module) {
+    const char *setting = getenv("AMD_CUBE_ARRAY_FIX");
+    if (setting && !strcmp(setting, "0")) return 0;
+    static const struct { const char *name; unsigned index; } kForms[] = {
+        {"air.sample_texture_cube_array", 3},
+        {"air.sample_texture_cube_array_grad", 3},
+        {"air.gather_texture_cube_array", 3},
+        {"air.sample_depth_cube_array", 4},
+        {"air.sample_compare_depth_cube_array", 4},
+        {"air.gather_depth_cube_array", 4},
+        {"air.gather_compare_depth_cube_array", 4},
+    };
+    static const char *const kTypes[] = {"f32", "f16", "v4f32", "v4f16", "s.v4i32", "u.v4i32", "s.v4i16", "u.v4i16"};
+    enum { kMaxArguments = 15 };
+    unsigned clamped = 0;
+    for (size_t f = 0; f < sizeof kForms / sizeof kForms[0]; f++)
+    for (size_t t = 0; t < sizeof kTypes / sizeof kTypes[0]; t++) {
+        char name[64];
+        snprintf(name, sizeof name, "%s.%s", kForms[f].name, kTypes[t]);
+        void *sample = api.getFunction(module, name, strlen(name));
+        if (!sample) continue;
+        void *i32 = api.getInt32Ty(api.getContext(sample)), *maxParams[2] = {i32, i32};
+        void *maxType = api.functionTypeGet(i32, maxParams, 2, false);
+        void *max = api.getOrInsertFunction(module, "air.max.s.i32", strlen("air.max.s.i32"), maxType);
+        if (!max || subclassID(max) != subclassID(sample)) return clamped;  // a bitcast: existing declaration of another type
+        void *sampleType = *(void **)((char *)sample + kFunctionValueType);
+        for (void *use = firstUse(sample); use;) {
+            void *call = api.getUser(use);
+            use = nextUse(use);
+            if (hungOffUses(call) || numOperands(call) <= kForms[f].index + 1 || numOperands(call) > kMaxArguments + 1 ||
+                operand(call, numOperands(call) - 1) != sample || typeOf(operand(call, kForms[f].index)) != i32)
+                continue;
+            // A new call rather than replaceUsesOfWith: a constant index is the same value as other constant operands.
+            void *args[kMaxArguments], *maxArgs[2] = {operand(call, kForms[f].index), api.constantIntGet(i32, 0, false)};
+            unsigned count = numOperands(call) - 1;
+            for (unsigned a = 0; a < count; a++) args[a] = operand(call, a);
+            args[kForms[f].index] = createCall(max, maxType, maxArgs, 2, call);
+            api.replaceAllUsesWith(call, createCall(sample, sampleType, args, count, call));
+            api.eraseFromParent(call);
+            clamped++;
+        }
+    }
+    return clamped;
+}
+
 static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *c, void *d, void *e) {
     if (module && resolveAPI()) {
         static bool optionsParsed;  // TEXATOMIC_LLVM_ARGS="-print-after-all ...": libAMDIL902's LLVM options (diagnostics)
@@ -865,6 +917,8 @@ static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *
         if (ldexps && logging()) fprintf(stderr, "[texatomic] %u half ldexp call(s) computed as float\n", ldexps);
         unsigned gathers = shiftIntegerGatherCoords(module);
         if (gathers && logging()) fprintf(stderr, "[texatomic] %u integer gather(s): coordinates shifted half a texel\n", gathers);
+        unsigned cubeArrays = clampCubeArrayIndices(module);
+        if (cubeArrays && logging()) fprintf(stderr, "[texatomic] %u cube array index(es) clamped\n", cubeArrays);
         unsigned n = lowerTextureAtomics(module);
         if (logging()) fprintf(stderr, "[texatomic] compileShader: %u texture atomic call(s) lowered\n", n);
     } else if (logging()) {
