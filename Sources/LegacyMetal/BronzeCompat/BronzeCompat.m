@@ -9,6 +9,7 @@
 //   4. sRGB MSAA resolve (the hardware resolve averages the encoded bytes)
 //   5. depth or stencil copied to a buffer with row pitch 0 (nothing gets written)
 //   6. WebKit's one-vertex pipelines, whose stride the driver refuses (Safari's GPU process crashes on the draw)
+//   7. WebKit's sample mask of 0 (the driver draws every sample)
 // 1 and 2 come from riptidewave93's bronzefix, found and tested on Tahoe with a MacPro6,1's FirePro D700s.
 // AMD_BRONZE_COMPAT=0 turns everything off for a process, AMD_EXACT_TRILINEAR=0 only item 3; AMD_BRONZE_VERBOSE=1 logs.
 #import <Foundation/Foundation.h>
@@ -433,9 +434,20 @@ static void setStride(id self, SEL _cmd, NSUInteger stride) {
     origSetStride(self, _cmd, stride);
 }
 
-static void installStrideFix(void) {
+// WebKit's WebGPU sets GPUMultisampleState.mask with the descriptor's sample mask. This driver takes 0 to mean no mask and
+// draws every sample, where nothing should be drawn (WebGPU CTS occlusionQuery sample_mask, sampleMask=0). A bit past the
+// last sample of any target isn't 0 to the driver and covers no sample. Only WebKit calls this. Test: s30.
+typedef void (*SetSampleMaskIMP)(id, SEL, NSUInteger);
+static SetSampleMaskIMP origSetSampleMask;
+
+static void setSampleMask(id self, SEL _cmd, NSUInteger mask) {
+    origSetSampleMask(self, _cmd, mask ? mask : 0x100);
+}
+
+static void installWebKitFixes(void) {
     if (strncmp(getprogname(), "com.apple.WebKit", 16)) return;
     origSetStride = (SetStrideIMP)swizzle(objc_getClass("MTLVertexBufferLayoutDescriptorInternal"), @selector(setStride:), (IMP)setStride);
+    origSetSampleMask = (SetSampleMaskIMP)swizzle(objc_getClass("MTLRenderPipelineDescriptorInternal"), @selector(setSampleMask:), (IMP)setSampleMask);
 }
 
 // This library is a dependency of the driver, so its initializer runs after the driver is mapped and its classes are
@@ -451,7 +463,7 @@ __attribute__((constructor)) static void init(void) {
         installMipFix();
         installRenderPassHooks();
         installCopyFix();
-        installStrideFix();
+        installWebKitFixes();
         if (!disabled("AMD_EXACT_TRILINEAR")) installTrilinearFix(name);
         if (verbose()) fprintf(stderr, "[bronzecompat] view fix %s, sRGB mipmaps %s, trilinear %s, sRGB resolve %s, copy pitch %s\n", origViewInit ? "on" : "off",
                                origGenerateMipmaps ? "on" : "off", origSamplerInit ? "on" : "off", origRenderEndEncoding ? "on" : "off",
