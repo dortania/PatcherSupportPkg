@@ -10,8 +10,10 @@
 //   5. depth or stencil copied to a buffer with row pitch 0 (nothing gets written)
 //   6. WebKit's one-vertex pipelines, whose stride the driver refuses (Safari's GPU process crashes on the draw)
 //   7. WebKit's sample mask of 0 (the driver draws every sample)
+//   8. memoryless textures (only Apple GPUs have them, and Metal's texture validation aborts the process)
 // 1 and 2 come from riptidewave93's bronzefix, found and tested on Tahoe with a MacPro6,1's FirePro D700s.
-// AMD_BRONZE_COMPAT=0 turns everything off for a process, AMD_EXACT_TRILINEAR=0 only item 3; AMD_BRONZE_VERBOSE=1 logs.
+// AMD_BRONZE_COMPAT=0 turns everything off for a process, AMD_EXACT_TRILINEAR=0 only item 3,
+// AMD_BRONZE_MEMORYLESS=0 only item 8; AMD_BRONZE_VERBOSE=1 logs.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <objc/message.h>
@@ -450,6 +452,29 @@ static void installWebKitFixes(void) {
     origSetSampleMask = (SetSampleMaskIMP)swizzle(objc_getClass("MTLRenderPipelineDescriptorInternal"), @selector(setSampleMask:), (IMP)setSampleMask);
 }
 
+// ---- 8. Memoryless textures ------------------------------------------------------------------------------------------
+// MTLStorageModeMemoryless needs tile memory, which only Apple GPUs have, and for this driver's device macOS 26's Metal aborts
+// the process on it (-[MTLTextureDescriptorInternal validateWithDevice:], called by the driver's texture init). Apps check
+// supportsFamily:Apple*, which this device answers NO, but some versions of WebKit's WebGPU asked for it for every transient
+// attachment (WebGPU conformance render_pass,resolve). The driver gets a copy of the descriptor with private storage,
+// so the app's descriptor stays as it was; the texture then takes video memory, as it would on any GPU but Apple's. Only
+// newTextureWithDescriptor: is hooked: heap, buffer and IOSurface textures take their storage from what backs them. Test: s27.
+typedef void *(*NewTextureIMP)(void *, SEL, void *);
+static NewTextureIMP origNewTexture;
+
+static void *newTexture(void *self, SEL _cmd, void *descriptor) {
+    MTLTextureDescriptor *requested = (__bridge MTLTextureDescriptor *)descriptor;
+    if (requested.storageMode != MTLStorageModeMemoryless) return origNewTexture(self, _cmd, descriptor);
+    MTLTextureDescriptor *copy = [requested copy];
+    copy.storageMode = MTLStorageModePrivate;
+    if (verbose()) fprintf(stderr, "[bronzecompat] memoryless texture made private\n");
+    return origNewTexture(self, _cmd, (__bridge void *)copy);
+}
+
+static void installMemorylessFix(void) {
+    origNewTexture = (NewTextureIMP)swizzle(objc_getClass("BronzeMtlDevice"), @selector(newTextureWithDescriptor:), (IMP)newTexture);
+}
+
 // This library is a dependency of the driver, so its initializer runs after the driver is mapped and its classes are
 // registered with the ObjC runtime, but before any driver code runs. No driver loaded: nothing to do.
 __attribute__((constructor)) static void init(void) {
@@ -464,10 +489,11 @@ __attribute__((constructor)) static void init(void) {
         installRenderPassHooks();
         installCopyFix();
         installWebKitFixes();
+        if (!disabled("AMD_BRONZE_MEMORYLESS")) installMemorylessFix();
         if (!disabled("AMD_EXACT_TRILINEAR")) installTrilinearFix(name);
-        if (verbose()) fprintf(stderr, "[bronzecompat] view fix %s, sRGB mipmaps %s, trilinear %s, sRGB resolve %s, copy pitch %s\n", origViewInit ? "on" : "off",
-                               origGenerateMipmaps ? "on" : "off", origSamplerInit ? "on" : "off", origRenderEndEncoding ? "on" : "off",
-                               origCopyToBuffer ? "on" : "off");
+        if (verbose()) fprintf(stderr, "[bronzecompat] view fix %s, sRGB mipmaps %s, trilinear %s, sRGB resolve %s, copy pitch %s, memoryless %s\n",
+                               origViewInit ? "on" : "off", origGenerateMipmaps ? "on" : "off", origSamplerInit ? "on" : "off",
+                               origRenderEndEncoding ? "on" : "off", origCopyToBuffer ? "on" : "off", origNewTexture ? "on" : "off");
         return;
     }
 }

@@ -1,6 +1,7 @@
-// s27-memoryless-texture (shim item 3): a texture with MTLStorageModeMemoryless on MetalOld. Only Apple GPUs have that storage, and
-// MetalOld's descriptor validation aborts the process. Safari 27's WebGPU asks for it for transient attachments (WebGPU
-// conformance render_pass,resolve, which crashes Safari's GPU process). Runs in a child, because the failure is an abort.
+// s27-memoryless-texture (shim item 3, AMDBronzeCompat item 8): a texture with MTLStorageModeMemoryless. Only Apple GPUs have
+// that storage, and the descriptor validation of MetalOld, and of macOS 26's Metal for the AMD driver, aborts the process.
+// Safari 27's WebGPU asks for it for transient attachments (WebGPU conformance render_pass,resolve, which crashes Safari's
+// GPU process). Runs in a child, because the failure is an abort.
 // Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
 #import "repro.h"
 
