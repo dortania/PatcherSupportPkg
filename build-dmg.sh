@@ -14,5 +14,5 @@ echo "DMG size: ${DMG_SIZE_MB} MB"
 
 hdiutil create -srcfolder Universal-Binaries tmp.dmg -volname "BridgePatcher Resources (Root Patching)" -fs HFS+ -ov -format UDRO -megabytes "$DMG_SIZE_MB"
 hdiutil convert -format ULMO tmp.dmg -o Universal-Binaries.dmg -passphrase password -encryption -ov
-codesign -s "OCLP Self Signed" Universal-Binaries.dmg
+codesign -s "OpenCore Legacy Patcher Software Signing" Universal-Binaries.dmg
 rm tmp.dmg
