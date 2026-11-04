@@ -14,7 +14,7 @@ DMG_NAME:         str = "Universal-Binaries.dmg"
 DMG_VOLNAME:      str = "BridgePatcher Resources (Root Patching)"
 DMG_FORMAT:       str = "UDRO"
 DMG_PASSPHRASE:   str = "password"
-SIGNING_IDENTITY: str = "OCLP Self Signed"
+SIGNING_IDENTITY: str = "OpenCore Legacy Patcher Software Signing"
 
 # Headroom added on top of the measured payload size so HFS+ metadata
 # (catalog/extents B-trees, journal, etc.) always fits
