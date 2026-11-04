@@ -6,8 +6,8 @@
 #   13.6-25 MTLCompiler.framework and 13.2.1-25 GPUCompiler.framework, Versions/31001/
 #                                           Tahoe's compiler: 14.2 Beta 1 under the 31001 paths (tools/make_tahoe_compiler.py)
 #   12.5 AMDShared.bundle/Contents/         MacOS/AMDShared (+ weak load of AMDTextureAtomics.dylib),
-#                                           MacOS/AMDTextureAtomics.dylib, PlugIns/libAMDIL902.dylib (patches 1-4)
-#   12.5-GCN-25 AMDShared.bundle/Contents/  the same for Tahoe, from OCLP's GCN-25 copies (libAMDIL902: patches 2-4,
+#                                           MacOS/AMDTextureAtomics.dylib, PlugIns/libAMDIL902.dylib (patches 1-5)
+#   12.5-GCN-25 AMDShared.bundle/Contents/  the same for Tahoe, from OCLP's GCN-25 copies (libAMDIL902: patches 2-5,
 #                                           OCLP's initializeIABArgTypeSet stub kept instead of patch 1)
 #   12.5 AppleIntelHD5000GraphicsMTLDriver.bundle/Contents/MacOS/
 #                                           libMTLIntelCompilerPlugin.dylib (+ weak load), IntelTextureAtomics.dylib

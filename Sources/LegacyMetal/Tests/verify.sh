@@ -10,6 +10,7 @@
 #                                          AMD_CUBE_ARRAY_FIX=0, AMD_LDS_BOOL_FIX=0)
 #                      c01, c02            the stock libAMDIL902
 #                      c03                 libAMDIL902 without patch 4
+#                      c04                 libAMDIL902 without patch 5
 # PAYLOAD=12.5-GCN-25 runs only the AMD compiler tests, with Tahoe's AMDShared copies (built for macOS 12.5, so they
 # load on Sequoia too), and writes RESULTS-12.5-GCN-25.md.
 # Needs: ../build.sh run first (its build/ folder, including build/stock/), an OCLP-patched Mac with the legacy Metal
@@ -31,17 +32,19 @@ B=$(cd .. && pwd)/build
 unset MTL_USE_AIRNT_BA
 V=  # the AMDShared copy: "" (12.5) or -GCN-25
 case ${PAYLOAD:-12.5} in 12.5) ;; 12.5-GCN-25) V=-GCN-25 ;; *) echo "PAYLOAD: 12.5 or 12.5-GCN-25" >&2; exit 2 ;; esac
-FIXED=$(mktemp -d) NOADAPTER=$(mktemp -d) STOCK=$(mktemp -d) PATCH3=$(mktemp -d)
+FIXED=$(mktemp -d) NOADAPTER=$(mktemp -d) STOCK=$(mktemp -d) PATCH3=$(mktemp -d) PATCH4=$(mktemp -d)
 cp "$B/AMDTextureAtomics.dylib" "$B/IntelTextureAtomics.dylib" "$B/libMTLIntelCompilerPlugin.dylib" "$FIXED/"
 cp "$B/AMDShared$V" "$FIXED/AMDShared"
 cp "$B/libAMDIL902$V.dylib" "$FIXED/libAMDIL902.dylib"
-for d in "$NOADAPTER" "$STOCK" "$PATCH3"; do cp "$FIXED"/* "$d/"; done
+for d in "$NOADAPTER" "$STOCK" "$PATCH3" "$PATCH4"; do cp "$FIXED"/* "$d/"; done
 cp "$B/stock/AMDShared$V" "$NOADAPTER/AMDShared"
 cp "$B/stock/libMTLIntelCompilerPlugin.dylib" "$NOADAPTER/"
 cp "$B/stock/libAMDIL902$V.dylib" "$STOCK/libAMDIL902.dylib"
 PARSERFIX_SKIP_GEP_SELECT=1 python3 -I ../libAMDIL902/make_parser_fix.py "$B/stock/libAMDIL902$V.dylib" \
     "$PATCH3/libAMDIL902.dylib" > /dev/null
-codesign -f -s - "$PATCH3/libAMDIL902.dylib" 2> /dev/null
+PARSERFIX_SKIP_STRUCT_MAP=1 python3 -I ../libAMDIL902/make_parser_fix.py "$B/stock/libAMDIL902$V.dylib" \
+    "$PATCH4/libAMDIL902.dylib" > /dev/null
+codesign -f -s - "$PATCH3/libAMDIL902.dylib" "$PATCH4/libAMDIL902.dylib" 2> /dev/null
 SHIM=$B/MetalOldCompat.dylib NOOP=$B/MetalOldCompat-noop.dylib CC=$PWD/tools/localcc.dylib BRONZELOAD=$PWD/tools/bronzeload.dylib
 
 # <test[@gpu]>:<what "without the fix" removes>
@@ -53,7 +56,7 @@ s20-intel-fill-buffer:shim s21-intel-depth-only-pipeline:shim s22-intel-depth-hi
 s24-intel-narrow-mip-clear:shim a01-texture-atomics:adapter
 a01-texture-atomics@Intel:adapter a02-si-smrd-hazard:smrd a04-si-threadgroup-pointer:ldsbase
 a05-escaped-texture-pointer:handle a05-escaped-texture-pointer@Intel:handle a06-fast-math-nan-compare:nan a07-half-ldexp:ldexp a08-integer-gather:gather a09-cube-array-index:cubearray a10-threadgroup-bool:ldsbool
-c01-amdil-argument-buffer:stock c02-amdil-color-input:stock c03-amdil-gep-select:patch3
+c01-amdil-argument-buffer:stock c02-amdil-color-input:stock c03-amdil-gep-select:patch3 c04-amdil-struct-type-map:patch4
 i01-intel-array-struct-arg:adapter r01-amd-slot8-data-segment:ldsbase"
 
 [ -n "$V" ] && CASES=$(for c in $CASES; do case $c in (*@*|i*|s*) ;; (*) echo "$c" ;; esac; done)
@@ -64,7 +67,7 @@ run() {  # <test[@gpu]> <removed fix or "fixed">
     local inject=$BRONZELOAD
     local -a env=()
     case $2 in
-        bronze) inject= ;; shim) shim=$NOOP ;; adapter) libs=$NOADAPTER ;; stock) libs=$STOCK ;; patch3) libs=$PATCH3 ;;
+        bronze) inject= ;; shim) shim=$NOOP ;; adapter) libs=$NOADAPTER ;; stock) libs=$STOCK ;; patch3) libs=$PATCH3 ;; patch4) libs=$PATCH4 ;;
         smrd) env=(AMD_SI_HAZARD_FIX=0) ;; ldsbase) env=(AMD_LDS_BASE_FIX=0) ;; handle) env=(AMD_HANDLE_FIX=0 INTEL_HANDLE_FIX=0) ;;
         nan) env=(AMD_NAN_FIX=0) ;; ldexp) env=(AMD_LDEXP_FIX=0) ;; gather) env=(AMD_GATHER_FIX=0) ;; cubearray) env=(AMD_CUBE_ARRAY_FIX=0) ;; ldsbool) env=(AMD_LDS_BOOL_FIX=0) ;;
     esac
@@ -94,4 +97,4 @@ run() {  # <test[@gpu]> <removed fix or "fixed">
         echo "| ${t/@/ on } | $before | $after |"
     done
 } > "RESULTS${V:+-12.5$V}.md"
-rm -rf "$FIXED" "$NOADAPTER" "$STOCK" "$PATCH3"
+rm -rf "$FIXED" "$NOADAPTER" "$STOCK" "$PATCH3" "$PATCH4"

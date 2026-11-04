@@ -26,11 +26,18 @@ array (<= 4 elements, alloca) as loads of every element + selects on the index. 
 once and never moves it, so every expansion lands at the GEP: when one GEP serves several loads (LLVM computes
 &w[i].field once and reuses it), loads after stores to that field read the values from before the stores. Fix: when
 the pass picks up each load, the builder is moved to that load first (IRBuilderBase::SetInsertPoint(load)).
+
+5. Struct type map entries left behind (Tests/c04-amdil-struct-type-map): a global multimap goes from a struct's metadata
+node to the AIRStructTypeInfo objects using it. ~AIRStructTypeInfo removes the first entry holding the same
+StructTypeInfo, which can be another object's: struct S { array a; ... } used by a buffer argument along with that same
+array on its own. The freed object's entry stays, and a later compile whose node lands on the same address reads the
+freed object as a StructTypeInfo pointer and crashes in CheckStructIndirectArgumentBuffer. Fix: it removes its own entry.
 The input is the stock 12.5 file or the 12.5-GCN-25 one (Tahoe), which is the stock file with OCLP's stub at the
 start of initializeIABArgTypeSet (0x7dbbc: return 0). The GCN-25 output keeps that stub and leaves out patch 1.
 
 usage: python3 make_parser_fix.py <stock 12.5 or 12.5-GCN-25 libAMDIL902.dylib> <out>
        PARSERFIX_SKIP_GEP_SELECT=1: without patch 4 (the tests' "without the fix" build for c03)
+       PARSERFIX_SKIP_STRUCT_MAP=1: without patch 5 (the same for c04)
 """
 
 import hashlib
@@ -213,6 +220,13 @@ if os.environ.get("PARSERFIX_SKIP_GEP_SELECT") != "1":
     assert data[CAVE4 - BASE : CAVE4 - BASE + len(gs) + 16] == bytes(len(gs) + 16), "cave 4 is not free"
     data[CAVE4 - BASE : CAVE4 - BASE + len(gs)] = gs
     data[off : off + 14] = b"\xe9" + struct.pack("<i", CAVE4 - (GS_SITE + 5)) + b"\x90" * 9
+# Patch 5: ~AIRStructTypeInfo, in its walk over the map (rbx = entry, rdx = the object the entry refers to, r14 = this):
+# compare the object instead of the StructTypeInfo it holds (cmpq (%rdx),%rcx -> cmpq %r14,%rdx).
+STI_CMP, STI_CMP_BYTES = 0x4FFA0D3D2660, bytes.fromhex("483b0a")
+if os.environ.get("PARSERFIX_SKIP_STRUCT_MAP") != "1":
+    off = STI_CMP - BASE
+    assert data[off : off + 3] == STI_CMP_BYTES
+    data[off : off + 3] = bytes.fromhex("4c39f2")
 open(sys.argv[2], "wb").write(data)
 patch1 = "OCLP's stub kept instead of patch 1" if gcn25 else f"cave {len(code)} bytes at {hex(cave)}"
 print(f"{patch1}; text pin {text_pin(data)[1]} (re-sign the output: its signature is stale)")
