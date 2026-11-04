@@ -26,6 +26,7 @@ ID=$(call /session '{"capabilities":{"alwaysMatch":{"browserName":"safari"}}}' 7
 call "/session/$ID/url" "{\"url\":\"http://127.0.0.1:$((PORT + 1))/\"}" > /dev/null
 SCRIPT='const done = arguments[arguments.length - 1];
 (async () => {
+  if (!navigator.gpu) return "no WebGPU";
   const adapter = await navigator.gpu.requestAdapter();
   if (!adapter) return "no adapter to start with";
   const device = await adapter.requestDevice();
@@ -47,6 +48,7 @@ SCRIPT='const done = arguments[arguments.length - 1];
 BODY=$(python3 -I -c 'import json,sys; print(json.dumps({"script": sys.argv[1], "args": []}))' "$SCRIPT")
 RESULT=$(call "/session/$ID/execute/async" "$BODY" 60 | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["value"])')
 case "$RESULT" in
+    "no WebGPU") echo "SKIP s28-webgpu-divide-by-zero: WebGPU is off in this Safari (the default on macOS 15)"; exit 77 ;;
     "alive; validation error: yes") echo "PASS s28-webgpu-divide-by-zero: render pass on a destroyed canvas texture is a validation error, WebGPU stays up"; exit 0 ;;
     *) echo "FAIL s28-webgpu-divide-by-zero: $RESULT"; exit 1 ;;
 esac
