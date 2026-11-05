@@ -14,6 +14,8 @@ the libAMDIL902 patches, and fixes for the 12.5 AMD Metal driver (`AMDBronzeComp
     ./build.sh
 
 Rebuilds the libraries and the patched files from the stock payload in git and writes them to `Universal-Binaries/`.
+With Xcode 26 (macOS SDK 26.2, ld 1230) the output is byte-identical to the committed files. Older Command Line Tools
+(for example 16.4, SDK 15.5) also build them, but the binaries differ.
 
 ## Test
 
