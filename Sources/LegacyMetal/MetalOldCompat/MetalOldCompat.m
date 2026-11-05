@@ -745,8 +745,8 @@ static id newLibraryData(id self, SEL _cmd, dispatch_data_t data, NSError **erro
 // 11. ANGLE in Chromium (Chrome, Chromium, Edge, Electron apps, ...) and WebKit (Safari): ANGLE, the only GL backend
 // current Chromium has on macOS and the one Safari's WebGL uses,
 // disables its Metal renderer on Macs older than 2016 by IOPlatformExpertDevice "model" (MacBookPro < 13,1, ...), so
-// these Macs get no GPU acceleration at all; and ANGLE can't create an OpenGL ES 3 context on a Metal family-1 GPU
-// (Haswell / Ivy Bridge), which automatic graphics switching often makes the active one. For calls from a Chromium
+// these Macs get no GPU acceleration at all; and ANGLE refuses a Metal family-1 GPU (Haswell / Ivy Bridge: no Mac2),
+// which automatic graphics switching often makes the active one. For calls from a Chromium
 // framework image ("<Product> Framework") or WebKit's ANGLE: report a post-2015 model, and list only family-2 GPUs (the
 // AMD dGPU) to ANGLE, Skia Graphite and Dawn. Everything else in the process sees the real model and all GPUs.
 typedef void (*EndEncodingIMP)(id, SEL);
@@ -1130,7 +1130,7 @@ static const char *callerImage(const void *returnAddress) {
 }
 
 // ANGLE can only run on Metal where there is a family-2 GPU. Macs whose only GPU is a Haswell / Ivy Bridge iGPU (family 1)
-// keep their real model, so ANGLE stays on its OpenGL backend instead of picking Metal and then rejecting the GPU.
+// keep their real model. ANGLE has no other backend there, so Chromium and Safari stay without GPU acceleration on them.
 static BOOL anyFamilyTwo(void) {
     static dispatch_once_t once;
     static BOOL any;
