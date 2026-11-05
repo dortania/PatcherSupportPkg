@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# verify.sh: runs every test twice without installing anything, and writes RESULTS.md:
+# verify.sh [GPU substring]: runs every test twice without installing anything, and writes RESULTS.md:
 #   with the fixes   the payload built by ../build.sh (shim, AMD and Intel adapters, patched libAMDIL902)
 #   without the fix  the same, minus only the fix the test is about:
 #                      shim tests          the no-op MetalOldCompat build (same load commands, does nothing)
@@ -14,6 +14,9 @@
 #                      c04                 libAMDIL902 without patch 5
 # PAYLOAD=12.5-GCN-25 runs only the AMD compiler tests, with Tahoe's AMDShared copies (built for macOS 12.5, so they
 # load on Sequoia too), and writes RESULTS-12.5-GCN-25.md.
+# A GPU substring runs every test on that GPU, as with run.sh. Without one, each test uses the GPU its bug is about
+# and reports SKIP (no such GPU) where that GPU is missing, so on a Mac without the AMD GPU run ./verify.sh Intel. The
+# @GPU cases then run once, and the table goes to RESULTS-<GPU>.md.
 # Needs: ../build.sh run first (its build/ folder, including build/stock/), an OCLP-patched Mac with the legacy Metal
 # stack (the tests drive the real GPUs), Xcode command-line tools.
 # How it works without installing: tools/localcc.dylib runs Metal's GPU-compiler requests inside the test process
@@ -23,6 +26,7 @@
 # driver, which the driver's load command does when installed. a03 needs Blender: run a03-si-stale-l1-blender.sh separately.
 set -u
 cd "$(dirname "$0")"
+GPU=${1:-}  # GPU name substring for every test (optional)
 B=$(cd .. && pwd)/build
 [ -f "$B/AMDTextureAtomics.dylib" ] || { echo "run ../build.sh first" >&2; exit 2; }
 [ -x build/s01-device-methods ] || ./build.sh > /dev/null
@@ -61,9 +65,10 @@ c01-amdil-argument-buffer:stock c02-amdil-color-input:stock c03-amdil-gep-select
 i01-intel-array-struct-arg:adapter r01-amd-slot8-data-segment:ldsbase"
 
 [ -n "$V" ] && CASES=$(for c in $CASES; do case $c in (*@*|i*|s*) ;; (*) echo "$c" ;; esac; done)
+[ -n "$GPU" ] && CASES=$(for c in $CASES; do case $c in (*@*) ;; (*) echo "$c" ;; esac; done)
 
 run() {  # <test[@gpu]> <removed fix or "fixed">
-    local t=${1%%@*} gpu= shim=$SHIM libs=$FIXED
+    local t=${1%%@*} gpu=$GPU shim=$SHIM libs=$FIXED
     [[ $1 == *@* ]] && gpu=${1#*@}
     local inject=$BRONZELOAD
     local -a env=()
@@ -76,13 +81,13 @@ run() {  # <test[@gpu]> <removed fix or "fixed">
     [ "$t" = s13-new-air-metallib ] && env+=(__XPC_DYLD_INSERT_LIBRARIES=$shim)
     rm -rf "$(getconf DARWIN_USER_CACHE_DIR)com.apple.metal"
     env ${env[@]+"${env[@]}"} AMD_BRONZE_COMPAT_PATH=$B/AMDBronzeCompat.dylib \
-        DYLD_INSERT_LIBRARIES=$shim:$CC${inject:+:$inject} DYLD_LIBRARY_PATH=$libs ./build/"$t" $gpu 2>/dev/null |
+        DYLD_INSERT_LIBRARIES=$shim:$CC${inject:+:$inject} DYLD_LIBRARY_PATH=$libs ./build/"$t" ${gpu:+"$gpu"} 2>/dev/null |
         grep -E '^(PASS|FAIL|SKIP) ' | tail -1
 }
 
 {
     echo "# Test results on $(sysctl -n hw.model), macOS $(sw_vers -productVersion) ($(date '+%Y-%m-%d %H:%M'))" \
-        "${V:+(AMDShared from 12.5$V)}"
+        "${V:+(AMDShared from 12.5$V)}${GPU:+(every test on the GPU matching \"$GPU\")}"
     echo
     echo "Each test runs once without the fix it is about (everything else fixed) and once with all fixes; the GPU"
     echo "compilers run in the test process. \"crashed\" = the in-process compiler took the test down (a compile"
@@ -97,5 +102,5 @@ run() {  # <test[@gpu]> <removed fix or "fixed">
         echo "$t" >&2; echo "  without: $before" >&2; echo "  with:    $after" >&2
         echo "| ${t/@/ on } | $before | $after |"
     done
-} > "RESULTS${V:+-12.5$V}.md"
+} > "RESULTS${V:+-12.5$V}${GPU:+-$GPU}.md"
 rm -rf "$FIXED" "$NOADAPTER" "$STOCK" "$PATCH3" "$PATCH4"

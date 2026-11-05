@@ -24,3 +24,6 @@ On a Mac with OCLP's legacy Metal stack:
 `verify.sh` runs each test without and with its fix, without installing anything. `PAYLOAD=12.5-GCN-25 ./verify.sh`
 runs the AMD compiler tests with Tahoe's AMDShared files (they load on Sequoia too). `run.sh` runs them against what is
 installed. On Tahoe, use `run.sh`: `verify.sh` compiles in the test process through `tools/localcc.dylib`, which crashed there when last tried.
+
+Each test uses the GPU its bug is about and reports SKIP where that GPU is missing. Both scripts take a GPU name
+substring to run every test on one GPU: on a Mac without the AMD GPU, use `./verify.sh Intel` and `./run.sh Intel`.
