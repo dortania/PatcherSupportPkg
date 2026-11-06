@@ -1729,20 +1729,37 @@ static void disableFeaturesFamilyOneLacks(void) {
 
 // Dawn (Chromium's WebGPU) asks `supportsFamily:Apple6 || supportsFamily:Mac2` before it offers the subgroups feature, which
 // these GPUs' compiler can't build (simd_sum, simd_ballot and the like abort MTLCompilerService, and Chrome's GPU process
-// went down with it during the WebGPU CTS subgroup tests). ANGLE never asks Mac2 right after Apple6 (its pairs are
-// Apple 1-5 or 7 with Mac 1 or 2). A Mac2 question that comes right after an Apple6 one on the same thread, from code a
-// few bytes away, gets the real answer.
-static __thread NSInteger lastFamilyAsked = -1;
-static __thread uintptr_t lastFamilyCaller;
+// went down with it during the WebGPU CTS subgroup tests). Right after that it asks Apple7 from the same function, then
+// `supportsFamily:Mac2 || supportsFamily:Apple2` (whether to offer texture-component-swizzle); this driver makes no
+// swizzled views (item 32 covers only those that change nothing), so pages that used the feature got no texture. Those
+// two Mac2 questions get the real answer: one that comes right after an Apple6 question on the same thread from code a
+// few bytes away, and one that comes right after such an Apple6, Mac2, Apple7 run. ANGLE asks Apple 1-3 or 7 and then
+// Mac2 (its Mac 1 check), from two helper functions far apart, and keeps getting yes.
+static __thread NSInteger familiesAsked[3] = {-1, -1, -1};  // the last three questions on this thread, newest first
+static __thread uintptr_t familyCallers[3];
+static BOOL near(uintptr_t a, uintptr_t b) { return (a > b ? a - b : b - a) < 256; }
 static BOOL compatSupportsFamily(id self, SEL _cmd, NSInteger family) {
     BOOL real = realSupportsFamily(self, _cmd, family);
     uintptr_t caller = (uintptr_t)__builtin_return_address(0);
-    NSInteger previous = lastFamilyAsked;
-    uintptr_t previousCaller = lastFamilyCaller;
-    lastFamilyAsked = family, lastFamilyCaller = caller;
+    NSInteger previous = familiesAsked[0];
+    uintptr_t previousCaller = familyCallers[0];
+    BOOL swizzleCheck = previous == MTLGPUFamilyApple7 && familiesAsked[1] == MTLGPUFamilyMac2 && familiesAsked[2] == MTLGPUFamilyApple6 &&
+                        near(familyCallers[0], familyCallers[1]) && near(familyCallers[1], familyCallers[2]);
+    for (int i = 2; i > 0; i--) familiesAsked[i] = familiesAsked[i - 1], familyCallers[i] = familyCallers[i - 1];
+    familiesAsked[0] = family, familyCallers[0] = caller;
+    if (getenv("MTLSHIM_FAMILY_LOG")) {  // debugging: every question, with the one before it on this thread
+        Dl_info info;
+        BOOL found = dladdr((const void *)caller, &info) && info.dli_fname;
+        shimLog("[mtlshim] supportsFamily:%ld (previous %ld) from %s+0x%lx: %d\n", (long)family, (long)previous,
+                found ? callerImage((const void *)caller) : "?", found ? (unsigned long)(caller - (uintptr_t)info.dli_fbase) : 0ul, real);
+    }
     if (real || family != MTLGPUFamilyMac2 || !fromChromium(__builtin_return_address(0)) || !familyOneAsTwo()) return real;
-    if (previous == MTLGPUFamilyApple6 && (caller > previousCaller ? caller - previousCaller : previousCaller - caller) < 256) {
+    if (previous == MTLGPUFamilyApple6 && near(caller, previousCaller)) {
         if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Mac2 asked right after Apple6 (Dawn's subgroups check): no\n");
+        return real;
+    }
+    if (swizzleCheck) {
+        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Mac2 asked after Dawn's Apple7 check (its texture swizzle check): no\n");
         return real;
     }
     disableFeaturesFamilyOneLacks();
