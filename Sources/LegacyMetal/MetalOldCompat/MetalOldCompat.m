@@ -50,6 +50,8 @@
 //  34. coverage from a fragment function (sample_mask output, alpha-to-coverage) in a pipeline with no depth/stencil and
 //      every color writeMask none on the 12.x Intel driver (dropped: occlusion queries count every sample): the first
 //      blendable color attachment is written through a blend that keeps it
+//  35. Metal Performance Shaders' statistics reductions (compute_final_*_statistics) dispatched with 16 threads on these
+//      Intel GPUs, which those kernels can't handle (min/max, mean and variance wrong): 32 threads
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -1639,6 +1641,65 @@ static void swizzledViews(void) {
                                                 (IMP)igSwizzleView);
 }
 
+// 35. Metal Performance Shaders' image statistics (MPSImageStatisticsMinAndMax and MeanAndVariance; Core Image's
+// CIAreaMinMax and the filters built on it) finish with a compute_final_*_statistics kernel that reduces one value per
+// thread through threadgroup memory and always folds in tg[tid + 16], tg[tid + 8], ...: it assumes at least 32 threads.
+// MPS dispatches it with the pipeline's threadExecutionWidth threads and memory for that many, which on these Intel GPUs
+// is 16: the first step reads past the threadgroup memory as 0, so minimums came out 0, maximums of negative data 0 and
+// means and variances wrong. On the Intel GPU, a pipeline MPS labels compute_final_..._statistics that is dispatched with
+// fewer than 32 threads in one row gets 32, and its threadgroup memory grows to match (the kernels loop over any width).
+// Test: s39. MTLSHIM_MPS_STATISTICS=0 turns it off.
+typedef void (*SetComputePipelineIMP)(id, SEL, id);
+typedef void (*SetThreadgroupMemoryIMP)(id, SEL, NSUInteger, NSUInteger);
+typedef void (*DispatchThreadgroupsIMP)(id, SEL, MTLSize, MTLSize);
+static SetComputePipelineIMP origIGSetComputePipeline;
+static SetThreadgroupMemoryIMP origIGSetThreadgroupMemory;
+static DispatchThreadgroupsIMP origIGDispatchThreadgroups;
+static __thread void *statisticsEncoder;           // the encoder whose pipeline is such a kernel, on this thread
+static __thread NSUInteger statisticsMemory[4];     // the threadgroup memory lengths it set at indices 0-3
+
+static BOOL mpsStatisticsKernel(id<MTLComputePipelineState> pipeline) {
+    NSString *label = pipeline.label;
+    return label && [label hasPrefix:@"compute_final_"] && [label hasSuffix:@"_statistics"];
+}
+
+static void igSetComputePipeline(id self, SEL _cmd, id pipeline) {
+    if (pipeline && mpsStatisticsKernel(pipeline)) {
+        if (statisticsEncoder != (__bridge void *)self) memset(statisticsMemory, 0, sizeof statisticsMemory);
+        statisticsEncoder = (__bridge void *)self;
+    } else if (statisticsEncoder == (__bridge void *)self) {
+        statisticsEncoder = NULL;
+    }
+    origIGSetComputePipeline(self, _cmd, pipeline);
+}
+
+static void igSetThreadgroupMemory(id self, SEL _cmd, NSUInteger length, NSUInteger index) {
+    if (statisticsEncoder == (__bridge void *)self && index < 4) statisticsMemory[index] = length;
+    origIGSetThreadgroupMemory(self, _cmd, length, index);
+}
+
+static void igDispatchThreadgroups(id self, SEL _cmd, MTLSize groups, MTLSize threads) {
+    if (statisticsEncoder == (__bridge void *)self && threads.width && threads.width < 32 && threads.height == 1 && threads.depth == 1) {
+        for (NSUInteger i = 0; i < 4; i++)
+            if (statisticsMemory[i]) origIGSetThreadgroupMemory(self, @selector(setThreadgroupMemoryLength:atIndex:), (statisticsMemory[i] * 32 / threads.width + 15) & ~(NSUInteger)15, i);
+        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MPS statistics reduction dispatched with %lu threads: 32\n", (unsigned long)threads.width);
+        threads.width = 32;
+    }
+    origIGDispatchThreadgroups(self, _cmd, groups, threads);
+}
+
+static void mpsStatisticsWidth(void) {
+    const char *setting = getenv("MTLSHIM_MPS_STATISTICS");
+    if ((setting && !strcmp(setting, "0")) || origIGDispatchThreadgroups) return;
+    const char *cls = "MTLIGAccelComputeCommandEncoder";
+    if (!definesMethod(cls, "setComputePipelineState:") || !definesMethod(cls, "setThreadgroupMemoryLength:atIndex:") ||
+        !definesMethod(cls, "dispatchThreadgroups:threadsPerThreadgroup:"))
+        return;
+    origIGSetComputePipeline = (SetComputePipelineIMP)swizzle(cls, "setComputePipelineState:", (IMP)igSetComputePipeline);
+    origIGSetThreadgroupMemory = (SetThreadgroupMemoryIMP)swizzle(cls, "setThreadgroupMemoryLength:atIndex:", (IMP)igSetThreadgroupMemory);
+    origIGDispatchThreadgroups = (DispatchThreadgroupsIMP)swizzle(cls, "dispatchThreadgroups:threadsPerThreadgroup:", (IMP)igDispatchThreadgroups);
+}
+
 // 29. WebKit's WebGPU sets GPUMultisampleState.mask with the render pipeline descriptor's sample mask. The 12.x Intel driver
 // takes 0 to mean no mask and draws every sample, where nothing should be drawn (WebGPU CTS occlusionQuery sample_mask,
 // sampleMask=0), as the 12.5 AMD driver does (AMDBronzeCompat item 7, which only loads with the AMD driver). A bit past the
@@ -1676,6 +1737,7 @@ static void patchDriverClasses(void) {
     nearestCubeClamp();
     encoderLodClamps();
     swizzledViews();
+    mpsStatisticsWidth();
     // item 29, once the Intel driver is in (WebKit's processes are named by then)
     if (!origSetSampleMask && !strncmp(getprogname(), "com.apple.WebKit", 16) && definesMethod("MTLRenderPipelineDescriptorInternal", "setSampleMask:"))
         origSetSampleMask = (SetSampleMaskIMP)swizzle("MTLRenderPipelineDescriptorInternal", "setSampleMask:", (IMP)compatSetSampleMask);
