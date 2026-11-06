@@ -30,6 +30,7 @@
 #include <mach-o/loader.h>
 #include <mach/mach.h>
 #include <pthread.h>
+#include <unistd.h>
 #include <sys/mman.h>
 #include <cctype>
 #include <cmath>
@@ -1339,11 +1340,19 @@ static unsigned wordPrivateSubwords(LLVMModuleRef module) {
 // set (MOV o0.x, r1.x): 0 or garbage. Float2 and float4 inputs, and any arithmetic on the input, are right. ANGLE's
 // vertex shaders do that copy for `out0 = in0.x` on a vec3 attribute (dEQP swizzles_vec3 *_vertex,
 // conversions_vector_to_scalar vec3_to_float_vertex). Each <3 x float> parameter of a vertex function goes through
-// air.fast_fmax(a, a) first, which is exact (NaN stays NaN) and makes the back end read the input.
-// INTEL_VERTEX_FLOAT3_FIX=0 turns it off.
+// air.fast_fmax(a, a) first, which is exact (NaN stays NaN) and makes the back end read the input. Only before the plugin
+// binds air.* calls to its runtime library (see runtimeNamesBound). INTEL_VERTEX_FLOAT3_FIX=0 turns it off.
+// Whether the plugin has already turned the module's air.* calls into the runtime library's air_* functions (a later
+// pass-manager run on the same module): air.* calls added then are never resolved, and the back end crashes lowering them.
+static bool runtimeNamesBound(LLVMModuleRef module) {
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        if (!strncmp(LLVMGetValueName(f), "air_", 4)) return true;
+    return false;
+}
+
 static unsigned fixVertexFloat3Inputs(LLVMModuleRef module) {
     const char *setting = getenv("INTEL_VERTEX_FLOAT3_FIX");
-    if (setting && !strcmp(setting, "0")) return 0;
+    if ((setting && !strcmp(setting, "0")) || runtimeNamesBound(module)) return 0;
     std::vector<LLVMValueRef> vertexFunctions(LLVMGetNamedMetadataNumOperands(module, "air.vertex"));
     if (vertexFunctions.empty()) return 0;
     LLVMGetNamedMetadataOperands(module, "air.vertex", vertexFunctions.data());
@@ -1364,7 +1373,8 @@ static unsigned fixVertexFloat3Inputs(LLVMModuleRef module) {
             bool done = false;
             for (LLVMUseRef u = LLVMGetFirstUse(param); u; u = LLVMGetNextUse(u)) {
                 LLVMValueRef user = LLVMGetUser(u);
-                if (LLVMIsACallInst(user) && !strcmp(LLVMGetValueName(LLVMGetOperand(user, LLVMGetNumOperands(user) - 1)), "air.fast_fmax.v3f32") &&
+                const char *callee = LLVMIsACallInst(user) ? LLVMGetValueName(LLVMGetOperand(user, LLVMGetNumOperands(user) - 1)) : "";
+                if ((!strcmp(callee, "air.fast_fmax.v3f32") || !strcmp(callee, "air_fast_fmax_v3f32")) &&
                     LLVMGetOperand(user, 0) == param && LLVMGetOperand(user, 1) == param)
                     done = true;  // this module's second pass
                 else users.push_back(user);
@@ -1395,7 +1405,7 @@ static int hookedRun(void *self, LLVMModuleRef module) {
     if (module && getenv("INTELTEX_DUMP_INPUT")) {  // debugging: every module as it reaches the pass manager
         static int serial;
         char path[1024];
-        snprintf(path, sizeof path, "%s/input-%d.ll", getenv("INTELTEX_DUMP_INPUT"), serial++);
+        snprintf(path, sizeof path, "%s/input-%d-%d.ll", getenv("INTELTEX_DUMP_INPUT"), getpid(), serial++);  // services run in parallel
         if (FILE *f = fopen(path, "w")) { char *text = LLVMPrintModuleToString(module); fputs(text, f); LLVMDisposeMessage(text); fclose(f); }
     }
     if (module) {
