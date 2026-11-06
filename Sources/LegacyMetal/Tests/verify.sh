@@ -3,10 +3,10 @@
 #   with the fixes   the payload built by ../build.sh (shim, AMD and Intel adapters, patched libAMDIL902)
 #   without the fix  the same, minus only the fix the test is about:
 #                      shim tests          the no-op MetalOldCompat build (same load commands, does nothing)
-#                      s12                 AMDBronzeCompat not loaded
-#                      s17                 AMDBronzeCompat not loaded and MTLSHIM_STENCIL_SUBRESOURCE=0
-#                      s19                 AMDBronzeCompat not loaded and INTEL_COMPUTE_TRILINEAR_FIX=0
-#                      s30                 AMDBronzeCompat not loaded and the no-op MetalOldCompat build
+#                      s12                 AMDBronzeCompat off (not injected, AMD_BRONZE_COMPAT=0 in case it is installed)
+#                      s17                 AMDBronzeCompat off and MTLSHIM_STENCIL_SUBRESOURCE=0
+#                      s19                 AMDBronzeCompat off and INTEL_COMPUTE_TRILINEAR_FIX=0
+#                      s30                 AMDBronzeCompat off and the no-op MetalOldCompat build
 #                      s27                 the no-op MetalOldCompat build and AMD_BRONZE_MEMORYLESS=0
 #                      a01, a05@Intel, i01 the stock AMDShared / libMTLIntelCompilerPlugin (adapters not loaded)
 #                      a02, a04-a11, r01   the AMD adapter's own switch (AMD_SI_HAZARD_FIX=0, AMD_LDS_BASE_FIX=0,
@@ -85,7 +85,7 @@ run() {  # <test[@gpu]> <removed fix or "fixed">
     local inject=$BRONZELOAD
     local -a env=()
     case $2 in
-        bronze) inject= ;; bronzestencil) inject= env=(MTLSHIM_STENCIL_SUBRESOURCE=0) ;; samplemask) inject= shim=$NOOP ;; trilinear) inject= env=(INTEL_COMPUTE_TRILINEAR_FIX=0) ;; shim) shim=$NOOP ;; memoryless) shim=$NOOP env=(AMD_BRONZE_MEMORYLESS=0) ;; adapter) libs=$NOADAPTER ;; stock) libs=$STOCK ;; patch3) libs=$PATCH3 env=(INTEL_PRIVATE_ALIGN_FIX=0) ;; patch4) libs=$PATCH4 ;;
+        bronze) inject= env=(AMD_BRONZE_COMPAT=0) ;; bronzestencil) inject= env=(AMD_BRONZE_COMPAT=0 MTLSHIM_STENCIL_SUBRESOURCE=0) ;; samplemask) inject= shim=$NOOP env=(AMD_BRONZE_COMPAT=0) ;; trilinear) inject= env=(AMD_BRONZE_COMPAT=0 INTEL_COMPUTE_TRILINEAR_FIX=0) ;; shim) shim=$NOOP ;; memoryless) shim=$NOOP env=(AMD_BRONZE_MEMORYLESS=0) ;; adapter) libs=$NOADAPTER ;; stock) libs=$STOCK ;; patch3) libs=$PATCH3 env=(INTEL_PRIVATE_ALIGN_FIX=0) ;; patch4) libs=$PATCH4 ;;
         smrd) env=(AMD_SI_HAZARD_FIX=0) ;; ldsbase) env=(AMD_LDS_BASE_FIX=0) ;; handle) env=(AMD_HANDLE_FIX=0 INTEL_HANDLE_FIX=0) ;;
         nan) env=(AMD_NAN_FIX=0) ;; ldexp) env=(AMD_LDEXP_FIX=0) ;; gather) env=(AMD_GATHER_FIX=0 INTEL_INTEGER_OFFSET_FIX=0) ;; cubearray) env=(AMD_CUBE_ARRAY_FIX=0) ;; ldsbool) env=(AMD_LDS_BOOL_FIX=0 INTEL_THREADGROUP_BOOL_FIX=0) ;; fmask) env=(AMD_FMASK_FIX=0) ;;
         subword) env=(INTEL_SIGNED_SUBWORD_FIX=0) ;; comparebias) env=(INTEL_COMPARE_BIAS_FIX=0) ;; intoffset) env=(INTEL_INTEGER_OFFSET_FIX=0) ;; samplerstate) env=(INTEL_SAMPLER_STATE_FIX=0) ;; float3) env=(INTEL_VERTEX_FLOAT3_FIX=0) ;; privatearray) env=(INTEL_PRIVATE_ARRAY_FIX=0) ;; kernelgradient) env=(INTEL_KERNEL_GRADIENT_FIX=0) ;; fragfloat3) env=(INTEL_FRAGMENT_FLOAT3_FIX=0) ;; numsamples) env=(INTEL_NUM_SAMPLES_FIX=0) ;; swizzleimm) env=(INTEL_SWIZZLE_IMMEDIATE_FIX=0) ;; branchchain) env=(INTEL_BRANCH_CHAIN_FIX=0) ;; basevertex) env=(INTEL_BASE_VERTEX_FIX=0) ;;
