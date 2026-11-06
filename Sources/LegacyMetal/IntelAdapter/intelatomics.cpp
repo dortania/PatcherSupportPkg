@@ -43,6 +43,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <map>
 
 extern "C" {
 typedef struct LLVMOpaqueModule *LLVMModuleRef;
@@ -345,6 +346,97 @@ static long definition(const std::vector<std::string> &lines, size_t before, con
     return -1;
 }
 
+// ---- immediates assembled into vectors with per-pixel values ---------------------------------------------------------
+// In a long fragment function, a MOV_SWZ that puts an immediate and per-pixel values in one vector (the IGIL for
+// `FragColor = vec4(1.0, a, b, 1.0)`) gets the immediate's lanes right in only one pixel of eight; the others read 0.
+// Whether the immediate comes from a register set once (MOV r1219.x, 0x3F800000, what the back end writes) or is the
+// operand itself makes no difference; a lane computed per pixel is right. dEQP's uniform-block shaders with 51
+// comparisons end that way (uniformbuffers *_instance_array_*: red and alpha 0 in 7 of 8 pixels; 36 comparisons were
+// fine). Such lanes are computed per pixel: FMAX(FMIN(p, -inf), c), with p one of the instruction's per-pixel sources, is
+// c for any p (NaN too) and exact for a normal float or zero c. Other bit patterns (NaN or denormal as floats, as small
+// integers are) are left as they are. Haswell only (the IGIL hooks don't match Ivy Bridge's plugin).
+// INTEL_SWIZZLE_IMMEDIATE_FIX=0 turns it off.
+static bool exactThroughFmax(const std::string &immediate) {  // "0x3F800000": a normal float or a zero
+    if (immediate.compare(0, 2, "0x") || immediate.size() < 3 || immediate.size() > 10 ||
+        immediate.find_first_not_of("0123456789abcdefABCDEF", 2) != std::string::npos)
+        return false;
+    uint32_t bits = (uint32_t)strtoul(immediate.c_str() + 2, nullptr, 16), exponent = (bits >> 23) & 0xff;
+    return (bits & 0x7fffffff) == 0 || (exponent != 0 && exponent != 0xff);
+}
+static unsigned perPixelSwizzleImmediates(std::string &s) {
+    const char *setting = getenv("INTEL_SWIZZLE_IMMEDIATE_FIX");
+    if ((setting && !strcmp(setting, "0")) || s.find("MOV_SWZ") == std::string::npos) return 0;
+    size_t temps = s.find("DCL_TEMPS r0..r");
+    if (temps == std::string::npos) return 0;
+    unsigned long next = strtoul(s.c_str() + temps + 15, nullptr, 10) + 1;
+    std::vector<std::string> lines;
+    for (size_t pos = 0; pos <= s.size();) {
+        size_t eol = s.find('\n', pos);
+        if (eol == std::string::npos) eol = s.size();
+        lines.push_back(s.substr(pos, eol - pos));
+        pos = eol + 1;
+    }
+    auto trim = [](const std::string &t) {
+        size_t a = t.find_first_not_of(' '), b = t.find_last_not_of(' ');
+        return a == std::string::npos ? std::string() : t.substr(a, b - a + 1);
+    };
+    std::map<std::string, std::string> immediate;  // registers set once, by MOV rN.x, 0x...: their value ("" otherwise)
+    for (const std::string &line : lines) {
+        std::string opcode;
+        std::vector<std::string> ops = instructionOperands(line, &opcode);
+        if (ops.empty() || !opcode.compare(0, 4, "DCL_")) continue;
+        std::string dst = operandRegister(ops[0]);
+        if (dst.empty()) continue;
+        bool isImmediate = opcode == "MOV" && ops.size() == 2 && trim(ops[0]) == dst + ".x" && !trim(ops[1]).compare(0, 2, "0x");
+        immediate[dst] = isImmediate && !immediate.count(dst) ? trim(ops[1]) : std::string();
+    }
+    std::vector<std::string> out;
+    unsigned fixed = 0;
+    for (std::string &line : lines) {
+        std::string opcode;
+        std::vector<std::string> ops = instructionOperands(line, &opcode);
+        if (opcode != "MOV_SWZ" || ops.size() != 5) { out.push_back(line); continue; }
+        std::string dst = trim(ops[0]), reg = operandRegister(dst);
+        std::string mask = dst.size() > reg.size() + 1 && dst[reg.size()] == '.' ? dst.substr(reg.size() + 1) : "xyzw";
+        std::vector<std::string> sources(ops.begin() + 1, ops.end());
+        std::string perPixel;  // a per-pixel source: a register not set by an immediate, or an input
+        for (std::string &src : sources) {
+            src = trim(src);
+            std::string r = operandRegister(src);
+            bool input = src.size() > 1 && src[0] == 'i' && isdigit((unsigned char)src[1]);
+            if (perPixel.empty() && ((!r.empty() && immediate[r].empty()) || input)) perPixel = src;
+        }
+        if (perPixel.empty()) { out.push_back(line); continue; }
+        std::string indent = line.substr(0, line.find_first_not_of(" \t"));
+        std::map<std::string, std::string> made;  // immediate -> its per-pixel register
+        bool changed = false;
+        for (size_t lane = 0; lane < 4; lane++) {
+            if (mask.find("xyzw"[lane]) == std::string::npos) continue;
+            std::string &src = sources[lane], r = operandRegister(src);
+            std::string value = !r.empty() && src == r + ".x" ? immediate[r] : (src.compare(0, 2, "0x") ? std::string() : src);
+            if (value.empty() || !exactThroughFmax(value)) continue;
+            if (!made.count(value)) {
+                std::string low = "r" + std::to_string(next++), computed = "r" + std::to_string(next++);
+                out.push_back(indent + "FMIN " + low + ".x, " + perPixel + ", 0xFF800000;");
+                out.push_back(indent + "FMAX " + computed + ".x, " + low + ".x, " + value + ";");
+                made[value] = computed + ".x";
+            }
+            src = made[value];
+            changed = true;
+        }
+        if (!changed) { out.push_back(line); continue; }
+        out.push_back(indent + "MOV_SWZ " + dst + ", " + sources[0] + ", " + sources[1] + ", " + sources[2] + ", " + sources[3] + ";");
+        fixed++;
+    }
+    if (!fixed) return 0;
+    std::string result;
+    for (size_t i = 0; i < out.size(); i++) result += out[i] + (i + 1 < out.size() ? "\n" : "");
+    size_t t = result.find("DCL_TEMPS r0..r");
+    result.replace(t, result.find(';', t) - t, "DCL_TEMPS r0..r" + std::to_string(next - 1));
+    s = result;
+    return fixed;
+}
+
 extern "C" void intelatomicsFixIGIL(std::string *text) {
     std::string &s = *text;
     if (getenv("INTELTEX_DUMP")) {  // debugging: the IGIL text as the back end produced it
@@ -352,6 +444,16 @@ extern "C" void intelatomicsFixIGIL(std::string *text) {
         char path[1024];
         snprintf(path, sizeof path, "%s/igil-%d.txt", getenv("INTELTEX_DUMP"), serial++);
         if (FILE *f = fopen(path, "w")) { fwrite(s.data(), 1, s.size(), f); fclose(f); }
+    }
+    if (s.find("PIXELSHADER") != std::string::npos) {
+        unsigned n = perPixelSwizzleImmediates(s);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u MOV_SWZ with immediate and per-pixel lanes: immediate lanes computed per pixel\n", n);
+        if (n && getenv("INTELTEX_DUMP")) {
+            static int serial;
+            char path[1024];
+            snprintf(path, sizeof path, "%s/igil-fixed-%d.txt", getenv("INTELTEX_DUMP"), serial++);
+            if (FILE *f = fopen(path, "w")) { fwrite(s.data(), 1, s.size(), f); fclose(f); }
+        }
     }
     if (s.find("IMM_ATOMIC_") == std::string::npos) return;
     std::vector<std::string> lines;
