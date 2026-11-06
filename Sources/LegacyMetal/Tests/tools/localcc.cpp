@@ -6,8 +6,9 @@
 // Backend requests are the MTLCompilerService messages that carry "pluginPath"; they are answered with the same
 // reply dictionary the service builds ({"error": status, "reply": data, "errorMessage": text}). Every other message
 // still goes to the service. LOCALCC_LOG=1 prints one line per local compile; LOCALCC_PLUGIN=<path> loads that
-// compiler plugin instead of the one the driver names.
+// compiler plugin instead of the one the driver names; LOCALCC_DUMP=<dir> writes every reply (the compiled binaries) there.
 #include <dlfcn.h>
+#include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -72,6 +73,12 @@ static xpc_object_t compileLocally(xpc_object_t msg) {
         result = status;
         xpc_dictionary_set_uint64(reply, "error", status);
         if (out && outSize) xpc_dictionary_set_data(reply, "reply", out, outSize);
+        if (out && outSize && getenv("LOCALCC_DUMP")) {  // debugging: every reply (the compiled binaries) as a file
+            static int serial;
+            char path[1024];
+            snprintf(path, sizeof path, "%s/reply-%d-%d-type%u.bin", getenv("LOCALCC_DUMP"), getpid(), serial++, type);
+            if (FILE *f = fopen(path, "wb")) { fwrite(out, 1, outSize, f); fclose(f); }
+        }
         if (error) { xpc_dictionary_set_string(reply, "errorMessage", error); lastError = error; }
     });
     if (getenv("LOCALCC_LOG")) fprintf(stderr, "[localcc] request type %u (%zu bytes) -> status %u%s%s\n", type, size, result, lastError.empty() ? "" : ": ", lastError.c_str());
