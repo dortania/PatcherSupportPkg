@@ -756,9 +756,11 @@ static id newLibraryData(id self, SEL _cmd, dispatch_data_t data, NSError **erro
 // MTLGPUFamilyMac2. ANGLE built for macOS 13 or later (Chrome, Safari) asks Mac2 for its family-1 checks too, such as
 // format capabilities and the number of color attachments. Of what ANGLE then expects from family 2, the 12.x Intel
 // driver lacks three: swizzled texture views (it returns nil), stencil MSAA resolves (nothing is written) and render
-// pipelines without attachments (MetalOld's validation aborts). Before ANGLE sets up its features, they're added to
-// ANGLE_FEATURE_OVERRIDES_DISABLED (hasTextureSwizzle, hasStencilAutoResolve, allowRenderpassWithoutAttachment), which
-// ANGLE reads once, so it takes its own fallbacks. MTLSHIM_ANGLE_MAC2=0 turns this part off.
+// pipelines without attachments (MetalOld's validation aborts). Its compiler also can't build a depth comparison with
+// gradients (sample_compare(..., gradient2d(...)) aborts MTLCompilerService), which ANGLE uses for textureGrad on shadow
+// samplers. Before ANGLE sets up its features, all four are added to ANGLE_FEATURE_OVERRIDES_DISABLED (hasTextureSwizzle,
+// hasStencilAutoResolve, allowRenderpassWithoutAttachment, allowSamplerCompareGradient), which ANGLE reads once, so it
+// takes its own fallbacks. MTLSHIM_ANGLE_MAC2=0 turns this part off.
 typedef void (*EndEncodingIMP)(id, SEL);
 
 // 15. MSAA resolves on the 12.x Intel driver (Haswell / Ivy Bridge): IGRenderPass::generateResolveOptions always resolves
@@ -1414,7 +1416,7 @@ static BOOL familyOneAsTwo(void) {
 static void disableFeaturesFamilyOneLacks(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        static const char kLacking[] = "hasTextureSwizzle:hasStencilAutoResolve:allowRenderpassWithoutAttachment";
+        static const char kLacking[] = "hasTextureSwizzle:hasStencilAutoResolve:allowRenderpassWithoutAttachment:allowSamplerCompareGradient";
         const char *set = getenv("ANGLE_FEATURE_OVERRIDES_DISABLED");
         char *value = NULL;
         if (set && *set && asprintf(&value, "%s:%s", set, kLacking) < 0) value = NULL;

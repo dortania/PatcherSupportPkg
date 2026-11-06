@@ -6,7 +6,9 @@
 //   - a LUMINANCE_ALPHA texture samples as (L, L, L, A): with ANGLE's texture swizzle feature on, the driver returns nil
 //     for the swizzled view ANGLE samples through
 //   - stencil blitted out of a 4x multisampled framebuffer arrives: with ANGLE's stencil auto-resolve on, the driver
-//     writes nothing
+//     writes nothing (and without item 27, ANGLE's stencil copy is lost)
+//   - textureGrad and texture with a bias on a sampler2DShadow compile and compare right: the Intel compiler can't build
+//     depth comparisons with gradients (ANGLE's allowSamplerCompareGradient goes off) or a bias (the Intel adapter)
 // Stock OCLP: FAIL (eglInitialize fails). Fixed: PASS. SKIP where a family-2 GPU exists (ANGLE runs there) or WebKit's
 // ANGLE isn't found.
 #import "repro.h"
@@ -31,7 +33,8 @@ enum {
     GL_DRAW_FRAMEBUFFER = 0x8CA9, GL_RENDERBUFFER = 0x8D41, GL_RGBA8 = 0x8058, GL_DEPTH24_STENCIL8 = 0x88F0,
     GL_COLOR_ATTACHMENT0 = 0x8CE0, GL_DEPTH_STENCIL_ATTACHMENT = 0x821A, GL_FRAMEBUFFER_COMPLETE = 0x8CD5,
     GL_COLOR_BUFFER_BIT = 0x4000, GL_DEPTH_BUFFER_BIT = 0x0100, GL_STENCIL_BUFFER_BIT = 0x0400, GL_STENCIL_TEST = 0x0B90,
-    GL_EQUAL = 0x0202, GL_RGBA = 0x1908,
+    GL_EQUAL = 0x0202, GL_RGBA = 0x1908, GL_DEPTH_COMPONENT32F = 0x8CAC, GL_DEPTH_COMPONENT = 0x1902,
+    GL_TEXTURE_COMPARE_MODE = 0x884C, GL_TEXTURE_COMPARE_FUNC = 0x884D, GL_COMPARE_REF_TO_TEXTURE = 0x884E, GL_LEQUAL = 0x0203,
 };
 
 static const char *const kANGLEPaths[] = {
@@ -231,7 +234,40 @@ int main(int argc, char **argv) {
         if (blitError || px[1] != 255)
             return FAIL(bug, "%s: stencil 0x5A blitted out of a 4x MSAA framebuffer: %s (GL error 0x%x)", dev.name.UTF8String,
                         px[1] == 255 ? "passes" : "lost", blitError);
-        return PASS(bug, "%s: ANGLE runs (%s, OpenGL ES 3); luminance-alpha sampling and MSAA stencil blits right",
+        // a depth texture of 0.25 compared with 0.125 (LEQUAL: passes) by textureGrad and by texture with a bias
+        static const float depths[16] = {0.25f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f,
+                                         0.25f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f};
+        GLuint shadow;
+        glGenTextures(1, &shadow);
+        glBindTexture(GL_TEXTURE_2D, shadow);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, 4, 4, 0, GL_DEPTH_COMPONENT, GL_FLOAT, depths);
+        static const char *const kShadowLookups[2][2] = {
+            {"textureGrad", "textureGrad(t, vec3(uv, 0.125), vec2(0.0), vec2(0.0))"},
+            {"texture with a bias", "texture(t, vec3(uv, 0.125), 1.5)"},
+        };
+        for (int i = 0; i < 2; i++) {
+            char fragment[512];
+            snprintf(fragment, sizeof fragment, "#version 300 es\nprecision highp float; uniform highp sampler2DShadow t; in vec2 uv; out vec4 o;\n"
+                     "void main() { o = vec4(%s); }\n", kShadowLookups[i][1]);
+            GLuint lookup = program(fragment);
+            if (!lookup) return FAIL(bug, "%s: sampler2DShadow %s: program doesn't link", dev.name.UTF8String, kShadowLookups[i][0]);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glClearColor(0, 0, 0, 0);
+            glClear(GL_COLOR_BUFFER_BIT);
+            glUseProgram(lookup);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            memset(px, 0, sizeof px);
+            glReadPixels(1, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+            error = glGetError();
+            if (error || px[0] != 255)
+                return FAIL(bug, "%s: sampler2DShadow %s of 0.125 against depth 0.25 (LEQUAL) gave %d (GL error 0x%x), want 255",
+                            dev.name.UTF8String, kShadowLookups[i][0], px[0], error);
+        }
+        return PASS(bug, "%s: ANGLE runs (%s, OpenGL ES 3); luminance-alpha sampling, MSAA stencil blits and shadow lookups right",
                     dev.name.UTF8String, renderer ? renderer : "?");
     }
 }
