@@ -3,22 +3,9 @@
 // render_pass,resolve:render_pass_resolve). Half of 4 samples white over black: the correct result is linear 0.5 = sRGB
 // byte 188; averaging the bytes gives 128. A linear format stays 128, and alpha is 128 either way. The blended case draws
 // every sample with white at alpha 0.5 over black, blended in linear space: 188 whether resolved right or not, so it checks
-// that the fix's linear stand-in attachment blends as the sRGB one does.
-// On the 12.5-24 driver (the build that links impostor.dylib), a shader read of a multisample texture resets the GPU, so
-// the fix keeps the driver's resolve for passes that store or load their samples; that case is reported, not failed.
+// that blending in the multisample pass is unchanged by the fix.
 // Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
 #import "repro.h"
-#include <mach-o/dyld.h>
-
-static BOOL multisampleReadsFault(void) {  // the same check as AMDBronzeCompat's
-    static const char kImpostor[] = "/AMDMTLBronzeDriver.bundle/Contents/MacOS/impostor.dylib";
-    for (uint32_t i = 0, n = _dyld_image_count(); i < n; i++) {
-        const char *name = _dyld_get_image_name(i);
-        size_t length = name ? strlen(name) : 0;
-        if (length >= sizeof kImpostor - 1 && !strcmp(name + length - (sizeof kImpostor - 1), kImpostor)) return YES;
-    }
-    return NO;
-}
 
 // Returns the resolved red byte, or -1 if a pass failed; alpha goes to *alpha.
 static int resolved(id<MTLDevice> d, MTLPixelFormat format, MTLStoreAction store, NSUInteger level, NSUInteger slice, BOOL blend,
@@ -89,16 +76,13 @@ int main(int argc, char **argv) {
             {"RGBA8Unorm_sRGB resolve, blended", MTLPixelFormatRGBA8Unorm_sRGB, MTLStoreActionMultisampleResolve, 0, 0, YES, 188},
             {"RGBA8Unorm resolve", MTLPixelFormatRGBA8Unorm, MTLStoreActionMultisampleResolve, 0, 0, NO, 128},
         };
-        BOOL kept = NO;  // the driver's resolve kept on 12.5-24
         for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
-            if (cases[i].store == MTLStoreActionStoreAndMultisampleResolve && multisampleReadsFault()) { kept = YES; continue; }
             int alpha = 0, red = resolved(dev, cases[i].format, cases[i].store, cases[i].level, cases[i].slice, cases[i].blend, &alpha);
             if (red < 0) return FAIL(bug, "%s: %s: the pass failed", dev.name.UTF8String, cases[i].what);
             if (abs(red - cases[i].want) > 3 || abs(alpha - 128) > 3)
                 return FAIL(bug, "%s: %s: half white over black = %d (alpha %d), want %d (alpha 128); 128 = encoded bytes averaged",
                             dev.name.UTF8String, cases[i].what, red, alpha, cases[i].want);
         }
-        return PASS(bug, "%s: sRGB MSAA resolves average linear values, linear formats unchanged%s", dev.name.UTF8String,
-                    kept ? " (12.5-24: store and resolve keeps the driver's resolve, not tested)" : "");
+        return PASS(bug, "%s: sRGB MSAA resolves average linear values, linear formats unchanged", dev.name.UTF8String);
     }
 }
