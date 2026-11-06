@@ -19,7 +19,8 @@
 // Also (compiler compatibility, not texture atomics): air.max_work_group_size dropped (the back end aborts on it),
 // air.struct_type_info dropped from array-of-struct buffer arguments (the argument-buffer emulation asserts on them),
 // signed i8/i16 conversions in vertex functions done with shifts of the 32-bit word (the back end can read the top lane
-// from the wrong word), and the LOD bias dropped from depth comparisons (the back end can't compile them).
+// from the wrong word), the LOD bias dropped from depth comparisons (the back end can't compile them), and texel offsets
+// of integer texture samples moved into the coordinates (the back end ignores them).
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
@@ -994,6 +995,83 @@ static unsigned dropSampleCompareBias(LLVMModuleRef module) {
     return fixed;
 }
 
+// ---- texel offsets on integer textures -----------------------------------------------------------------------------
+// The back end ignores the texel offset of a sample from an integer texture (texture2d<int>::sample(s, coord, offset),
+// GLSL textureOffset on an isampler2D / usampler2D): the texel at the coordinate comes back. Float textures are right.
+// For air.sample_texture_{2d,2d_array,3d}.{s,u}.v4i32 calls with an offset, the offset goes into the coordinates instead,
+// in texels of the sampled level: coord + offset / size, the size from air.get_{width,height,depth}_texture_* at the
+// explicit level (rounded) or at level 0 for an implicit one. Integer textures are only sampled with nearest filtering,
+// so this picks the same texel, except where an implicit LOD selects a level above 0 (a minified fragment): the compiler
+// can't compute the LOD (calculate_clamped_lod aborts it), so the offset stays in level-0 texels there.
+// INTEL_INTEGER_OFFSET_FIX=0 turns it off.
+extern "C" {
+LLVMValueRef LLVMBuildFAdd(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildFPToSI(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
+LLVMValueRef LLVMBuildUIToFP(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
+LLVMValueRef LLVMIsAConstantAggregateZero(LLVMValueRef);
+}
+
+static unsigned foldIntegerSampleOffsets(LLVMModuleRef module) {
+    const char *setting = getenv("INTEL_INTEGER_OFFSET_FIX");
+    if (setting && !strcmp(setting, "0")) return 0;
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context), f32 = LLVMFloatTypeInContext(context);
+    static const struct { const char *prefix, *size; unsigned dims, coordIndex, offsetIndex; } kKinds[] = {
+        {"air.sample_texture_2d.", "texture_2d", 2, 2, 4},              // tex, sampler, coord, i1, offset, i1 lod, float, i32
+        {"air.sample_texture_2d_array.", "texture_2d_array", 2, 2, 5},  // ..., coord, i32 layer, i1, offset, ...
+        {"air.sample_texture_3d.", "texture_3d", 3, 2, 4},
+    };
+    static const char *const kSizes[3] = {"width", "height", "depth"};
+    LLVMBuilderRef b = nullptr;
+    unsigned fixed = 0;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
+        const char *name = LLVMGetValueName(f);
+        size_t length = strlen(name);
+        if (length < 8 || (strcmp(name + length - 8, ".s.v4i32") && strcmp(name + length - 8, ".u.v4i32"))) continue;
+        for (const auto &kind : kKinds) {
+            size_t prefix = strlen(kind.prefix);
+            if (strncmp(name, kind.prefix, prefix) || strchr(name + prefix, '_')) continue;  // not 2d_array for 2d, no _grad
+            std::vector<LLVMValueRef> calls;
+            for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u)) calls.push_back(LLVMGetUser(u));
+            for (LLVMValueRef call : calls) {
+                int n = LLVMGetNumOperands(call);  // arguments, then the callee
+                if (!LLVMIsACallInst(call) || n != (int)kind.offsetIndex + 5 || LLVMGetOperand(call, n - 1) != f) continue;
+                LLVMValueRef offset = LLVMGetOperand(call, kind.offsetIndex), coord = LLVMGetOperand(call, kind.coordIndex);
+                LLVMValueRef hasLevel = LLVMGetOperand(call, kind.offsetIndex + 1), level = LLVMGetOperand(call, kind.offsetIndex + 2);
+                if (LLVMIsAConstantAggregateZero(offset) || lanes(LLVMTypeOf(offset)) != kind.dims || lanes(LLVMTypeOf(coord)) != kind.dims ||
+                    !LLVMIsAConstantInt(hasLevel))
+                    continue;
+                if (!b) b = LLVMCreateBuilderInContext(context);
+                LLVMPositionBuilderBefore(b, call);
+                LLVMValueRef texture = LLVMGetOperand(call, 0), lod = LLVMConstInt(i32, 0, false);
+                if (LLVMConstIntGetZExtValue(hasLevel)) {  // nearest level: round, at least 0
+                    LLVMValueRef rounded = LLVMBuildFPToSI(b, LLVMBuildFAdd(b, level, LLVMConstReal(f32, 0.5), ""), i32, "");
+                    lod = LLVMBuildSelect(b, LLVMBuildICmp(b, 40 /* LLVMIntSLT */, rounded, lod, ""), lod, rounded, "");
+                }
+                LLVMValueRef shifted = coord;
+                for (unsigned d = 0; d < kind.dims; d++) {
+                    char sizeName[64];
+                    snprintf(sizeName, sizeof sizeName, "air.get_%s_%s", kSizes[d], kind.size);
+                    LLVMTypeRef params[2] = {LLVMTypeOf(texture), i32};
+                    LLVMValueRef getSize = LLVMGetNamedFunction(module, sizeName);
+                    if (!getSize) getSize = LLVMAddFunction(module, sizeName, LLVMFunctionType(i32, params, 2, 0));
+                    LLVMValueRef args[2] = {texture, lod};
+                    LLVMValueRef size = LLVMBuildUIToFP(b, LLVMBuildCall(b, getSize, args, 2, ""), f32, "");
+                    LLVMValueRef index = LLVMConstInt(i32, d, false);
+                    LLVMValueRef texels = LLVMBuildSIToFP(b, LLVMBuildExtractElement(b, offset, index, ""), f32, "");
+                    LLVMValueRef component = LLVMBuildFAdd(b, LLVMBuildExtractElement(b, shifted, index, ""), LLVMBuildFDiv(b, texels, size, ""), "");
+                    shifted = LLVMBuildInsertElement(b, shifted, component, index, "");
+                }
+                LLVMSetOperand(call, kind.coordIndex, shifted);
+                LLVMSetOperand(call, kind.offsetIndex, LLVMConstNull(LLVMTypeOf(offset)));
+                fixed++;
+            }
+        }
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
 static int hookedRun(void *self, LLVMModuleRef module) {
     pthread_mutex_lock(&installLock);
     installIntoPlugin(false);  // test process: the plugin was dlopened after we were inserted
@@ -1016,6 +1094,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] %u signed i8/i16 conversion(s) in a vertex function done on the 32-bit word\n", n);
         n = dropSampleCompareBias(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u depth comparison(s) with an LOD bias: bias dropped\n", n);
+        n = foldIntegerSampleOffsets(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u integer texture sample(s): texel offset moved into the coordinates\n", n);
         if (n && getenv("INTELTEX_DUMP_HANDLES")) {  // debugging: the module after that rewrite
             static int serial;
             char path[1024];
