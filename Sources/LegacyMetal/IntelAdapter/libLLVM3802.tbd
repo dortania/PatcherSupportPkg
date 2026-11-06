@@ -26,5 +26,5 @@ exports:
                    _LLVMIsDeclaration, _LLVMGetAttribute, _LLVMGetArrayLength, _LLVMGetStructName, _LLVMBuildInBoundsGEP,
                    _LLVMBuildSelect, _LLVMBuildShl, _LLVMBuildAShr, _LLVMBuildSExt, _LLVMBuildTrunc, _LLVMBuildSIToFP,
                    _LLVMBuildFDiv, _LLVMBuildFCmp, _LLVMConstReal, _LLVMConstVector, _LLVMFloatTypeInContext, _LLVMHalfTypeInContext,
-                   _LLVMIsACallInst, _LLVMIntTypeInContext, _LLVMGetTypeContext, _LLVMIsAExtractElementInst ]
+                   _LLVMIsACallInst, _LLVMIntTypeInContext, _LLVMGetTypeContext, _LLVMIsAExtractElementInst, _LLVMSetOperand, _LLVMIsAConstantFP, _LLVMConstRealGetDouble ]
 ...

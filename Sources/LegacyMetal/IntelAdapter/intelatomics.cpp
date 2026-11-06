@@ -17,9 +17,9 @@
 //   INTELTEX_DUMP=<dir>   write each lowered module and the IGIL text before the fix
 //   INTELTEX_DUMP_INPUT=<dir>  write every module as it reaches the pass manager
 // Also (compiler compatibility, not texture atomics): air.max_work_group_size dropped (the back end aborts on it),
-// air.struct_type_info dropped from array-of-struct buffer arguments (the argument-buffer emulation asserts on them), and
+// air.struct_type_info dropped from array-of-struct buffer arguments (the argument-buffer emulation asserts on them),
 // signed i8/i16 conversions in vertex functions done with shifts of the 32-bit word (the back end can read the top lane
-// from the wrong word).
+// from the wrong word), and the LOD bias dropped from depth comparisons (the back end can't compile them).
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
@@ -957,6 +957,43 @@ static unsigned fixVertexSignedSubwords(LLVMModuleRef module) {
     return fixed;
 }
 
+// ---- sample_compare with a bias ------------------------------------------------------------------------------------
+// The back end can't select a depth comparison with an LOD bias (sample_compare(s, coord, ref, bias(b)), from GLSL's
+// texture(sampler2DShadow, coord, bias)): "Cannot select" aborts MTLCompilerService, which takes the page's WebGL
+// context and, in Chrome, the GPU process with it. Nor can it compute an LOD (calculate_clamped_lod), so the bias can't
+// be turned into an explicit level. The bias is dropped instead: air.sample_compare_depth_* calls whose level flag (the
+// i1 before the float) is false get 0 for that float. Shadow maps with one level, the usual kind, are unaffected.
+// INTEL_COMPARE_BIAS_FIX=0 turns it off.
+extern "C" {
+void LLVMSetOperand(LLVMValueRef, unsigned, LLVMValueRef);
+LLVMValueRef LLVMIsAConstantFP(LLVMValueRef);
+double LLVMConstRealGetDouble(LLVMValueRef, int *);
+}
+
+static unsigned dropSampleCompareBias(LLVMModuleRef module) {
+    const char *setting = getenv("INTEL_COMPARE_BIAS_FIX");
+    if (setting && !strcmp(setting, "0")) return 0;
+    LLVMTypeRef f32 = LLVMFloatTypeInContext(LLVMGetModuleContext(module));
+    unsigned fixed = 0;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
+        const char *name = LLVMGetValueName(f);
+        if (strncmp(name, "air.sample_compare_depth_", 25) || strstr(name, "_grad")) continue;
+        std::vector<LLVMValueRef> calls;
+        for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u)) calls.push_back(LLVMGetUser(u));
+        for (LLVMValueRef call : calls) {
+            int n = LLVMGetNumOperands(call);  // arguments, then the callee
+            if (!LLVMIsACallInst(call) || n < 4 || LLVMGetOperand(call, n - 1) != f) continue;
+            LLVMValueRef flag = LLVMGetOperand(call, n - 4), value = LLVMGetOperand(call, n - 3);
+            if (!LLVMIsAConstantInt(flag) || LLVMConstIntGetZExtValue(flag) || LLVMTypeOf(value) != f32) continue;
+            int lossy = 0;
+            if (LLVMIsAConstantFP(value) && LLVMConstRealGetDouble(value, &lossy) == 0.0) continue;
+            LLVMSetOperand(call, n - 3, LLVMConstReal(f32, 0.0));
+            fixed++;
+        }
+    }
+    return fixed;
+}
+
 static int hookedRun(void *self, LLVMModuleRef module) {
     pthread_mutex_lock(&installLock);
     installIntoPlugin(false);  // test process: the plugin was dlopened after we were inserted
@@ -977,6 +1014,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] %u texture/sampler load(s) through escaped pointers re-indexed into the argument\n", n);
         n = fixVertexSignedSubwords(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u signed i8/i16 conversion(s) in a vertex function done on the 32-bit word\n", n);
+        n = dropSampleCompareBias(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u depth comparison(s) with an LOD bias: bias dropped\n", n);
         if (n && getenv("INTELTEX_DUMP_HANDLES")) {  // debugging: the module after that rewrite
             static int serial;
             char path[1024];
