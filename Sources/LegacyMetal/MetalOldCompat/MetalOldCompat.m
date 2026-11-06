@@ -1105,8 +1105,10 @@ static BOOL (*realSupportsFamily)(id, SEL, NSInteger);
 
 static BOOL familyTwo(const void *device) {
     SEL selector = @selector(supportsFamily:);
-    if (realSupportsFamily) return realSupportsFamily((__bridge id)device, selector, MTLGPUFamilyMac2);
-    return ((BOOL (*)(const void *, SEL, NSInteger))objc_msgSend)(device, selector, MTLGPUFamilyMac2);
+    id object = (__bridge id)device;
+    // Metal's API validation layer (MTL_DEBUG_LAYER=1) hands out its own device objects, which aren't _MTLDevices
+    if (realSupportsFamily && [object isKindOfClass:objc_getClass("_MTLDevice")]) return realSupportsFamily(object, selector, MTLGPUFamilyMac2);
+    return ((BOOL (*)(id, SEL, NSInteger))objc_msgSend)(object, selector, MTLGPUFamilyMac2);
 }
 
 static CFArrayRef familyTwoOnly(CFArrayRef all) {  // consumes all; unchanged if no device qualifies
