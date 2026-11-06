@@ -3,16 +3,18 @@
 #   with the fixes   the payload built by ../build.sh (shim, AMD and Intel adapters, patched libAMDIL902)
 #   without the fix  the same, minus only the fix the test is about:
 #                      shim tests          the no-op MetalOldCompat build (same load commands, does nothing)
-#                      s12, s17, s19       AMDBronzeCompat not loaded
+#                      s12, s17            AMDBronzeCompat not loaded
+#                      s19                 AMDBronzeCompat not loaded and INTEL_COMPUTE_TRILINEAR_FIX=0
 #                      s27                 the no-op MetalOldCompat build and AMD_BRONZE_MEMORYLESS=0
 #                      a01, a05@Intel, i01 the stock AMDShared / libMTLIntelCompilerPlugin (adapters not loaded)
 #                      a02, a04-a10, r01   the AMD adapter's own switch (AMD_SI_HAZARD_FIX=0, AMD_LDS_BASE_FIX=0,
-#                                          AMD_HANDLE_FIX=0 + INTEL_HANDLE_FIX=0, AMD_NAN_FIX=0, AMD_LDEXP_FIX=0, AMD_GATHER_FIX=0,
-#                                          AMD_CUBE_ARRAY_FIX=0, AMD_LDS_BOOL_FIX=0)
+#                                          AMD_HANDLE_FIX=0 + INTEL_HANDLE_FIX=0, AMD_NAN_FIX=0, AMD_LDEXP_FIX=0,
+#                                          AMD_GATHER_FIX=0 + INTEL_INTEGER_OFFSET_FIX=0,
+#                                          AMD_CUBE_ARRAY_FIX=0, AMD_LDS_BOOL_FIX=0 + INTEL_THREADGROUP_BOOL_FIX=0)
 #                      i02-i05             the Intel adapter's switch (INTEL_SIGNED_SUBWORD_FIX=0, INTEL_COMPARE_BIAS_FIX=0,
 #                                          INTEL_INTEGER_OFFSET_FIX=0, INTEL_SAMPLER_STATE_FIX=0)
 #                      c01, c02            the stock libAMDIL902
-#                      c03                 libAMDIL902 without patch 4
+#                      c03                 libAMDIL902 without patch 4 and INTEL_PRIVATE_ALIGN_FIX=0
 #                      c04                 libAMDIL902 without patch 5
 # PAYLOAD=12.5-GCN-25 runs only the AMD compiler tests, with Tahoe's AMDShared copies (built for macOS 12.5, so they
 # load on Sequoia too), and writes RESULTS-12.5-GCN-25.md.
@@ -60,7 +62,7 @@ SHIM=$B/MetalOldCompat.dylib NOOP=$B/MetalOldCompat-noop.dylib CC=$PWD/tools/loc
 CASES="s01-device-methods:shim s02-reflection:shim s03-shader-atomic-usage:shim s27-memoryless-texture:memoryless s07-vertex-descriptor:shim
 s08-sdk-properties:shim s09-msl-3.2:shim s10-device-over-release:shim s12-srgb-mipmaps:bronze s13-new-air-metallib:shim
 s14-safari-argument-encoders:shim s15a-intel-msaa-resolve:shim s15b-intel-narrow-clear:shim s16-intel-array-view:shim
-s17-amd-depth-stencil-view:bronze s18-pipeline-cache-key:shim s19-amd-trilinear-blend:bronze s25-amd-srgb-resolve:bronze s26-amd-depth-stencil-copy-pitch:bronze s29-amd-webkit-vertex-stride:bronze s30-amd-webkit-sample-mask:bronze
+s17-amd-depth-stencil-view:bronze s18-pipeline-cache-key:shim s19-amd-trilinear-blend:trilinear s25-amd-srgb-resolve:bronze s26-amd-depth-stencil-copy-pitch:bronze s29-amd-webkit-vertex-stride:bronze s30-amd-webkit-sample-mask:bronze
 s20-intel-fill-buffer:shim s21-intel-depth-only-pipeline:shim s22-intel-depth-hiz-levels:shim s23-intel-3d-mip-plane:shim
 s24-intel-narrow-mip-clear:shim s31-angle-family-one:shim s32-intel-depth-stencil-blit:shim s33-intel-nil-argument-buffer:shim a01-texture-atomics:adapter
 a01-texture-atomics@Intel:adapter a02-si-smrd-hazard:smrd a04-si-threadgroup-pointer:ldsbase
@@ -77,9 +79,9 @@ run() {  # <test[@gpu]> <removed fix or "fixed">
     local inject=$BRONZELOAD
     local -a env=()
     case $2 in
-        bronze) inject= ;; shim) shim=$NOOP ;; memoryless) shim=$NOOP env=(AMD_BRONZE_MEMORYLESS=0) ;; adapter) libs=$NOADAPTER ;; stock) libs=$STOCK ;; patch3) libs=$PATCH3 ;; patch4) libs=$PATCH4 ;;
+        bronze) inject= ;; trilinear) inject= env=(INTEL_COMPUTE_TRILINEAR_FIX=0) ;; shim) shim=$NOOP ;; memoryless) shim=$NOOP env=(AMD_BRONZE_MEMORYLESS=0) ;; adapter) libs=$NOADAPTER ;; stock) libs=$STOCK ;; patch3) libs=$PATCH3 env=(INTEL_PRIVATE_ALIGN_FIX=0) ;; patch4) libs=$PATCH4 ;;
         smrd) env=(AMD_SI_HAZARD_FIX=0) ;; ldsbase) env=(AMD_LDS_BASE_FIX=0) ;; handle) env=(AMD_HANDLE_FIX=0 INTEL_HANDLE_FIX=0) ;;
-        nan) env=(AMD_NAN_FIX=0) ;; ldexp) env=(AMD_LDEXP_FIX=0) ;; gather) env=(AMD_GATHER_FIX=0) ;; cubearray) env=(AMD_CUBE_ARRAY_FIX=0) ;; ldsbool) env=(AMD_LDS_BOOL_FIX=0) ;;
+        nan) env=(AMD_NAN_FIX=0) ;; ldexp) env=(AMD_LDEXP_FIX=0) ;; gather) env=(AMD_GATHER_FIX=0 INTEL_INTEGER_OFFSET_FIX=0) ;; cubearray) env=(AMD_CUBE_ARRAY_FIX=0) ;; ldsbool) env=(AMD_LDS_BOOL_FIX=0 INTEL_THREADGROUP_BOOL_FIX=0) ;;
         subword) env=(INTEL_SIGNED_SUBWORD_FIX=0) ;; comparebias) env=(INTEL_COMPARE_BIAS_FIX=0) ;; intoffset) env=(INTEL_INTEGER_OFFSET_FIX=0) ;; samplerstate) env=(INTEL_SAMPLER_STATE_FIX=0) ;;
     esac
     # s13's fix (item 25) works in MTLCompilerService, which gets the shim under test this way (i05's metallib needs it too)

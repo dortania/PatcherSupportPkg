@@ -3,6 +3,9 @@
 // in between: a sample at level 0.25 returns 0.19 of the way to the next level, at 0.75 0.81. Apple's GPUs blend
 // linearly (0.25, 0.75), and Blender EEVEE's horizon scan depends on it when it samples its depth pyramid just above a
 // whole level (render tests triangle_light_sampling, light_link_mesh_tree, ...: light from bright emitters missing).
+// Haswell's samplers do the same in compute kernels, though the sampler state asks for full-quality trilinear filtering:
+// they blend only between 0.375 and 0.625 (0.25 and 0.75 return 0 and 1); the Intel adapter remaps compute kernels'
+// explicit levels (INTEL_COMPUTE_TRILINEAR_FIX=0 turns that off).
 // A 2-level R32Float texture (level 0 = 0, level 1 = 1) is sampled at levels 0.25, 0.5 and 0.75.
 // Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
 #import "repro.h"

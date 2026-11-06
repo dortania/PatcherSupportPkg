@@ -2,6 +2,8 @@
 // libAMDIL902 compiles it to fetch4 with unnormalized coordinates but passes the shader's normalized ones, so it always
 // returns the texels at the texture's corner. GCN also forces nearest filtering on integer formats, which leaves gather
 // half a texel off once the coordinates are normalized. (WebGPU CTS builtin,textureGather: every integer format.)
+// The 3802 Intel compiler gets the plain cases right but ignores the offset (as for samples, i04); the Intel adapter
+// moves it into the coordinates.
 // Checked: 2D and 2D array, 8 and 32 bit, clamp, repeat and mirrored repeat, with and without an offset.
 // Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
 #import "repro.h"

@@ -20,8 +20,10 @@
 // air.struct_type_info dropped from array-of-struct buffer arguments (the argument-buffer emulation asserts on them),
 // signed i8/i16 conversions in vertex functions done with shifts of the 32-bit word (the back end can read the top lane
 // from the wrong word), the LOD bias dropped from depth comparisons (the back end can't compile them), texel offsets
-// of integer texture samples moved into the coordinates (the back end ignores them), and constexpr samplers from newer
-// front ends ([2 x i64]) rewritten in the i64 form the back end reads (it crashes on the array).
+// of integer texture samples moved into the coordinates (the back end ignores them), constexpr samplers from newer
+// front ends ([2 x i64]) rewritten in the i64 form the back end reads (it crashes on the array), and explicit levels in
+// compute kernels remapped so the sampler's narrow mip blend there comes out linear, and threadgroup bools widened to i8
+// (the back end can't select i1 loads and stores there).
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
@@ -29,6 +31,7 @@
 #include <pthread.h>
 #include <sys/mman.h>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -1003,13 +1006,15 @@ static unsigned dropSampleCompareBias(LLVMModuleRef module) {
 // in texels of the sampled level: coord + offset / size, the size from air.get_{width,height,depth}_texture_* at the
 // explicit level (rounded) or at level 0 for an implicit one. Integer textures are only sampled with nearest filtering,
 // so this picks the same texel, except where an implicit LOD selects a level above 0 (a minified fragment): the compiler
-// can't compute the LOD (calculate_clamped_lod aborts it), so the offset stays in level-0 texels there.
+// can't compute the LOD (calculate_clamped_lod aborts it), so the offset stays in level-0 texels there. Gathers on integer
+// textures ignore their offset the same way (a08's offset case) and get the same rewrite, at level 0.
 // INTEL_INTEGER_OFFSET_FIX=0 turns it off.
 extern "C" {
 LLVMValueRef LLVMBuildFAdd(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
 LLVMValueRef LLVMBuildFPToSI(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
 LLVMValueRef LLVMBuildUIToFP(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
 LLVMValueRef LLVMIsAConstantAggregateZero(LLVMValueRef);
+LLVMTypeRef LLVMInt1TypeInContext(LLVMContextRef);
 }
 
 static unsigned foldIntegerSampleOffsets(LLVMModuleRef module) {
@@ -1017,10 +1022,12 @@ static unsigned foldIntegerSampleOffsets(LLVMModuleRef module) {
     if (setting && !strcmp(setting, "0")) return 0;
     LLVMContextRef context = LLVMGetModuleContext(module);
     LLVMTypeRef i32 = LLVMInt32TypeInContext(context), f32 = LLVMFloatTypeInContext(context);
-    static const struct { const char *prefix, *size; unsigned dims, coordIndex, offsetIndex; } kKinds[] = {
-        {"air.sample_texture_2d.", "texture_2d", 2, 2, 4},              // tex, sampler, coord, i1, offset, i1 lod, float, i32
-        {"air.sample_texture_2d_array.", "texture_2d_array", 2, 2, 5},  // ..., coord, i32 layer, i1, offset, ...
-        {"air.sample_texture_3d.", "texture_3d", 3, 2, 4},
+    static const struct { const char *prefix, *size; unsigned dims, coordIndex, offsetIndex; bool gather; } kKinds[] = {
+        {"air.sample_texture_2d.", "texture_2d", 2, 2, 4, false},              // tex, sampler, coord, i1, offset, i1 lod, float, i32
+        {"air.sample_texture_2d_array.", "texture_2d_array", 2, 2, 5, false},  // ..., coord, i32 layer, i1, offset, ...
+        {"air.sample_texture_3d.", "texture_3d", 3, 2, 4, false},
+        {"air.gather_texture_2d.", "texture_2d", 2, 2, 4, true},               // tex, sampler, coord, i1, offset, i32 component, i32
+        {"air.gather_texture_2d_array.", "texture_2d_array", 2, 2, 5, true},   // ..., coord, i32 layer, i1, offset, ...
     };
     static const char *const kSizes[3] = {"width", "height", "depth"};
     LLVMBuilderRef b = nullptr;
@@ -1036,9 +1043,10 @@ static unsigned foldIntegerSampleOffsets(LLVMModuleRef module) {
             for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u)) calls.push_back(LLVMGetUser(u));
             for (LLVMValueRef call : calls) {
                 int n = LLVMGetNumOperands(call);  // arguments, then the callee
-                if (!LLVMIsACallInst(call) || n != (int)kind.offsetIndex + 5 || LLVMGetOperand(call, n - 1) != f) continue;
+                if (!LLVMIsACallInst(call) || n != (int)kind.offsetIndex + (kind.gather ? 4 : 5) || LLVMGetOperand(call, n - 1) != f) continue;
                 LLVMValueRef offset = LLVMGetOperand(call, kind.offsetIndex), coord = LLVMGetOperand(call, kind.coordIndex);
-                LLVMValueRef hasLevel = LLVMGetOperand(call, kind.offsetIndex + 1), level = LLVMGetOperand(call, kind.offsetIndex + 2);
+                LLVMValueRef hasLevel = kind.gather ? LLVMConstInt(LLVMInt1TypeInContext(context), 0, false) : LLVMGetOperand(call, kind.offsetIndex + 1);
+                LLVMValueRef level = kind.gather ? nullptr : LLVMGetOperand(call, kind.offsetIndex + 2);
                 if (LLVMIsAConstantAggregateZero(offset) || lanes(LLVMTypeOf(offset)) != kind.dims || lanes(LLVMTypeOf(coord)) != kind.dims ||
                     !LLVMIsAConstantInt(hasLevel))
                     continue;
@@ -1137,6 +1145,193 @@ static unsigned fixSamplerStateWords(LLVMModuleRef module) {
     return fixed;
 }
 
+// ---- explicit LODs in compute kernels ------------------------------------------------------------------------------
+// Samplers in compute kernels on Haswell blend between mip levels only in the middle quarter of each step: with a linear
+// mip filter, level n + f reads level n for f <= 0.375 and level n + 1 for f >= 0.625, and blends linearly in between
+// (weight (f - 0.375) * 4). Vertex and fragment functions blend over the whole step, and the sampler state's
+// TrilinearFilterQuality (0, full) changes nothing. So in compute kernels an explicit level with a fraction becomes
+// n + 0.375 + f / 4, which gives weight f. A nearest mip filter still picks the same level (f < 0.5 stays below the
+// middle), and whole levels are left alone (whether the min or mag filter applies depends on LOD > 0). Gradients in
+// compute kernels blend the same way and are left as they are: their LOD would have to be computed in the shader.
+// Modules can reach the pass manager twice, so remapped calls are marked (!intel.level_remapped). INTEL_COMPUTE_TRILINEAR_FIX=0
+// turns it off.
+extern "C" {
+LLVMValueRef LLVMBuildFSub(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildFMul(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+unsigned LLVMGetMDKindIDInContext(LLVMContextRef, const char *, unsigned);
+LLVMValueRef LLVMGetMetadata(LLVMValueRef, unsigned);
+void LLVMSetMetadata(LLVMValueRef, unsigned, LLVMValueRef);
+}
+
+static unsigned remapComputeLevels(LLVMModuleRef module) {
+    const char *setting = getenv("INTEL_COMPUTE_TRILINEAR_FIX");
+    if ((setting && !strcmp(setting, "0")) || !LLVMGetNamedMetadataNumOperands(module, "air.kernel")) return 0;
+    enum { kRealOEQ = 1, kRealOGT = 2 };  // LLVMRealPredicate
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context), f32 = LLVMFloatTypeInContext(context);
+    static const char kMark[] = "intel.level_remapped";
+    unsigned mark = LLVMGetMDKindIDInContext(context, kMark, sizeof kMark - 1);
+    LLVMValueRef marker = LLVMMDNodeInContext(context, nullptr, 0);
+    LLVMBuilderRef b = nullptr;
+    unsigned fixed = 0;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
+        const char *name = LLVMGetValueName(f);
+        if (strncmp(name, "air.sample_", 11) || strstr(name, "_grad")) continue;
+        std::vector<LLVMValueRef> calls;
+        for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u)) calls.push_back(LLVMGetUser(u));
+        for (LLVMValueRef call : calls) {
+            int n = LLVMGetNumOperands(call);  // arguments (..., i1 level flag, float level or bias, i32), then the callee
+            if (!LLVMIsACallInst(call) || n < 5 || LLVMGetOperand(call, n - 1) != f || LLVMGetMetadata(call, mark)) continue;
+            LLVMValueRef flag = LLVMGetOperand(call, n - 4), level = LLVMGetOperand(call, n - 3);
+            if (!LLVMIsAConstantInt(flag) || LLVMConstIntGetZExtValue(flag) != 1 || LLVMTypeOf(level) != f32) continue;
+            LLVMValueRef mapped;
+            if (LLVMIsAConstantFP(level)) {
+                int lossy = 0;
+                double l = LLVMConstRealGetDouble(level, &lossy), whole = floor(l);
+                if (l == whole) continue;
+                mapped = LLVMConstReal(f32, whole + 0.375 + (l - whole) * 0.25);
+            } else {
+                if (!b) b = LLVMCreateBuilderInContext(context);
+                LLVMPositionBuilderBefore(b, call);
+                LLVMValueRef truncated = LLVMBuildSIToFP(b, LLVMBuildFPToSI(b, level, i32, ""), f32, "");
+                LLVMValueRef whole = LLVMBuildSelect(b, LLVMBuildFCmp(b, kRealOGT, truncated, level, ""),
+                                                     LLVMBuildFSub(b, truncated, LLVMConstReal(f32, 1.0), ""), truncated, "");  // floor
+                LLVMValueRef fraction = LLVMBuildFSub(b, level, whole, "");
+                LLVMValueRef middle = LLVMBuildFAdd(b, LLVMBuildFAdd(b, whole, LLVMConstReal(f32, 0.375), ""),
+                                                    LLVMBuildFMul(b, fraction, LLVMConstReal(f32, 0.25), ""), "");
+                mapped = LLVMBuildSelect(b, LLVMBuildFCmp(b, kRealOEQ, fraction, LLVMConstReal(f32, 0.0), ""), level, middle, "");
+            }
+            LLVMSetOperand(call, n - 3, mapped);
+            LLVMSetMetadata(call, mark, marker);
+            fixed++;
+        }
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
+// ---- threadgroup bools ---------------------------------------------------------------------------------------------
+// LLVM shrinks a threadgroup bool to an i1 global, and the back end can't select loads and stores of i1 in threadgroup
+// memory ("Cannot select" aborts MTLCompilerService; WebKit's WebGPU workgroupUniformLoad on bool, a10). Such globals
+// become i8: loads compare with 0, stored values are zero-extended, and both are volatile, or the back end's GlobalOpt
+// shrinks the global back to i1 (it only ever holds 0 or 1). INTEL_THREADGROUP_BOOL_FIX=0 turns it off.
+extern "C" {
+LLVMValueRef LLVMGetFirstGlobal(LLVMModuleRef);
+LLVMValueRef LLVMGetNextGlobal(LLVMValueRef);
+LLVMValueRef LLVMIsAStoreInst(LLVMValueRef);
+LLVMTypeRef LLVMInt8TypeInContext(LLVMContextRef);
+void LLVMSetVolatile(LLVMValueRef, int);
+}
+
+static unsigned widenThreadgroupBools(LLVMModuleRef module) {
+    const char *setting = getenv("INTEL_THREADGROUP_BOOL_FIX");
+    if (setting && !strcmp(setting, "0")) return 0;
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMTypeRef i1 = LLVMInt1TypeInContext(context), i8 = LLVMInt8TypeInContext(context);
+    std::vector<LLVMValueRef> globals;
+    for (LLVMValueRef g = LLVMGetFirstGlobal(module); g; g = LLVMGetNextGlobal(g))
+        if (LLVMGetPointerAddressSpace(LLVMTypeOf(g)) == 3 && LLVMGetElementType(LLVMTypeOf(g)) == i1) globals.push_back(g);
+    LLVMBuilderRef b = nullptr;
+    unsigned fixed = 0;
+    for (LLVMValueRef g : globals) {
+        std::vector<LLVMValueRef> users;
+        bool plain = true;  // only loads from it and stores to it
+        for (LLVMUseRef u = LLVMGetFirstUse(g); u; u = LLVMGetNextUse(u)) {
+            LLVMValueRef user = LLVMGetUser(u);
+            if (LLVMIsALoadInst(user) || (LLVMIsAStoreInst(user) && LLVMGetOperand(user, 1) == g && LLVMGetOperand(user, 0) != g)) users.push_back(user);
+            else plain = false;
+        }
+        if (!plain) continue;
+        std::string name = LLVMGetValueName(g);
+        LLVMValueRef wide = LLVMAddGlobalInAddressSpace(module, i8, (name + ".i8").c_str(), 3);
+        LLVMValueRef init = LLVMGetInitializer(g);
+        LLVMSetInitializer(wide, init && LLVMIsAConstantInt(init) ? LLVMConstInt(i8, LLVMConstIntGetZExtValue(init), false) : LLVMGetUndef(i8));
+        LLVMSetLinkage(wide, LLVMGetLinkage(g));
+        LLVMSetAlignment(wide, 1);
+        if (!b) b = LLVMCreateBuilderInContext(context);
+        for (LLVMValueRef user : users) {
+            LLVMPositionBuilderBefore(b, user);
+            if (LLVMIsALoadInst(user)) {
+                // != 0 rather than a truncation, which the DAG combiner turns back into an i1 load
+                LLVMValueRef load = LLVMBuildLoad(b, wide, "");
+                LLVMSetVolatile(load, 1);
+                LLVMValueRef value = LLVMBuildICmp(b, 33 /* LLVMIntNE */, load, LLVMConstInt(i8, 0, false), "");
+                LLVMReplaceAllUsesWith(user, value);
+            } else {
+                LLVMSetVolatile(LLVMBuildStore(b, LLVMBuildZExt(b, LLVMGetOperand(user, 0), i8, ""), wide), 1);
+            }
+            LLVMInstructionEraseFromParent(user);
+        }
+        LLVMDeleteGlobal(g);
+        LLVMSetValueName(wide, name.c_str());
+        fixed++;
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
+// ---- over-aligned byte accesses to private memory ------------------------------------------------------------------
+// A byte or halfword load from private (stack) memory with an alignment of 4 or more, as LLVM gives the first small field
+// of a 16-byte-aligned struct in a dynamically indexed private array (`S w[2]; ... w[s].count`, EEVEE's G-buffer writer,
+// c03), has no instruction pattern in the back end ("Cannot select: load ... anyext from i8", align 16), which aborts
+// MTLCompilerService. Lowering the alignment doesn't last (the optimizer infers it again from the alloca), so such an
+// access becomes one of its 32-bit word, which starts at the pointer: a load and a truncation, or a read-modify-write
+// of the word for a store. They are volatile, or instruction selection narrows them back. INTEL_PRIVATE_ALIGN_FIX=0
+// turns it off.
+extern "C" {
+unsigned LLVMGetAlignment(LLVMValueRef);
+LLVMValueRef LLVMBuildBitCast(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
+LLVMValueRef LLVMBuildOr(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildAnd(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+LLVMTypeRef LLVMPointerType(LLVMTypeRef, unsigned);
+}
+
+static unsigned wordPrivateSubwords(LLVMModuleRef module) {
+    const char *setting = getenv("INTEL_PRIVATE_ALIGN_FIX");
+    if (setting && !strcmp(setting, "0")) return 0;
+    enum { kIntegerKind = 8 };  // LLVMTypeKind
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context), i32Pointer = LLVMPointerType(i32, 0);
+    std::vector<LLVMValueRef> accesses;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                bool load = LLVMIsALoadInst(inst), store = !load && LLVMIsAStoreInst(inst);
+                if (!load && !store) continue;
+                LLVMValueRef pointer = LLVMGetOperand(inst, load ? 0 : 1);
+                LLVMTypeRef type = load ? LLVMTypeOf(inst) : LLVMTypeOf(LLVMGetOperand(inst, 0));
+                if (LLVMGetPointerAddressSpace(LLVMTypeOf(pointer)) != 0 || LLVMGetTypeKind(type) != kIntegerKind || !subwordBits(type) ||
+                    LLVMGetAlignment(inst) < 4)
+                    continue;
+                accesses.push_back(inst);
+            }
+    if (accesses.empty()) return 0;
+    LLVMBuilderRef b = LLVMCreateBuilderInContext(context);
+    for (LLVMValueRef inst : accesses) {
+        LLVMPositionBuilderBefore(b, inst);
+        bool load = LLVMIsALoadInst(inst);
+        LLVMValueRef pointer = LLVMGetOperand(inst, load ? 0 : 1);
+        LLVMTypeRef type = load ? LLVMTypeOf(inst) : LLVMTypeOf(LLVMGetOperand(inst, 0));
+        LLVMValueRef word = LLVMBuildBitCast(b, pointer, i32Pointer, "");
+        LLVMValueRef old = LLVMBuildLoad(b, word, "");
+        LLVMSetVolatile(old, 1);
+        LLVMSetAlignment(old, 4);
+        if (load) {
+            LLVMReplaceAllUsesWith(inst, LLVMBuildTrunc(b, old, type, ""));
+        } else {
+            unsigned long long mask = subwordBits(type) == 8 ? 0xffu : 0xffffu;
+            LLVMValueRef kept = LLVMBuildAnd(b, old, LLVMConstInt(i32, ~mask & 0xffffffffu, false), "");
+            LLVMValueRef merged = LLVMBuildOr(b, kept, LLVMBuildZExt(b, LLVMGetOperand(inst, 0), i32, ""), "");
+            LLVMValueRef put = LLVMBuildStore(b, merged, word);
+            LLVMSetVolatile(put, 1);
+            LLVMSetAlignment(put, 4);
+        }
+        LLVMInstructionEraseFromParent(inst);
+    }
+    LLVMDisposeBuilder(b);
+    return (unsigned)accesses.size();
+}
+
 static int hookedRun(void *self, LLVMModuleRef module) {
     pthread_mutex_lock(&installLock);
     installIntoPlugin(false);  // test process: the plugin was dlopened after we were inserted
@@ -1163,6 +1358,12 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] %u integer texture sample(s): texel offset moved into the coordinates\n", n);
         n = fixSamplerStateWords(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u constexpr sampler(s) in the [2 x i64] form rewritten as i64\n", n);
+        n = remapComputeLevels(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u explicit level(s) in a compute kernel remapped for the sampler's mip blend\n", n);
+        n = widenThreadgroupBools(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u threadgroup bool(s) widened to i8\n", n);
+        n = wordPrivateSubwords(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u aligned byte/halfword access(es) to private memory done on the 32-bit word\n", n);
         if (n && getenv("INTELTEX_DUMP_HANDLES")) {  // debugging: the module after that rewrite
             static int serial;
             char path[1024];

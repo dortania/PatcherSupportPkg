@@ -1,6 +1,7 @@
 // a10-threadgroup-bool (AMD adapter): a threadgroup bool must read back what was stored. LLVM shrinks the variable to an i1
 // global and libAMDIL902 miscompiles zext of its load, `iand load, r` with r holding an unrelated 0, so it always reads as false.
 // (WebGPU CTS builtin,workgroupUniformLoad:types, type="bool", in Safari; the shader here is the one WebKit generates.)
+// The 3802 Intel compiler can't select the i1 loads and stores at all and aborts; the Intel adapter widens the global to i8.
 // Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
 #import "repro.h"
 

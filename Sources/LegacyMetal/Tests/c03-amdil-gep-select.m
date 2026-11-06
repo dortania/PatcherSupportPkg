@@ -4,8 +4,9 @@
 // of every element + selects on the index, but builds all of them at the GEP: when LLVM computed &w[s].count once
 // and reused it for every access, loads after the stores read the values from before them (here closure_len came out
 // 0, or whatever an earlier wavefront left in that scratch slot). The fix moves the pass's IRBuilder to each load.
-// (Found while trying to reproduce a03 with a small shader: the fragment-shader variant of this kernel. With the
-// Intel GPU its compile hits an internal compiler error, a different problem not looked at yet.)
+// (Found while trying to reproduce a03 with a small shader: the fragment-shader variant of this kernel.) The 3802 Intel
+// compiler can't select the byte loads of normal_len (align 16, from the struct's alignment) and aborts; the Intel
+// adapter does those accesses on their 32-bit word (INTEL_PRIVATE_ALIGN_FIX).
 // Stock OCLP: FAIL. Fixed (patched libAMDIL902): PASS. Argument: GPU name substring (default: AMD).
 #import "repro.h"
 
