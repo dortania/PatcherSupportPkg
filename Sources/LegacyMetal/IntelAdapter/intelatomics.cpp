@@ -26,7 +26,8 @@
 // front ends ([2 x i64]) rewritten in the i64 form the back end reads (it crashes on the array), and explicit levels in
 // compute kernels remapped so the sampler's narrow mip blend there comes out linear, threadgroup bools widened to i8
 // (the back end can't select i1 loads and stores there), aligned subword accesses to private memory done on their word,
-// and float3 vertex inputs read through fmax (a bare copy to an output reads an unset register).
+// float3 vertex inputs read through fmax (a bare copy to an output reads an unset register), and variable-index accesses to
+// small private arrays done at constant indices (the back end addresses such arrays two incompatible ways).
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
@@ -1402,6 +1403,103 @@ static unsigned fixVertexFloat3Inputs(LLVMModuleRef module) {
     return fixed;
 }
 
+// ---- dynamically indexed private arrays ----------------------------------------------------------------------------
+// A private array inside a struct (`struct { int v[3]; } a; ... a.v[i]`, the way ANGLE declares every GLSL array, as
+// metal::array) that is indexed with a variable becomes an indexable register array (DCL_INDEXABLETEMP x0[N]) in vertex
+// and fragment functions, and the back end addresses it two ways: stores at constant offsets go to raw scratch with byte
+// addresses (element 2 of an int array lands in x0[0].z) while variable-index accesses use x0[i].x. Elements written one
+// way and read the other come back 0 or stale (WebGL unary-minus-operator-in-dynamic-loop, dEQP shaderstruct
+// array_member_dynamic_index, shaderindexing). Each load or store through a GEP into an alloca with one variable index over
+// an array of at most 16 elements becomes accesses at every constant index plus selects (a load: one load per element and
+// a select chain; a store: for each element, store select(i == k, value, old)), so only constant offsets remain. Out of
+// range indices read the last element and store nothing. Only loads and stores of numbers and vectors of them: arrays of
+// textures or samplers are left alone (the back end can't pick a handle with a select). INTEL_PRIVATE_ARRAY_FIX=0 turns
+// it off.
+extern "C" {
+LLVMValueRef LLVMBuildGEP(LLVMBuilderRef, LLVMValueRef, LLVMValueRef *, unsigned, const char *);
+LLVMValueRef LLVMIsAGetElementPtrInst(LLVMValueRef);
+LLVMTypeRef LLVMStructGetTypeAtIndex(LLVMTypeRef, unsigned);
+}
+
+static LLVMValueRef allocaBase(LLVMValueRef pointer) {  // the alloca a pointer is derived from by GEPs and bitcasts, or null
+    for (int depth = 0; pointer && depth < 8; depth++) {
+        if (LLVMIsAAllocaInst(pointer)) return pointer;
+        if (LLVMIsAGetElementPtrInst(pointer) || LLVMIsABitCastInst(pointer)) pointer = LLVMGetOperand(pointer, 0);
+        else return nullptr;
+    }
+    return nullptr;
+}
+
+static unsigned selectPrivateArrayIndices(LLVMModuleRef module) {
+    const char *setting = getenv("INTEL_PRIVATE_ARRAY_FIX");
+    if (setting && !strcmp(setting, "0")) return 0;
+    enum { kArrayKind = 11, kStructKind = 10, kPointerKind = 12, kIntEQ = 32, kMaxElements = 16 };
+    std::vector<LLVMValueRef> geps;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst))
+                if (LLVMIsAGetElementPtrInst(inst) && allocaBase(LLVMGetOperand(inst, 0))) geps.push_back(inst);
+    LLVMBuilderRef b = nullptr;
+    unsigned fixed = 0;
+    for (LLVMValueRef gep : geps) {
+        int n = LLVMGetNumOperands(gep);  // pointer, indices
+        int dynamic = -1;
+        bool usable = true;
+        for (int i = 1; i < n && usable; i++)
+            if (!LLVMIsAConstantInt(LLVMGetOperand(gep, i))) usable = dynamic < 0, dynamic = i;
+        if (!usable || dynamic < 2) continue;  // exactly one variable index, and not the first (pointer-step) one
+        // the type the variable index steps through: walk the pointee type with the indices before it
+        LLVMTypeRef t = LLVMGetElementType(LLVMTypeOf(LLVMGetOperand(gep, 0)));
+        for (int i = 2; i < dynamic && t; i++) {
+            if (LLVMGetTypeKind(t) == kArrayKind) t = LLVMGetElementType(t);
+            else if (LLVMGetTypeKind(t) == kStructKind) t = LLVMStructGetTypeAtIndex(t, (unsigned)LLVMConstIntGetZExtValue(LLVMGetOperand(gep, i)));
+            else t = nullptr;
+        }
+        if (!t || LLVMGetTypeKind(t) != kArrayKind || LLVMGetArrayLength(t) < 2 || LLVMGetArrayLength(t) > kMaxElements) continue;
+        unsigned length = LLVMGetArrayLength(t);
+        std::vector<LLVMValueRef> users;
+        for (LLVMUseRef u = LLVMGetFirstUse(gep); u && usable; u = LLVMGetNextUse(u)) {
+            LLVMValueRef user = LLVMGetUser(u);
+            bool load = LLVMIsALoadInst(user), store = !load && LLVMIsAStoreInst(user) && LLVMGetOperand(user, 1) == gep && LLVMGetOperand(user, 0) != gep;
+            // plain data only: texture and sampler handles picked by a select break the back end (a05)
+            LLVMTypeRef value = load ? LLVMTypeOf(user) : store ? LLVMTypeOf(LLVMGetOperand(user, 0)) : nullptr;
+            int kind = value ? LLVMGetTypeKind(scalarOf(value)) : -1;
+            if (value && (kind == kTypeKindInteger || kind == 1 /* half */ || kind == 2 /* float */ || kind == 3 /* double */)) users.push_back(user);
+            else usable = false;
+        }
+        if (!usable || users.empty()) continue;
+        if (!b) b = LLVMCreateBuilderInContext(LLVMGetModuleContext(module));
+        LLVMValueRef index = LLVMGetOperand(gep, dynamic);
+        LLVMTypeRef indexType = LLVMTypeOf(index);
+        for (LLVMValueRef user : users) {
+            LLVMPositionBuilderBefore(b, user);
+            std::vector<LLVMValueRef> indices(n - 1), slots(length);
+            for (int i = 1; i < n; i++) indices[i - 1] = LLVMGetOperand(gep, i);
+            for (unsigned k = 0; k < length; k++) {
+                indices[dynamic - 1] = LLVMConstInt(indexType, k, false);
+                slots[k] = LLVMBuildGEP(b, LLVMGetOperand(gep, 0), indices.data(), n - 1, "");
+            }
+            if (LLVMIsALoadInst(user)) {
+                LLVMValueRef value = LLVMBuildLoad(b, slots[length - 1], "");
+                for (int k = (int)length - 2; k >= 0; k--)
+                    value = LLVMBuildSelect(b, LLVMBuildICmp(b, kIntEQ, index, LLVMConstInt(indexType, k, false), ""), LLVMBuildLoad(b, slots[k], ""), value, "");
+                LLVMReplaceAllUsesWith(user, value);
+            } else {
+                LLVMValueRef value = LLVMGetOperand(user, 0);
+                for (unsigned k = 0; k < length; k++) {
+                    LLVMValueRef old = LLVMBuildLoad(b, slots[k], "");
+                    LLVMBuildStore(b, LLVMBuildSelect(b, LLVMBuildICmp(b, kIntEQ, index, LLVMConstInt(indexType, k, false), ""), value, old, ""), slots[k]);
+                }
+            }
+            LLVMInstructionEraseFromParent(user);
+            fixed++;
+        }
+        if (!LLVMGetFirstUse(gep)) LLVMInstructionEraseFromParent(gep);
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
 static int hookedRun(void *self, LLVMModuleRef module) {
     pthread_mutex_lock(&installLock);
     installIntoPlugin(false);  // test process: the plugin was dlopened after we were inserted
@@ -1436,6 +1534,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] %u aligned byte/halfword access(es) to private memory done on the 32-bit word\n", n);
         n = fixVertexFloat3Inputs(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u float3 vertex input(s) read through fmax\n", n);
+        n = selectPrivateArrayIndices(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u variable-index private array access(es) done at constant indices\n", n);
         if (n && getenv("INTELTEX_DUMP_HANDLES")) {  // debugging: the module after that rewrite
             static int serial;
             char path[1024];

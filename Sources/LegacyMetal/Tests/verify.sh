@@ -12,8 +12,9 @@
 #                                          AMD_HANDLE_FIX=0 + INTEL_HANDLE_FIX=0, AMD_NAN_FIX=0, AMD_LDEXP_FIX=0,
 #                                          AMD_GATHER_FIX=0 + INTEL_INTEGER_OFFSET_FIX=0,
 #                                          AMD_CUBE_ARRAY_FIX=0, AMD_LDS_BOOL_FIX=0 + INTEL_THREADGROUP_BOOL_FIX=0)
-#                      i02-i06             the Intel adapter's switch (INTEL_SIGNED_SUBWORD_FIX=0, INTEL_COMPARE_BIAS_FIX=0,
-#                                          INTEL_INTEGER_OFFSET_FIX=0, INTEL_SAMPLER_STATE_FIX=0, INTEL_VERTEX_FLOAT3_FIX=0)
+#                      i02-i07             the Intel adapter's switch (INTEL_SIGNED_SUBWORD_FIX=0, INTEL_COMPARE_BIAS_FIX=0,
+#                                          INTEL_INTEGER_OFFSET_FIX=0, INTEL_SAMPLER_STATE_FIX=0, INTEL_VERTEX_FLOAT3_FIX=0,
+#                                          INTEL_PRIVATE_ARRAY_FIX=0)
 #                      c01, c02            the stock libAMDIL902
 #                      c03                 libAMDIL902 without patch 4 and INTEL_PRIVATE_ALIGN_FIX=0
 #                      c04                 libAMDIL902 without patch 5
@@ -69,7 +70,7 @@ s24-intel-narrow-mip-clear:shim s31-angle-family-one:shim s32-intel-depth-stenci
 a01-texture-atomics@Intel:adapter a02-si-smrd-hazard:smrd a04-si-threadgroup-pointer:ldsbase
 a05-escaped-texture-pointer:handle a05-escaped-texture-pointer@Intel:handle a06-fast-math-nan-compare:nan a07-half-ldexp:ldexp a08-integer-gather:gather a09-cube-array-index:cubearray a10-threadgroup-bool:ldsbool
 c01-amdil-argument-buffer:stock c02-amdil-color-input:stock c03-amdil-gep-select:patch3 c04-amdil-struct-type-map:patch4
-i01-intel-array-struct-arg:adapter i02-intel-vertex-signed-subword:subword i03-intel-shadow-compare-bias:comparebias i04-intel-integer-texel-offset:intoffset i05-intel-constexpr-sampler:samplerstate i06-intel-vertex-float3-input:float3 r01-amd-slot8-data-segment:ldsbase"
+i01-intel-array-struct-arg:adapter i02-intel-vertex-signed-subword:subword i03-intel-shadow-compare-bias:comparebias i04-intel-integer-texel-offset:intoffset i05-intel-constexpr-sampler:samplerstate i06-intel-vertex-float3-input:float3 i07-intel-private-array-index:privatearray r01-amd-slot8-data-segment:ldsbase"
 
 [ -n "$V" ] && CASES=$(for c in $CASES; do case $c in (*@*|i*|s*) ;; (*) echo "$c" ;; esac; done)
 [ -n "$GPU" ] && CASES=$(for c in $CASES; do case $c in (*@*) ;; (*) echo "$c" ;; esac; done)
@@ -83,7 +84,7 @@ run() {  # <test[@gpu]> <removed fix or "fixed">
         bronze) inject= ;; samplemask) inject= shim=$NOOP ;; trilinear) inject= env=(INTEL_COMPUTE_TRILINEAR_FIX=0) ;; shim) shim=$NOOP ;; memoryless) shim=$NOOP env=(AMD_BRONZE_MEMORYLESS=0) ;; adapter) libs=$NOADAPTER ;; stock) libs=$STOCK ;; patch3) libs=$PATCH3 env=(INTEL_PRIVATE_ALIGN_FIX=0) ;; patch4) libs=$PATCH4 ;;
         smrd) env=(AMD_SI_HAZARD_FIX=0) ;; ldsbase) env=(AMD_LDS_BASE_FIX=0) ;; handle) env=(AMD_HANDLE_FIX=0 INTEL_HANDLE_FIX=0) ;;
         nan) env=(AMD_NAN_FIX=0) ;; ldexp) env=(AMD_LDEXP_FIX=0) ;; gather) env=(AMD_GATHER_FIX=0 INTEL_INTEGER_OFFSET_FIX=0) ;; cubearray) env=(AMD_CUBE_ARRAY_FIX=0) ;; ldsbool) env=(AMD_LDS_BOOL_FIX=0 INTEL_THREADGROUP_BOOL_FIX=0) ;;
-        subword) env=(INTEL_SIGNED_SUBWORD_FIX=0) ;; comparebias) env=(INTEL_COMPARE_BIAS_FIX=0) ;; intoffset) env=(INTEL_INTEGER_OFFSET_FIX=0) ;; samplerstate) env=(INTEL_SAMPLER_STATE_FIX=0) ;; float3) env=(INTEL_VERTEX_FLOAT3_FIX=0) ;;
+        subword) env=(INTEL_SIGNED_SUBWORD_FIX=0) ;; comparebias) env=(INTEL_COMPARE_BIAS_FIX=0) ;; intoffset) env=(INTEL_INTEGER_OFFSET_FIX=0) ;; samplerstate) env=(INTEL_SAMPLER_STATE_FIX=0) ;; float3) env=(INTEL_VERTEX_FLOAT3_FIX=0) ;; privatearray) env=(INTEL_PRIVATE_ARRAY_FIX=0) ;;
     esac
     # s13's fix (item 25) works in MTLCompilerService, which gets the shim under test this way (i05's metallib needs it too)
     [ "$t" = s13-new-air-metallib ] || [ "$t" = i05-intel-constexpr-sampler ] && env+=(__XPC_DYLD_INSERT_LIBRARIES=$shim)
