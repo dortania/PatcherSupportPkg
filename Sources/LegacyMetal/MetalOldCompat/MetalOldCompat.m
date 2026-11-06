@@ -42,6 +42,9 @@
 //      nearest samplers get programmed instead of seamless cube addressing
 //  31. LOD clamps passed to the 12.x Intel driver's encoders (setFragmentSamplerState:lodMinClamp:lodMaxClamp:atIndex: and
 //      the like) wrap modulo 16 (ANGLE's 1000 reads as 8: WebGL never sampled a mip level above 8): clamped to [0, 15.996]
+//  32. texture views with a swizzle on the 12.x Intel driver (nil: family 1 has no swizzle; Dawn, told the iGPU is family 2
+//      by item 11, makes every depth/stencil view with one and loses the device): a plain view where the swizzle changes
+//      nothing a shader can see
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -1455,6 +1458,68 @@ static void encoderLodClamps(void) {
     }
 }
 
+// 32. The 12.x Intel driver returns nil from newTextureViewWithPixelFormat:textureType:levels:slices:swizzle: (family 1 has
+// no texture swizzle). Item 11 tells Chromium that a lone Intel iGPU is family 2, which Dawn (WebGPU) takes to mean
+// swizzled views work, and Dawn makes every depth/stencil view it needs (a stencil-only view of Depth32Float_Stencil8,
+// which backs stencil8; depth textures bound to shaders) with the swizzle (R, 0, 0, 1): nil, and the device is lost
+// ("Failed to create MTLTexture view"). ANGLE is told not to use swizzles (item 11). Where the driver says nil and the
+// swizzle changes nothing a shader can see, the view is made without it: the identity; a format's own channels (R001 for
+// one-channel formats, RG01 for two); and R001 for depth and stencil formats, which shaders read in R only (sampling
+// one as float, G, B and A then come from the driver instead of 0, 0, 1). Other swizzles still get nil.
+// MTLSHIM_SWIZZLE_VIEW=0 turns it off. Test: s36.
+typedef id (*SwizzleViewIMP)(id, SEL, MTLPixelFormat, MTLTextureType, NSRange, NSRange, MTLTextureSwizzleChannels);
+static SwizzleViewIMP origIGSwizzleView;
+
+static int channelCount(MTLPixelFormat f) {  // 1, 2, or 0 (other / not known)
+    switch (f) {
+        case MTLPixelFormatA8Unorm: return 0;
+        case MTLPixelFormatR8Unorm: case MTLPixelFormatR8Unorm_sRGB: case MTLPixelFormatR8Snorm: case MTLPixelFormatR8Uint: case MTLPixelFormatR8Sint:
+        case MTLPixelFormatR16Unorm: case MTLPixelFormatR16Snorm: case MTLPixelFormatR16Uint: case MTLPixelFormatR16Sint: case MTLPixelFormatR16Float:
+        case MTLPixelFormatR32Uint: case MTLPixelFormatR32Sint: case MTLPixelFormatR32Float:
+            return 1;
+        case MTLPixelFormatRG8Unorm: case MTLPixelFormatRG8Unorm_sRGB: case MTLPixelFormatRG8Snorm: case MTLPixelFormatRG8Uint: case MTLPixelFormatRG8Sint:
+        case MTLPixelFormatRG16Unorm: case MTLPixelFormatRG16Snorm: case MTLPixelFormatRG16Uint: case MTLPixelFormatRG16Sint: case MTLPixelFormatRG16Float:
+        case MTLPixelFormatRG32Uint: case MTLPixelFormatRG32Sint: case MTLPixelFormatRG32Float:
+            return 2;
+        default:
+            return 0;
+    }
+}
+static BOOL depthOrStencil(MTLPixelFormat f) {
+    switch (f) {
+        case MTLPixelFormatDepth16Unorm: case MTLPixelFormatDepth32Float: case MTLPixelFormatStencil8: case MTLPixelFormatDepth24Unorm_Stencil8:
+        case MTLPixelFormatDepth32Float_Stencil8: case MTLPixelFormatX32_Stencil8: case MTLPixelFormatX24_Stencil8:
+            return YES;
+        default:
+            return NO;
+    }
+}
+static BOOL swizzleIs(MTLTextureSwizzleChannels s, MTLTextureSwizzle r, MTLTextureSwizzle g, MTLTextureSwizzle b, MTLTextureSwizzle a) {
+    return s.red == r && s.green == g && s.blue == b && s.alpha == a;
+}
+static id igSwizzleView(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices, MTLTextureSwizzleChannels swizzle) {
+    id view = origIGSwizzleView(self, _cmd, format, type, levels, slices, swizzle);
+    if (view) return view;
+    int channels = channelCount(format);
+    BOOL r001 = swizzleIs(swizzle, MTLTextureSwizzleRed, MTLTextureSwizzleZero, MTLTextureSwizzleZero, MTLTextureSwizzleOne);
+    BOOL harmless = swizzleIs(swizzle, MTLTextureSwizzleRed, MTLTextureSwizzleGreen, MTLTextureSwizzleBlue, MTLTextureSwizzleAlpha) ||
+                    (r001 && (channels == 1 || depthOrStencil(format))) ||
+                    (channels == 2 && swizzleIs(swizzle, MTLTextureSwizzleRed, MTLTextureSwizzleGreen, MTLTextureSwizzleZero, MTLTextureSwizzleOne));
+    if (!harmless) return nil;
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] swizzled texture view: made without the swizzle\n");
+    return ((id (*)(id, SEL, MTLPixelFormat, MTLTextureType, NSRange, NSRange))objc_msgSend)(
+        self, @selector(newTextureViewWithPixelFormat:textureType:levels:slices:), format, type, levels, slices);
+}
+
+static void swizzledViews(void) {
+    const char *setting = getenv("MTLSHIM_SWIZZLE_VIEW");
+    if (origIGSwizzleView || (setting && !strcmp(setting, "0")) ||
+        !definesMethod("MTLIGAccelTexture", "newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:"))
+        return;
+    origIGSwizzleView = (SwizzleViewIMP)swizzle("MTLIGAccelTexture", "newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:",
+                                                (IMP)igSwizzleView);
+}
+
 // 29. WebKit's WebGPU sets GPUMultisampleState.mask with the render pipeline descriptor's sample mask. The 12.x Intel driver
 // takes 0 to mean no mask and draws every sample, where nothing should be drawn (WebGPU CTS occlusionQuery sample_mask,
 // sampleMask=0), as the 12.5 AMD driver does (AMDBronzeCompat item 7, which only loads with the AMD driver). A bit past the
@@ -1491,6 +1556,7 @@ static void patchDriverClasses(void) {
     nilArgumentBuffers();
     nearestCubeClamp();
     encoderLodClamps();
+    swizzledViews();
     // item 29, once the Intel driver is in (WebKit's processes are named by then)
     if (!origSetSampleMask && !strncmp(getprogname(), "com.apple.WebKit", 16) && definesMethod("MTLRenderPipelineDescriptorInternal", "setSampleMask:"))
         origSetSampleMask = (SetSampleMaskIMP)swizzle("MTLRenderPipelineDescriptorInternal", "setSampleMask:", (IMP)compatSetSampleMask);
