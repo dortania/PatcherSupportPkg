@@ -1,6 +1,7 @@
 // s30-amd-webkit-sample-mask (AMDBronzeCompat item 7): WebKit's WebGPU sets GPUMultisampleState.mask with the render pipeline
 // descriptor's sample mask. The 12.5 AMD driver takes 0 to mean no mask and draws every sample, where nothing should be drawn
-// (WebGPU CTS occlusionQuery sample_mask, sampleMask=0). The fix only applies in WebKit's processes, so this calls itself one
+// (WebGPU CTS occlusionQuery sample_mask, sampleMask=0); so does the 12.x Intel driver (MetalOldCompat item 29). The fixes
+// only apply in WebKit's processes, so this calls itself one
 // before Metal loads. It draws a full-screen triangle with mask 0 and checks no sample is counted or written, then checks that
 // mask 1 still draws one sample per pixel.
 // Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).

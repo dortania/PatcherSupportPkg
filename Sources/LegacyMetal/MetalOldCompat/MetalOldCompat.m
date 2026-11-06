@@ -37,6 +37,7 @@
 //      render pass
 //  28. nil buffers encoded into argument buffers on the 12.x Intel driver (a null dereference; Blender's Cycles): the
 //      slot cleared instead
+//  29. a sample mask of 0 from WebKit's WebGPU on the 12.x Intel driver (every sample drawn): a mask that covers none
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -1359,6 +1360,17 @@ static void nilArgumentBuffers(void) {
     origIGArgSetBuffers = (ArgSetBuffersIMP)swizzle(kClass, "setBuffers:offsets:withRange:", (IMP)igArgSetBuffers);
 }
 
+// 29. WebKit's WebGPU sets GPUMultisampleState.mask with the render pipeline descriptor's sample mask. The 12.x Intel driver
+// takes 0 to mean no mask and draws every sample, where nothing should be drawn (WebGPU CTS occlusionQuery sample_mask,
+// sampleMask=0), as the 12.5 AMD driver does (AMDBronzeCompat item 7, which only loads with the AMD driver). A bit past the
+// last sample of any target isn't 0 to the driver and covers no sample. Only WebKit calls this SPI. Test: s30.
+typedef void (*SetSampleMaskIMP)(id, SEL, NSUInteger);
+static SetSampleMaskIMP origSetSampleMask;
+
+static void compatSetSampleMask(id self, SEL _cmd, NSUInteger mask) {
+    origSetSampleMask(self, _cmd, mask ? mask : 0x100);
+}
+
 static void patchDriverClasses(void) {
     if (patched) restoreArgumentEncoders();  // item 14: after the wrapper's initializer
     static os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
@@ -1382,6 +1394,9 @@ static void patchDriverClasses(void) {
     intelDepthWithoutHiZ();
     blitsIntoDepthStencil();
     nilArgumentBuffers();
+    // item 29, once the Intel driver is in (WebKit's processes are named by then)
+    if (!origSetSampleMask && !strncmp(getprogname(), "com.apple.WebKit", 16) && definesMethod("MTLRenderPipelineDescriptorInternal", "setSampleMask:"))
+        origSetSampleMask = (SetSampleMaskIMP)swizzle("MTLRenderPipelineDescriptorInternal", "setSampleMask:", (IMP)compatSetSampleMask);
     if (!origIGFillBuffer && definesMethod("MTLIGAccelBlitCommandEncoder", "fillBuffer:range:value:"))
         origIGFillBuffer = (FillBufferIMP)swizzle("MTLIGAccelBlitCommandEncoder", "fillBuffer:range:value:", (IMP)igFillBuffer);
     os_unfair_lock_unlock(&lock);
