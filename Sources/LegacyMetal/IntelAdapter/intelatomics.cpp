@@ -437,6 +437,31 @@ static unsigned perPixelSwizzleImmediates(std::string &s) {
     return fixed;
 }
 
+// ---- vertex IDs in indirect draws ---------------------------------------------------------------------------------
+// In drawIndexedPrimitives:...indirectBuffer: the vertex ID ([[vertex_id]], IGIL's VERTEXID input) leaves out the base
+// vertex, unless the vertex function also reads [[base_vertex]]: then its system-value constants (DCL_CONSTANTREGISTER
+// c0) list BASE_VERTEX_ID and the driver sets the draw up so VERTEXID includes it (direct draws are right either way).
+// WebGPU's drawIndexedIndirect with a base vertex drew from the wrong vertices wherever Dawn's shaders use the vertex
+// index (CTS draw:arguments, robust_access_vertex). Vertex shaders that read VERTEXID get BASE_VERTEX_ID in a free slot
+// of c0 (or a c0 of their own). Haswell only (the IGIL hook). INTEL_BASE_VERTEX_FIX=0 turns it off.
+static bool disabled(const char *setting);
+static bool declareBaseVertex(std::string &s) {
+    if (s.find("VERTEXSHADER") == std::string::npos || s.find(", VERTEXID;") == std::string::npos ||
+        s.find("BASE_VERTEX_ID") != std::string::npos || disabled("INTEL_BASE_VERTEX_FIX"))
+        return false;
+    size_t block = s.find("DCL_CONSTANTREGISTER c0 =");
+    if (block != std::string::npos) {
+        size_t end = s.find("};", block), unused = s.find("UNUSED", block);
+        if (end == std::string::npos || unused == std::string::npos || unused > end) return false;
+        s.replace(unused, 6, "BASE_VERTEX_ID");
+        return true;
+    }
+    size_t input = s.find("\tDCL_INPUT");
+    if (input == std::string::npos) return false;
+    s.insert(input, "\tDCL_CONSTANTREGISTER c0 =\n\t{\n\t\tBASE_VERTEX_ID, 0, 0,\n\t\tUNUSED, 0, 0,\n\t\tUNUSED, 0, 0,\n\t\tUNUSED, 0, 0\n\t};\n");
+    return true;
+}
+
 extern "C" void intelatomicsFixIGIL(std::string *text) {
     std::string &s = *text;
     if (getenv("INTELTEX_DUMP")) {  // debugging: the IGIL text as the back end produced it
@@ -455,6 +480,7 @@ extern "C" void intelatomicsFixIGIL(std::string *text) {
             if (FILE *f = fopen(path, "w")) { fwrite(s.data(), 1, s.size(), f); fclose(f); }
         }
     }
+    if (declareBaseVertex(s) && logging()) fprintf(stderr, "[inteltex] vertex shader reads VERTEXID: BASE_VERTEX_ID declared\n");
     if (s.find("IMM_ATOMIC_") == std::string::npos) return;
     std::vector<std::string> lines;
     for (size_t pos = 0; pos <= s.size();) {
