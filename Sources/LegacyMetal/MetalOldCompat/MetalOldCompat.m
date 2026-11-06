@@ -10,7 +10,8 @@
 //   9. MSL 3.2 requests (compiled as 3.1, the newest this stack's front end has; also the default; 3.2's coherence
 //      qualifiers rewritten to their 3.1 equivalents)
 //  10. Metal devices pinned against over-release (Chromium's GPU process)
-//  11. ANGLE (Chromium, Safari's WebKit): past ANGLE's pre-2016-Mac gate, and only family-2 GPUs (the AMD dGPU) for it
+//  11. ANGLE (Chromium, Safari's WebKit): past ANGLE's pre-2016-Mac gate, and only family-2 GPUs (the AMD dGPU) for it;
+//      on Macs whose only GPU is family 1, that GPU as family 2, with ANGLE's fallbacks for what it lacks
 //  13. Safari's ANGLE: its prebuilt internal-shader metallib (too new for this stack) replaced by the same shaders
 //      compiled from source
 //  14. argument encoders in Safari's processes (OCLP's wrapper stubs them out; WebGL 2 uniform blocks need them)
@@ -751,6 +752,13 @@ static id newLibraryData(id self, SEL _cmd, dispatch_data_t data, NSError **erro
 // which automatic graphics switching often makes the active one. For calls from a Chromium
 // framework image ("<Product> Framework") or WebKit's ANGLE: report a post-2015 model, and list only family-2 GPUs (the
 // AMD dGPU) to ANGLE, Skia Graphite and Dawn. Everything else in the process sees the real model and all GPUs.
+// Where no GPU is family 2 (Macs with only the Intel iGPU), those callers are told the iGPU supports
+// MTLGPUFamilyMac2. ANGLE built for macOS 13 or later (Chrome, Safari) asks Mac2 for its family-1 checks too, such as
+// format capabilities and the number of color attachments. Of what ANGLE then expects from family 2, the 12.x Intel
+// driver lacks three: swizzled texture views (it returns nil), stencil MSAA resolves (nothing is written) and render
+// pipelines without attachments (MetalOld's validation aborts). Before ANGLE sets up its features, they're added to
+// ANGLE_FEATURE_OVERRIDES_DISABLED (hasTextureSwizzle, hasStencilAutoResolve, allowRenderpassWithoutAttachment), which
+// ANGLE reads once, so it takes its own fallbacks. MTLSHIM_ANGLE_MAC2=0 turns this part off.
 typedef void (*EndEncodingIMP)(id, SEL);
 
 // 15. MSAA resolves on the 12.x Intel driver (Haswell / Ivy Bridge): IGRenderPass::generateResolveOptions always resolves
@@ -1350,7 +1358,7 @@ static BOOL fromChromium(const void *returnAddress) {
 }
 
 // OCLP's Tahoe wrapper makes supportsFamily: say yes to Mac2 for every GPU in WebKit's processes, when it loads. This library's
-// initializer runs first and keeps the real one.
+// initializer runs first and keeps the real one (then replaces it with compatSupportsFamily).
 static BOOL (*realSupportsFamily)(id, SEL, NSInteger);
 
 static BOOL familyTwo(const void *device) {
@@ -1381,8 +1389,6 @@ static const char *callerImage(const void *returnAddress) {
     return base ? base + 1 : info.dli_fname;
 }
 
-// ANGLE can only run on Metal where there is a family-2 GPU. Macs whose only GPU is a Haswell / Ivy Bridge iGPU (family 1)
-// keep their real model. ANGLE has no other backend there, so Chromium and Safari stay without GPU acceleration on them.
 static BOOL anyFamilyTwo(void) {
     static dispatch_once_t once;
     static BOOL any;
@@ -1394,6 +1400,38 @@ static BOOL anyFamilyTwo(void) {
     return any;
 }
 
+// Macs whose only GPU is a Haswell / Ivy Bridge iGPU (family 1): ANGLE's callers get it as family 2 (item 11).
+static BOOL familyOneAsTwo(void) {
+    static int state;  // 0 not decided yet, 1 yes, -1 no
+    if (!state) {
+        const char *setting = getenv("MTLSHIM_ANGLE_MAC2");
+        state = (setting && !strcmp(setting, "0")) || anyFamilyTwo() ? -1 : 1;
+    }
+    return state > 0;
+}
+
+// ANGLE reads this when it sets up its Metal features, which comes after its family checks and its model check.
+static void disableFeaturesFamilyOneLacks(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        static const char kLacking[] = "hasTextureSwizzle:hasStencilAutoResolve:allowRenderpassWithoutAttachment";
+        const char *set = getenv("ANGLE_FEATURE_OVERRIDES_DISABLED");
+        char *value = NULL;
+        if (set && *set && asprintf(&value, "%s:%s", set, kLacking) < 0) value = NULL;
+        setenv("ANGLE_FEATURE_OVERRIDES_DISABLED", value ? value : kLacking, 1);
+        free(value);
+        if (getenv("MTLSHIM_VERBOSE"))
+            shimLog("[mtlshim] ANGLE on a family-1 GPU: ANGLE_FEATURE_OVERRIDES_DISABLED=%s\n", getenv("ANGLE_FEATURE_OVERRIDES_DISABLED"));
+    });
+}
+
+static BOOL compatSupportsFamily(id self, SEL _cmd, NSInteger family) {
+    BOOL real = realSupportsFamily(self, _cmd, family);
+    if (real || family != MTLGPUFamilyMac2 || !fromChromium(__builtin_return_address(0)) || !familyOneAsTwo()) return real;
+    disableFeaturesFamilyOneLacks();
+    return YES;
+}
+
 static CFTypeRef compatRegistryEntryCreateCFProperty(io_registry_entry_t entry, CFStringRef key, CFAllocatorRef allocator, IOOptionBits options) {
     CFTypeRef value = IORegistryEntryCreateCFProperty(entry, key, allocator, options);
     if (getenv("MTLSHIM_VERBOSE") && key && CFStringCompare(key, CFSTR("model"), 0) == kCFCompareEqualTo)
@@ -1402,8 +1440,9 @@ static CFTypeRef compatRegistryEntryCreateCFProperty(io_registry_entry_t entry, 
         return value;
     io_name_t cls;
     if (IOObjectGetClass(entry, cls) != KERN_SUCCESS || strcmp(cls, "IOPlatformExpertDevice") || !fromChromium(__builtin_return_address(0)) ||
-        !anyFamilyTwo())
+        (!anyFamilyTwo() && !familyOneAsTwo()))
         return value;
+    if (familyOneAsTwo()) disableFeaturesFamilyOneLacks();
     static const char model[] = "MacBookPro13,3";  // past ANGLE's gate (MacBookPro >= 13,1)
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Chromium: IOPlatformExpertDevice model -> %s\n", model);
     CFRelease(value);
@@ -1715,6 +1754,7 @@ static void guardWebGPUImage(const struct mach_header *mh, intptr_t slide) {
 static void installWebKitRouting(void) {
     Method supportsFamily = class_getInstanceMethod(objc_getClass("_MTLDevice"), @selector(supportsFamily:));
     if (supportsFamily) realSupportsFamily = (BOOL (*)(id, SEL, NSInteger))method_getImplementation(supportsFamily);
+    if (supportsFamily && onMetalOld()) method_setImplementation(supportsFamily, (IMP)compatSupportsFamily);
     if (strncmp(getprogname(), "com.apple.WebKit", 16)) return;
     _dyld_register_func_for_add_image(routeWebKitImage);
     _dyld_register_func_for_add_image(guardWebGPUImage);
