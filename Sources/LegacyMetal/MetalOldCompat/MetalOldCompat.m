@@ -35,6 +35,8 @@
 //      Apple silicon gets
 //  27. blits into depth or stencil that later render passes don't see on the 12.x Intel driver: written again by a
 //      render pass
+//  28. nil buffers encoded into argument buffers on the 12.x Intel driver (a null dereference; Blender's Cycles): the
+//      slot cleared instead
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -1302,6 +1304,61 @@ static void blitsIntoDepthStencil(void) {
         origIGTextureToTextureOptions = (TextureToTextureOptionsIMP)swizzle("MTLIGAccelBlitCommandEncoder", withOptions, (IMP)igTextureToTextureOptions);
 }
 
+// 28. Argument buffers on the 12.x Intel driver are emulated (tier 1), and the emulated encoder's
+// setBuffer:offset:atIndex: and setBuffers:offsets:withRange: read the buffer's GPU address without checking for nil:
+// encoding nil into an unused slot, which Metal allows, dereferences null. Cycles (Blender 3.6's GPU renderer) does that
+// before every kernel, so a GPU render crashed Blender. A nil buffer gets a cleared slot instead (no buffer, offset 0,
+// GPU address 0), what the driver's slot holds before anything is encoded. Textures and samplers store only the object,
+// so nil is already fine there.
+typedef void (*ArgSetBufferIMP)(id, SEL, id, NSUInteger, NSUInteger);
+typedef void (*ArgSetBuffersIMP)(id, SEL, const __unsafe_unretained id *, const NSUInteger *, NSRange);
+static ArgSetBufferIMP origIGArgSetBuffer;
+static ArgSetBuffersIMP origIGArgSetBuffers;
+static ptrdiff_t igArgDestinationOffset;
+static Ivar igArgLayout;
+
+static void clearArgumentBufferSlot(id self, NSUInteger index) {
+    char *destination = *(char **)((char *)(__bridge void *)self + igArgDestinationOffset);
+    id layout = object_getIvar(self, igArgLayout);
+    if (!destination || !layout) return;  // no argument buffer set: the driver would crash on a real buffer too
+    NSUInteger offset = ((NSUInteger (*)(id, SEL, NSUInteger))objc_msgSend)(layout, sel_registerName("offsetForBuffer:"), index);
+    memset(destination + offset, 0, 3 * sizeof(uint64_t));  // buffer, offset, GPU address
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] nil buffer encoded into argument buffer slot %lu\n", (unsigned long)index);
+}
+
+static void igArgSetBuffer(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInteger index) {
+    if (buffer) origIGArgSetBuffer(self, _cmd, buffer, offset, index);
+    else clearArgumentBufferSlot(self, index);
+}
+
+static void igArgSetBuffers(id self, SEL _cmd, const __unsafe_unretained id *buffers, const NSUInteger *offsets, NSRange range) {
+    bool anyNil = false;
+    for (NSUInteger i = 0; i < range.length; i++) anyNil |= !buffers[i];
+    if (!anyNil) {
+        origIGArgSetBuffers(self, _cmd, buffers, offsets, range);
+        return;
+    }
+    for (NSUInteger i = 0; i < range.length; i++) {
+        if (buffers[i]) origIGArgSetBuffer(self, @selector(setBuffer:offset:atIndex:), buffers[i], offsets[i], range.location + i);
+        else clearArgumentBufferSlot(self, range.location + i);
+    }
+}
+
+static void nilArgumentBuffers(void) {
+    static const char *const kClass = "MTLIGEmulationIndirectArgumentEncoder";
+    Class c = objc_getClass(kClass);
+    Ivar destination = c ? class_getInstanceVariable(c, "_destination") : NULL;
+    Ivar layout = c ? class_getInstanceVariable(c, "_emulationLayout") : NULL;
+    if (origIGArgSetBuffer || !destination || !layout || strcmp(ivar_getTypeEncoding(destination), "*") ||
+        ivar_getTypeEncoding(layout)[0] != '@' || !definesMethod(kClass, "setBuffer:offset:atIndex:") ||
+        !definesMethod(kClass, "setBuffers:offsets:withRange:"))
+        return;
+    igArgDestinationOffset = ivar_getOffset(destination);
+    igArgLayout = layout;
+    origIGArgSetBuffer = (ArgSetBufferIMP)swizzle(kClass, "setBuffer:offset:atIndex:", (IMP)igArgSetBuffer);
+    origIGArgSetBuffers = (ArgSetBuffersIMP)swizzle(kClass, "setBuffers:offsets:withRange:", (IMP)igArgSetBuffers);
+}
+
 static void patchDriverClasses(void) {
     if (patched) restoreArgumentEncoders();  // item 14: after the wrapper's initializer
     static os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
@@ -1324,6 +1381,7 @@ static void patchDriverClasses(void) {
     }
     intelDepthWithoutHiZ();
     blitsIntoDepthStencil();
+    nilArgumentBuffers();
     if (!origIGFillBuffer && definesMethod("MTLIGAccelBlitCommandEncoder", "fillBuffer:range:value:"))
         origIGFillBuffer = (FillBufferIMP)swizzle("MTLIGAccelBlitCommandEncoder", "fillBuffer:range:value:", (IMP)igFillBuffer);
     os_unfair_lock_unlock(&lock);
