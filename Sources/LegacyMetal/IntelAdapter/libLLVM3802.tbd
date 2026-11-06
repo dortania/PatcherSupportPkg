@@ -27,5 +27,8 @@ exports:
                    _LLVMBuildSelect, _LLVMBuildShl, _LLVMBuildAShr, _LLVMBuildSExt, _LLVMBuildTrunc, _LLVMBuildSIToFP,
                    _LLVMBuildFDiv, _LLVMBuildFCmp, _LLVMConstReal, _LLVMConstVector, _LLVMFloatTypeInContext, _LLVMHalfTypeInContext,
                    _LLVMIsACallInst, _LLVMIntTypeInContext, _LLVMGetTypeContext, _LLVMIsAExtractElementInst, _LLVMSetOperand, _LLVMIsAConstantFP, _LLVMConstRealGetDouble, _LLVMBuildFAdd, _LLVMBuildFPToSI, _LLVMBuildUIToFP,
-                   _LLVMIsAConstantAggregateZero ]
+                   _LLVMIsAConstantAggregateZero, _LLVMGetInitializer, _LLVMSetInitializer, _LLVMAddGlobalInAddressSpace,
+                   _LLVMSetGlobalConstant, _LLVMGetLinkage, _LLVMSetLinkage, _LLVMSetAlignment, _LLVMGetPointerAddressSpace,
+                   _LLVMIsAGlobalVariable, _LLVMIsAConstantDataArray, _LLVMGetElementAsConstant, _LLVMConstBitCast,
+                   _LLVMDeleteGlobal, _LLVMSetValueName, '__ZN4llvm15ValueAsMetadata3getEPNS_5ValueE' ]
 ...

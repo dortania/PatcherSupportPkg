@@ -19,8 +19,9 @@
 // Also (compiler compatibility, not texture atomics): air.max_work_group_size dropped (the back end aborts on it),
 // air.struct_type_info dropped from array-of-struct buffer arguments (the argument-buffer emulation asserts on them),
 // signed i8/i16 conversions in vertex functions done with shifts of the 32-bit word (the back end can read the top lane
-// from the wrong word), the LOD bias dropped from depth comparisons (the back end can't compile them), and texel offsets
-// of integer texture samples moved into the coordinates (the back end ignores them).
+// from the wrong word), the LOD bias dropped from depth comparisons (the back end can't compile them), texel offsets
+// of integer texture samples moved into the coordinates (the back end ignores them), and constexpr samplers from newer
+// front ends ([2 x i64]) rewritten in the i64 form the back end reads (it crashes on the array).
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
@@ -1072,6 +1073,70 @@ static unsigned foldIntegerSampleOffsets(LLVMModuleRef module) {
     return fixed;
 }
 
+// ---- constexpr samplers from newer front ends ----------------------------------------------------------------------
+// The front end in Xcode 26 (metalfe-32023.850) writes a constexpr sampler as a [2 x i64] constant (!air.sampler_states),
+// the second word 0 and bit 63 of the first clear; the runtime compiler that goes with the 3802 back end writes one i64,
+// the same word with bit 63 set (checked for filters, mip filters, addressing, border colors, anisotropy, compare
+// functions, LOD clamps). IGILInlineSamplerLowering reads the constant as an integer and dereferences null on the array,
+// which kills MTLCompilerService: iMovie 10.4.4's viewer (Flexo's textureSamplingShader) never gets a pipeline and stays
+// black, and so would any app's library built with that compiler that uses constexpr samplers. Such globals become the
+// i64 the runtime compiler writes; their uses and the sampler-state metadata go to it.
+// INTEL_SAMPLER_STATE_FIX=0 turns it off.
+extern "C" {
+LLVMValueRef LLVMGetInitializer(LLVMValueRef);
+void LLVMSetInitializer(LLVMValueRef, LLVMValueRef);
+LLVMValueRef LLVMAddGlobalInAddressSpace(LLVMModuleRef, LLVMTypeRef, const char *, unsigned);
+void LLVMSetGlobalConstant(LLVMValueRef, int);
+int LLVMGetLinkage(LLVMValueRef);
+void LLVMSetLinkage(LLVMValueRef, int);
+void LLVMSetAlignment(LLVMValueRef, unsigned);
+unsigned LLVMGetPointerAddressSpace(LLVMTypeRef);
+LLVMValueRef LLVMIsAGlobalVariable(LLVMValueRef);
+LLVMValueRef LLVMIsAConstantDataArray(LLVMValueRef);
+LLVMValueRef LLVMGetElementAsConstant(LLVMValueRef, unsigned);
+LLVMValueRef LLVMConstBitCast(LLVMValueRef, LLVMTypeRef);
+void LLVMDeleteGlobal(LLVMValueRef);
+void LLVMSetValueName(LLVMValueRef, const char *);
+}
+extern "C" void *valueAsMetadata(LLVMValueRef value) asm("__ZN4llvm15ValueAsMetadata3getEPNS_5ValueE");
+
+static unsigned fixSamplerStateWords(LLVMModuleRef module) {
+    const char *setting = getenv("INTEL_SAMPLER_STATE_FIX");
+    if (setting && !strcmp(setting, "0")) return 0;
+    enum { kArrayKind = 11 };  // LLVMTypeKind
+    std::vector<LLVMValueRef> states(LLVMGetNamedMetadataNumOperands(module, "air.sampler_states"));
+    if (states.empty()) return 0;
+    LLVMGetNamedMetadataOperands(module, "air.sampler_states", states.data());
+    LLVMTypeRef i64 = LLVMInt64TypeInContext(LLVMGetModuleContext(module));
+    unsigned fixed = 0;
+    for (LLVMValueRef state : states) {  // !{!"air.sampler_state", [2 x i64] addrspace(2)* @__air_sampler_state}
+        std::vector<LLVMValueRef> parts = metadataOperands(state);
+        void *node = metadataOf(state);
+        if (parts.size() != 2 || !isString(parts[0], "air.sampler_state") || !node) continue;
+        LLVMValueRef global = parts[1] ? LLVMIsAGlobalVariable(parts[1]) : nullptr;
+        LLVMValueRef words = global ? LLVMGetInitializer(global) : nullptr;
+        LLVMTypeRef type = words ? LLVMTypeOf(words) : nullptr;
+        if (!type || LLVMGetTypeKind(type) != kArrayKind || LLVMGetArrayLength(type) != 2 || LLVMGetElementType(type) != i64 ||
+            !LLVMIsAConstantDataArray(words))
+            continue;
+        uint64_t first = LLVMConstIntGetZExtValue(LLVMGetElementAsConstant(words, 0));
+        uint64_t second = LLVMConstIntGetZExtValue(LLVMGetElementAsConstant(words, 1));
+        if (second && logging()) fprintf(stderr, "[inteltex] sampler state: second word 0x%llx not representable, dropped\n", (unsigned long long)second);
+        std::string name = LLVMGetValueName(global);
+        LLVMValueRef word = LLVMAddGlobalInAddressSpace(module, i64, (name + ".word").c_str(), LLVMGetPointerAddressSpace(LLVMTypeOf(global)));
+        LLVMSetInitializer(word, LLVMConstInt(i64, first | 1ull << 63, false));
+        LLVMSetGlobalConstant(word, 1);
+        LLVMSetLinkage(word, LLVMGetLinkage(global));
+        LLVMSetAlignment(word, 8);
+        mdNodeReplaceOperand(node, 1, valueAsMetadata(word));
+        LLVMReplaceAllUsesWith(global, LLVMConstBitCast(word, LLVMTypeOf(global)));
+        LLVMDeleteGlobal(global);
+        LLVMSetValueName(word, name.c_str());
+        fixed++;
+    }
+    return fixed;
+}
+
 static int hookedRun(void *self, LLVMModuleRef module) {
     pthread_mutex_lock(&installLock);
     installIntoPlugin(false);  // test process: the plugin was dlopened after we were inserted
@@ -1096,6 +1161,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] %u depth comparison(s) with an LOD bias: bias dropped\n", n);
         n = foldIntegerSampleOffsets(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u integer texture sample(s): texel offset moved into the coordinates\n", n);
+        n = fixSamplerStateWords(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u constexpr sampler(s) in the [2 x i64] form rewritten as i64\n", n);
         if (n && getenv("INTELTEX_DUMP_HANDLES")) {  // debugging: the module after that rewrite
             static int serial;
             char path[1024];
