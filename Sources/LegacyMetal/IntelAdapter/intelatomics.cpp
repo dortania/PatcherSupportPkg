@@ -1559,6 +1559,38 @@ static unsigned fixFloat3Inputs(LLVMModuleRef module) {
     return fixed;
 }
 
+// ---- get_num_samples ------------------------------------------------------------------------------------------------
+// get_num_samples() (air.get_num_samples) returns 1 in a fragment function that takes a buffer argument, at any sample
+// count; without one it's right. Every ANGLE fragment shader takes buffers, and ANGLE's alpha-to-coverage emulation (on
+// for every non-Apple GPU) picks its dither pattern by sample count: with 1 it fell through to using alpha * 510 itself as
+// the sample mask, so coverage jumped around instead of growing with alpha (dEQP
+// multisample.fbo_*.proportionality_alpha_to_coverage). A render pipeline's sample count is fixed when its functions are
+// compiled, and the module carries it (!air.state !{!"msaaLevel", i32 N}): the calls become that constant.
+// INTEL_NUM_SAMPLES_FIX=0 turns it off.
+static unsigned foldNumSamples(LLVMModuleRef module) {
+    LLVMValueRef f = LLVMGetNamedFunction(module, "air.get_num_samples.i32");
+    if (disabled("INTEL_NUM_SAMPLES_FIX") || !f || !LLVMGetFirstUse(f)) return 0;
+    int samples = 0;
+    std::vector<LLVMValueRef> states(LLVMGetNamedMetadataNumOperands(module, "air.state"));
+    if (!states.empty()) LLVMGetNamedMetadataOperands(module, "air.state", states.data());
+    for (LLVMValueRef state : states) {
+        std::vector<LLVMValueRef> parts = metadataOperands(state);
+        if (parts.size() == 2 && isString(parts[0], "msaaLevel") && LLVMIsAConstantInt(parts[1]))
+            samples = (int)LLVMConstIntGetZExtValue(parts[1]);
+    }
+    if (samples < 1 || samples > 16) return 0;
+    std::vector<LLVMValueRef> calls;
+    for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u)) calls.push_back(LLVMGetUser(u));
+    unsigned fixed = 0;
+    for (LLVMValueRef call : calls) {
+        if (!LLVMIsACallInst(call) || LLVMGetOperand(call, LLVMGetNumOperands(call) - 1) != f) continue;
+        LLVMReplaceAllUsesWith(call, LLVMConstInt(LLVMTypeOf(call), samples, false));
+        LLVMInstructionEraseFromParent(call);
+        fixed++;
+    }
+    return fixed;
+}
+
 // ---- dynamically indexed private arrays ----------------------------------------------------------------------------
 // A private array inside a struct (`struct { int v[3]; } a; ... a.v[i]`, the way ANGLE declares every GLSL array, as
 // metal::array) that is indexed with a variable becomes an indexable register array (DCL_INDEXABLETEMP x0[N]) in vertex
@@ -1692,6 +1724,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] %u aligned byte/halfword access(es) to private memory done on the 32-bit word\n", n);
         n = fixFloat3Inputs(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u float3 vertex/fragment input(s) read through fmax\n", n);
+        n = foldNumSamples(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u get_num_samples() call(s) replaced by the pipeline's sample count\n", n);
         n = selectPrivateArrayIndices(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u variable-index private array access(es) done at constant indices\n", n);
         if (n && getenv("INTELTEX_DUMP_HANDLES")) {  // debugging: the module after that rewrite
