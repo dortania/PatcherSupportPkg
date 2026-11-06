@@ -9,10 +9,11 @@
 #                      s30                 AMDBronzeCompat not loaded and the no-op MetalOldCompat build
 #                      s27                 the no-op MetalOldCompat build and AMD_BRONZE_MEMORYLESS=0
 #                      a01, a05@Intel, i01 the stock AMDShared / libMTLIntelCompilerPlugin (adapters not loaded)
-#                      a02, a04-a10, r01   the AMD adapter's own switch (AMD_SI_HAZARD_FIX=0, AMD_LDS_BASE_FIX=0,
+#                      a02, a04-a11, r01   the AMD adapter's own switch (AMD_SI_HAZARD_FIX=0, AMD_LDS_BASE_FIX=0,
 #                                          AMD_HANDLE_FIX=0 + INTEL_HANDLE_FIX=0, AMD_NAN_FIX=0, AMD_LDEXP_FIX=0,
 #                                          AMD_GATHER_FIX=0 + INTEL_INTEGER_OFFSET_FIX=0,
-#                                          AMD_CUBE_ARRAY_FIX=0, AMD_LDS_BOOL_FIX=0 + INTEL_THREADGROUP_BOOL_FIX=0)
+#                                          AMD_CUBE_ARRAY_FIX=0, AMD_LDS_BOOL_FIX=0 + INTEL_THREADGROUP_BOOL_FIX=0,
+#                                          AMD_FMASK_FIX=0)
 #                      i02-i13             the Intel adapter's switch (INTEL_SIGNED_SUBWORD_FIX=0, INTEL_COMPARE_BIAS_FIX=0,
 #                                          INTEL_INTEGER_OFFSET_FIX=0, INTEL_SAMPLER_STATE_FIX=0, INTEL_VERTEX_FLOAT3_FIX=0,
 #                                          INTEL_PRIVATE_ARRAY_FIX=0, INTEL_KERNEL_GRADIENT_FIX=0,
@@ -71,7 +72,7 @@ s17-amd-depth-stencil-view:bronzestencil s18-pipeline-cache-key:shim s19-amd-tri
 s20-intel-fill-buffer:shim s21-intel-depth-only-pipeline:shim s22-intel-depth-hiz-levels:shim s23-intel-3d-mip-plane:shim
 s24-intel-narrow-mip-clear:shim s31-angle-family-one:shim s32-intel-depth-stencil-blit:shim s33-intel-nil-argument-buffer:shim s34-intel-small-integer-cube:shim s35-intel-encoder-lod-clamp:shim s36-intel-swizzle-view:shim s37-intel-stencil-subresources:shim s38-intel-coverage-without-writes:shim s39-intel-mps-statistics:shim a01-texture-atomics:adapter
 a01-texture-atomics@Intel:adapter a02-si-smrd-hazard:smrd a04-si-threadgroup-pointer:ldsbase
-a05-escaped-texture-pointer:handle a05-escaped-texture-pointer@Intel:handle a06-fast-math-nan-compare:nan a07-half-ldexp:ldexp a08-integer-gather:gather a09-cube-array-index:cubearray a10-threadgroup-bool:ldsbool
+a05-escaped-texture-pointer:handle a05-escaped-texture-pointer@Intel:handle a06-fast-math-nan-compare:nan a07-half-ldexp:ldexp a08-integer-gather:gather a09-cube-array-index:cubearray a10-threadgroup-bool:ldsbool a11-msaa-shader-read:fmask
 c01-amdil-argument-buffer:stock c02-amdil-color-input:stock c03-amdil-gep-select:patch3 c04-amdil-struct-type-map:patch4
 i01-intel-array-struct-arg:adapter i02-intel-vertex-signed-subword:subword i03-intel-shadow-compare-bias:comparebias i04-intel-integer-texel-offset:intoffset i05-intel-constexpr-sampler:samplerstate i06-intel-vertex-float3-input:float3 i07-intel-private-array-index:privatearray i08-intel-kernel-integer-gradient:kernelgradient i09-intel-fragment-float3-compare:fragfloat3 i10-intel-num-samples:numsamples i11-intel-swizzle-immediate:swizzleimm i12-intel-branch-chain-compile:branchchain i13-intel-indirect-vertex-id:basevertex r01-amd-slot8-data-segment:ldsbase"
 
@@ -86,7 +87,7 @@ run() {  # <test[@gpu]> <removed fix or "fixed">
     case $2 in
         bronze) inject= ;; bronzestencil) inject= env=(MTLSHIM_STENCIL_SUBRESOURCE=0) ;; samplemask) inject= shim=$NOOP ;; trilinear) inject= env=(INTEL_COMPUTE_TRILINEAR_FIX=0) ;; shim) shim=$NOOP ;; memoryless) shim=$NOOP env=(AMD_BRONZE_MEMORYLESS=0) ;; adapter) libs=$NOADAPTER ;; stock) libs=$STOCK ;; patch3) libs=$PATCH3 env=(INTEL_PRIVATE_ALIGN_FIX=0) ;; patch4) libs=$PATCH4 ;;
         smrd) env=(AMD_SI_HAZARD_FIX=0) ;; ldsbase) env=(AMD_LDS_BASE_FIX=0) ;; handle) env=(AMD_HANDLE_FIX=0 INTEL_HANDLE_FIX=0) ;;
-        nan) env=(AMD_NAN_FIX=0) ;; ldexp) env=(AMD_LDEXP_FIX=0) ;; gather) env=(AMD_GATHER_FIX=0 INTEL_INTEGER_OFFSET_FIX=0) ;; cubearray) env=(AMD_CUBE_ARRAY_FIX=0) ;; ldsbool) env=(AMD_LDS_BOOL_FIX=0 INTEL_THREADGROUP_BOOL_FIX=0) ;;
+        nan) env=(AMD_NAN_FIX=0) ;; ldexp) env=(AMD_LDEXP_FIX=0) ;; gather) env=(AMD_GATHER_FIX=0 INTEL_INTEGER_OFFSET_FIX=0) ;; cubearray) env=(AMD_CUBE_ARRAY_FIX=0) ;; ldsbool) env=(AMD_LDS_BOOL_FIX=0 INTEL_THREADGROUP_BOOL_FIX=0) ;; fmask) env=(AMD_FMASK_FIX=0) ;;
         subword) env=(INTEL_SIGNED_SUBWORD_FIX=0) ;; comparebias) env=(INTEL_COMPARE_BIAS_FIX=0) ;; intoffset) env=(INTEL_INTEGER_OFFSET_FIX=0) ;; samplerstate) env=(INTEL_SAMPLER_STATE_FIX=0) ;; float3) env=(INTEL_VERTEX_FLOAT3_FIX=0) ;; privatearray) env=(INTEL_PRIVATE_ARRAY_FIX=0) ;; kernelgradient) env=(INTEL_KERNEL_GRADIENT_FIX=0) ;; fragfloat3) env=(INTEL_FRAGMENT_FLOAT3_FIX=0) ;; numsamples) env=(INTEL_NUM_SAMPLES_FIX=0) ;; swizzleimm) env=(INTEL_SWIZZLE_IMMEDIATE_FIX=0) ;; branchchain) env=(INTEL_BRANCH_CHAIN_FIX=0) ;; basevertex) env=(INTEL_BASE_VERTEX_FIX=0) ;;
     esac
     # s13's fix (item 25) works in MTLCompilerService, which gets the shim under test this way (i05's metallib needs it too)

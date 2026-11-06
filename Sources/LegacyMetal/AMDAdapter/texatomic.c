@@ -33,6 +33,13 @@
 // Seventh job: load threadgroup bools as bytes (loadThreadgroupBoolsAsBytes): libAMDIL902 reads them as false.
 // AMD_LDS_BOOL_FIX=0 turns it off.
 //
+// Eighth job, with the 12.5-24 Bronze driver only (Sequoia without MetalOld): read multisample textures without their
+// FMASK (identityFmaskLookups). There the driver leaves the FMASK descriptor table (API slot 13) unset for render
+// stages, so a fragment shader's texture2d_ms read loads its FMASK descriptor from GPU address 0 and the GPU resets;
+// compute reads get a stale table and wrong samples. Both encoders expand compressed MSAA textures when they're bound
+// (BronzeCompressionMgr_SubmitCondExpand), so the identity sample map is right. AMD_FMASK_FIX=0 turns it off,
+// AMD_FMASK_FIX=1 turns it on with any driver.
+//
 // Installed: AMDShared.bundle/Contents/MacOS/AMDTextureAtomics.dylib, loaded by a weak load command in AMDShared.
 // Test use (in-process compiling): DYLD_INSERT_LIBRARIES=Tests/tools/localcc.dylib:build/texatomic.dylib <app>
 //   TEXATOMIC_LOG=1   log what is rewritten
@@ -47,6 +54,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 // ---- hooked functions -------------------------------------------------------------------------------------------
 // A static member: (Module&, std::string& il, char*&, uint64&, char*&, uint64&, std::string&).
@@ -1277,21 +1285,62 @@ static int normalizeFetch4(char *il) {
     return n;
 }
 
+// The eighth job's driver check: only the 12.5-24 copy of AMDMTLBronzeDriver links OCLP's impostor.dylib.
+static bool fmaskFixEnabled(void) {
+    const char *setting = getenv("AMD_FMASK_FIX");
+    if (setting) return strcmp(setting, "0") != 0;
+    static int installed = -1;
+    if (installed < 0)
+        installed = !access("/System/Library/Extensions/AMDMTLBronzeDriver.bundle/Contents/MacOS/impostor.dylib", F_OK);
+    return installed;
+}
+
+// Each FMASK lookup (`load_fptr... rD.mask, coords, imgDescN, samDescN`) becomes the identity map, which SC folds into
+// the sample index, so the shader no longer loads the FMASK descriptor.
+static int identityFmaskLookups(const char *in, Text *out) {
+    static const char kIdentity[] = ", 0x76543210, 0x76543210, 0x76543210, 0x76543210\n";
+    int n = 0;
+    for (const char *p = in; *p;) {
+        const char *eol = strchr(p, '\n');
+        size_t length = eol ? (size_t)(eol - p + 1) : strlen(p);
+        const char *op = p + strspn(p, " \t");  // indented inside loops and branches
+        const char *space = strchr(op, ' '), *comma = space ? strchr(space, ',') : NULL;
+        if (!strncmp(op, "load_fptr", 9) && comma && comma < p + length) {
+            append(out, p, op - p);
+            append(out, "mov_lit", 7);
+            append(out, space, comma - space);
+            append(out, kIdentity, sizeof kIdentity - 1);
+            n++;
+        } else {
+            append(out, p, length);
+        }
+        p += length;
+    }
+    return n;
+}
+
 static int hookedSCCompileShader(void *sc, void *src, void *out) {
     void **tokens = (void **)((char *)src + kSrcTokens);
     uint32_t *size = (uint32_t *)((char *)src + kSrcSize);
     Text il = {0};
     SCDumpILShader(&il, *tokens, *size, appendFormatted);
+    int fmasks = 0;
+    if (il.buf && strstr(il.buf, "load_fptr") && fmaskFixEnabled()) {
+        Text identity = {0};
+        fmasks = identityFmaskLookups(il.buf, &identity);
+        free(il.buf);
+        il = identity;
+    }
     const char *ldsSetting = getenv("AMD_LDS_BASE_FIX");
     bool atomics = il.buf && (strstr(il.buf, "0x7A70") || strstr(il.buf, "0x7A71"));
     bool ldsBase = scFamily == kFamilySI && il.buf && !strncmp(il.buf, "il_cs", 5) && strstr(il.buf, "dcl_lds_id(") &&
                    strstr(il.buf, kThreadgroupBaseSlot) && !(ldsSetting && !strcmp(ldsSetting, "0"));
     int gathers = il.buf && gatherFixEnabled() ? normalizeFetch4(il.buf) : 0;
-    if (atomics || ldsBase || gathers) {
+    if (atomics || ldsBase || gathers || fmasks) {
         Text edited = {0}, based = {0};
         int n = atomics ? rewriteIL(il.buf, &edited) : 0;
         int k = ldsBase && (!atomics || n > 0) ? dropThreadgroupBase(atomics ? edited.buf : il.buf, &based) : 0;
-        const char *text = k > 0 ? based.buf : atomics && n > 0 ? edited.buf : gathers ? il.buf : NULL;
+        const char *text = k > 0 ? based.buf : atomics && n > 0 ? edited.buf : gathers || fmasks ? il.buf : NULL;
         void *binary = NULL;
         unsigned dwords = 0;
         int ok = text ? ilXltTextToBinary(text, &binary, &dwords) : 0;
@@ -1299,6 +1348,7 @@ static int hookedSCCompileShader(void *sc, void *src, void *out) {
             if (atomics) fprintf(stderr, "[texatomic] IL: %d texture atomic(s) rewritten\n", n);
             if (k) fprintf(stderr, "[texatomic] IL: %d threadgroup address(es): data-segment base (API slot 8) dropped\n", k);
             if (gathers) fprintf(stderr, "[texatomic] IL: %d integer gather(s) use normalized coordinates\n", gathers);
+            if (fmasks) fprintf(stderr, "[texatomic] IL: %d multisample read(s) without FMASK\n", fmasks);
             if (text) fprintf(stderr, "[texatomic] IL: assembled %s\n", ok == 1 ? "ok" : "FAILED");
             if (getenv("TEXATOMIC_DUMP")) fprintf(stderr, "%s\n", text ? text : "");
         }
