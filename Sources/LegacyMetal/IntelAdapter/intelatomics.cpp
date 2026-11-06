@@ -1790,6 +1790,264 @@ static unsigned selectPrivateArrayIndices(LLVMModuleRef module) {
     return fixed;
 }
 
+// ---- chains of short branches --------------------------------------------------------------------------------------
+// The back end's register allocator (iCBE VirtualRegistersToRegisters -> CStructRegionTree::StructuralAnalysis) takes
+// exponential time on functions made of chains of short conditional branches that all fall through to a shared block,
+// the shape `if (a && b && c && d) ... else ...` compiles to when each test is a few compares: 4 such tests over vec4s
+// take 2 s, 6 more than a minute, 8 more than ten minutes. Chrome's GPU watchdog kills the process meanwhile (WebGPU CTS
+// shader,execution,robust_access_vertex, which validates each of up to 12 vertex attributes this way). Blocks that only
+// compute (no memory access, no calls but pure air functions) are folded into their predecessor, the branch conditions
+// combined with selects (`br a, B, E; B: br b, C, E` becomes `br (a ? b : false), C, E`), and if-then(-else) shapes
+// with such arms become selects, until the chains are single blocks. Only blocks of at most INTEL_BRANCH_CHAIN_MOVE
+// (default 16) instructions move, phis become selects only for numbers and vectors of them (never texture or sampler
+// pointers, a05), and it only runs on functions with at least INTEL_BRANCH_CHAIN_MIN (default 12) conditional branches.
+// INTEL_BRANCH_CHAIN_FIX=0 turns it off.
+extern "C" {
+LLVMValueRef LLVMGetBasicBlockTerminator(LLVMBasicBlockRef);
+unsigned LLVMGetNumSuccessors(LLVMValueRef);
+LLVMBasicBlockRef LLVMGetSuccessor(LLVMValueRef, unsigned);
+int LLVMIsConditional(LLVMValueRef);
+LLVMValueRef LLVMGetCondition(LLVMValueRef);
+LLVMValueRef LLVMIsABranchInst(LLVMValueRef);
+LLVMValueRef LLVMIsAPHINode(LLVMValueRef);
+void LLVMInstructionRemoveFromParent(LLVMValueRef);
+void LLVMInsertIntoBuilder(LLVMBuilderRef, LLVMValueRef);
+LLVMValueRef LLVMBuildCondBr(LLVMBuilderRef, LLVMValueRef, LLVMBasicBlockRef, LLVMBasicBlockRef);
+LLVMValueRef LLVMBuildBr(LLVMBuilderRef, LLVMBasicBlockRef);
+LLVMValueRef LLVMBuildPhi(LLVMBuilderRef, LLVMTypeRef, const char *);
+void LLVMAddIncoming(LLVMValueRef, LLVMValueRef *, LLVMBasicBlockRef *, unsigned);
+unsigned LLVMCountIncoming(LLVMValueRef);
+LLVMValueRef LLVMGetIncomingValue(LLVMValueRef, unsigned);
+LLVMBasicBlockRef LLVMGetIncomingBlock(LLVMValueRef, unsigned);
+void LLVMDeleteBasicBlock(LLVMBasicBlockRef);
+void LLVMPositionBuilderAtEnd(LLVMBuilderRef, LLVMBasicBlockRef);
+typedef struct LLVMOpaqueAttributeRef *LLVMAttributeRef;
+unsigned LLVMGetEnumAttributeKindForName(const char *, size_t);
+LLVMAttributeRef LLVMGetEnumAttributeAtIndex(LLVMValueRef, unsigned, unsigned);
+LLVMAttributeRef LLVMGetCallSiteEnumAttribute(LLVMValueRef, unsigned, unsigned);
+}
+
+namespace flatten {
+enum { kFunctionIndex = ~0u, kMaxSteps = 4096 };
+static int maxMoved = 16;
+
+static bool hasAttribute(LLVMValueRef call, LLVMValueRef callee, const char *name) {
+    unsigned kind = LLVMGetEnumAttributeKindForName(name, strlen(name));
+    return kind && (LLVMGetEnumAttributeAtIndex(callee, kFunctionIndex, kind) || LLVMGetCallSiteEnumAttribute(call, kFunctionIndex, kind));
+}
+
+// An instruction that can run on a path that didn't run it before: arithmetic, compares, selects, casts, vector and
+// aggregate element moves, address arithmetic, and calls of air functions that read no memory and aren't SIMD-group
+// operations. Not loads, stores, integer division (a zero divisor), phis or terminators.
+static bool speculatable(LLVMValueRef inst) {
+    int op = LLVMGetInstructionOpcode(inst);
+    if ((op >= 8 && op <= 13) || op == 16 || op == 19 || (op >= 20 && op <= 25) || (op >= 29 && op <= 38) || op == 41 ||
+        op == 42 || op == 43 || op == 46 || (op >= 50 && op <= 54))
+        return true;  // add..fmul, fdiv, frem, shifts/logic, gep, casts but ptr<->int, bitcast, icmp, fcmp, select, vectors
+    if (op != 45 || !LLVMIsACallInst(inst)) return false;
+    LLVMValueRef callee = LLVMGetCalledValue(inst);
+    const char *name = callee ? LLVMGetValueName(callee) : "";
+    return !strncmp(name, "air.", 4) && LLVMIsDeclaration(callee) && !strstr(name, "simd") && !strstr(name, "quad") &&
+           hasAttribute(inst, callee, "readnone") && !hasAttribute(inst, callee, "convergent");
+}
+
+// A block that can be folded into its predecessor: at most maxMoved speculatable instructions, a branch at the end.
+static bool movable(LLVMBasicBlockRef bb) {
+    LLVMValueRef term = LLVMGetBasicBlockTerminator(bb);
+    if (!term || !LLVMIsABranchInst(term)) return false;
+    int n = 0;
+    for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst && inst != term; inst = LLVMGetNextInstruction(inst))
+        if (++n > maxMoved || !speculatable(inst)) return false;
+    return true;
+}
+
+// Whether the phis of `bb` that take different values from `a` and `b` can become selects: numbers and vectors of them.
+static bool selectablePhis(LLVMBasicBlockRef bb, LLVMBasicBlockRef a, LLVMBasicBlockRef b) {
+    for (LLVMValueRef phi = LLVMGetFirstInstruction(bb); phi && LLVMIsAPHINode(phi); phi = LLVMGetNextInstruction(phi)) {
+        LLVMValueRef fromA = nullptr, fromB = nullptr;
+        for (unsigned i = 0, n = LLVMCountIncoming(phi); i < n; i++) {
+            if (LLVMGetIncomingBlock(phi, i) == a) fromA = LLVMGetIncomingValue(phi, i);
+            if (LLVMGetIncomingBlock(phi, i) == b) fromB = LLVMGetIncomingValue(phi, i);
+        }
+        int kind = LLVMGetTypeKind(scalarOf(LLVMTypeOf(phi)));
+        if (fromA && fromB && fromA != fromB && kind != kTypeKindInteger && kind != kTypeKindHalf && kind != kTypeKindFloat && kind != 3)
+            return false;
+    }
+    return true;
+}
+
+static void moveBody(LLVMBuilderRef b, LLVMBasicBlockRef from, LLVMValueRef before) {  // all but the terminator
+    LLVMValueRef term = LLVMGetBasicBlockTerminator(from);
+    for (LLVMValueRef inst = LLVMGetFirstInstruction(from), next; inst && inst != term; inst = next) {
+        next = LLVMGetNextInstruction(inst);
+        LLVMInstructionRemoveFromParent(inst);
+        LLVMPositionBuilderBefore(b, before);
+        LLVMInsertIntoBuilder(b, inst);
+    }
+}
+
+// Rewrites the phis of `bb` that have an entry from `from`: it becomes the entry from `to`, or, where `to` has one too,
+// both become one entry from `to` with the value merge(phi, value from `to`, value from `from`).
+template <typename Merge>
+static void retargetPhis(LLVMBuilderRef b, LLVMBasicBlockRef bb, LLVMBasicBlockRef from, LLVMBasicBlockRef to, Merge merge) {
+    std::vector<LLVMValueRef> phis;
+    for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst && LLVMIsAPHINode(inst); inst = LLVMGetNextInstruction(inst)) phis.push_back(inst);
+    for (LLVMValueRef phi : phis) {
+        std::vector<LLVMValueRef> values;
+        std::vector<LLVMBasicBlockRef> blocks;
+        LLVMValueRef fromValue = nullptr, toValue = nullptr;
+        unsigned n = LLVMCountIncoming(phi);
+        for (unsigned i = 0; i < n; i++) {
+            LLVMBasicBlockRef in = LLVMGetIncomingBlock(phi, i);
+            if (in == from) fromValue = LLVMGetIncomingValue(phi, i);
+            else if (in == to) toValue = LLVMGetIncomingValue(phi, i);
+            else values.push_back(LLVMGetIncomingValue(phi, i)), blocks.push_back(in);
+        }
+        if (!fromValue) continue;  // nothing comes from `from`
+        values.push_back(toValue ? merge(phi, toValue, fromValue) : fromValue);
+        blocks.push_back(to);
+        LLVMPositionBuilderBefore(b, phi);
+        LLVMValueRef replacement = LLVMBuildPhi(b, LLVMTypeOf(phi), "");
+        LLVMAddIncoming(replacement, values.data(), blocks.data(), (unsigned)values.size());
+        LLVMReplaceAllUsesWith(phi, replacement);
+        LLVMInstructionEraseFromParent(phi);
+    }
+}
+
+static unsigned conditionalBranches(LLVMValueRef f) {
+    unsigned n = 0;
+    for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb)) {
+        LLVMValueRef term = LLVMGetBasicBlockTerminator(bb);
+        n += term && LLVMIsABranchInst(term) && LLVMIsConditional(term);
+    }
+    return n;
+}
+
+// One rewrite in `f`; false when there is nothing left to do.
+static bool step(LLVMBuilderRef b, LLVMValueRef f, LLVMValueRef yes, LLVMValueRef no) {
+    std::map<LLVMBasicBlockRef, std::vector<LLVMBasicBlockRef>> preds;
+    for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+        if (LLVMValueRef term = LLVMGetBasicBlockTerminator(bb))
+            for (unsigned i = 0, n = LLVMGetNumSuccessors(term); i < n; i++) preds[LLVMGetSuccessor(term, i)].push_back(bb);
+    auto onlyFrom = [&](LLVMBasicBlockRef bb, LLVMBasicBlockRef p) { return preds[bb].size() == 1 && preds[bb][0] == p; };
+    auto hasPhis = [](LLVMBasicBlockRef bb) { LLVMValueRef first = LLVMGetFirstInstruction(bb); return first && LLVMIsAPHINode(first); };
+    for (LLVMBasicBlockRef p = LLVMGetFirstBasicBlock(f); p; p = LLVMGetNextBasicBlock(p)) {
+        LLVMValueRef term = LLVMGetBasicBlockTerminator(p);
+        if (!term || !LLVMIsABranchInst(term)) continue;
+        if (!LLVMIsConditional(term)) {
+            // p: br s, and p is s's only predecessor: s's instructions join p's
+            LLVMBasicBlockRef s = LLVMGetSuccessor(term, 0);
+            if (s == p || !onlyFrom(s, p)) continue;
+            LLVMValueRef sTerm = LLVMGetBasicBlockTerminator(s);
+            if (!sTerm) continue;
+            while (hasPhis(s)) {  // one predecessor: each phi has the one entry
+                LLVMValueRef phi = LLVMGetFirstInstruction(s);
+                LLVMReplaceAllUsesWith(phi, LLVMGetIncomingValue(phi, 0));
+                LLVMInstructionEraseFromParent(phi);
+            }
+            for (unsigned i = 0, n = LLVMGetNumSuccessors(sTerm); i < n; i++)
+                retargetPhis(b, LLVMGetSuccessor(sTerm, i), s, p, [](LLVMValueRef, LLVMValueRef t, LLVMValueRef) { return t; });
+            LLVMInstructionEraseFromParent(term);
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(s), next; inst; inst = next) {
+                next = LLVMGetNextInstruction(inst);
+                LLVMInstructionRemoveFromParent(inst);
+                LLVMPositionBuilderAtEnd(b, p);
+                LLVMInsertIntoBuilder(b, inst);
+            }
+            LLVMDeleteBasicBlock(s);
+            return true;
+        }
+        LLVMValueRef c = LLVMGetCondition(term);
+        LLVMBasicBlockRef t = LLVMGetSuccessor(term, 0), e = LLVMGetSuccessor(term, 1);
+        if (t == e || t == p || e == p) continue;
+        for (int side = 0; side < 2; side++) {
+            // p: br c, s, other (s on the true side when side == 0), p is s's only predecessor, s only computes
+            LLVMBasicBlockRef s = side ? e : t, other = side ? t : e;
+            if (!onlyFrom(s, p) || hasPhis(s) || !movable(s)) continue;
+            LLVMValueRef sTerm = LLVMGetBasicBlockTerminator(s);
+            auto viaS = [&](LLVMValueRef sValue, LLVMValueRef pValue) {  // the value that depends on whether p went to s
+                if (sValue == pValue) return sValue;
+                LLVMPositionBuilderBefore(b, term);
+                return side ? LLVMBuildSelect(b, c, pValue, sValue, "") : LLVMBuildSelect(b, c, sValue, pValue, "");
+            };
+            if (!LLVMIsConditional(sTerm)) {
+                LLVMBasicBlockRef j = LLVMGetSuccessor(sTerm, 0);
+                if (j == other) {
+                    // triangle: p: br c, s, j; s: br j
+                    if (!selectablePhis(j, p, s)) continue;
+                    moveBody(b, s, term);
+                    retargetPhis(b, j, s, p, [&](LLVMValueRef, LLVMValueRef pValue, LLVMValueRef sValue) { return viaS(sValue, pValue); });
+                    LLVMPositionBuilderBefore(b, term);
+                    LLVMBuildBr(b, j);
+                    LLVMInstructionEraseFromParent(term);
+                    LLVMDeleteBasicBlock(s);
+                    return true;
+                }
+                // diamond: p: br c, t, e; t: br j; e: br j (both arms movable, j not p)
+                LLVMValueRef oTerm = LLVMGetBasicBlockTerminator(other);
+                if (side || j == p || !onlyFrom(other, p) || hasPhis(other) || !movable(other) || LLVMIsConditional(oTerm) ||
+                    LLVMGetSuccessor(oTerm, 0) != j || !selectablePhis(j, t, e))
+                    continue;
+                moveBody(b, t, term);
+                moveBody(b, e, term);
+                retargetPhis(b, j, t, p, [](LLVMValueRef, LLVMValueRef, LLVMValueRef tValue) { return tValue; });
+                retargetPhis(b, j, e, p, [&](LLVMValueRef, LLVMValueRef tValue, LLVMValueRef eValue) {
+                    if (tValue == eValue) return tValue;
+                    LLVMPositionBuilderBefore(b, term);
+                    return LLVMBuildSelect(b, c, tValue, eValue, "");
+                });
+                LLVMPositionBuilderBefore(b, term);
+                LLVMBuildBr(b, j);
+                LLVMInstructionEraseFromParent(term);
+                LLVMDeleteBasicBlock(t);
+                LLVMDeleteBasicBlock(e);
+                return true;
+            }
+            // shared destination: p: br c, s, other; s: br d, x, other (either order) -> p: br c', x, other
+            LLVMValueRef d = LLVMGetCondition(sTerm);
+            LLVMBasicBlockRef s0 = LLVMGetSuccessor(sTerm, 0), s1 = LLVMGetSuccessor(sTerm, 1);
+            if ((s0 == other) == (s1 == other)) continue;
+            bool otherOnTrue = s0 == other;  // in s
+            LLVMBasicBlockRef x = otherOnTrue ? s1 : s0;
+            if (x == p || x == s || !selectablePhis(other, p, s)) continue;
+            moveBody(b, s, term);
+            LLVMPositionBuilderBefore(b, term);
+            // reach x iff (p goes to s) and (s goes to x)
+            LLVMValueRef toX;
+            if (!side) toX = otherOnTrue ? LLVMBuildSelect(b, c, d, yes, "") : LLVMBuildSelect(b, c, d, no, "");  // c && ...
+            else toX = otherOnTrue ? LLVMBuildSelect(b, c, yes, d, "") : LLVMBuildSelect(b, c, no, d, "");       // !c && ...
+            retargetPhis(b, other, s, p, [&](LLVMValueRef, LLVMValueRef pValue, LLVMValueRef sValue) { return viaS(sValue, pValue); });
+            retargetPhis(b, x, s, p, [](LLVMValueRef, LLVMValueRef, LLVMValueRef sValue) { return sValue; });
+            LLVMPositionBuilderBefore(b, term);
+            // toX as computed is "goes to the 'other' side" when otherOnTrue (select(c, d, true) / select(c, true, d))
+            if (otherOnTrue) LLVMBuildCondBr(b, toX, other, x);
+            else LLVMBuildCondBr(b, toX, x, other);
+            LLVMInstructionEraseFromParent(term);
+            LLVMDeleteBasicBlock(s);
+            return true;
+        }
+    }
+    return false;
+}
+}  // namespace flatten
+
+static unsigned flattenBranchChains(LLVMModuleRef module) {
+    if (disabled("INTEL_BRANCH_CHAIN_FIX")) return 0;
+    const char *setting = getenv("INTEL_BRANCH_CHAIN_MIN");
+    unsigned minimum = setting ? (unsigned)atoi(setting) : 12, rewrites = 0;
+    if (const char *move = getenv("INTEL_BRANCH_CHAIN_MOVE")) flatten::maxMoved = atoi(move);
+    LLVMBuilderRef b = nullptr;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
+        if (!LLVMGetFirstBasicBlock(f) || flatten::conditionalBranches(f) < minimum) continue;
+        if (!b) b = LLVMCreateBuilderInContext(LLVMGetModuleContext(module));
+        LLVMTypeRef i1 = LLVMInt1TypeInContext(LLVMGetModuleContext(module));
+        LLVMValueRef yes = LLVMConstInt(i1, 1, false), no = LLVMConstInt(i1, 0, false);
+        for (int i = 0; i < flatten::kMaxSteps && flatten::step(b, f, yes, no); i++) rewrites++;
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return rewrites;
+}
+
 static int hookedRun(void *self, LLVMModuleRef module) {
     pthread_mutex_lock(&installLock);
     installIntoPlugin(false);  // test process: the plugin was dlopened after we were inserted
@@ -1830,10 +2088,12 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] %u get_num_samples() call(s) replaced by the pipeline's sample count\n", n);
         n = selectPrivateArrayIndices(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u variable-index private array access(es) done at constant indices\n", n);
-        if (n && getenv("INTELTEX_DUMP_HANDLES")) {  // debugging: the module after that rewrite
+        unsigned flattened = flattenBranchChains(module);
+        if (flattened && logging()) fprintf(stderr, "[inteltex] %u short branch(es) folded into selects\n", flattened);
+        if (getenv("INTELTEX_DUMP_REWRITTEN")) {  // debugging: every module after these rewrites
             static int serial;
             char path[1024];
-            snprintf(path, sizeof path, "%s/handles-%d.ll", getenv("INTELTEX_DUMP_HANDLES"), serial++);
+            snprintf(path, sizeof path, "%s/rewritten-%d-%d.ll", getenv("INTELTEX_DUMP_REWRITTEN"), getpid(), serial++);
             if (FILE *f = fopen(path, "w")) { char *text = LLVMPrintModuleToString(module); fputs(text, f); LLVMDisposeMessage(text); fclose(f); }
         }
     }
