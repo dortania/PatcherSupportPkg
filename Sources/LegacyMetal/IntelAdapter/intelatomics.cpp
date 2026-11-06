@@ -16,8 +16,10 @@
 //   INTELTEX_LOG=1        log what is rewritten
 //   INTELTEX_DUMP=<dir>   write each lowered module and the IGIL text before the fix
 //   INTELTEX_DUMP_INPUT=<dir>  write every module as it reaches the pass manager
-// Also (compiler compatibility, not texture atomics): air.max_work_group_size dropped (the back end aborts on it), and
-// air.struct_type_info dropped from array-of-struct buffer arguments (the argument-buffer emulation asserts on them).
+// Also (compiler compatibility, not texture atomics): air.max_work_group_size dropped (the back end aborts on it),
+// air.struct_type_info dropped from array-of-struct buffer arguments (the argument-buffer emulation asserts on them), and
+// signed i8/i16 conversions in vertex functions done with shifts of the 32-bit word (the back end can read the top lane
+// from the wrong word).
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
@@ -767,6 +769,194 @@ static unsigned fixEscapedHandleLoads(LLVMModuleRef module) {
     return fixed;
 }
 
+// ---- signed bytes and halfwords in vertex functions -----------------------------------------------------------------
+// In vertex functions (SIMD4x2 "vec4" mode on these GPUs; fragment and compute functions are right), the back end gets
+// the sign-extended top lane of a word read from a constant buffer wrong when the word isn't the first in its 16 bytes:
+// char4(x).w, short2(x).y, unpack_snorm4x8_to_float(x).w and unpack_snorm2x16_to_float(x).y come from the first word of
+// those 16 bytes instead. Other lanes, zero extension and 32-bit shifts are right. ANGLE's vertex shaders unpack their
+// Y flip, at byte 12 of their uniform block, with unpack_snorm4x8_to_float(...).w, so on these GPUs every WebGL draw got
+// the flip of another field and collapsed (nothing drawn). In vertex functions, sext / sitofp / air.convert.*.s.i8|i16
+// of a packed vector of i8 or i16 (32 or 16 bits), or of a lane extracted from one, become shl + ashr on the packed
+// word, and air.unpack.snorm4x8 / snorm2x16 become the same, then air.convert to float, / 127 or / 32767 and max(-1)
+// (the MSL definition). Test: i02.
+// INTEL_SIGNED_SUBWORD_FIX=0 turns it off.
+extern "C" {
+LLVMValueRef LLVMBuildShl(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildAShr(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildSExt(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
+LLVMValueRef LLVMBuildTrunc(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
+LLVMValueRef LLVMBuildSIToFP(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
+LLVMValueRef LLVMBuildFDiv(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildFCmp(LLVMBuilderRef, int, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildShuffleVector(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMConstReal(LLVMTypeRef, double);
+LLVMValueRef LLVMConstVector(LLVMValueRef *, unsigned);
+LLVMTypeRef LLVMFloatTypeInContext(LLVMContextRef);
+LLVMTypeRef LLVMHalfTypeInContext(LLVMContextRef);
+LLVMTypeRef LLVMFunctionType(LLVMTypeRef, LLVMTypeRef *, unsigned, int);
+LLVMValueRef LLVMAddFunction(LLVMModuleRef, const char *, LLVMTypeRef);
+LLVMValueRef LLVMGetCalledValue(LLVMValueRef);
+LLVMValueRef LLVMIsACallInst(LLVMValueRef);
+int LLVMGetInstructionOpcode(LLVMValueRef);
+unsigned LLVMGetIntTypeWidth(LLVMTypeRef);
+LLVMValueRef LLVMBuildBitCast(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
+LLVMTypeRef LLVMIntTypeInContext(LLVMContextRef, unsigned);
+LLVMContextRef LLVMGetTypeContext(LLVMTypeRef);
+LLVMValueRef LLVMIsAExtractElementInst(LLVMValueRef);
+}
+enum { kTypeKindHalf = 1, kTypeKindFloat = 2, kTypeKindInteger = 8, kTypeKindVector = 13, kOpcodeSExt = 32,
+       kOpcodeSIToFP = 36, kRealOLT = 4 };
+
+static unsigned lanes(LLVMTypeRef type) { return LLVMGetTypeKind(type) == kTypeKindVector ? LLVMGetVectorSize(type) : 0; }
+static LLVMTypeRef scalarOf(LLVMTypeRef type) { return lanes(type) ? LLVMGetElementType(type) : type; }
+static LLVMTypeRef shaped(LLVMTypeRef scalar, unsigned n) { return n ? LLVMVectorType(scalar, n) : scalar; }
+static LLVMValueRef splat(LLVMValueRef scalar, unsigned n) {
+    if (!n) return scalar;
+    LLVMValueRef elements[16];
+    for (unsigned i = 0; i < n && i < 16; i++) elements[i] = scalar;
+    return LLVMConstVector(elements, n < 16 ? n : 16);
+}
+static unsigned subwordBits(LLVMTypeRef type) {  // 8 or 16 for i8 / i16 (or vectors of them), else 0
+    LLVMTypeRef scalar = scalarOf(type);
+    if (LLVMGetTypeKind(scalar) != kTypeKindInteger) return 0;
+    unsigned bits = LLVMGetIntTypeWidth(scalar);
+    return bits == 8 || bits == 16 ? bits : 0;
+}
+// Lanes of a 32-bit word packed with K-bit integers, sign-extended to i32: lane `first` (n = 0) or lanes 0..n-1 as <n x i32>,
+// each ashr(shl(word, 32 - K(k + 1)), 32 - K). Shifting the whole word is what the back end gets right; shifts of a
+// zero-extended lane would be folded back into the sign extension by the optimizer that runs next.
+static LLVMValueRef signedLanes(LLVMBuilderRef b, LLVMTypeRef i32, LLVMValueRef word, unsigned n, unsigned bits, unsigned first) {
+    if (!n)
+        return LLVMBuildAShr(b, LLVMBuildShl(b, word, LLVMConstInt(i32, 32 - bits * (first + 1), false), ""),
+                             LLVMConstInt(i32, 32 - bits, false), "");
+    LLVMTypeRef words = LLVMVectorType(i32, n);
+    LLVMValueRef zero[16], left[16], right[16];
+    for (unsigned k = 0; k < n && k < 16; k++)
+        zero[k] = LLVMConstInt(i32, 0, false), left[k] = LLVMConstInt(i32, 32 - bits * (k + 1), false), right[k] = LLVMConstInt(i32, 32 - bits, false);
+    LLVMValueRef v = LLVMBuildShuffleVector(b, LLVMBuildInsertElement(b, LLVMGetUndef(words), word, LLVMConstInt(i32, 0, false), ""),
+                                            LLVMGetUndef(words), LLVMConstVector(zero, n), "");
+    return LLVMBuildAShr(b, LLVMBuildShl(b, v, LLVMConstVector(left, n), ""), LLVMConstVector(right, n), "");
+}
+// A vector of i8 / i16 that fills 16 or 32 bits, as an i32 word (nullptr otherwise)
+static LLVMValueRef wordOf(LLVMBuilderRef b, LLVMTypeRef i32, LLVMValueRef vector) {
+    LLVMTypeRef type = LLVMTypeOf(vector);
+    unsigned total = lanes(type) * subwordBits(type);
+    if (total != 16 && total != 32) return nullptr;
+    LLVMValueRef bits = LLVMBuildBitCast(b, vector, LLVMIntTypeInContext(LLVMGetTypeContext(i32), total), "");
+    return total == 32 ? bits : LLVMBuildZExt(b, bits, i32, "");
+}
+// x as a signed i32 (or <n x i32>) when x is a packed vector of i8 / i16 or a lane extracted from one with a constant
+// index; nullptr for other values (a lone char or short sits in the low part of its register, which is right)
+static LLVMValueRef signedValue(LLVMBuilderRef b, LLVMTypeRef i32, LLVMValueRef x) {
+    unsigned bits = subwordBits(LLVMTypeOf(x)), n = lanes(LLVMTypeOf(x));
+    if (n) {
+        LLVMValueRef word = wordOf(b, i32, x);
+        return word ? signedLanes(b, i32, word, n, bits, 0) : nullptr;
+    }
+    if (!LLVMIsAExtractElementInst(x) || !LLVMIsAConstantInt(LLVMGetOperand(x, 1))) return nullptr;
+    LLVMValueRef word = wordOf(b, i32, LLVMGetOperand(x, 0));
+    return word ? signedLanes(b, i32, word, 0, bits, (unsigned)LLVMConstIntGetZExtValue(LLVMGetOperand(x, 1))) : nullptr;
+}
+static LLVMValueRef resized(LLVMBuilderRef b, LLVMValueRef word, LLVMTypeRef type) {  // the signed i32 word as `type`
+    unsigned bits = LLVMGetIntTypeWidth(scalarOf(type));
+    return bits == 32 ? word : bits < 32 ? LLVMBuildTrunc(b, word, type, "") : LLVMBuildSExt(b, word, type, "");
+}
+static LLVMValueRef function(LLVMModuleRef module, const char *name, LLVMTypeRef result, LLVMTypeRef param) {
+    LLVMValueRef f = LLVMGetNamedFunction(module, name);
+    return f ? f : LLVMAddFunction(module, name, LLVMFunctionType(result, &param, 1, 0));
+}
+static std::string typeSuffix(unsigned n, char kind, unsigned bits) {  // "i32", "v4f32", ...
+    char text[16];
+    if (n) snprintf(text, sizeof text, "v%u%c%u", n, kind, bits);
+    else snprintf(text, sizeof text, "%c%u", kind, bits);
+    return text;
+}
+// air.convert.<to>.s.<from> with an i8 / i16 (or vector) argument: "air.convert.f.f32.s.i8", "air.convert.s.v4i32.s.v4i8"
+static bool signedSubwordConvert(LLVMValueRef call, const char *name) {
+    if (strncmp(name, "air.convert.", 12) || LLVMGetNumOperands(call) != 2 || !subwordBits(LLVMTypeOf(LLVMGetOperand(call, 0)))) return false;
+    const char *last = strrchr(name, '.');
+    return last - name >= 2 && last[-1] == 's' && last[-2] == '.';
+}
+
+static unsigned fixVertexSignedSubwords(LLVMModuleRef module) {
+    const char *setting = getenv("INTEL_SIGNED_SUBWORD_FIX");
+    if ((setting && !strcmp(setting, "0")) || !LLVMGetNamedMetadataNumOperands(module, "air.vertex")) return 0;
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context), f32 = LLVMFloatTypeInContext(context);
+    std::vector<LLVMValueRef> found;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                int opcode = LLVMGetInstructionOpcode(inst);
+                if ((opcode == kOpcodeSExt || opcode == kOpcodeSIToFP) && subwordBits(LLVMTypeOf(LLVMGetOperand(inst, 0)))) {
+                    found.push_back(inst);
+                    continue;
+                }
+                if (!LLVMIsACallInst(inst)) continue;
+                LLVMValueRef callee = LLVMGetCalledValue(inst);
+                const char *name = callee ? LLVMGetValueName(callee) : "";
+                if (!strncmp(name, "air.unpack.snorm4x8.", 20) || !strncmp(name, "air.unpack.snorm2x16.", 21) || signedSubwordConvert(inst, name))
+                    found.push_back(inst);
+            }
+    if (found.empty()) return 0;
+    LLVMBuilderRef b = LLVMCreateBuilderInContext(context);
+    unsigned fixed = 0;
+    for (LLVMValueRef inst : found) {
+        LLVMPositionBuilderBefore(b, inst);
+        LLVMTypeRef result = LLVMTypeOf(inst);
+        LLVMValueRef replacement = nullptr;
+        int opcode = LLVMGetInstructionOpcode(inst);
+        if (opcode == kOpcodeSExt || opcode == kOpcodeSIToFP) {
+            LLVMValueRef value = signedValue(b, i32, LLVMGetOperand(inst, 0));
+            if (!value) continue;
+            replacement = opcode == kOpcodeSExt ? resized(b, value, result) : LLVMBuildSIToFP(b, value, result, "");
+        } else {
+            const char *name = LLVMGetValueName(LLVMGetCalledValue(inst));
+            LLVMValueRef x = LLVMGetOperand(inst, 0);
+            if (!strncmp(name, "air.unpack.", 11)) {
+                // air.unpack.snorm4x8.v4f32(i32 x): lane k = clamp(float(int(x << (32 - K(k+1))) >> (32 - K)) / max, -1, 1)
+                unsigned bits = !strncmp(name, "air.unpack.snorm4x8.", 20) ? 8 : 16, n = 32 / bits;
+                if (lanes(result) != n || LLVMTypeOf(x) != i32) continue;
+                LLVMTypeRef words = LLVMVectorType(i32, n), floats = LLVMVectorType(f32, n);
+                LLVMValueRef s = signedLanes(b, i32, x, n, bits, 0);
+                std::string convert = "air.convert.f." + typeSuffix(n, 'f', 32) + ".s." + typeSuffix(n, 'i', 32);
+                LLVMValueRef args[1] = {s};
+                LLVMValueRef f = LLVMBuildCall(b, function(module, convert.c_str(), floats, words), args, 1, "");
+                f = LLVMBuildFDiv(b, f, splat(LLVMConstReal(f32, bits == 8 ? 127.0 : 32767.0), n), "");
+                LLVMValueRef minusOne = splat(LLVMConstReal(f32, -1.0), n);
+                f = LLVMBuildSelect(b, LLVMBuildFCmp(b, kRealOLT, f, minusOne, ""), minusOne, f, "");
+                if (LLVMGetTypeKind(scalarOf(result)) == kTypeKindHalf) {
+                    std::string narrow = "air.convert.f." + typeSuffix(n, 'f', 16) + ".f." + typeSuffix(n, 'f', 32);
+                    LLVMValueRef narrowArgs[1] = {f};
+                    f = LLVMBuildCall(b, function(module, narrow.c_str(), result, floats), narrowArgs, 1, "");
+                } else if (LLVMGetTypeKind(scalarOf(result)) != kTypeKindFloat) {
+                    continue;
+                }
+                replacement = f;
+            } else {
+                // air.convert.<to>.s.i8|i16|vNi8|vNi16(x): the same conversion of the signed i32 value(s)
+                LLVMValueRef word = signedValue(b, i32, x);
+                if (!word) continue;
+                unsigned n = lanes(LLVMTypeOf(x));
+                if (LLVMGetTypeKind(scalarOf(result)) == kTypeKindInteger && !strncmp(name, "air.convert.s.", 14)) {
+                    replacement = resized(b, word, result);
+                } else {
+                    std::string wide(name, strrchr(name, '.') - name);
+                    wide += "." + typeSuffix(n, 'i', 32);
+                    LLVMValueRef args[1] = {word};
+                    replacement = LLVMBuildCall(b, function(module, wide.c_str(), result, shaped(i32, n)), args, 1, "");
+                }
+            }
+        }
+        if (!replacement) continue;
+        LLVMReplaceAllUsesWith(inst, replacement);
+        LLVMInstructionEraseFromParent(inst);
+        fixed++;
+    }
+    LLVMDisposeBuilder(b);
+    return fixed;
+}
+
 static int hookedRun(void *self, LLVMModuleRef module) {
     pthread_mutex_lock(&installLock);
     installIntoPlugin(false);  // test process: the plugin was dlopened after we were inserted
@@ -785,6 +975,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] struct info dropped from %u array-of-struct argument(s)\n", n);
         n = fixEscapedHandleLoads(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u texture/sampler load(s) through escaped pointers re-indexed into the argument\n", n);
+        n = fixVertexSignedSubwords(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u signed i8/i16 conversion(s) in a vertex function done on the 32-bit word\n", n);
         if (n && getenv("INTELTEX_DUMP_HANDLES")) {  // debugging: the module after that rewrite
             static int serial;
             char path[1024];
