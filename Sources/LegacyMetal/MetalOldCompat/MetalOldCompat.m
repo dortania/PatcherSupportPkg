@@ -32,6 +32,8 @@
 //      service, as MetallibSupportPkg does for the system's metallibs
 //  26. divide by zero in WebKit's WebGPU, which only traps on Intel Macs (kills Safari's GPU process): gives the result
 //      Apple silicon gets
+//  27. blits into depth or stencil that later render passes don't see on the 12.x Intel driver: written again by a
+//      render pass
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -1043,6 +1045,253 @@ static BOOL definesMethod(const char *cls, const char *sel);
 static IMP swizzle(const char *cls, const char *sel, IMP imp);
 
 // Driver classes come from the driver bundles, which load with the first device: patched when a device is first seen.
+// 27. Blits into depth and stencil on the 12.x Intel driver: render passes don't see what a blit wrote there. Stencil
+// copied in (copyFromBuffer:...toTexture: with StencilFromDepthStencil, copyFromTexture:...toTexture:) reads back right
+// with a blit, but a later render pass still tests against the old stencil; depth copied into a small texture that keeps
+// HiZ (item 22; 4x4 here, 8x8 and larger were right) after a render pass cleared it still tests as the cleared value. ANGLE copies stencil that way on Intel GPUs,
+// so glBlitFramebuffer lost it. When a blit encoder that wrote into such a texture (a single-sample render target) ends,
+// each region is read back into a buffer with a blit and written again by a render pass: depth by a fragment function's
+// depth output, stencil cleared and then set one bit per draw (these GPUs have no stencil output). Test: s32.
+typedef id (*BlitEncoderIMP)(id, SEL);
+typedef void (*BufferToTextureIMP)(id, SEL, id, NSUInteger, NSUInteger, NSUInteger, MTLSize, id, NSUInteger, NSUInteger, MTLOrigin);
+typedef void (*BufferToTextureOptionsIMP)(id, SEL, id, NSUInteger, NSUInteger, NSUInteger, MTLSize, id, NSUInteger, NSUInteger, MTLOrigin,
+                                          MTLBlitOption);
+typedef void (*TextureToTextureIMP)(id, SEL, id, NSUInteger, NSUInteger, MTLOrigin, MTLSize, id, NSUInteger, NSUInteger, MTLOrigin);
+typedef void (*TextureToTextureOptionsIMP)(id, SEL, id, NSUInteger, NSUInteger, MTLOrigin, MTLSize, id, NSUInteger, NSUInteger, MTLOrigin,
+                                           MTLBlitOption);
+static BlitEncoderIMP origIGBlitEncoder;
+static EndEncodingIMP origIGBlitEndEncoding;
+static BufferToTextureIMP origIGBufferToTexture;
+static BufferToTextureOptionsIMP origIGBufferToTextureOptions;
+static TextureToTextureIMP origIGTextureToTexture;
+static TextureToTextureOptionsIMP origIGTextureToTextureOptions;
+static const void *kBlitCommandBuffer = &kBlitCommandBuffer, *kPendingDepthStencil = &kPendingDepthStencil;
+enum { kRewriteDepth = 1, kRewriteStencil = 2 };
+
+static BOOL keepsHiZ(id<MTLTexture> t) {  // item 22 creates these depth textures without it
+    return !origIGNewTexture || (t.mipmapLevelCount == 1 && t.arrayLength == 1 && t.textureType == MTLTextureType2D);
+}
+
+// What a blit into `t` with `options` needs rewritten (kRewriteDepth | kRewriteStencil), 0 for nothing
+static unsigned depthStencilRewrite(id<MTLTexture> t, MTLBlitOption options) {
+    if (!t || t.parentTexture || t.sampleCount > 1 || !(t.usage & MTLTextureUsageRenderTarget) || t.textureType == MTLTextureType3D) return 0;
+    switch (t.pixelFormat) {
+        case MTLPixelFormatDepth16Unorm:
+        case MTLPixelFormatDepth32Float:
+            return keepsHiZ(t) ? kRewriteDepth : 0;
+        case MTLPixelFormatStencil8:
+            return kRewriteStencil;
+        case MTLPixelFormatDepth32Float_Stencil8: {
+            BOOL depth = !(options & MTLBlitOptionStencilFromDepthStencil), stencil = !(options & MTLBlitOptionDepthFromDepthStencil);
+            return (depth && keepsHiZ(t) ? kRewriteDepth : 0) | (stencil ? kRewriteStencil : 0);
+        }
+        default:
+            return 0;
+    }
+}
+
+static void noteDepthStencilWrite(id encoder, id<MTLTexture> t, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLSize size,
+                                  MTLBlitOption options) {
+    unsigned what = depthStencilRewrite(t, options);
+    if (!what || !size.width || !size.height || !objc_getAssociatedObject(encoder, kBlitCommandBuffer)) return;
+    NSMutableArray *pending = objc_getAssociatedObject(encoder, kPendingDepthStencil);
+    if (!pending) objc_setAssociatedObject(encoder, kPendingDepthStencil, pending = [NSMutableArray array], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    NSArray *last = pending.lastObject;  // the driver's variant without options may call the one with them
+    MTLOrigin lastOrigin;
+    MTLSize lastSize;
+    if (last) [last[3] getValue:&lastOrigin], [last[4] getValue:&lastSize];
+    if (last && last[0] == t && [last[1] unsignedIntegerValue] == slice && [last[2] unsignedIntegerValue] == level &&
+        !memcmp(&lastOrigin, &origin, sizeof origin) && !memcmp(&lastSize, &size, sizeof size)) {
+        pending[pending.count - 1] = @[t, @(slice), @(level), last[3], last[4], @([last[5] unsignedIntValue] | what)];
+        return;
+    }
+    [pending addObject:@[t, @(slice), @(level), [NSValue valueWithBytes:&origin objCType:@encode(MTLOrigin)],
+                         [NSValue valueWithBytes:&size objCType:@encode(MTLSize)], @(what)]];
+}
+
+static id igBlitEncoder(id self, SEL _cmd) {
+    id encoder = origIGBlitEncoder(self, _cmd);
+    if (encoder) objc_setAssociatedObject(encoder, kBlitCommandBuffer, self, OBJC_ASSOCIATION_ASSIGN);  // ends before its buffer
+    return encoder;
+}
+static void igBufferToTexture(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInteger row, NSUInteger image, MTLSize size, id t,
+                              NSUInteger slice, NSUInteger level, MTLOrigin origin) {
+    origIGBufferToTexture(self, _cmd, buffer, offset, row, image, size, t, slice, level, origin);
+    noteDepthStencilWrite(self, t, slice, level, origin, size, MTLBlitOptionNone);
+}
+static void igBufferToTextureOptions(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInteger row, NSUInteger image, MTLSize size, id t,
+                                     NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLBlitOption options) {
+    origIGBufferToTextureOptions(self, _cmd, buffer, offset, row, image, size, t, slice, level, origin, options);
+    noteDepthStencilWrite(self, t, slice, level, origin, size, options);
+}
+static void igTextureToTexture(id self, SEL _cmd, id source, NSUInteger sourceSlice, NSUInteger sourceLevel, MTLOrigin sourceOrigin, MTLSize size,
+                               id t, NSUInteger slice, NSUInteger level, MTLOrigin origin) {
+    origIGTextureToTexture(self, _cmd, source, sourceSlice, sourceLevel, sourceOrigin, size, t, slice, level, origin);
+    noteDepthStencilWrite(self, t, slice, level, origin, size, MTLBlitOptionNone);
+}
+static void igTextureToTextureOptions(id self, SEL _cmd, id source, NSUInteger sourceSlice, NSUInteger sourceLevel, MTLOrigin sourceOrigin,
+                                      MTLSize size, id t, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLBlitOption options) {
+    origIGTextureToTextureOptions(self, _cmd, source, sourceSlice, sourceLevel, sourceOrigin, size, t, slice, level, origin, options);
+    noteDepthStencilWrite(self, t, slice, level, origin, size, options);
+}
+
+// Pipelines writing depth (from a float or ushort buffer) or one stencil bit (from a byte buffer) per pixel of a region
+// at buffer(0) {x, y, width}; key: kind | pixel format << 8.
+static id<MTLRenderPipelineState> depthStencilWriter(id<MTLDevice> device, MTLPixelFormat format, int kind) {
+    static NSMutableDictionary *pipelines;
+    static os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
+    NSString *key = [NSString stringWithFormat:@"%p-%lu-%d", device, (unsigned long)format, kind];
+    os_unfair_lock_lock(&lock);
+    if (!pipelines) pipelines = [NSMutableDictionary dictionary];
+    id<MTLRenderPipelineState> pipeline = pipelines[key];
+    os_unfair_lock_unlock(&lock);
+    if (pipeline) return pipeline;
+    static NSString *const source = @"#include <metal_stdlib>\nusing namespace metal;\n"
+        "struct Region { uint x, y, width; };\n"
+        "struct Depth { float value [[depth(any)]]; };\n"
+        "vertex float4 fullScreen(uint id [[vertex_id]]) { float2 p = float2((id << 1) & 2, id & 2); return float4(p * 2 - 1, 0, 1); }\n"
+        "static uint at(float4 p, constant Region &r) { return (uint(p.y) - r.y) * r.width + (uint(p.x) - r.x); }\n"
+        "fragment Depth depth32(float4 p [[position]], constant Region &r [[buffer(0)]], device const float *d [[buffer(1)]]) { return { d[at(p, r)] }; }\n"
+        "fragment Depth depth16(float4 p [[position]], constant Region &r [[buffer(0)]], device const ushort *d [[buffer(1)]]) {\n"
+        "    return { float(d[at(p, r)]) / 65535.0f };\n"
+        "}\n"
+        "fragment void stencilBit(float4 p [[position]], constant Region &r [[buffer(0)]], device const uchar *s [[buffer(1)]],\n"
+        "                         constant int &bit [[buffer(2)]]) {\n"
+        "    if (bit >= 0 && !((s[at(p, r)] >> bit) & 1)) discard_fragment();\n"
+        "}\n";
+    NSError *error = nil;
+    id<MTLLibrary> library = [device newLibraryWithSource:source options:nil error:&error];
+    MTLRenderPipelineDescriptor *descriptor = [MTLRenderPipelineDescriptor new];
+    descriptor.vertexFunction = [library newFunctionWithName:@"fullScreen"];
+    descriptor.fragmentFunction = [library newFunctionWithName:kind == kRewriteStencil ? @"stencilBit"
+                                                               : format == MTLPixelFormatDepth16Unorm ? @"depth16" : @"depth32"];
+    if (format != MTLPixelFormatStencil8) descriptor.depthAttachmentPixelFormat = format;
+    if (format == MTLPixelFormatStencil8 || format == MTLPixelFormatDepth32Float_Stencil8) descriptor.stencilAttachmentPixelFormat = format;
+    pipeline = library ? [device newRenderPipelineStateWithDescriptor:descriptor error:&error] : nil;
+    if (!pipeline && getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] depth/stencil rewrite pipeline: %s\n", error.localizedDescription.UTF8String);
+    os_unfair_lock_lock(&lock);
+    if (pipeline) pipelines[key] = pipeline;
+    os_unfair_lock_unlock(&lock);
+    return pipeline;
+}
+
+static id<MTLDepthStencilState> depthStencilWriteState(id<MTLDevice> device, BOOL depth, uint32_t stencilMask) {
+    MTLDepthStencilDescriptor *descriptor = [MTLDepthStencilDescriptor new];
+    descriptor.depthCompareFunction = MTLCompareFunctionAlways;
+    descriptor.depthWriteEnabled = depth;
+    if (stencilMask) {
+        MTLStencilDescriptor *stencil = [MTLStencilDescriptor new];
+        stencil.stencilCompareFunction = MTLCompareFunctionAlways;
+        stencil.depthStencilPassOperation = MTLStencilOperationReplace;
+        stencil.writeMask = stencilMask;
+        descriptor.frontFaceStencil = descriptor.backFaceStencil = stencil;
+    }
+    return [device newDepthStencilStateWithDescriptor:descriptor];
+}
+
+static void rewriteDepthStencil(id<MTLCommandBuffer> commandBuffer, NSArray *pending) {
+    for (NSArray *entry in pending) {
+        id<MTLTexture> t = entry[0];
+        NSUInteger slice = [entry[1] unsignedIntegerValue], level = [entry[2] unsignedIntegerValue];
+        MTLOrigin origin;
+        MTLSize size;
+        [entry[3] getValue:&origin];
+        [entry[4] getValue:&size];
+        unsigned what = [entry[5] unsignedIntValue];
+        id<MTLDevice> device = t.device;
+        BOOL combined = t.pixelFormat == MTLPixelFormatDepth32Float_Stencil8;
+        NSUInteger depthBytes = t.pixelFormat == MTLPixelFormatDepth16Unorm ? 2 : 4;
+        id<MTLRenderPipelineState> depthPipeline = what & kRewriteDepth ? depthStencilWriter(device, t.pixelFormat, kRewriteDepth) : nil;
+        id<MTLRenderPipelineState> stencilPipeline = what & kRewriteStencil ? depthStencilWriter(device, t.pixelFormat, kRewriteStencil) : nil;
+        id<MTLBuffer> depth = depthPipeline ? [device newBufferWithLength:size.width * size.height * depthBytes options:MTLResourceStorageModePrivate] : nil;
+        id<MTLBuffer> stencil = stencilPipeline ? [device newBufferWithLength:size.width * size.height options:MTLResourceStorageModePrivate] : nil;
+        if (!depth && !stencil) continue;
+        id<MTLBlitCommandEncoder> blit = [commandBuffer blitCommandEncoder];
+        if (depth)
+            [blit copyFromTexture:t sourceSlice:slice sourceLevel:level sourceOrigin:origin sourceSize:size toBuffer:depth destinationOffset:0
+                destinationBytesPerRow:size.width * depthBytes destinationBytesPerImage:size.width * size.height * depthBytes
+                               options:combined ? MTLBlitOptionDepthFromDepthStencil : MTLBlitOptionNone];
+        if (stencil)
+            [blit copyFromTexture:t sourceSlice:slice sourceLevel:level sourceOrigin:origin sourceSize:size toBuffer:stencil destinationOffset:0
+                destinationBytesPerRow:size.width destinationBytesPerImage:size.width * size.height
+                               options:combined ? MTLBlitOptionStencilFromDepthStencil : MTLBlitOptionNone];
+        [blit endEncoding];
+        MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+        if (t.pixelFormat != MTLPixelFormatStencil8) {
+            pass.depthAttachment.texture = t;
+            pass.depthAttachment.level = level;
+            pass.depthAttachment.slice = slice;
+            pass.depthAttachment.loadAction = MTLLoadActionLoad;
+            pass.depthAttachment.storeAction = MTLStoreActionStore;
+        }
+        if (t.pixelFormat == MTLPixelFormatStencil8 || combined) {
+            pass.stencilAttachment.texture = t;
+            pass.stencilAttachment.level = level;
+            pass.stencilAttachment.slice = slice;
+            pass.stencilAttachment.loadAction = MTLLoadActionLoad;
+            pass.stencilAttachment.storeAction = MTLStoreActionStore;
+        }
+        id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:pass];
+        const uint32_t region[3] = {(uint32_t)origin.x, (uint32_t)origin.y, (uint32_t)size.width};
+        [encoder setScissorRect:(MTLScissorRect){origin.x, origin.y, size.width, size.height}];
+        [encoder setFragmentBytes:region length:sizeof region atIndex:0];
+        if (depth) {
+            [encoder setRenderPipelineState:depthPipeline];
+            [encoder setDepthStencilState:depthStencilWriteState(device, YES, 0)];
+            [encoder setFragmentBuffer:depth offset:0 atIndex:1];
+            [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+        }
+        if (stencil) {
+            [encoder setRenderPipelineState:stencilPipeline];
+            [encoder setFragmentBuffer:stencil offset:0 atIndex:1];
+            for (int bit = -1; bit < 8; bit++) {  // -1: clear the region, then one bit per draw
+                [encoder setDepthStencilState:depthStencilWriteState(device, NO, bit < 0 ? 0xFF : 1u << bit)];
+                [encoder setStencilReferenceValue:bit < 0 ? 0 : 0xFF];
+                [encoder setFragmentBytes:&bit length:sizeof bit atIndex:2];
+                [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+            }
+        }
+        [encoder endEncoding];
+        if (getenv("MTLSHIM_VERBOSE"))
+            shimLog("[mtlshim] blit into %s: %lux%lu region written again by a render pass\n",
+                    what == (kRewriteDepth | kRewriteStencil) ? "depth and stencil" : what == kRewriteDepth ? "depth" : "stencil",
+                    (unsigned long)size.width, (unsigned long)size.height);
+    }
+}
+
+static void igBlitEndEncoding(id self, SEL _cmd) {
+    NSArray *pending = objc_getAssociatedObject(self, kPendingDepthStencil);
+    id<MTLCommandBuffer> commandBuffer = objc_getAssociatedObject(self, kBlitCommandBuffer);
+    origIGBlitEndEncoding(self, _cmd);
+    objc_setAssociatedObject(self, kBlitCommandBuffer, nil, OBJC_ASSOCIATION_ASSIGN);
+    if (!pending) return;
+    objc_setAssociatedObject(self, kPendingDepthStencil, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (commandBuffer) rewriteDepthStencil(commandBuffer, pending);
+}
+
+static void blitsIntoDepthStencil(void) {
+    static const char *const kBufferToTexture =
+        "copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:";
+    static const char *const kTextureToTexture =
+        "copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:";
+    char withOptions[256];
+    const char *setting = getenv("MTLSHIM_DEPTH_STENCIL_BLITS");
+    if (origIGBlitEndEncoding || (setting && !strcmp(setting, "0"))) return;
+    if (!definesMethod("MTLIGAccelCommandBuffer", "blitCommandEncoder") || !definesMethod("MTLIGAccelBlitCommandEncoder", "endEncoding") ||
+        !definesMethod("MTLIGAccelBlitCommandEncoder", kBufferToTexture) || !definesMethod("MTLIGAccelBlitCommandEncoder", kTextureToTexture))
+        return;
+    origIGBlitEncoder = (BlitEncoderIMP)swizzle("MTLIGAccelCommandBuffer", "blitCommandEncoder", (IMP)igBlitEncoder);
+    origIGBlitEndEncoding = (EndEncodingIMP)swizzle("MTLIGAccelBlitCommandEncoder", "endEncoding", (IMP)igBlitEndEncoding);
+    origIGBufferToTexture = (BufferToTextureIMP)swizzle("MTLIGAccelBlitCommandEncoder", kBufferToTexture, (IMP)igBufferToTexture);
+    origIGTextureToTexture = (TextureToTextureIMP)swizzle("MTLIGAccelBlitCommandEncoder", kTextureToTexture, (IMP)igTextureToTexture);
+    snprintf(withOptions, sizeof withOptions, "%soptions:", kBufferToTexture);
+    if (definesMethod("MTLIGAccelBlitCommandEncoder", withOptions))
+        origIGBufferToTextureOptions = (BufferToTextureOptionsIMP)swizzle("MTLIGAccelBlitCommandEncoder", withOptions, (IMP)igBufferToTextureOptions);
+    snprintf(withOptions, sizeof withOptions, "%soptions:", kTextureToTexture);
+    if (definesMethod("MTLIGAccelBlitCommandEncoder", withOptions))
+        origIGTextureToTextureOptions = (TextureToTextureOptionsIMP)swizzle("MTLIGAccelBlitCommandEncoder", withOptions, (IMP)igTextureToTextureOptions);
+}
+
 static void patchDriverClasses(void) {
     if (patched) restoreArgumentEncoders();  // item 14: after the wrapper's initializer
     static os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
@@ -1064,6 +1313,7 @@ static void patchDriverClasses(void) {
         origIGInitView = (InitViewIMP)swizzle("MTLIGAccelTexture", "initWithTexture:pixelFormat:textureType:levels:slices:", (IMP)igInitView);
     }
     intelDepthWithoutHiZ();
+    blitsIntoDepthStencil();
     if (!origIGFillBuffer && definesMethod("MTLIGAccelBlitCommandEncoder", "fillBuffer:range:value:"))
         origIGFillBuffer = (FillBufferIMP)swizzle("MTLIGAccelBlitCommandEncoder", "fillBuffer:range:value:", (IMP)igFillBuffer);
     os_unfair_lock_unlock(&lock);
