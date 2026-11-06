@@ -18,7 +18,8 @@
 # and reports SKIP (no such GPU) where that GPU is missing, so on a Mac without the AMD GPU run ./verify.sh Intel. The
 # @GPU cases then run once, and the table goes to RESULTS-<GPU>.md.
 # Needs: ../build.sh run first (its build/ folder, including build/stock/), an OCLP-patched Mac with the legacy Metal
-# stack (the tests drive the real GPUs), Xcode command-line tools.
+# stack (the tests drive the real GPUs), Xcode command-line tools. MetalOldCompat links MetalOld.dylib, which only Macs
+# with OCLP's MetalOld wrapper have (not GCN-only ones); without it the shim tests report SKIP and the rest run without it.
 # How it works without installing: tools/localcc.dylib runs Metal's GPU-compiler requests inside the test process
 # instead of in MTLCompilerService, so DYLD_LIBRARY_PATH picks the compiler files by name; the shim is loaded with
 # DYLD_INSERT_LIBRARIES. A crash inside the in-process compiler leaves no result line and counts as the bug reproducing
@@ -51,6 +52,7 @@ PARSERFIX_SKIP_STRUCT_MAP=1 python3 -I ../libAMDIL902/make_parser_fix.py "$B/sto
     "$PATCH4/libAMDIL902.dylib" > /dev/null
 codesign -f -s - "$PATCH3/libAMDIL902.dylib" "$PATCH4/libAMDIL902.dylib" 2> /dev/null
 SHIM=$B/MetalOldCompat.dylib NOOP=$B/MetalOldCompat-noop.dylib CC=$PWD/tools/localcc.dylib BRONZELOAD=$PWD/tools/bronzeload.dylib
+[ -f /System/Library/Frameworks/Metal.framework/Versions/A/MetalOld.dylib ] || SHIM= NOOP=
 
 # <test[@gpu]>:<what "without the fix" removes>
 CASES="s01-device-methods:shim s02-reflection:shim s03-shader-atomic-usage:shim s27-memoryless-texture:memoryless s07-vertex-descriptor:shim
@@ -81,7 +83,7 @@ run() {  # <test[@gpu]> <removed fix or "fixed">
     [ "$t" = s13-new-air-metallib ] && env+=(__XPC_DYLD_INSERT_LIBRARIES=$shim)
     rm -rf "$(getconf DARWIN_USER_CACHE_DIR)com.apple.metal"
     env ${env[@]+"${env[@]}"} AMD_BRONZE_COMPAT_PATH=$B/AMDBronzeCompat.dylib \
-        DYLD_INSERT_LIBRARIES=$shim:$CC${inject:+:$inject} DYLD_LIBRARY_PATH=$libs ./build/"$t" ${gpu:+"$gpu"} 2>/dev/null |
+        DYLD_INSERT_LIBRARIES=${shim:+$shim:}$CC${inject:+:$inject} DYLD_LIBRARY_PATH=$libs ./build/"$t" ${gpu:+"$gpu"} 2>/dev/null |
         grep -E '^(PASS|FAIL|SKIP) ' | tail -1
 }
 
@@ -97,8 +99,12 @@ run() {  # <test[@gpu]> <removed fix or "fixed">
     echo "|---|---|---|"
     for c in $CASES; do
         t=${c%%:*} removed=${c#*:}
-        before=$(run "$t" "$removed"); before=${before:-FAIL: crashed (in-process compiler)}
-        after=$(run "$t" fixed); after=${after:-FAIL: crashed (in-process compiler)}
+        if [ -z "$SHIM" ] && [ "$removed" = shim ]; then
+            before="SKIP ${t%%@*}: MetalOldCompat needs OCLP's MetalOld wrapper" after=$before
+        else
+            before=$(run "$t" "$removed"); before=${before:-FAIL: crashed (in-process compiler)}
+            after=$(run "$t" fixed); after=${after:-FAIL: crashed (in-process compiler)}
+        fi
         echo "$t" >&2; echo "  without: $before" >&2; echo "  with:    $after" >&2
         echo "| ${t/@/ on } | $before | $after |"
     done

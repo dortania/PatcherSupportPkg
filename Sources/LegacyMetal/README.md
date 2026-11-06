@@ -29,3 +29,5 @@ installed. On Tahoe, use `run.sh`: `verify.sh` compiles in the test process thro
 
 Each test uses the GPU its bug is about and reports SKIP where that GPU is missing. Both scripts take a GPU name
 substring to run every test on one GPU: on a Mac without the AMD GPU, use `./verify.sh Intel` and `./run.sh Intel`.
+Without OCLP's MetalOld wrapper (GCN-only Macs), MetalOldCompat can't load, so `verify.sh` reports SKIP for its tests
+and runs the rest without it.
