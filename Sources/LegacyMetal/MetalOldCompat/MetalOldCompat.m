@@ -40,6 +40,8 @@
 //  29. a sample mask of 0 from WebKit's WebGPU on the 12.x Intel driver (every sample drawn): a mask that covers none
 //  30. integer cube textures with 1x1 / 2x2 faces sampled in vertex and fragment functions on the 12.x Intel driver (0):
 //      nearest samplers get programmed instead of seamless cube addressing
+//  31. LOD clamps passed to the 12.x Intel driver's encoders (setFragmentSamplerState:lodMinClamp:lodMaxClamp:atIndex: and
+//      the like) wrap modulo 16 (ANGLE's 1000 reads as 8: WebGL never sampled a mip level above 8): clamped to [0, 15.996]
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -1396,6 +1398,63 @@ static void nearestCubeClamp(void) {
     origIGInitSamplerState = (InitSamplerStateIMP)swizzle("MTLIGSampler", "initializeSamplerState:", (IMP)igInitSamplerState);
 }
 
+// 31. The 12.x Intel driver's encoders pack the LOD clamps of setVertexSamplerState:lodMinClamp:lodMaxClamp:atIndex: and
+// the like (vertex, fragment, tile and compute stages, one sampler or a range) into the sampler state's 4.8 fixed-point
+// LOD fields without saturating them, so they wrap modulo 16: 1000 reads as 8, 20 as 4, -3 as 13. Sampler descriptors'
+// clamps are saturated (newSamplerStateWithDescriptor:). ANGLE binds every texture's sampler with GL's TEXTURE_MIN_LOD /
+// TEXTURE_MAX_LOD this way, by default 0 and 1000, so in Chrome and Safari WebGL never sampled a mip level above 8
+// (textures over 256 texels, minified: conformance2/glsl3/texture-bias.html). The clamps are clamped to the fields' range
+// [0, 4095 / 256] first. MTLSHIM_ENCODER_LOD_CLAMP=0 turns it off. Test: s35.
+typedef void (*SetSamplerLodIMP)(id, SEL, id, float, float, NSUInteger);
+typedef void (*SetSamplersLodIMP)(id, SEL, const id __unsafe_unretained *, const float *, const float *, NSRange);
+enum { kLodVertex, kLodFragment, kLodTile, kLodCompute, kLodStages };
+static SetSamplerLodIMP origIGSamplerLod[kLodStages];
+static SetSamplersLodIMP origIGSamplersLod[kLodStages];
+
+static float lodField(float lod) {  // NaN: 0
+    return lod > 0 ? (lod < 4095.0f / 256 ? lod : 4095.0f / 256) : 0;
+}
+static void igSamplersLod(int stage, id self, SEL _cmd, const id __unsafe_unretained *samplers, const float *mins, const float *maxs,
+                          NSRange range) {
+    float clampedMins[32], clampedMaxs[32];
+    if (!mins || !maxs || range.length > 32) return origIGSamplersLod[stage](self, _cmd, samplers, mins, maxs, range);
+    for (NSUInteger i = 0; i < range.length; i++) clampedMins[i] = lodField(mins[i]), clampedMaxs[i] = lodField(maxs[i]);
+    origIGSamplersLod[stage](self, _cmd, samplers, clampedMins, clampedMaxs, range);
+}
+#define LOD_CLAMP_HOOKS(stage)                                                                                                      \
+    static void igSamplerLod##stage(id self, SEL _cmd, id sampler, float min, float max, NSUInteger index) {                     \
+        origIGSamplerLod[stage](self, _cmd, sampler, lodField(min), lodField(max), index);                                         \
+    }                                                                                                                               \
+    static void igSamplersLod##stage(id self, SEL _cmd, const id __unsafe_unretained *samplers, const float *mins, const float *maxs, \
+                                     NSRange range) {                                                                               \
+        igSamplersLod(stage, self, _cmd, samplers, mins, maxs, range);                                                              \
+    }
+LOD_CLAMP_HOOKS(kLodVertex)
+LOD_CLAMP_HOOKS(kLodFragment)
+LOD_CLAMP_HOOKS(kLodTile)
+LOD_CLAMP_HOOKS(kLodCompute)
+
+static void encoderLodClamps(void) {
+    static const struct { const char *cls, *one, *range; IMP hookOne, hookRange; } kHooks[kLodStages] = {
+        {"MTLIGAccelRenderCommandEncoder", "setVertexSamplerState:lodMinClamp:lodMaxClamp:atIndex:",
+         "setVertexSamplerStates:lodMinClamps:lodMaxClamps:withRange:", (IMP)igSamplerLodkLodVertex, (IMP)igSamplersLodkLodVertex},
+        {"MTLIGAccelRenderCommandEncoder", "setFragmentSamplerState:lodMinClamp:lodMaxClamp:atIndex:",
+         "setFragmentSamplerStates:lodMinClamps:lodMaxClamps:withRange:", (IMP)igSamplerLodkLodFragment, (IMP)igSamplersLodkLodFragment},
+        {"MTLIGAccelRenderCommandEncoder", "setTileSamplerState:lodMinClamp:lodMaxClamp:atIndex:",
+         "setTileSamplerStates:lodMinClamps:lodMaxClamps:withRange:", (IMP)igSamplerLodkLodTile, (IMP)igSamplersLodkLodTile},
+        {"MTLIGAccelComputeCommandEncoder", "setSamplerState:lodMinClamp:lodMaxClamp:atIndex:",
+         "setSamplerStates:lodMinClamps:lodMaxClamps:withRange:", (IMP)igSamplerLodkLodCompute, (IMP)igSamplersLodkLodCompute},
+    };
+    const char *setting = getenv("MTLSHIM_ENCODER_LOD_CLAMP");
+    if (setting && !strcmp(setting, "0")) return;
+    for (int stage = 0; stage < kLodStages; stage++) {
+        if (!origIGSamplerLod[stage] && definesMethod(kHooks[stage].cls, kHooks[stage].one))
+            origIGSamplerLod[stage] = (SetSamplerLodIMP)swizzle(kHooks[stage].cls, kHooks[stage].one, kHooks[stage].hookOne);
+        if (!origIGSamplersLod[stage] && definesMethod(kHooks[stage].cls, kHooks[stage].range))
+            origIGSamplersLod[stage] = (SetSamplersLodIMP)swizzle(kHooks[stage].cls, kHooks[stage].range, kHooks[stage].hookRange);
+    }
+}
+
 // 29. WebKit's WebGPU sets GPUMultisampleState.mask with the render pipeline descriptor's sample mask. The 12.x Intel driver
 // takes 0 to mean no mask and draws every sample, where nothing should be drawn (WebGPU CTS occlusionQuery sample_mask,
 // sampleMask=0), as the 12.5 AMD driver does (AMDBronzeCompat item 7, which only loads with the AMD driver). A bit past the
@@ -1431,6 +1490,7 @@ static void patchDriverClasses(void) {
     blitsIntoDepthStencil();
     nilArgumentBuffers();
     nearestCubeClamp();
+    encoderLodClamps();
     // item 29, once the Intel driver is in (WebKit's processes are named by then)
     if (!origSetSampleMask && !strncmp(getprogname(), "com.apple.WebKit", 16) && definesMethod("MTLRenderPipelineDescriptorInternal", "setSampleMask:"))
         origSetSampleMask = (SetSampleMaskIMP)swizzle("MTLRenderPipelineDescriptorInternal", "setSampleMask:", (IMP)compatSetSampleMask);
