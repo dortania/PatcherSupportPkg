@@ -38,6 +38,8 @@
 //  28. nil buffers encoded into argument buffers on the 12.x Intel driver (a null dereference; Blender's Cycles): the
 //      slot cleared instead
 //  29. a sample mask of 0 from WebKit's WebGPU on the 12.x Intel driver (every sample drawn): a mask that covers none
+//  30. integer cube textures with 1x1 / 2x2 faces sampled in vertex and fragment functions on the 12.x Intel driver (0):
+//      nearest samplers get programmed instead of seamless cube addressing
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -1360,6 +1362,40 @@ static void nilArgumentBuffers(void) {
     origIGArgSetBuffers = (ArgSetBuffersIMP)swizzle(kClass, "setBuffers:offsets:withRange:", (IMP)igArgSetBuffers);
 }
 
+// 30. Integer cube textures with 1x1 or 2x2 faces sample as 0 in vertex and fragment functions on the 12.x Intel driver
+// (compute kernels and float formats are right). The driver's sampler state asks for seamless cube addressing
+// (CubeSurfaceControlMode = override), and the sampler can't do that for integer formats on faces this small. Integer
+// textures are only sampled with nearest filtering, where seamless addressing changes nothing (a nearest texel never
+// spans a face edge), so samplers whose min and mag filters are nearest get the programmed (clamped) addressing. The
+// WebGL suite uploads such faces from canvases and ImageData (integer-cubemap-texture-sampling, tex-2d-*ui-*_integer-*:
+// about 2400 failures in Chrome and Safari). MTLSHIM_NEAREST_CUBE_CLAMP=0 turns it off.
+typedef void (*InitSamplerStateIMP)(id, SEL, id);
+static InitSamplerStateIMP origIGInitSamplerState;
+static ptrdiff_t igSamplerStateOffset = -1;
+
+static void igInitSamplerState(id self, SEL _cmd, id descriptor) {
+    origIGInitSamplerState(self, _cmd, descriptor);
+    uint32_t *state = (uint32_t *)((char *)(__bridge void *)self + igSamplerStateOffset);
+    BOOL nearest = !((state[0] >> 14) & 7) && !((state[0] >> 17) & 7);  // MinModeFilter, MagModeFilter
+    if (nearest && (state[1] & 1)) {
+        state[1] &= ~1u;  // CubeSurfaceControlMode: programmed
+        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] nearest sampler: programmed cube addressing\n");
+    }
+}
+
+static void nearestCubeClamp(void) {
+    static const char kLayout[] = "{SGfxSamplerState=\"AnisotropicAlgorithm\"b1\"TextureLODBias\"b13\"MinModeFilter\"b3\"MagModeFilter\"b3";
+    const char *setting = getenv("MTLSHIM_NEAREST_CUBE_CLAMP");
+    Class c = objc_getClass("MTLIGSampler");
+    Ivar state = c ? class_getInstanceVariable(c, "samplerState") : NULL;
+    if (origIGInitSamplerState || (setting && !strcmp(setting, "0")) || !state ||
+        strncmp(ivar_getTypeEncoding(state), kLayout, sizeof kLayout - 1) ||
+        !strstr(ivar_getTypeEncoding(state), "\"SamplerDisable\"b1\"CubeSurfaceControlMode\"b1") || !definesMethod("MTLIGSampler", "initializeSamplerState:"))
+        return;
+    igSamplerStateOffset = ivar_getOffset(state);
+    origIGInitSamplerState = (InitSamplerStateIMP)swizzle("MTLIGSampler", "initializeSamplerState:", (IMP)igInitSamplerState);
+}
+
 // 29. WebKit's WebGPU sets GPUMultisampleState.mask with the render pipeline descriptor's sample mask. The 12.x Intel driver
 // takes 0 to mean no mask and draws every sample, where nothing should be drawn (WebGPU CTS occlusionQuery sample_mask,
 // sampleMask=0), as the 12.5 AMD driver does (AMDBronzeCompat item 7, which only loads with the AMD driver). A bit past the
@@ -1394,6 +1430,7 @@ static void patchDriverClasses(void) {
     intelDepthWithoutHiZ();
     blitsIntoDepthStencil();
     nilArgumentBuffers();
+    nearestCubeClamp();
     // item 29, once the Intel driver is in (WebKit's processes are named by then)
     if (!origSetSampleMask && !strncmp(getprogname(), "com.apple.WebKit", 16) && definesMethod("MTLRenderPipelineDescriptorInternal", "setSampleMask:"))
         origSetSampleMask = (SetSampleMaskIMP)swizzle("MTLRenderPipelineDescriptorInternal", "setSampleMask:", (IMP)compatSetSampleMask);
