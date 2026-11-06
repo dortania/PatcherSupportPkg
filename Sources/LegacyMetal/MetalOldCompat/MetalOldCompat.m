@@ -47,6 +47,9 @@
 //  32. texture views with a swizzle on the 12.x Intel driver (nil: family 1 has no swizzle; Dawn, told the iGPU is family 2
 //      by item 11, makes every depth/stencil view with one and loses the device): a plain view where the swizzle changes
 //      nothing a shader can see
+//  34. coverage from a fragment function (sample_mask output, alpha-to-coverage) in a pipeline with no depth/stencil and
+//      every color writeMask none on the 12.x Intel driver (dropped: occlusion queries count every sample): the first
+//      blendable color attachment is written through a blend that keeps it
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -613,22 +616,74 @@ static MTLRenderPipelineDescriptor *withEmptyFragment(id<MTLDevice> device, MTLR
     return copy;
 }
 
+// 34. Coverage that a fragment function computes (a [[sample_mask]] output, or its alpha with alpha-to-coverage) travels
+// with the color write on the 12.x Intel driver. In a pipeline with no depth or stencil attachment whose color attachments
+// all have writeMask none, the fragment function runs but its coverage is dropped: every sample counts as drawn, and
+// occlusion queries count them all (WebGPU CTS occlusionQuery sample_mask and alpha_to_coverage with writeMask 0; Dawn
+// does GPUMultisampleState.mask with a sample_mask output). Discards and buffer writes are unaffected. On the Intel GPU,
+// such pipelines with several samples or alpha-to-coverage write their first blendable color attachment through a blend
+// that keeps what's there (source x 0 + destination x 1). Test: s38. MTLSHIM_COVERAGE_WRITE=0 turns it off.
+static BOOL blendableFormat(MTLPixelFormat f) {
+    switch (f) {
+    case MTLPixelFormatR8Uint: case MTLPixelFormatR8Sint: case MTLPixelFormatR16Uint: case MTLPixelFormatR16Sint:
+    case MTLPixelFormatRG8Uint: case MTLPixelFormatRG8Sint: case MTLPixelFormatR32Uint: case MTLPixelFormatR32Sint:
+    case MTLPixelFormatRG16Uint: case MTLPixelFormatRG16Sint: case MTLPixelFormatRGBA8Uint: case MTLPixelFormatRGBA8Sint:
+    case MTLPixelFormatRGB10A2Uint: case MTLPixelFormatRG32Uint: case MTLPixelFormatRG32Sint: case MTLPixelFormatRGBA16Uint:
+    case MTLPixelFormatRGBA16Sint: case MTLPixelFormatRGBA32Uint: case MTLPixelFormatRGBA32Sint: case MTLPixelFormatInvalid:
+        return NO;
+    default:
+        return YES;
+    }
+}
+
+static MTLRenderPipelineDescriptor *withCoverageWrite(id<MTLDevice> device, MTLRenderPipelineDescriptor *descriptor) {
+    static Class intel;
+    if (!intel) intel = objc_getClass("MTLIGAccelDevice");
+    if (!intel || ![(id)device isKindOfClass:intel] || !descriptor || !descriptor.fragmentFunction || !descriptor.rasterizationEnabled ||
+        descriptor.depthAttachmentPixelFormat != MTLPixelFormatInvalid || descriptor.stencilAttachmentPixelFormat != MTLPixelFormatInvalid ||
+        (descriptor.rasterSampleCount <= 1 && !descriptor.alphaToCoverageEnabled))
+        return descriptor;
+    const char *setting = getenv("MTLSHIM_COVERAGE_WRITE");
+    if (setting && !strcmp(setting, "0")) return descriptor;
+    int target = -1;
+    for (NSUInteger i = 0; i < 8; i++) {
+        MTLRenderPipelineColorAttachmentDescriptor *a = descriptor.colorAttachments[i];
+        if (a.pixelFormat == MTLPixelFormatInvalid) continue;
+        if (a.writeMask != MTLColorWriteMaskNone) return descriptor;
+        if (target < 0 && blendableFormat(a.pixelFormat)) target = (int)i;
+    }
+    if (target < 0) return descriptor;
+    MTLRenderPipelineDescriptor *copy = [descriptor copy];
+    MTLRenderPipelineColorAttachmentDescriptor *a = copy.colorAttachments[target];
+    a.writeMask = MTLColorWriteMaskAll;
+    a.blendingEnabled = YES;
+    a.rgbBlendOperation = a.alphaBlendOperation = MTLBlendOperationAdd;
+    a.sourceRGBBlendFactor = a.sourceAlphaBlendFactor = MTLBlendFactorZero;
+    a.destinationRGBBlendFactor = a.destinationAlphaBlendFactor = MTLBlendFactorOne;
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] render pipeline without writes: color attachment %d written through a blend that keeps it\n", target);
+    return copy;
+}
+
+static MTLRenderPipelineDescriptor *adjustedPipeline(id<MTLDevice> device, MTLRenderPipelineDescriptor *descriptor) {
+    return withCoverageWrite(device, withEmptyFragment(device, descriptor));  // items 21 and 34
+}
+
 static id newRenderPipeline(id self, SEL _cmd, MTLRenderPipelineDescriptor *descriptor, NSError **error) {
-    return origNewRenderPipeline(self, _cmd, withEmptyFragment(self, descriptor), error);
+    return origNewRenderPipeline(self, _cmd, adjustedPipeline(self, descriptor), error);
 }
 
 static id newRenderPipelineRefl(id self, SEL _cmd, MTLRenderPipelineDescriptor *descriptor, MTLPipelineOption options,
                                 MTLAutoreleasedRenderPipelineReflection *reflection, NSError **error) {
-    return origNewRenderPipelineRefl(self, _cmd, withEmptyFragment(self, descriptor), options, reflection, error);
+    return origNewRenderPipelineRefl(self, _cmd, adjustedPipeline(self, descriptor), options, reflection, error);
 }
 
 static void newRenderPipelineAsync(id self, SEL _cmd, MTLRenderPipelineDescriptor *descriptor, id handler) {
-    origNewRenderPipelineAsync(self, _cmd, withEmptyFragment(self, descriptor), handler);
+    origNewRenderPipelineAsync(self, _cmd, adjustedPipeline(self, descriptor), handler);
 }
 
 static void newRenderPipelineOptAsync(id self, SEL _cmd, MTLRenderPipelineDescriptor *descriptor, MTLPipelineOption options,
                                       id handler) {
-    origNewRenderPipelineOptAsync(self, _cmd, withEmptyFragment(self, descriptor), options, handler);
+    origNewRenderPipelineOptAsync(self, _cmd, adjustedPipeline(self, descriptor), options, handler);
 }
 
 static void fillEmptyFragments(void) {
