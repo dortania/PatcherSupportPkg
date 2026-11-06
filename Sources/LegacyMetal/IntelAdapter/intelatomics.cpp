@@ -1169,7 +1169,7 @@ static unsigned lowerIntegerGradients(LLVMModuleRef module) {
 // Texel offsets on integer textures: into the coordinates.
 static unsigned foldIntegerSampleOffsets(LLVMModuleRef module) {
     if (disabled("INTEL_INTEGER_OFFSET_FIX")) return 0;
-    bool bound = runtimeNamesBound(module);  // no air.* calls can be added (see fixVertexFloat3Inputs)
+    bool bound = runtimeNamesBound(module);  // no air.* calls can be added (see fixFloat3Inputs)
     LLVMContextRef context = LLVMGetModuleContext(module);
     LLVMTypeRef i32 = LLVMInt32TypeInContext(context), f32 = LLVMFloatTypeInContext(context), i1 = LLVMInt1TypeInContext(context);
     // after: operands after the offset (the level flag, level or bias and i32 of a sample; component and i32 of a gather;
@@ -1488,14 +1488,18 @@ static unsigned wordPrivateSubwords(LLVMModuleRef module) {
     return (unsigned)accesses.size();
 }
 
-// ---- float3 vertex inputs ------------------------------------------------------------------------------------------
+// ---- float3 vertex and fragment inputs -------------------------------------------------------------------------------
 // When a vertex function copies a component of a float3 vertex input straight to an output (`out.o = in.a.y`), the back
 // end declares the input (DCL_INPUT i1.xyz) but drops its move into a register and writes the output from one nothing
 // set (MOV o0.x, r1.x): 0 or garbage. Float2 and float4 inputs, and any arithmetic on the input, are right. ANGLE's
 // vertex shaders do that copy for `out0 = in0.x` on a vec3 attribute (dEQP swizzles_vec3 *_vertex,
-// conversions_vector_to_scalar vec3_to_float_vertex). Each <3 x float> parameter of a vertex function goes through
-// air.fast_fmax(a, a) first, which is exact (NaN stays NaN) and makes the back end read the input. Only before the plugin
-// binds air.* calls to its runtime library (see runtimeNamesBound). INTEL_VERTEX_FLOAT3_FIX=0 turns it off.
+// conversions_vector_to_scalar vec3_to_float_vertex). In fragment functions, the z of a float3 input given straight to
+// sample_compare as the reference value compares with the input's x instead; ANGLE passes sampler2DShadow coordinates
+// as a vec3 varying that way (dEQP texture.sampler2dshadow_fragment, textureoffset.sampler2dshadow_fragment and their
+// _bias cases). Each <3 x float> parameter of a vertex or fragment function goes through air.fast_fmax(a, a) first,
+// which is exact (NaN stays NaN) and makes the back end read the input into a register. Only before the plugin binds
+// air.* calls to its runtime library (see runtimeNamesBound). INTEL_VERTEX_FLOAT3_FIX=0 and INTEL_FRAGMENT_FLOAT3_FIX=0
+// turn it off.
 // Whether the plugin has already turned the module's air.* calls into the runtime library's air_* functions (a later
 // pass-manager run on the same module): air.* calls added then are never resolved, and the back end crashes lowering them.
 static bool runtimeNamesBound(LLVMModuleRef module) {
@@ -1504,17 +1508,21 @@ static bool runtimeNamesBound(LLVMModuleRef module) {
     return false;
 }
 
-static unsigned fixVertexFloat3Inputs(LLVMModuleRef module) {
-    const char *setting = getenv("INTEL_VERTEX_FLOAT3_FIX");
-    if ((setting && !strcmp(setting, "0")) || runtimeNamesBound(module)) return 0;
-    std::vector<LLVMValueRef> vertexFunctions(LLVMGetNamedMetadataNumOperands(module, "air.vertex"));
-    if (vertexFunctions.empty()) return 0;
-    LLVMGetNamedMetadataOperands(module, "air.vertex", vertexFunctions.data());
+static unsigned fixFloat3Inputs(LLVMModuleRef module) {
+    if (runtimeNamesBound(module)) return 0;
+    std::vector<LLVMValueRef> entryFunctions;
+    for (const char *list : {"air.vertex", "air.fragment"}) {
+        if (disabled(!strcmp(list, "air.vertex") ? "INTEL_VERTEX_FLOAT3_FIX" : "INTEL_FRAGMENT_FLOAT3_FIX")) continue;
+        std::vector<LLVMValueRef> entries(LLVMGetNamedMetadataNumOperands(module, list));
+        if (!entries.empty()) LLVMGetNamedMetadataOperands(module, list, entries.data());
+        entryFunctions.insert(entryFunctions.end(), entries.begin(), entries.end());
+    }
+    if (entryFunctions.empty()) return 0;
     LLVMContextRef context = LLVMGetModuleContext(module);
     LLVMTypeRef f32 = LLVMFloatTypeInContext(context), v3f32 = LLVMVectorType(f32, 3);
     LLVMBuilderRef b = nullptr;
     unsigned fixed = 0;
-    for (LLVMValueRef node : vertexFunctions) {
+    for (LLVMValueRef node : entryFunctions) {
         std::vector<LLVMValueRef> parts = metadataOperands(node);
         LLVMValueRef function = parts.empty() ? nullptr : parts[0];
         if (!function || LLVMIsDeclaration(function) || !LLVMGetFirstBasicBlock(function)) continue;
@@ -1682,8 +1690,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] %u threadgroup bool(s) widened to i8\n", n);
         n = wordPrivateSubwords(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u aligned byte/halfword access(es) to private memory done on the 32-bit word\n", n);
-        n = fixVertexFloat3Inputs(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u float3 vertex input(s) read through fmax\n", n);
+        n = fixFloat3Inputs(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u float3 vertex/fragment input(s) read through fmax\n", n);
         n = selectPrivateArrayIndices(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u variable-index private array access(es) done at constant indices\n", n);
         if (n && getenv("INTELTEX_DUMP_HANDLES")) {  // debugging: the module after that rewrite
