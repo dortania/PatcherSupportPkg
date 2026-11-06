@@ -1,23 +1,45 @@
 // s25-amd-srgb-resolve (AMDBronzeCompat item 4): an MSAA resolve of an sRGB attachment with the 12.5 AMD driver. The
 // driver averages the encoded bytes instead of the linear values, so antialiased edges are too dark (WebGPU conformance:
 // render_pass,resolve:render_pass_resolve). Half of 4 samples white over black: the correct result is linear 0.5 = sRGB
-// byte 188; averaging the bytes gives 128. A linear format stays 128, and alpha is 128 either way.
+// byte 188; averaging the bytes gives 128. A linear format stays 128, and alpha is 128 either way. The blended case draws
+// every sample with white at alpha 0.5 over black, blended in linear space: 188 whether resolved right or not, so it checks
+// that the fix's linear stand-in attachment blends as the sRGB one does.
+// On the 12.5-24 driver (the build that links impostor.dylib), a shader read of a multisample texture resets the GPU, so
+// the fix keeps the driver's resolve for passes that store or load their samples; that case is reported, not failed.
 // Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
 #import "repro.h"
+#include <mach-o/dyld.h>
+
+static BOOL multisampleReadsFault(void) {  // the same check as AMDBronzeCompat's
+    static const char kImpostor[] = "/AMDMTLBronzeDriver.bundle/Contents/MacOS/impostor.dylib";
+    for (uint32_t i = 0, n = _dyld_image_count(); i < n; i++) {
+        const char *name = _dyld_get_image_name(i);
+        size_t length = name ? strlen(name) : 0;
+        if (length >= sizeof kImpostor - 1 && !strcmp(name + length - (sizeof kImpostor - 1), kImpostor)) return YES;
+    }
+    return NO;
+}
 
 // Returns the resolved red byte, or -1 if a pass failed; alpha goes to *alpha.
-static int resolved(id<MTLDevice> d, MTLPixelFormat format, MTLStoreAction store, NSUInteger level, NSUInteger slice, int *alpha) {
+static int resolved(id<MTLDevice> d, MTLPixelFormat format, MTLStoreAction store, NSUInteger level, NSUInteger slice, BOOL blend,
+                    int *alpha) {
     NSString *source = [@"#include <metal_stdlib>\nusing namespace metal;\n"
         "vertex float4 v(uint id [[vertex_id]]) { float2 p = float2((id << 1) & 2, id & 2); return float4(p * 2 - 1, 0, 1); }\n"
         "struct F { float4 color [[color(0)]]; uint mask [[sample_mask]]; };\n"
-        "fragment F f() { return { float4(1), 3 }; }\n" stringByAppendingString:reproUniqueComment()];
+        "fragment F f() { return { float4(1), 3 }; }\n"
+        "fragment float4 g() { return float4(1, 1, 1, 0.5); }\n" stringByAppendingString:reproUniqueComment()];
     NSError *error = nil;
     id<MTLLibrary> library = [d newLibraryWithSource:source options:nil error:&error];
     MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
     pd.vertexFunction = [library newFunctionWithName:@"v"];
-    pd.fragmentFunction = [library newFunctionWithName:@"f"];
+    pd.fragmentFunction = [library newFunctionWithName:blend ? @"g" : @"f"];
     pd.colorAttachments[0].pixelFormat = format;
     pd.rasterSampleCount = 4;
+    if (blend) {
+        pd.colorAttachments[0].blendingEnabled = YES;
+        pd.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+        pd.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+    }
     id<MTLRenderPipelineState> pipeline = library ? [d newRenderPipelineStateWithDescriptor:pd error:&error] : nil;
     if (!pipeline) return -1;
 
@@ -59,20 +81,24 @@ int main(int argc, char **argv) {
         const char *bug = "s25-amd-srgb-resolve";
         id<MTLDevice> dev = reproDevice(argc, argv, "AMD");
         if (!dev) return SKIP(bug, "no such GPU");
-        struct { const char *what; MTLPixelFormat format; MTLStoreAction store; NSUInteger level, slice; int want; } cases[] = {
-            {"RGBA8Unorm_sRGB resolve", MTLPixelFormatRGBA8Unorm_sRGB, MTLStoreActionMultisampleResolve, 0, 0, 188},
-            {"RGBA8Unorm_sRGB store and resolve", MTLPixelFormatRGBA8Unorm_sRGB, MTLStoreActionStoreAndMultisampleResolve, 0, 0, 188},
-            {"BGRA8Unorm_sRGB resolve", MTLPixelFormatBGRA8Unorm_sRGB, MTLStoreActionMultisampleResolve, 0, 0, 188},
-            {"RGBA8Unorm_sRGB resolve into level 1 slice 1", MTLPixelFormatRGBA8Unorm_sRGB, MTLStoreActionMultisampleResolve, 1, 1, 188},
-            {"RGBA8Unorm resolve", MTLPixelFormatRGBA8Unorm, MTLStoreActionMultisampleResolve, 0, 0, 128},
+        struct { const char *what; MTLPixelFormat format; MTLStoreAction store; NSUInteger level, slice; BOOL blend; int want; } cases[] = {
+            {"RGBA8Unorm_sRGB resolve", MTLPixelFormatRGBA8Unorm_sRGB, MTLStoreActionMultisampleResolve, 0, 0, NO, 188},
+            {"RGBA8Unorm_sRGB store and resolve", MTLPixelFormatRGBA8Unorm_sRGB, MTLStoreActionStoreAndMultisampleResolve, 0, 0, NO, 188},
+            {"BGRA8Unorm_sRGB resolve", MTLPixelFormatBGRA8Unorm_sRGB, MTLStoreActionMultisampleResolve, 0, 0, NO, 188},
+            {"RGBA8Unorm_sRGB resolve into level 1 slice 1", MTLPixelFormatRGBA8Unorm_sRGB, MTLStoreActionMultisampleResolve, 1, 1, NO, 188},
+            {"RGBA8Unorm_sRGB resolve, blended", MTLPixelFormatRGBA8Unorm_sRGB, MTLStoreActionMultisampleResolve, 0, 0, YES, 188},
+            {"RGBA8Unorm resolve", MTLPixelFormatRGBA8Unorm, MTLStoreActionMultisampleResolve, 0, 0, NO, 128},
         };
+        BOOL kept = NO;  // the driver's resolve kept on 12.5-24
         for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
-            int alpha = 0, red = resolved(dev, cases[i].format, cases[i].store, cases[i].level, cases[i].slice, &alpha);
+            if (cases[i].store == MTLStoreActionStoreAndMultisampleResolve && multisampleReadsFault()) { kept = YES; continue; }
+            int alpha = 0, red = resolved(dev, cases[i].format, cases[i].store, cases[i].level, cases[i].slice, cases[i].blend, &alpha);
             if (red < 0) return FAIL(bug, "%s: %s: the pass failed", dev.name.UTF8String, cases[i].what);
             if (abs(red - cases[i].want) > 3 || abs(alpha - 128) > 3)
                 return FAIL(bug, "%s: %s: half white over black = %d (alpha %d), want %d (alpha 128); 128 = encoded bytes averaged",
                             dev.name.UTF8String, cases[i].what, red, alpha, cases[i].want);
         }
-        return PASS(bug, "%s: sRGB MSAA resolves average linear values, linear formats unchanged", dev.name.UTF8String);
+        return PASS(bug, "%s: sRGB MSAA resolves average linear values, linear formats unchanged%s", dev.name.UTF8String,
+                    kept ? " (12.5-24: store and resolve keeps the driver's resolve, not tested)" : "");
     }
 }

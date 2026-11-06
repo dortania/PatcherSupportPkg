@@ -13,7 +13,7 @@
 //   8. memoryless textures (only Apple GPUs have them, and Metal's texture validation aborts the process)
 // 1 and 2 come from riptidewave93's bronzefix, found and tested on Tahoe with a MacPro6,1's FirePro D700s.
 // AMD_BRONZE_COMPAT=0 turns everything off for a process, AMD_EXACT_TRILINEAR=0 only item 3,
-// AMD_BRONZE_MEMORYLESS=0 only item 8; AMD_BRONZE_VERBOSE=1 logs.
+// AMD_BRONZE_SRGB_RESOLVE=0 only item 4, AMD_BRONZE_MEMORYLESS=0 only item 8; AMD_BRONZE_VERBOSE=1 logs.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <objc/message.h>
@@ -176,6 +176,9 @@ static id<MTLRenderPipelineState> srgbPipeline(id<MTLDevice> device, MTLPixelFor
         "    float4 sum = 0;\n"
         "    for (uint i = 0; i < source.get_num_samples(); i++) sum += source.read(uint2(position.xy), i);\n"
         "    return sum / source.get_num_samples();\n"
+        "}\n"
+        "fragment float4 srgbCopyFragment(float4 position [[position]], texture2d<float> source [[texture(0)]]) {\n"
+        "    return source.read(uint2(position.xy));\n"
         "}\n";
     NSError *error = nil;
     id<MTLLibrary> library = [device newLibraryWithSource:source options:nil error:&error];
@@ -327,14 +330,70 @@ static void installTrilinearFix(const char *driverPath) {
 // The driver's resolve averages the encoded bytes of an sRGB attachment instead of the linear values, so antialiased
 // edges come out too dark (WebGPU conformance render_pass,resolve:render_pass_resolve). The resolve is taken off the pass,
 // which stores its samples instead, and when the encoder ends one render pass per attachment reads the samples (decoded),
-// averages them and writes the target (encoded). Only 2D multisample attachments whose store action is known when the
-// pass starts; a deferred store action or a parallel encoder keeps the driver's resolve. Test: s25.
+// averages them and writes the target (encoded).
+// On the 12.5-24 driver (Sequoia without MetalOld), a shader read of any multisample texture faults on GPU address 0 and
+// resets the GPU (texture never written, linear formats, a later command buffer: always; compute reads return wrong
+// values). There, a pass that only resolves (MultisampleResolve, not loading the samples) renders into a stand-in
+// RGBA16Float multisample texture instead, which the driver's own resolve averages in linear space into an RGBA16Float
+// texture; when the encoder ends, a plain pass copies that into the target, which encodes it. The app's pipelines stay as
+// they are: the driver takes them with the stand-in's format, and the hardware converts and blends as for the sRGB
+// attachment. A pass that also stores or loads its samples keeps the driver's resolve there.
+// Only 2D multisample attachments whose store action is known when the pass starts; a deferred store action or a parallel
+// encoder keeps the driver's resolve. Test: s25.
 typedef id (*RenderEncoderIMP)(id, SEL, MTLRenderPassDescriptor *);
 static RenderEncoderIMP origRenderEncoder;
 static EndEncodingIMP origRenderEndEncoding;
 static const void *kPendingResolves = &kPendingResolves, *kResolveCommandBuffer = &kResolveCommandBuffer;
 
-static MTLRenderPassDescriptor *takeSrgbResolves(MTLRenderPassDescriptor *descriptor, NSMutableArray **resolves) {
+// The 12.5-24 copy is the only one that links impostor.dylib (OCLP's layer for running it on Sequoia without MetalOld),
+// and the only one where shader reads of multisample textures fault.
+static BOOL multisampleReadsFault(void) {
+    static int faults = -1;
+    if (faults < 0) {
+        static const char kImpostor[] = "/AMDMTLBronzeDriver.bundle/Contents/MacOS/impostor.dylib";
+        faults = 0;
+        for (uint32_t i = 0, n = _dyld_image_count(); i < n && !faults; i++) {
+            const char *name = _dyld_get_image_name(i);
+            size_t length = name ? strlen(name) : 0;
+            faults = length >= sizeof kImpostor - 1 && !strcmp(name + length - (sizeof kImpostor - 1), kImpostor);
+        }
+    }
+    return faults;
+}
+
+// Stand-in textures, reused once the command buffer that used them has completed.
+static id<MTLTexture> pooledTexture(id<MTLCommandBuffer> commandBuffer, id<MTLDevice> device, MTLTextureType type,
+                                    NSUInteger width, NSUInteger height, NSUInteger samples, MTLTextureUsage usage) {
+    static NSMutableDictionary<NSString *, NSMutableArray *> *pool;
+    static os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
+    NSString *key = [NSString stringWithFormat:@"%p-%lu-%lux%lu-%lu", device, (unsigned long)type, (unsigned long)width,
+                                               (unsigned long)height, (unsigned long)samples];
+    os_unfair_lock_lock(&lock);
+    if (!pool) pool = [NSMutableDictionary dictionary];
+    id<MTLTexture> texture = pool[key].lastObject;
+    if (texture) [pool[key] removeLastObject];
+    os_unfair_lock_unlock(&lock);
+    if (!texture) {
+        MTLTextureDescriptor *descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
+                                                                                              width:width height:height mipmapped:NO];
+        descriptor.textureType = type;
+        descriptor.sampleCount = samples;
+        descriptor.usage = usage;
+        descriptor.storageMode = MTLStorageModePrivate;
+        texture = [device newTextureWithDescriptor:descriptor];
+        if (!texture) return nil;
+    }
+    [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> done) {
+        os_unfair_lock_lock(&lock);
+        NSMutableArray *free = pool[key] ?: (pool[key] = [NSMutableArray array]);
+        if (free.count < 2) [free addObject:texture];
+        os_unfair_lock_unlock(&lock);
+    }];
+    return texture;
+}
+
+static MTLRenderPassDescriptor *takeSrgbResolves(id<MTLCommandBuffer> commandBuffer, MTLRenderPassDescriptor *descriptor,
+                                                 NSMutableArray **resolves) {
     MTLRenderPassDescriptor *rewritten = nil;
     for (NSUInteger i = 0; origRenderEndEncoding && i < 8; i++) {
         MTLRenderPassColorAttachmentDescriptor *attachment = descriptor.colorAttachments[i];
@@ -343,23 +402,44 @@ static MTLRenderPassDescriptor *takeSrgbResolves(MTLRenderPassDescriptor *descri
         MTLStoreAction store = attachment.storeAction;
         if (!attachment.resolveTexture || texture.textureType != MTLTextureType2DMultisample ||
             (f != MTLPixelFormatRGBA8Unorm_sRGB && f != MTLPixelFormatBGRA8Unorm_sRGB) ||
-            (store != MTLStoreActionMultisampleResolve && store != MTLStoreActionStoreAndMultisampleResolve) ||
-            !srgbPipeline(texture.device, f, @"srgbResolveFragment"))
+            (store != MTLStoreActionMultisampleResolve && store != MTLStoreActionStoreAndMultisampleResolve))
             continue;
+        // 12.5-24 only (what OCLP installs on Sequoia without MetalOld); the other copies resolve in a shader as before
+        BOOL faults = multisampleReadsFault();
+        BOOL standIn = faults && store == MTLStoreActionMultisampleResolve && attachment.loadAction != MTLLoadActionLoad;
+        if (faults && !standIn) continue;
+        if (!srgbPipeline(texture.device, f, standIn ? @"srgbCopyFragment" : @"srgbResolveFragment")) continue;
+        MTLRenderPassColorAttachmentDescriptor *pending = [attachment copy];
+        id<MTLTexture> samples = nil, linear = nil;
+        if (standIn) {
+            samples = pooledTexture(commandBuffer, texture.device, MTLTextureType2DMultisample, texture.width, texture.height,
+                                    texture.sampleCount, MTLTextureUsageRenderTarget);
+            linear = pooledTexture(commandBuffer, texture.device, MTLTextureType2D, texture.width, texture.height, 1,
+                                   MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead);
+            if (!samples || !linear) continue;
+            pending.texture = linear;  // what the pass at the end reads: resolved, linear, one sample
+        }
         if (!rewritten) {
             rewritten = [descriptor copy];
             *resolves = [NSMutableArray array];
         }
-        [*resolves addObject:[attachment copy]];
-        rewritten.colorAttachments[i].resolveTexture = nil;
-        rewritten.colorAttachments[i].storeAction = MTLStoreActionStore;
+        [*resolves addObject:pending];
+        MTLRenderPassColorAttachmentDescriptor *changed = rewritten.colorAttachments[i];
+        if (standIn) {
+            changed.texture = samples;
+            changed.resolveTexture = linear;
+            changed.resolveLevel = changed.resolveSlice = changed.resolveDepthPlane = 0;
+        } else {
+            changed.resolveTexture = nil;
+            changed.storeAction = MTLStoreActionStore;
+        }
     }
     return rewritten ?: descriptor;
 }
 
 static id renderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor) {
     NSMutableArray *resolves = nil;
-    MTLRenderPassDescriptor *fixed = takeSrgbResolves(stencilViewToParent(descriptor), &resolves);
+    MTLRenderPassDescriptor *fixed = takeSrgbResolves(self, stencilViewToParent(descriptor), &resolves);
     id encoder = origRenderEncoder(self, _cmd, fixed);
     if (encoder && resolves) {
         objc_setAssociatedObject(encoder, kPendingResolves, resolves, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -375,8 +455,10 @@ static void renderEndEncoding(id self, SEL _cmd) {
     if (!resolves) return;
     objc_setAssociatedObject(self, kPendingResolves, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, kResolveCommandBuffer, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    if (verbose()) fprintf(stderr, "[bronzecompat] %lu sRGB attachment(s) resolved in a shader\n", (unsigned long)resolves.count);
     for (MTLRenderPassColorAttachmentDescriptor *attachment in resolves) {
+        // texture: the stored samples (sRGB, resolved here) or the stand-in's resolve (linear, copied here)
+        BOOL resolved = attachment.texture.sampleCount == 1;
+        if (verbose()) fprintf(stderr, "[bronzecompat] sRGB attachment resolved %s\n", resolved ? "through a linear stand-in" : "in a shader");
         MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
         pass.colorAttachments[0].texture = attachment.resolveTexture;
         pass.colorAttachments[0].level = attachment.resolveLevel;
@@ -385,7 +467,8 @@ static void renderEndEncoding(id self, SEL _cmd) {
         pass.colorAttachments[0].loadAction = MTLLoadActionDontCare;
         pass.colorAttachments[0].storeAction = MTLStoreActionStore;
         id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:pass];
-        [encoder setRenderPipelineState:srgbPipeline(attachment.texture.device, attachment.texture.pixelFormat, @"srgbResolveFragment")];
+        [encoder setRenderPipelineState:srgbPipeline(attachment.texture.device, attachment.resolveTexture.pixelFormat,
+                                                     resolved ? @"srgbCopyFragment" : @"srgbResolveFragment")];
         [encoder setFragmentTexture:attachment.texture atIndex:0];
         [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
         [encoder endEncoding];
@@ -395,7 +478,7 @@ static void renderEndEncoding(id self, SEL _cmd) {
 static void installRenderPassHooks(void) {
     Class commandBuffer = objc_getClass("BronzeMtlCmdBuffer"), encoder = objc_getClass("BronzeMtlRenderCmdEncoder");
     if (!definesMethod(commandBuffer, @selector(renderCommandEncoderWithDescriptor:))) return;
-    if (definesMethod(encoder, @selector(endEncoding)))
+    if (definesMethod(encoder, @selector(endEncoding)) && !disabled("AMD_BRONZE_SRGB_RESOLVE"))
         origRenderEndEncoding = (EndEncodingIMP)swizzle(encoder, @selector(endEncoding), (IMP)renderEndEncoding);
     if (origViewInit || origRenderEndEncoding)
         origRenderEncoder = (RenderEncoderIMP)swizzle(commandBuffer, @selector(renderCommandEncoderWithDescriptor:), (IMP)renderEncoder);
