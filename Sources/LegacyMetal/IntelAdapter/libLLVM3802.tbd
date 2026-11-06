@@ -25,7 +25,7 @@ exports:
                    _LLVMIsAAllocaInst, _LLVMIsAGetElementPtrInst, _LLVMIsABitCastInst, _LLVMIsASelectInst, _LLVMIsAConstant,
                    _LLVMIsDeclaration, _LLVMGetAttribute, _LLVMGetArrayLength, _LLVMGetStructName, _LLVMBuildInBoundsGEP,
                    _LLVMBuildSelect, _LLVMBuildShl, _LLVMBuildAShr, _LLVMBuildSExt, _LLVMBuildTrunc, _LLVMBuildSIToFP,
-                   _LLVMBuildFDiv, _LLVMBuildFCmp, _LLVMConstReal, _LLVMConstVector, _LLVMFloatTypeInContext, _LLVMHalfTypeInContext,
+                   _LLVMBuildFDiv, _LLVMBuildFCmp, _LLVMGetInstructionParent, _LLVMGetBasicBlockParent, _LLVMConstReal, _LLVMConstVector, _LLVMFloatTypeInContext, _LLVMHalfTypeInContext,
                    _LLVMIsACallInst, _LLVMIntTypeInContext, _LLVMGetTypeContext, _LLVMIsAExtractElementInst, _LLVMSetOperand, _LLVMIsAConstantFP, _LLVMConstRealGetDouble, _LLVMBuildFAdd, _LLVMBuildFPToSI, _LLVMBuildUIToFP,
                    _LLVMIsAConstantAggregateZero, _LLVMGetInitializer, _LLVMSetInitializer, _LLVMAddGlobalInAddressSpace,
                    _LLVMSetGlobalConstant, _LLVMGetLinkage, _LLVMSetLinkage, _LLVMSetAlignment, _LLVMGetPointerAddressSpace,

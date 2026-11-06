@@ -1006,43 +1006,189 @@ static unsigned dropSampleCompareBias(LLVMModuleRef module) {
     return fixed;
 }
 
-// ---- texel offsets on integer textures -----------------------------------------------------------------------------
-// The back end ignores the texel offset of a sample from an integer texture (texture2d<int>::sample(s, coord, offset),
-// GLSL textureOffset on an isampler2D / usampler2D): the texel at the coordinate comes back. Float textures are right.
-// For air.sample_texture_{2d,2d_array,3d}.{s,u}.v4i32 calls with an offset, the offset goes into the coordinates instead,
-// in texels of the sampled level: coord + offset / size, the size from air.get_{width,height,depth}_texture_* at the
-// explicit level (rounded) or at level 0 for an implicit one. Integer textures are only sampled with nearest filtering,
-// so this picks the same texel, except where an implicit LOD selects a level above 0 (a minified fragment): the compiler
-// can't compute the LOD (calculate_clamped_lod aborts it), so the offset stays in level-0 texels there. Gathers on integer
-// textures ignore their offset the same way (a08's offset case) and get the same rewrite, at level 0.
-// INTEL_INTEGER_OFFSET_FIX=0 turns it off.
+// ---- integer textures: gradient samples and texel offsets -----------------------------------------------------------
+// Two rewrites of samples from integer textures (air.sample_texture_*.{s,u}.v4i32 and air.gather_texture_*), which are
+// only ever sampled with nearest filtering, where the LOD does nothing but pick the level:
+// - A gradient sample in a compute kernel (texture2d<int>::sample(s, coord, gradient2d(dx, dy))) crashes the back end
+//   (null dereference in IGILTargetLowering::LowerReadImage_Int), offset or not; vertex and fragment functions are right.
+//   Such calls become explicit-level samples (lowerIntegerGradients). INTEL_KERNEL_GRADIENT_FIX=0 turns that off.
+// - The back end ignores the texel offset of a sample or gather (GLSL textureOffset, textureLodOffset, textureGradOffset
+//   and textureProj*Offset on isampler2D, usampler2D and the like; a08's offset case): the texel at the coordinate comes
+//   back. Float textures are right. The offset goes into the coordinates instead, in texels of the level the sample
+//   reads: coord + offset / size, the size from air.get_{width,height,depth}_texture_* (foldIntegerSampleOffsets).
+//   Where the GPU would pick the level (gradients; implicit LODs in fragment functions, from the coordinate's
+//   derivatives, plus the bias: the compiler can't compute an LOD, calculate_clamped_lod aborts it), the level is
+//   computed in the shader and the sample made explicit at it, so the offset and the texels come from the same level.
+//   Gathers and implicit LODs in other functions read level 0. INTEL_INTEGER_OFFSET_FIX=0 turns it off.
+// The level computed for gradients is log2 of the longer gradient in texels of level 0 (+ the bias), rounded and clamped
+// to the texture's levels: a nearest mip filter's. A sampler that doesn't mipmap reads level 0 regardless (a mipmapped
+// integer texture with such a sampler, sampled minified: the offset is then in the wrong level's texels).
 extern "C" {
 LLVMValueRef LLVMBuildFAdd(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
 LLVMValueRef LLVMBuildFPToSI(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
 LLVMValueRef LLVMBuildUIToFP(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
 LLVMValueRef LLVMIsAConstantAggregateZero(LLVMValueRef);
 LLVMTypeRef LLVMInt1TypeInContext(LLVMContextRef);
+LLVMBasicBlockRef LLVMGetInstructionParent(LLVMValueRef);
+LLVMValueRef LLVMGetBasicBlockParent(LLVMBasicBlockRef);
+LLVMValueRef LLVMBuildFMul(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildSub(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
 }
 
-static unsigned foldIntegerSampleOffsets(LLVMModuleRef module) {
-    const char *setting = getenv("INTEL_INTEGER_OFFSET_FIX");
-    if (setting && !strcmp(setting, "0")) return 0;
+static bool runtimeNamesBound(LLVMModuleRef module);
+static bool disabled(const char *setting) {
+    const char *value = getenv(setting);
+    return value && !strcmp(value, "0");
+}
+static LLVMValueRef declared(LLVMModuleRef module, const char *name, LLVMTypeRef result, LLVMTypeRef param) {
+    LLVMValueRef f = LLVMGetNamedFunction(module, name);
+    return f ? f : LLVMAddFunction(module, name, LLVMFunctionType(result, &param, 1, 0));
+}
+static bool isEntry(LLVMModuleRef module, const char *list, LLVMValueRef function) {
+    std::vector<LLVMValueRef> entries(LLVMGetNamedMetadataNumOperands(module, list));
+    if (!entries.empty()) LLVMGetNamedMetadataOperands(module, list, entries.data());
+    for (LLVMValueRef entry : entries) {
+        std::vector<LLVMValueRef> parts = metadataOperands(entry);
+        if (!parts.empty() && parts[0] == function) return true;
+    }
+    return false;
+}
+static LLVMValueRef callerOf(LLVMValueRef call) { return LLVMGetBasicBlockParent(LLVMGetInstructionParent(call)); }
+// air.get_{width,height,depth}_<type>(texture, lod) as a float
+static LLVMValueRef textureSize(LLVMBuilderRef b, LLVMModuleRef module, LLVMValueRef texture, const char *type, unsigned d, LLVMValueRef lod) {
+    static const char *const kSizes[3] = {"width", "height", "depth"};
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    char name[64];
+    snprintf(name, sizeof name, "air.get_%s_%s", kSizes[d], type);
+    LLVMTypeRef params[2] = {LLVMTypeOf(texture), i32};
+    LLVMValueRef getSize = LLVMGetNamedFunction(module, name);
+    if (!getSize) getSize = LLVMAddFunction(module, name, LLVMFunctionType(i32, params, 2, 0));
+    LLVMValueRef args[2] = {texture, lod};
+    return LLVMBuildUIToFP(b, LLVMBuildCall(b, getSize, args, 2, ""), LLVMFloatTypeInContext(context), "");
+}
+// rounded (a level + 0.5) clamped to [0, levels - 1] (NaN: 0) and truncated: an i32 level
+static LLVMValueRef clampedLevel(LLVMBuilderRef b, LLVMModuleRef module, LLVMValueRef texture, const char *type, LLVMValueRef rounded) {
     LLVMContextRef context = LLVMGetModuleContext(module);
     LLVMTypeRef i32 = LLVMInt32TypeInContext(context), f32 = LLVMFloatTypeInContext(context);
-    static const struct { const char *prefix, *size; unsigned dims, coordIndex, offsetIndex; bool gather; } kKinds[] = {
-        {"air.sample_texture_2d.", "texture_2d", 2, 2, 4, false},              // tex, sampler, coord, i1, offset, i1 lod, float, i32
-        {"air.sample_texture_2d_array.", "texture_2d_array", 2, 2, 5, false},  // ..., coord, i32 layer, i1, offset, ...
-        {"air.sample_texture_3d.", "texture_3d", 3, 2, 4, false},
-        {"air.gather_texture_2d.", "texture_2d", 2, 2, 4, true},               // tex, sampler, coord, i1, offset, i32 component, i32
-        {"air.gather_texture_2d_array.", "texture_2d_array", 2, 2, 5, true},   // ..., coord, i32 layer, i1, offset, ...
+    char name[64];
+    snprintf(name, sizeof name, "air.get_num_mip_levels_%s", type);
+    LLVMValueRef levels = LLVMBuildCall(b, declared(module, name, i32, LLVMTypeOf(texture)), &texture, 1, "");
+    LLVMValueRef top = LLVMBuildUIToFP(b, LLVMBuildSub(b, levels, LLVMConstInt(i32, 1, false), ""), f32, "");
+    LLVMValueRef zero = LLVMConstReal(f32, 0.0);
+    rounded = LLVMBuildSelect(b, LLVMBuildFCmp(b, 2 /* OGT */, rounded, zero, ""), rounded, zero, "");
+    rounded = LLVMBuildSelect(b, LLVMBuildFCmp(b, 4 /* OLT */, rounded, top, ""), rounded, top, "");
+    return LLVMBuildFPToSI(b, rounded, i32, "");
+}
+// The level gradients dPdx and dPdy (normalized coordinates) select with a nearest mip filter, plus bias (or null):
+// 0.5 * log2(max(|dPdx * size|^2, |dPdy * size|^2)) + bias, the size level 0's, rounded and clamped; an i32
+static LLVMValueRef selectedLevel(LLVMBuilderRef b, LLVMModuleRef module, LLVMValueRef texture, const char *type, unsigned dims,
+                                  LLVMValueRef dPdx, LLVMValueRef dPdy, LLVMValueRef bias) {
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context), f32 = LLVMFloatTypeInContext(context);
+    LLVMValueRef rho[2] = {LLVMConstReal(f32, 0.0), LLVMConstReal(f32, 0.0)};
+    for (unsigned d = 0; d < dims; d++) {
+        LLVMValueRef size = textureSize(b, module, texture, type, d, LLVMConstInt(i32, 0, false));
+        for (int k = 0; k < 2; k++) {
+            LLVMValueRef texels = LLVMBuildFMul(b, LLVMBuildExtractElement(b, k ? dPdy : dPdx, LLVMConstInt(i32, d, false), ""), size, "");
+            rho[k] = LLVMBuildFAdd(b, rho[k], LLVMBuildFMul(b, texels, texels, ""), "");
+        }
+    }
+    LLVMValueRef longer = LLVMBuildSelect(b, LLVMBuildFCmp(b, 2 /* OGT */, rho[0], rho[1], ""), rho[0], rho[1], "");
+    LLVMValueRef log = LLVMBuildCall(b, declared(module, "air.fast_log2.f32", f32, f32), &longer, 1, "");
+    LLVMValueRef rounded = LLVMBuildFAdd(b, LLVMBuildFMul(b, log, LLVMConstReal(f32, 0.5), ""), LLVMConstReal(f32, 0.5), "");
+    if (bias) rounded = LLVMBuildFAdd(b, rounded, bias, "");
+    return clampedLevel(b, module, texture, type, rounded);
+}
+static bool integerResult(const char *name, size_t length) {
+    return length >= 8 && (!strcmp(name + length - 8, ".s.v4i32") || !strcmp(name + length - 8, ".u.v4i32"));
+}
+
+// Gradient samples from integer textures in compute kernels, and those with an offset anywhere: explicit-level samples
+// at the level the gradients select.
+static unsigned lowerIntegerGradients(LLVMModuleRef module) {
+    bool kernels = !disabled("INTEL_KERNEL_GRADIENT_FIX"), offsets = !disabled("INTEL_INTEGER_OFFSET_FIX");
+    if ((!kernels && !offsets) || runtimeNamesBound(module)) return 0;
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMTypeRef f32 = LLVMFloatTypeInContext(context), i1 = LLVMInt1TypeInContext(context);
+    // gradient: the index of dPdx (dPdy follows, then i1, offset, i32); the explicit-level form takes the operands before
+    // it, then i1, offset, i1 true, float level, i32
+    static const struct { const char *prefix, *plain, *size; unsigned dims, gradient; } kKinds[] = {
+        {"air.sample_texture_2d_grad.", "air.sample_texture_2d.", "texture_2d", 2, 3},                    // tex, sampler, coord, dPdx, ...
+        {"air.sample_texture_2d_array_grad.", "air.sample_texture_2d_array.", "texture_2d_array", 2, 4},  // ..., coord, layer, dPdx, ...
+        {"air.sample_texture_3d_grad.", "air.sample_texture_3d.", "texture_3d", 3, 3},
     };
-    static const char *const kSizes[3] = {"width", "height", "depth"};
+    LLVMBuilderRef b = nullptr;
+    unsigned fixed = 0;
+    std::vector<LLVMValueRef> functions;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) functions.push_back(f);
+    for (LLVMValueRef f : functions) {
+        const char *name = LLVMGetValueName(f);
+        size_t length = strlen(name);
+        if (!integerResult(name, length)) continue;
+        for (const auto &kind : kKinds) {
+            size_t prefix = strlen(kind.prefix);
+            if (strncmp(name, kind.prefix, prefix) || strchr(name + prefix, '_')) continue;
+            std::vector<LLVMValueRef> calls;
+            for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u)) calls.push_back(LLVMGetUser(u));
+            for (LLVMValueRef call : calls) {
+                int n = LLVMGetNumOperands(call);
+                if (!LLVMIsACallInst(call) || n != (int)kind.gradient + 6 || LLVMGetOperand(call, n - 1) != f) continue;
+                LLVMValueRef texture = LLVMGetOperand(call, 0), dPdx = LLVMGetOperand(call, kind.gradient), dPdy = LLVMGetOperand(call, kind.gradient + 1);
+                bool offset = !LLVMIsAConstantAggregateZero(LLVMGetOperand(call, kind.gradient + 3));
+                if (lanes(LLVMTypeOf(dPdx)) != kind.dims || lanes(LLVMTypeOf(dPdy)) != kind.dims ||
+                    !((kernels && isEntry(module, "air.kernel", callerOf(call))) || (offsets && offset)))
+                    continue;
+                if (!b) b = LLVMCreateBuilderInContext(context);
+                LLVMPositionBuilderBefore(b, call);
+                LLVMValueRef level = LLVMBuildSIToFP(b, selectedLevel(b, module, texture, kind.size, kind.dims, dPdx, dPdy, nullptr), f32, "");
+                std::vector<LLVMValueRef> args;
+                for (unsigned k = 0; k < kind.gradient; k++) args.push_back(LLVMGetOperand(call, k));
+                args.push_back(LLVMGetOperand(call, kind.gradient + 2));  // i1 (offset)
+                args.push_back(LLVMGetOperand(call, kind.gradient + 3));  // offset
+                args.push_back(LLVMConstInt(i1, 1, false));
+                args.push_back(level);
+                args.push_back(LLVMGetOperand(call, kind.gradient + 4));  // i32
+                std::vector<LLVMTypeRef> params;
+                for (LLVMValueRef arg : args) params.push_back(LLVMTypeOf(arg));
+                char plain[96];
+                snprintf(plain, sizeof plain, "%s%s", kind.plain, name + length - 7);  // s.v4i32 / u.v4i32
+                LLVMValueRef target = LLVMGetNamedFunction(module, plain);
+                if (!target) target = LLVMAddFunction(module, plain, LLVMFunctionType(LLVMTypeOf(call), params.data(), (unsigned)params.size(), 0));
+                LLVMValueRef replacement = LLVMBuildCall(b, target, args.data(), (unsigned)args.size(), "");
+                LLVMReplaceAllUsesWith(call, replacement);
+                LLVMInstructionEraseFromParent(call);
+                fixed++;
+            }
+        }
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
+// Texel offsets on integer textures: into the coordinates.
+static unsigned foldIntegerSampleOffsets(LLVMModuleRef module) {
+    if (disabled("INTEL_INTEGER_OFFSET_FIX")) return 0;
+    bool bound = runtimeNamesBound(module);  // no air.* calls can be added (see fixVertexFloat3Inputs)
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context), f32 = LLVMFloatTypeInContext(context), i1 = LLVMInt1TypeInContext(context);
+    // after: operands after the offset (the level flag, level or bias and i32 of a sample; component and i32 of a gather;
+    // i32 of a gradient sample, left by lowerIntegerGradients only where no calls can be added: level 0)
+    static const struct { const char *prefix, *size; unsigned dims, coordIndex, offsetIndex, after; } kKinds[] = {
+        {"air.sample_texture_2d.", "texture_2d", 2, 2, 4, 3},                   // tex, sampler, coord, i1, offset, i1 lod, float, i32
+        {"air.sample_texture_2d_array.", "texture_2d_array", 2, 2, 5, 3},       // ..., coord, i32 layer, i1, offset, ...
+        {"air.sample_texture_3d.", "texture_3d", 3, 2, 4, 3},
+        {"air.gather_texture_2d.", "texture_2d", 2, 2, 4, 2},                   // tex, sampler, coord, i1, offset, i32 component, i32
+        {"air.gather_texture_2d_array.", "texture_2d_array", 2, 2, 5, 2},       // ..., coord, i32 layer, i1, offset, ...
+        {"air.sample_texture_2d_grad.", "texture_2d", 2, 2, 6, 1},              // tex, sampler, coord, dPdx, dPdy, i1, offset, i32
+        {"air.sample_texture_2d_array_grad.", "texture_2d_array", 2, 2, 7, 1},  // ..., coord, i32 layer, dPdx, dPdy, i1, offset, i32
+        {"air.sample_texture_3d_grad.", "texture_3d", 3, 2, 6, 1},
+    };
     LLVMBuilderRef b = nullptr;
     unsigned fixed = 0;
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
         const char *name = LLVMGetValueName(f);
-        size_t length = strlen(name);
-        if (length < 8 || (strcmp(name + length - 8, ".s.v4i32") && strcmp(name + length - 8, ".u.v4i32"))) continue;
+        if (!integerResult(name, strlen(name))) continue;
         for (const auto &kind : kKinds) {
             size_t prefix = strlen(kind.prefix);
             if (strncmp(name, kind.prefix, prefix) || strchr(name + prefix, '_')) continue;  // not 2d_array for 2d, no _grad
@@ -1050,29 +1196,32 @@ static unsigned foldIntegerSampleOffsets(LLVMModuleRef module) {
             for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u)) calls.push_back(LLVMGetUser(u));
             for (LLVMValueRef call : calls) {
                 int n = LLVMGetNumOperands(call);  // arguments, then the callee
-                if (!LLVMIsACallInst(call) || n != (int)kind.offsetIndex + (kind.gather ? 4 : 5) || LLVMGetOperand(call, n - 1) != f) continue;
+                if (!LLVMIsACallInst(call) || n != (int)(kind.offsetIndex + kind.after + 2) || LLVMGetOperand(call, n - 1) != f) continue;
                 LLVMValueRef offset = LLVMGetOperand(call, kind.offsetIndex), coord = LLVMGetOperand(call, kind.coordIndex);
-                LLVMValueRef hasLevel = kind.gather ? LLVMConstInt(LLVMInt1TypeInContext(context), 0, false) : LLVMGetOperand(call, kind.offsetIndex + 1);
-                LLVMValueRef level = kind.gather ? nullptr : LLVMGetOperand(call, kind.offsetIndex + 2);
+                bool sample = kind.after == 3;
+                LLVMValueRef hasLevel = sample ? LLVMGetOperand(call, kind.offsetIndex + 1) : LLVMConstInt(i1, 0, false);
+                LLVMValueRef level = sample ? LLVMGetOperand(call, kind.offsetIndex + 2) : nullptr;  // or the bias
                 if (LLVMIsAConstantAggregateZero(offset) || lanes(LLVMTypeOf(offset)) != kind.dims || lanes(LLVMTypeOf(coord)) != kind.dims ||
                     !LLVMIsAConstantInt(hasLevel))
                     continue;
                 if (!b) b = LLVMCreateBuilderInContext(context);
                 LLVMPositionBuilderBefore(b, call);
                 LLVMValueRef texture = LLVMGetOperand(call, 0), lod = LLVMConstInt(i32, 0, false);
-                if (LLVMConstIntGetZExtValue(hasLevel)) {  // nearest level: round, at least 0
-                    LLVMValueRef rounded = LLVMBuildFPToSI(b, LLVMBuildFAdd(b, level, LLVMConstReal(f32, 0.5), ""), i32, "");
-                    lod = LLVMBuildSelect(b, LLVMBuildICmp(b, 40 /* LLVMIntSLT */, rounded, lod, ""), lod, rounded, "");
+                if (sample && LLVMConstIntGetZExtValue(hasLevel)) {
+                    lod = clampedLevel(b, module, texture, kind.size, LLVMBuildFAdd(b, level, LLVMConstReal(f32, 0.5), ""));
+                } else if (sample && !bound && isEntry(module, "air.fragment", callerOf(call))) {  // made explicit
+                    char name[32];
+                    snprintf(name, sizeof name, "air.dfdx.v%uf32", kind.dims);
+                    LLVMValueRef dPdx = LLVMBuildCall(b, declared(module, name, LLVMTypeOf(coord), LLVMTypeOf(coord)), &coord, 1, "");
+                    name[7] = 'y';
+                    LLVMValueRef dPdy = LLVMBuildCall(b, declared(module, name, LLVMTypeOf(coord), LLVMTypeOf(coord)), &coord, 1, "");
+                    lod = selectedLevel(b, module, texture, kind.size, kind.dims, dPdx, dPdy, level);
+                    LLVMSetOperand(call, kind.offsetIndex + 1, LLVMConstInt(i1, 1, false));
+                    LLVMSetOperand(call, kind.offsetIndex + 2, LLVMBuildSIToFP(b, lod, f32, ""));
                 }
                 LLVMValueRef shifted = coord;
                 for (unsigned d = 0; d < kind.dims; d++) {
-                    char sizeName[64];
-                    snprintf(sizeName, sizeof sizeName, "air.get_%s_%s", kSizes[d], kind.size);
-                    LLVMTypeRef params[2] = {LLVMTypeOf(texture), i32};
-                    LLVMValueRef getSize = LLVMGetNamedFunction(module, sizeName);
-                    if (!getSize) getSize = LLVMAddFunction(module, sizeName, LLVMFunctionType(i32, params, 2, 0));
-                    LLVMValueRef args[2] = {texture, lod};
-                    LLVMValueRef size = LLVMBuildUIToFP(b, LLVMBuildCall(b, getSize, args, 2, ""), f32, "");
+                    LLVMValueRef size = textureSize(b, module, texture, kind.size, d, lod);
                     LLVMValueRef index = LLVMConstInt(i32, d, false);
                     LLVMValueRef texels = LLVMBuildSIToFP(b, LLVMBuildExtractElement(b, offset, index, ""), f32, "");
                     LLVMValueRef component = LLVMBuildFAdd(b, LLVMBuildExtractElement(b, shifted, index, ""), LLVMBuildFDiv(b, texels, size, ""), "");
@@ -1165,7 +1314,6 @@ static unsigned fixSamplerStateWords(LLVMModuleRef module) {
 // turns it off.
 extern "C" {
 LLVMValueRef LLVMBuildFSub(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildFMul(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
 unsigned LLVMGetMDKindIDInContext(LLVMContextRef, const char *, unsigned);
 LLVMValueRef LLVMGetMetadata(LLVMValueRef, unsigned);
 void LLVMSetMetadata(LLVMValueRef, unsigned, LLVMValueRef);
@@ -1522,6 +1670,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] %u signed i8/i16 conversion(s) in a vertex function done on the 32-bit word\n", n);
         n = dropSampleCompareBias(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u depth comparison(s) with an LOD bias: bias dropped\n", n);
+        n = lowerIntegerGradients(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u integer gradient sample(s) done at the level the gradients select\n", n);
         n = foldIntegerSampleOffsets(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u integer texture sample(s): texel offset moved into the coordinates\n", n);
         n = fixSamplerStateWords(module);
