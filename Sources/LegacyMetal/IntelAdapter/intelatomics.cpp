@@ -11,8 +11,10 @@
 //   2. IGILTargetLowering::LowerImageAtomic (inline hook): image operand = the tag, value back in its place.
 //   3. Before each MTLIntelCompiler::compile*FunctionIGILtoBinary: IMM_ATOMIC_* image operand -> the u<N> declared
 //      for the binding found through coords.w, which is cleared.
-// Installed: AppleIntelHD5000GraphicsMTLDriver.bundle/Contents/MacOS/IntelTextureAtomics.dylib, a weak dependency of
-// libMTLIntelCompilerPlugin.dylib. Test use: DYLD_INSERT_LIBRARIES=Tests/tools/localcc.dylib:build/intelatomics-test.dylib
+// Installed: AppleIntelHD5000GraphicsMTLDriver.bundle/Contents/MacOS/IntelTextureAtomics.dylib (Haswell, 12.5 payload) and
+// AppleIntelHD4000GraphicsMTLDriver.bundle/Contents/MacOS/IntelTextureAtomics.dylib (Ivy Bridge, 11.7.10 payloads), a weak
+// dependency of each bundle's libMTLIntelCompilerPlugin.dylib. On Ivy Bridge the IGIL entry hooks (texture atomics) don't
+// match its plugin and stay off, and the Haswell sampler workaround is skipped; the IR fixes for compiler crashes apply. Test use: DYLD_INSERT_LIBRARIES=Tests/tools/localcc.dylib:build/intelatomics-test.dylib
 //   INTELTEX_LOG=1        log what is rewritten
 //   INTELTEX_DUMP=<dir>   write each lowered module and the IGIL text before the fix
 //   INTELTEX_DUMP_INPUT=<dir>  write every module as it reaches the pass manager
@@ -553,6 +555,7 @@ static unsigned redirectPassManager(const mach_header_64 *header, intptr_t slide
 // Installs into the loaded plugin once: import redirect (unless interposed already) and the IGIL entry hooks.
 static pthread_mutex_t installLock = PTHREAD_MUTEX_INITIALIZER;
 static bool textFixInstalled;
+static bool ivyBridgePlugin;  // OCLP's 11.7.10 AppleIntelHD4000GraphicsMTLDriver plugin: compiler fixes only, no Haswell workarounds
 static void installIntoPlugin(bool redirectImport) {
     static bool done;
     if (done) return;
@@ -561,6 +564,7 @@ static void installIntoPlugin(bool redirectImport) {
         size_t len = name ? strlen(name) : 0, suffix = strlen(kPluginSuffix);
         if (len < suffix || strcmp(name + len - suffix, kPluginSuffix)) continue;
         done = true;
+        ivyBridgePlugin = strstr(name, "AppleIntelHD4000GraphicsMTLDriver") != nullptr;
         void *h = dlopen(name, RTLD_NOLOAD | RTLD_LAZY);
         unsigned imports = redirectImport ? redirectPassManager((const mach_header_64 *)_dyld_get_image_header(i), _dyld_get_image_vmaddr_slide(i)) : 0;
         unsigned hooks = 0;
@@ -1155,7 +1159,8 @@ static unsigned fixSamplerStateWords(LLVMModuleRef module) {
 // n + 0.375 + f / 4, which gives weight f. A nearest mip filter still picks the same level (f < 0.5 stays below the
 // middle), and whole levels are left alone (whether the min or mag filter applies depends on LOD > 0). Gradients in
 // compute kernels blend the same way and are left as they are: their LOD would have to be computed in the shader.
-// Modules can reach the pass manager twice, so remapped calls are marked (!intel.level_remapped). INTEL_COMPUTE_TRILINEAR_FIX=0
+// Haswell only: Ivy Bridge's samplers haven't been measured. Modules can reach the pass manager twice, so remapped calls
+// are marked (!intel.level_remapped). INTEL_COMPUTE_TRILINEAR_FIX=0
 // turns it off.
 extern "C" {
 LLVMValueRef LLVMBuildFSub(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
@@ -1167,7 +1172,7 @@ void LLVMSetMetadata(LLVMValueRef, unsigned, LLVMValueRef);
 
 static unsigned remapComputeLevels(LLVMModuleRef module) {
     const char *setting = getenv("INTEL_COMPUTE_TRILINEAR_FIX");
-    if ((setting && !strcmp(setting, "0")) || !LLVMGetNamedMetadataNumOperands(module, "air.kernel")) return 0;
+    if ((setting && !strcmp(setting, "0")) || ivyBridgePlugin || !LLVMGetNamedMetadataNumOperands(module, "air.kernel")) return 0;
     enum { kRealOEQ = 1, kRealOGT = 2 };  // LLVMRealPredicate
     LLVMContextRef context = LLVMGetModuleContext(module);
     LLVMTypeRef i32 = LLVMInt32TypeInContext(context), f32 = LLVMFloatTypeInContext(context);

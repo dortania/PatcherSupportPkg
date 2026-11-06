@@ -11,6 +11,8 @@
 #                                           OCLP's initializeIABArgTypeSet stub kept instead of patch 1)
 #   12.5 AppleIntelHD5000GraphicsMTLDriver.bundle/Contents/MacOS/
 #                                           libMTLIntelCompilerPlugin.dylib (+ weak load), IntelTextureAtomics.dylib
+#   11.7.10 and 11.7.10-22 AppleIntelHD4000GraphicsMTLDriver.bundle/Contents/MacOS/ (Ivy Bridge)
+#                                           the same, from OCLP's 11.7.10 plugin
 #   AMDMTLBronzeDriver.bundle/Contents/MacOS/ in 12.5, 12.5-24, 12.5-25 and 12.5-GCN-SKL-22..25:
 #                                           AMDMTLBronzeDriver (+ weak load of AMDBronzeCompat.dylib), AMDBronzeCompat.dylib
 # The stock inputs come from git (STOCK_REF, default: the merge base with origin/HEAD, the upstream default branch), never from the patched files
@@ -29,6 +31,7 @@ GCN25=12.5-GCN-25/System/Library/Extensions/AMDShared.bundle/Contents
 BRONZE=System/Library/Extensions/AMDMTLBronzeDriver.bundle/Contents/MacOS
 BRONZE_VARIANTS="12.5 12.5-24 12.5-25 12.5-GCN-SKL-22 12.5-GCN-SKL-23 12.5-GCN-SKL-24 12.5-GCN-SKL-25"
 INTEL=12.5/System/Library/Extensions/AppleIntelHD5000GraphicsMTLDriver.bundle/Contents/MacOS
+IVB_VARIANTS="11.7.10 11.7.10-22" IVB=System/Library/Extensions/AppleIntelHD4000GraphicsMTLDriver.bundle/Contents/MacOS
 rm -rf "$B"; mkdir -p "$B/stock"
 stock() {  # <path under Universal-Binaries> <file name>
     if [ -n "${STOCK_DIR:-}" ]; then cp "$STOCK_DIR/$2" "$B/stock/$2"; return; fi
@@ -43,6 +46,7 @@ stock "$AMD/PlugIns/libAMDIL902.dylib" libAMDIL902.dylib
 stock "$GCN25/MacOS/AMDShared" AMDShared-GCN-25
 stock "$GCN25/PlugIns/libAMDIL902.dylib" libAMDIL902-GCN-25.dylib
 stock "$INTEL/libMTLIntelCompilerPlugin.dylib" libMTLIntelCompilerPlugin.dylib
+stock "11.7.10/$IVB/libMTLIntelCompilerPlugin.dylib" libMTLIntelCompilerPlugin-IVB.dylib  # the same file in 11.7.10-22
 for v in $BRONZE_VARIANTS; do stock "$v/$BRONZE/AMDMTLBronzeDriver" "AMDMTLBronzeDriver-$v"; done
 
 # 1. MetalOldCompat, and the no-op build the tests use for "without the fix" (same load commands, does nothing)
@@ -80,10 +84,12 @@ weak Metal-25 Metal-25 @loader_path/MetalOldCompat.dylib  # this wrapper has no 
 weak AMDShared AMDShared @loader_path/AMDTextureAtomics.dylib
 weak AMDShared-GCN-25 AMDShared-GCN-25 @loader_path/AMDTextureAtomics.dylib
 weak libMTLIntelCompilerPlugin.dylib libMTLIntelCompilerPlugin.dylib @loader_path/IntelTextureAtomics.dylib
+weak libMTLIntelCompilerPlugin-IVB.dylib libMTLIntelCompilerPlugin-IVB.dylib @loader_path/IntelTextureAtomics.dylib
 for v in $BRONZE_VARIANTS; do weak "AMDMTLBronzeDriver-$v" "AMDMTLBronzeDriver-$v" @loader_path/AMDBronzeCompat.dylib; done
 cd "$B"
 codesign -f -s - MetalOldCompat.dylib MetalOldCompat-noop.dylib AMDTextureAtomics.dylib IntelTextureAtomics.dylib \
     libAMDIL902.dylib libAMDIL902-GCN-25.dylib Metal Metal-25 AMDShared AMDShared-GCN-25 libMTLIntelCompilerPlugin.dylib \
+    libMTLIntelCompilerPlugin-IVB.dylib \
     2>/dev/null
 codesign -f -s - AMDBronzeCompat.dylib 2>/dev/null
 for v in $BRONZE_VARIANTS; do codesign -f -s - "AMDMTLBronzeDriver-$v" 2>/dev/null; done
@@ -97,10 +103,14 @@ cp AMDShared-GCN-25 "$UB/$GCN25/MacOS/AMDShared"
 cp AMDTextureAtomics.dylib "$UB/$GCN25/MacOS/"
 cp libAMDIL902-GCN-25.dylib "$UB/$GCN25/PlugIns/libAMDIL902.dylib"
 cp libMTLIntelCompilerPlugin.dylib IntelTextureAtomics.dylib "$UB/$INTEL/"
+for v in $IVB_VARIANTS; do
+    cp libMTLIntelCompilerPlugin-IVB.dylib "$UB/$v/$IVB/libMTLIntelCompilerPlugin.dylib"
+    cp IntelTextureAtomics.dylib "$UB/$v/$IVB/"
+done
 for v in $BRONZE_VARIANTS; do
     cp "AMDMTLBronzeDriver-$v" "$UB/$v/$BRONZE/AMDMTLBronzeDriver"
     cp AMDBronzeCompat.dylib "$UB/$v/$BRONZE/"
 done
 [ -n "${STOCK_DIR:-}" ] || python3 -I "$HERE/tools/make_tahoe_compiler.py" "$ROOT" "${STOCK_REF:-$(git -C "$ROOT" merge-base HEAD origin/HEAD)}"
 shasum -a 256 MetalOldCompat.dylib AMDTextureAtomics.dylib IntelTextureAtomics.dylib AMDBronzeCompat.dylib libAMDIL902.dylib Metal \
-    Metal-25 AMDShared libAMDIL902-GCN-25.dylib AMDShared-GCN-25 libMTLIntelCompilerPlugin.dylib
+    Metal-25 AMDShared libAMDIL902-GCN-25.dylib AMDShared-GCN-25 libMTLIntelCompilerPlugin.dylib libMTLIntelCompilerPlugin-IVB.dylib
