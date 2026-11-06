@@ -22,8 +22,9 @@
 // from the wrong word), the LOD bias dropped from depth comparisons (the back end can't compile them), texel offsets
 // of integer texture samples moved into the coordinates (the back end ignores them), constexpr samplers from newer
 // front ends ([2 x i64]) rewritten in the i64 form the back end reads (it crashes on the array), and explicit levels in
-// compute kernels remapped so the sampler's narrow mip blend there comes out linear, and threadgroup bools widened to i8
-// (the back end can't select i1 loads and stores there).
+// compute kernels remapped so the sampler's narrow mip blend there comes out linear, threadgroup bools widened to i8
+// (the back end can't select i1 loads and stores there), aligned subword accesses to private memory done on their word,
+// and float3 vertex inputs read through fmax (a bare copy to an output reads an unset register).
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
@@ -1332,6 +1333,60 @@ static unsigned wordPrivateSubwords(LLVMModuleRef module) {
     return (unsigned)accesses.size();
 }
 
+// ---- float3 vertex inputs ------------------------------------------------------------------------------------------
+// When a vertex function copies a component of a float3 vertex input straight to an output (`out.o = in.a.y`), the back
+// end declares the input (DCL_INPUT i1.xyz) but drops its move into a register and writes the output from one nothing
+// set (MOV o0.x, r1.x): 0 or garbage. Float2 and float4 inputs, and any arithmetic on the input, are right. ANGLE's
+// vertex shaders do that copy for `out0 = in0.x` on a vec3 attribute (dEQP swizzles_vec3 *_vertex,
+// conversions_vector_to_scalar vec3_to_float_vertex). Each <3 x float> parameter of a vertex function goes through
+// air.fast_fmax(a, a) first, which is exact (NaN stays NaN) and makes the back end read the input.
+// INTEL_VERTEX_FLOAT3_FIX=0 turns it off.
+static unsigned fixVertexFloat3Inputs(LLVMModuleRef module) {
+    const char *setting = getenv("INTEL_VERTEX_FLOAT3_FIX");
+    if (setting && !strcmp(setting, "0")) return 0;
+    std::vector<LLVMValueRef> vertexFunctions(LLVMGetNamedMetadataNumOperands(module, "air.vertex"));
+    if (vertexFunctions.empty()) return 0;
+    LLVMGetNamedMetadataOperands(module, "air.vertex", vertexFunctions.data());
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMTypeRef f32 = LLVMFloatTypeInContext(context), v3f32 = LLVMVectorType(f32, 3);
+    LLVMBuilderRef b = nullptr;
+    unsigned fixed = 0;
+    for (LLVMValueRef node : vertexFunctions) {
+        std::vector<LLVMValueRef> parts = metadataOperands(node);
+        LLVMValueRef function = parts.empty() ? nullptr : parts[0];
+        if (!function || LLVMIsDeclaration(function) || !LLVMGetFirstBasicBlock(function)) continue;
+        LLVMValueRef first = LLVMGetFirstInstruction(LLVMGetFirstBasicBlock(function));
+        if (!first) continue;
+        for (unsigned p = 0; p < LLVMCountParams(function); p++) {
+            LLVMValueRef param = LLVMGetParam(function, p);
+            if (LLVMTypeOf(param) != v3f32 || !LLVMGetFirstUse(param)) continue;
+            std::vector<LLVMValueRef> users;
+            bool done = false;
+            for (LLVMUseRef u = LLVMGetFirstUse(param); u; u = LLVMGetNextUse(u)) {
+                LLVMValueRef user = LLVMGetUser(u);
+                if (LLVMIsACallInst(user) && !strcmp(LLVMGetValueName(LLVMGetOperand(user, LLVMGetNumOperands(user) - 1)), "air.fast_fmax.v3f32") &&
+                    LLVMGetOperand(user, 0) == param && LLVMGetOperand(user, 1) == param)
+                    done = true;  // this module's second pass
+                else users.push_back(user);
+            }
+            if (done) continue;
+            LLVMValueRef fmax = LLVMGetNamedFunction(module, "air.fast_fmax.v3f32");
+            LLVMTypeRef params[2] = {v3f32, v3f32};
+            if (!fmax) fmax = LLVMAddFunction(module, "air.fast_fmax.v3f32", LLVMFunctionType(v3f32, params, 2, 0));
+            if (!b) b = LLVMCreateBuilderInContext(context);
+            LLVMPositionBuilderBefore(b, first);
+            LLVMValueRef args[2] = {param, param};
+            LLVMValueRef read = LLVMBuildCall(b, fmax, args, 2, "");
+            for (LLVMValueRef user : users)
+                for (int i = 0; i < LLVMGetNumOperands(user); i++)
+                    if (LLVMGetOperand(user, i) == param) LLVMSetOperand(user, i, read);
+            fixed++;
+        }
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
 static int hookedRun(void *self, LLVMModuleRef module) {
     pthread_mutex_lock(&installLock);
     installIntoPlugin(false);  // test process: the plugin was dlopened after we were inserted
@@ -1364,6 +1419,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] %u threadgroup bool(s) widened to i8\n", n);
         n = wordPrivateSubwords(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u aligned byte/halfword access(es) to private memory done on the 32-bit word\n", n);
+        n = fixVertexFloat3Inputs(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u float3 vertex input(s) read through fmax\n", n);
         if (n && getenv("INTELTEX_DUMP_HANDLES")) {  // debugging: the module after that rewrite
             static int serial;
             char path[1024];
