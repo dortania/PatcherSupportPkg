@@ -1727,9 +1727,24 @@ static void disableFeaturesFamilyOneLacks(void) {
     });
 }
 
+// Dawn (Chromium's WebGPU) asks `supportsFamily:Apple6 || supportsFamily:Mac2` before it offers the subgroups feature, which
+// these GPUs' compiler can't build (simd_sum, simd_ballot and the like abort MTLCompilerService, and Chrome's GPU process
+// went down with it during the WebGPU CTS subgroup tests). ANGLE never asks Mac2 right after Apple6 (its pairs are
+// Apple 1-5 or 7 with Mac 1 or 2). A Mac2 question that comes right after an Apple6 one on the same thread, from code a
+// few bytes away, gets the real answer.
+static __thread NSInteger lastFamilyAsked = -1;
+static __thread uintptr_t lastFamilyCaller;
 static BOOL compatSupportsFamily(id self, SEL _cmd, NSInteger family) {
     BOOL real = realSupportsFamily(self, _cmd, family);
+    uintptr_t caller = (uintptr_t)__builtin_return_address(0);
+    NSInteger previous = lastFamilyAsked;
+    uintptr_t previousCaller = lastFamilyCaller;
+    lastFamilyAsked = family, lastFamilyCaller = caller;
     if (real || family != MTLGPUFamilyMac2 || !fromChromium(__builtin_return_address(0)) || !familyOneAsTwo()) return real;
+    if (previous == MTLGPUFamilyApple6 && (caller > previousCaller ? caller - previousCaller : previousCaller - caller) < 256) {
+        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Mac2 asked right after Apple6 (Dawn's subgroups check): no\n");
+        return real;
+    }
     disableFeaturesFamilyOneLacks();
     return YES;
 }
