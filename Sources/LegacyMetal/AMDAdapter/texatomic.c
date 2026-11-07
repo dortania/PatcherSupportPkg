@@ -57,6 +57,12 @@
 // Thirteenth job: rotates as shifts (rotatesAsShifts): SC folds a constant rotate by a multiple of 8 the wrong way.
 // AMD_ROTATE_FIX=0 turns it off.
 //
+// Fifteenth job: single-bit tests as bit-field extracts (singleBitTests): libAMDIL902 drops the `& 1` of `(x & 1) != 0`
+// once the comparison is or'ed with another one. AMD_BIT_TEST_FIX=0 turns it off.
+//
+// Fourteenth job (AMD IL, before SC): loops whose last if/else ends both branches with break + continue get a single
+// exit (singleLoopExits): SC loses track of which threads take the else branch. AMD_LOOP_EXIT_FIX=0 turns it off.
+//
 // Installed: AMDShared.bundle/Contents/MacOS/AMDTextureAtomics.dylib, loaded by a weak load command in AMDShared.
 // Test use (in-process compiling): DYLD_INSERT_LIBRARIES=Tests/tools/localcc.dylib:build/texatomic.dylib <app>
 //   TEXATOMIC_LOG=1   log what is rewritten
@@ -624,7 +630,7 @@ enum { kModuleFunctions = 0x18, kFunctionValueType = 0x18, kFunctionParent = 0x2
        kFunctionArgs = 0x58, kFunctionNumArgs = 0x60, kArgumentSize = 40, kBlockNode = 0x18, kBlockInstructions = 0x28,
        kBlockParent = 0x38, kInstructionNode = 0x18, kInstructionParent = 0x28 };
 enum { kTypeStruct = 13, kTypeArray = 14, kTypePointer = 15 };  // Type::TypeID @8
-enum { kValueArgument = 0, kValueGlobalVariable = 8, kValueInstruction = 24 };  // SubclassID; an instruction's is kValueInstruction + opcode
+enum { kValueArgument = 0, kValueFunction = 5, kValueGlobalVariable = 8, kValueInstruction = 24 };  // SubclassID; an instruction's is kValueInstruction + opcode
 enum { kOpcodeAlloca = 29, kOpcodeLoad = 30, kOpcodeGEP = 32, kOpcodeBitCast = 47, kOpcodeSelect = 55 };
 enum { kMaxHandleArrays = 8, kMaxHandleElements = 32, kMaxHandleLoads = 256, kMaxUsers = 64 };
 
@@ -1301,6 +1307,63 @@ static unsigned rotatesAsShifts(void *module) {
     return rewritten;
 }
 
+// `(x & 2^k) != 0` / `== 0` (32-bit) as `extract_bits(x, k, 1) != 0` / `== 0`: libAMDIL902 treats booleans as 0 / 1
+// when it simplifies (it turns `(x & 1) != 0` into `x & 1`, then drops the `& 1` where only bit 0 is said to matter, as
+// in an or with another boolean), but its branches test the whole register: `odd(x) || c` branches on `x | c`, so code
+// guarded by "x even and not c" runs only for x == 0 (found by differential fuzzing, in loops and branches; 9 of the 16
+// random kernels the AMD compiler still got wrong). Its optimizer turns a shift back into the and, but doesn't look into
+// air.extract_bits (the IL's ubit_extract), so the comparison stays a comparison. AMD_BIT_TEST_FIX=0 turns this off.
+enum { kValueConstantInt = 18, kOpcodeICmpPredicateMask = 0x3f };
+static bool constantIntValue(void *v, uint64_t *value) {
+    if (subclassID(v) != kValueConstantInt || typeID(typeOf(v)) != kTypeInteger) return false;
+    if (*(uint32_t *)((char *)v + 0x20) > 64) return false;  // APInt BitWidth @0x20, VAL @0x18 (inline up to 64 bits)
+    *value = *(uint64_t *)((char *)v + 0x18);
+    return true;
+}
+static unsigned singleBitTestsAsExtracts(void *module, void *function, void *i32) {
+    unsigned rewritten = 0;
+    void *extract = NULL, *extractType = NULL;
+    char *blocks = (char *)function + kFunctionBlocks;
+    for (char *bn = nextNode(blocks); bn != blocks; bn = nextNode(bn)) {
+        char *block = bn - kBlockNode, *insts = block + kBlockInstructions;
+        for (char *in = nextNode(insts); in != insts; in = nextNode(in)) {
+            char *inst = in - kInstructionNode;
+            if (!isInstruction(inst, kOpcodeICmp) || hungOffUses(inst) || numOperands(inst) != 2) continue;
+            unsigned predicate = *(uint16_t *)(inst + 0x12) & kOpcodeICmpPredicateMask;
+            uint64_t zero, mask;
+            void *masked = operand(inst, 0);
+            if ((predicate != kPredicateEQ && predicate != kPredicateNE) || !constantIntValue(operand(inst, 1), &zero) || zero ||
+                !isInstruction(masked, kOpcodeAnd) || hungOffUses(masked) || numOperands(masked) != 2 || typeOf(masked) != i32 ||
+                !constantIntValue(operand(masked, 1), &mask) || !mask || (mask & (mask - 1)) || mask > 0xffffffffu)
+                continue;
+            if (!extract) {
+                void *params[3] = {i32, i32, i32};
+                extractType = api.functionTypeGet(i32, params, 3, false);
+                extract = api.getOrInsertFunction(module, "air.extract_bits.u.i32", strlen("air.extract_bits.u.i32"), extractType);
+                if (!extract || subclassID(extract) != kValueFunction) return rewritten;  // a bitcast: another declaration
+            }
+            void *args[3] = {operand(masked, 0), api.constantIntGet(i32, (uint64_t)__builtin_ctzll(mask), false), api.constantIntGet(i32, 1, false)};
+            api.replaceUsesOfWith(inst, masked, createCall(extract, extractType, args, 3, inst));
+            rewritten++;
+        }
+    }
+    return rewritten;
+}
+
+static unsigned singleBitTests(void *module) {
+    const char *setting = getenv("AMD_BIT_TEST_FIX");
+    if ((setting && !strcmp(setting, "0")) || !api.functionTypeGet || !api.getOrInsertFunction) return 0;
+    unsigned rewritten = 0;
+    char *functions = (char *)module + kModuleFunctions;
+    for (char *fn = nextNode(functions); fn != functions; fn = nextNode(fn)) {
+        char *function = fn - kFunctionNode, *blocks = function + kFunctionBlocks;
+        if (*(void **)(function + kFunctionParent) != module) return rewritten;  // layout mismatch: leave the module alone
+        if (nextNode(blocks) == blocks) continue;
+        rewritten += singleBitTestsAsExtracts(module, function, api.getInt32Ty(api.getContext(function)));
+    }
+    return rewritten;
+}
+
 // The front end in Xcode 26 writes a constexpr sampler (!air.sampler_states) as a [2 x i64] constant: the sampler word with
 // bit 63 clear, then 0. Older front ends, including the runtime compiler that libAMDIL902 was built with, write one i64:
 // the same word with bit 63 set. ILSetupConstantSampler turns the global's initializer into an integer-to-pointer
@@ -1370,6 +1433,8 @@ static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *
         if (samplers && logging()) fprintf(stderr, "[texatomic] %u constexpr sampler(s) rewritten in the one-word form\n", samplers);
         unsigned unpacks = exactUnpackNorm(module);
         if (unpacks && logging()) fprintf(stderr, "[texatomic] %u unpack call(s) computed exactly\n", unpacks);
+        unsigned bitTests = singleBitTests(module);
+        if (bitTests && logging()) fprintf(stderr, "[texatomic] %u single-bit test(s) done as bit-field extracts\n", bitTests);
         unsigned saturating = plainSaturatingAddSub(module);
         if (saturating && logging()) fprintf(stderr, "[texatomic] %u unsigned saturating add/sub call(s) done as arithmetic\n", saturating);
         unsigned rotates = rotatesAsShifts(module);
@@ -1709,6 +1774,128 @@ static int identityFmaskLookups(const char *in, Text *out) {
     return n;
 }
 
+// SC's code for a loop that ends in
+//     if_logicalnz c            ; or if_logicalz
+//         ...  break_logicalz a  continue
+//     else
+//         ...  break_logicalz b  continue
+//     endif
+//   endloop
+// (what libAMDIL902 makes of `while (n < 8) { n++; ...; if (odd && x) break; }`) is wrong once the threads diverge: when
+// some threads leave through the first branch's break, SC sets exec to the threads still in the loop and then falls into
+// the else branch's mask computation, which takes those as the first branch's threads, so the else branch runs for none
+// of them that iteration; they skip its exit check and run the loop once more (found by differential fuzzing; a barrier
+// before the loop is enough to get this layout). The continues are redundant there (endloop follows), so each branch
+// sets a flag instead and one break follows the endif:
+//     if_logicalnz c  ...  mov f, a  else  ...  mov f, b  endif  break_logicalz f  endloop
+// A branch without a break sets the flag to "stay". Both branches' breaks must test the same way. AMD_LOOP_EXIT_FIX=0
+// turns this off.
+static int ilIndent(const char *line) { return (int)strspn(line, " "); }
+static bool ilIs(const char *line, const char *word) {
+    const char *t = line + ilIndent(line);
+    size_t n = strlen(word);
+    return !strncmp(t, word, n) && (t[n] == 0 || t[n] == ' ');
+}
+static int singleLoopExits(const char *in, Text *out) {
+    const char *setting = getenv("AMD_LOOP_EXIT_FIX");
+    if ((setting && !strcmp(setting, "0")) || !strstr(in, "continue")) return 0;
+    char *copy = strdup(in);
+    size_t count = 0, cap = 1024;
+    char **lines = malloc(cap * sizeof *lines);
+    for (char *save, *line = strtok_r(copy, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
+        if (count == cap) lines = realloc(lines, (cap *= 2) * sizeof *lines);
+        lines[count++] = line;
+    }
+    unsigned maxReg = 0;  // a free temporary for the flags: above every r<n> under the special r8192+
+    for (const char *p = in; (p = strchr(p, 'r'));) {
+        p++;
+        if (p[-2] != ' ' && p[-2] != ',' && p[-2] != '(') continue;
+        unsigned r = (unsigned)strtoul(p, NULL, 10);
+        if (r < 8192 && r > maxReg) maxReg = r;
+    }
+    unsigned flag = maxReg + 1;
+    // per line: 0 keep, 1 drop, 2 replace with replacement[i]; extra[i]: a line to add after line i
+    char *action = calloc(count, 1), **replacement = calloc(count, sizeof *replacement), **extra = calloc(count, sizeof *extra);
+    int n = 0;
+    for (size_t i = 0; i < count && flag < 8192; i++) {
+        if (!ilIs(lines[i], "if_logicalnz") && !ilIs(lines[i], "if_logicalz")) continue;
+        int ind = ilIndent(lines[i]);
+        size_t elseLine = 0, endifLine = 0;
+        for (size_t j = i + 1; j < count; j++) {
+            int k = ilIndent(lines[j]);
+            if (k < ind) break;
+            if (k > ind) continue;
+            if (!elseLine && ilIs(lines[j], "else")) { elseLine = j; continue; }
+            if (ilIs(lines[j], "endif")) endifLine = j;
+            break;
+        }
+        if (!elseLine || !endifLine || endifLine + 1 >= count || !ilIs(lines[endifLine + 1], "endloop") ||
+            ilIndent(lines[endifLine + 1]) != ind - 4)
+            continue;
+        size_t ends[2] = {elseLine - 1, endifLine - 1}, starts[2] = {i + 1, elseLine + 1};
+        bool ok = true;
+        const char *breakOp = NULL, *operand[2] = {NULL, NULL};
+        for (int b = 0; b < 2 && ok; b++) {
+            size_t e = ends[b];
+            ok = e >= starts[b] && ilIndent(lines[e]) == ind + 4 && ilIs(lines[e], "continue");
+            if (!ok) break;
+            if (e > starts[b] && ilIndent(lines[e - 1]) == ind + 4 && (ilIs(lines[e - 1], "break_logicalz") || ilIs(lines[e - 1], "break_logicalnz"))) {
+                const char *t = lines[e - 1] + ilIndent(lines[e - 1]);
+                const char *op = ilIs(lines[e - 1], "break_logicalz") ? "break_logicalz" : "break_logicalnz";
+                if (breakOp && strcmp(breakOp, op)) ok = false;
+                breakOp = op;
+                operand[b] = t + strlen(op) + 1;
+            }
+        }
+        if (!ok) continue;
+        for (int b = 0; b < 2; b++) {
+            size_t e = ends[b];
+            action[e] = 1;  // the continue
+            if (!breakOp) continue;
+            char *line = malloc(160);
+            if (operand[b]) {
+                snprintf(line, 160, "%*smov r%u.x___, %s", ind + 4, "", flag, operand[b]);
+                action[e - 1] = 2;
+                replacement[e - 1] = line;
+            } else {  // stays in the loop: break_logicalz needs nonzero, break_logicalnz zero
+                snprintf(line, 160, "%*smov_lit r%u.x___, %s, 0x00000000, 0x00000000, 0x00000000", ind + 4, "", flag,
+                         !strcmp(breakOp, "break_logicalz") ? "0xFFFFFFFF" : "0x00000000");
+                action[e] = 2;
+                replacement[e] = line;
+            }
+        }
+        if (breakOp) {
+            char *line = malloc(96);
+            snprintf(line, 96, "%*s%s r%u.x", ind, "", breakOp, flag);
+            extra[endifLine] = line;
+            flag++;
+        }
+        n++;
+    }
+    if (n)
+        for (size_t i = 0; i < count; i++) {
+            if (action[i] != 1) {
+                const char *line = action[i] == 2 ? replacement[i] : lines[i];
+                append(out, line, strlen(line));
+                append(out, "\n", 1);
+            }
+            if (extra[i]) {
+                append(out, extra[i], strlen(extra[i]));
+                append(out, "\n", 1);
+            }
+        }
+    for (size_t i = 0; i < count; i++) {
+        free(replacement[i]);
+        free(extra[i]);
+    }
+    free(action);
+    free(replacement);
+    free(extra);
+    free(lines);
+    free(copy);
+    return n;
+}
+
 static int hookedSCCompileShader(void *sc, void *src, void *out) {
     void **tokens = (void **)((char *)src + kSrcTokens);
     uint32_t *size = (uint32_t *)((char *)src + kSrcSize);
@@ -1726,11 +1913,17 @@ static int hookedSCCompileShader(void *sc, void *src, void *out) {
     bool ldsBase = scFamily == kFamilySI && il.buf && !strncmp(il.buf, "il_cs", 5) && strstr(il.buf, "dcl_lds_id(") &&
                    strstr(il.buf, kThreadgroupBaseSlot) && !(ldsSetting && !strcmp(ldsSetting, "0"));
     int gathers = il.buf && gatherFixEnabled() ? normalizeFetch4(il.buf) : 0;
-    if (atomics || ldsBase || gathers || fmasks) {
+    Text exits = {0};
+    int loops = il.buf ? singleLoopExits(il.buf, &exits) : 0;
+    if (loops) {
+        free(il.buf);
+        il = exits;
+    }
+    if (atomics || ldsBase || gathers || fmasks || loops) {
         Text edited = {0}, based = {0};
         int n = atomics ? rewriteIL(il.buf, &edited) : 0;
         int k = ldsBase && (!atomics || n > 0) ? dropThreadgroupBase(atomics ? edited.buf : il.buf, &based) : 0;
-        const char *text = k > 0 ? based.buf : atomics && n > 0 ? edited.buf : gathers || fmasks ? il.buf : NULL;
+        const char *text = k > 0 ? based.buf : atomics && n > 0 ? edited.buf : gathers || fmasks || loops ? il.buf : NULL;
         void *binary = NULL;
         unsigned dwords = 0;
         int ok = text ? ilXltTextToBinary(text, &binary, &dwords) : 0;
@@ -1739,6 +1932,7 @@ static int hookedSCCompileShader(void *sc, void *src, void *out) {
             if (k) fprintf(stderr, "[texatomic] IL: %d threadgroup address(es): data-segment base (API slot 8) dropped\n", k);
             if (gathers) fprintf(stderr, "[texatomic] IL: %d integer gather(s) use normalized coordinates\n", gathers);
             if (fmasks) fprintf(stderr, "[texatomic] IL: %d multisample read(s) without FMASK\n", fmasks);
+            if (loops) fprintf(stderr, "[texatomic] IL: %d loop(s) given a single exit\n", loops);
             if (text) fprintf(stderr, "[texatomic] IL: assembled %s\n", ok == 1 ? "ok" : "FAILED");
             if (getenv("TEXATOMIC_DUMP")) fprintf(stderr, "%s\n", text ? text : "");
         }
