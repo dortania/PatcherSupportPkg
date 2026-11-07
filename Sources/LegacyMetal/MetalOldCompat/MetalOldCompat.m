@@ -77,6 +77,12 @@
 #include <pthread.h>
 #import <IOKit/IOKitLib.h>
 #include <os/log.h>
+// Replacements for methods of the new / copy / init families return an owned (+1) object like the methods they replace,
+// and init replacements consume self: without these annotations ARC treats them as returning +0, retains and autoreleases
+// what they return, and every such object then lives until an autorelease pool drains, never in a process that drains
+// none (dawn.node, command-line tools: 15000 textures in 25 s of WebGPU CTS image_copy).
+#define RETURNS_RETAINED __attribute__((ns_returns_retained))
+#define CONSUMED __attribute__((ns_consumed))
 #include <stdarg.h>
 
 static void shimLog(const char *format, ...) __attribute__((format(printf, 1, 2)));
@@ -211,12 +217,12 @@ static id vertexStage(id self, SEL _cmd, void *fragment, id fragmentVariant, id 
                            fragmentTimeData, archiverId, error, handler);
 }
 
-typedef id (*InitVFIMP)(id, SEL, dispatch_data_t, dispatch_data_t, dispatch_data_t, id, NSUInteger, NSUInteger);
-typedef id (*InitOMFIMP)(id, SEL, dispatch_data_t, dispatch_data_t, dispatch_data_t, id, NSUInteger, NSUInteger);
-typedef id (*InitTileIMP)(id, SEL, dispatch_data_t, NSUInteger, id, NSUInteger, NSUInteger);
-typedef id (*InitComputeIMP)(id, SEL, dispatch_data_t, id, NSUInteger, NSUInteger);
-typedef id (*InitComputeStageIMP)(id, SEL, dispatch_data_t, dispatch_data_t, id, NSUInteger, NSUInteger);
-typedef id (*InitFunctionIMP)(id, SEL, id, dispatch_data_t, NSUInteger, NSUInteger);
+typedef id (*InitVFIMP)(CONSUMED id, SEL, dispatch_data_t, dispatch_data_t, dispatch_data_t, id, NSUInteger, NSUInteger) RETURNS_RETAINED;
+typedef id (*InitOMFIMP)(CONSUMED id, SEL, dispatch_data_t, dispatch_data_t, dispatch_data_t, id, NSUInteger, NSUInteger) RETURNS_RETAINED;
+typedef id (*InitTileIMP)(CONSUMED id, SEL, dispatch_data_t, NSUInteger, id, NSUInteger, NSUInteger) RETURNS_RETAINED;
+typedef id (*InitComputeIMP)(CONSUMED id, SEL, dispatch_data_t, id, NSUInteger, NSUInteger) RETURNS_RETAINED;
+typedef id (*InitComputeStageIMP)(CONSUMED id, SEL, dispatch_data_t, dispatch_data_t, id, NSUInteger, NSUInteger) RETURNS_RETAINED;
+typedef id (*InitFunctionIMP)(CONSUMED id, SEL, id, dispatch_data_t, NSUInteger, NSUInteger) RETURNS_RETAINED;
 
 static InitVFIMP origVF;
 static InitOMFIMP origOMF;
@@ -225,28 +231,34 @@ static InitComputeIMP origCompute;
 static InitComputeStageIMP origComputeStage;
 static InitFunctionIMP origFunction;
 
-static id initVF(id self, SEL _cmd, dispatch_data_t vertex, dispatch_data_t fragment, dispatch_data_t vertexDesc, id device, NSUInteger options, NSUInteger flags) {
+static id initVF(CONSUMED id self, SEL _cmd, dispatch_data_t vertex, dispatch_data_t fragment, dispatch_data_t vertexDesc, id device, NSUInteger options, NSUInteger flags) RETURNS_RETAINED;
+static id initVF(CONSUMED id self, SEL _cmd, dispatch_data_t vertex, dispatch_data_t fragment, dispatch_data_t vertexDesc, id device, NSUInteger options, NSUInteger flags) {
     // MetalOld's own reflection reader still needs the 13.2 vertex descriptor layout.
     return origVF(self, _cmd, unwrapReflection(vertex), unwrapReflection(fragment), convertVertexDescriptor(vertexDesc, NO), device, options, flags);
 }
 
-static id initOMF(id self, SEL _cmd, dispatch_data_t object, dispatch_data_t mesh, dispatch_data_t fragment, id device, NSUInteger options, NSUInteger flags) {
+static id initOMF(CONSUMED id self, SEL _cmd, dispatch_data_t object, dispatch_data_t mesh, dispatch_data_t fragment, id device, NSUInteger options, NSUInteger flags) RETURNS_RETAINED;
+static id initOMF(CONSUMED id self, SEL _cmd, dispatch_data_t object, dispatch_data_t mesh, dispatch_data_t fragment, id device, NSUInteger options, NSUInteger flags) {
     return origOMF(self, _cmd, unwrapReflection(object), unwrapReflection(mesh), unwrapReflection(fragment), device, options, flags);
 }
 
-static id initTile(id self, SEL _cmd, dispatch_data_t tile, NSUInteger functionType, id device, NSUInteger options, NSUInteger flags) {
+static id initTile(CONSUMED id self, SEL _cmd, dispatch_data_t tile, NSUInteger functionType, id device, NSUInteger options, NSUInteger flags) RETURNS_RETAINED;
+static id initTile(CONSUMED id self, SEL _cmd, dispatch_data_t tile, NSUInteger functionType, id device, NSUInteger options, NSUInteger flags) {
     return origTile(self, _cmd, unwrapReflection(tile), functionType, device, options, flags);
 }
 
-static id initCompute(id self, SEL _cmd, dispatch_data_t data, id device, NSUInteger options, NSUInteger flags) {
+static id initCompute(CONSUMED id self, SEL _cmd, dispatch_data_t data, id device, NSUInteger options, NSUInteger flags) RETURNS_RETAINED;
+static id initCompute(CONSUMED id self, SEL _cmd, dispatch_data_t data, id device, NSUInteger options, NSUInteger flags) {
     return origCompute(self, _cmd, unwrapReflection(data), device, options, flags);
 }
 
-static id initComputeStage(id self, SEL _cmd, dispatch_data_t data, dispatch_data_t stageDesc, id device, NSUInteger options, NSUInteger flags) {
+static id initComputeStage(CONSUMED id self, SEL _cmd, dispatch_data_t data, dispatch_data_t stageDesc, id device, NSUInteger options, NSUInteger flags) RETURNS_RETAINED;
+static id initComputeStage(CONSUMED id self, SEL _cmd, dispatch_data_t data, dispatch_data_t stageDesc, id device, NSUInteger options, NSUInteger flags) {
     return origComputeStage(self, _cmd, unwrapReflection(data), stageDesc, device, options, flags);
 }
 
-static id initFunction(id self, SEL _cmd, id device, dispatch_data_t data, NSUInteger functionType, NSUInteger options) {
+static id initFunction(CONSUMED id self, SEL _cmd, id device, dispatch_data_t data, NSUInteger functionType, NSUInteger options) RETURNS_RETAINED;
+static id initFunction(CONSUMED id self, SEL _cmd, id device, dispatch_data_t data, NSUInteger functionType, NSUInteger options) {
     return origFunction(self, _cmd, device, unwrapReflection(data), functionType, options);
 }
 
@@ -338,7 +350,7 @@ static void setBytesStride(id self, SEL _cmd, const void *bytes, NSUInteger leng
 enum { kNewestLanguageVersion = 0x30001 /* MTLLanguageVersion3_1 */ };
 typedef void (*SetLanguageVersionIMP)(id, SEL, NSUInteger);
 static SetLanguageVersionIMP origSetLanguageVersion;
-typedef id (*InitIMP)(id, SEL);
+typedef id (*InitIMP)(CONSUMED id, SEL) RETURNS_RETAINED;
 static InitIMP origCompileOptionsInit;
 
 static const void *kNewerVersionRequested = &kNewerVersionRequested;
@@ -423,7 +435,8 @@ static void newLibraryAsync(id self, SEL _cmd, NSString *source, id options, id 
 // OCLP's Tahoe wrapper makes setLanguageVersion: a no-op when it loads, which is after this library's initializer. Apps then can't
 // pick an older version than the default, and shaders only valid there stop compiling (Blender's EEVEE has a variable called
 // ray_data, a keyword since MSL 2.3). The hook goes back in here, before anyone can call the setter.
-static id compileOptionsInit(id self, SEL _cmd) {
+static id compileOptionsInit(CONSUMED id self, SEL _cmd) RETURNS_RETAINED;
+static id compileOptionsInit(CONSUMED id self, SEL _cmd) {
     Method setter = class_getInstanceMethod(object_getClass(self), @selector(setLanguageVersion:));
     if (setter && method_getImplementation(setter) != (IMP)setLanguageVersion) method_setImplementation(setter, (IMP)setLanguageVersion);
     self = origCompileOptionsInit(self, _cmd);
@@ -1119,7 +1132,7 @@ static void igFillBuffer(id self, SEL _cmd, id buffer, NSRange range, uint8_t va
 // bHizDisable is set (read at creation), and these depth textures are created that way. Single-level depth buffers,
 // almost every renderer's main depth buffer, keep HiZ. Multisampled depth has the same problem with blits but is left
 // alone: copying it is rare, and HiZ matters most to multisampled rendering.
-typedef id (*NewTextureIMP)(id, SEL, MTLTextureDescriptor *);
+typedef id (*NewTextureIMP)(id, SEL, MTLTextureDescriptor *) RETURNS_RETAINED;
 static NewTextureIMP origIGNewTexture, origIGHeapNewTexture;
 static ptrdiff_t igHizDisableOffset;
 
@@ -1139,7 +1152,8 @@ static BOOL needsNoHiZ(MTLTextureDescriptor *descriptor) {
                                            type == MTLTextureTypeCubeArray || type == MTLTextureType3D);
 }
 
-static id createWithoutHiZ(id device, id (^create)(void)) {
+// Item 22: while `device`'s bHizDisable is set; returns the lock's previous value to restore with endWithoutHiZ.
+static pthread_mutex_t *hizLock(void) {
     static pthread_mutex_t lock;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
@@ -1148,15 +1162,19 @@ static id createWithoutHiZ(id device, id (^create)(void)) {
         pthread_mutexattr_settype(&attributes, PTHREAD_MUTEX_RECURSIVE);
         pthread_mutex_init(&lock, &attributes);
     });
+    return &lock;
+}
+static bool beginWithoutHiZ(id device) {
     bool *hizDisable = (bool *)((char *)(__bridge void *)device + igHizDisableOffset);
-    pthread_mutex_lock(&lock);
+    pthread_mutex_lock(hizLock());
     bool saved = *hizDisable;
     *hizDisable = true;
-    id texture = create();
-    *hizDisable = saved;
-    pthread_mutex_unlock(&lock);
+    return saved;
+}
+static void endWithoutHiZ(id device, bool saved) {
+    *(bool *)((char *)(__bridge void *)device + igHizDisableOffset) = saved;
+    pthread_mutex_unlock(hizLock());
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] depth texture with several levels/slices created without HiZ\n");
-    return texture;
 }
 
 // 36. Multisampled Stencil8 textures on the 12.x Intel driver: render passes write their stencil right, but shaders read
@@ -1184,28 +1202,38 @@ static MTLPixelFormat sampleableStencilView(id texture, MTLPixelFormat format) {
     return t.pixelFormat == MTLPixelFormatDepth32Float_Stencil8 && t.sampleCount > 1 ? MTLPixelFormatX32_Stencil8 : format;
 }
 
+static id igNewTexture(id self, SEL _cmd, MTLTextureDescriptor *descriptor) RETURNS_RETAINED;
 static id igNewTexture(id self, SEL _cmd, MTLTextureDescriptor *descriptor) {
     MTLTextureDescriptor *standIn = sampleableStencilStandIn(descriptor);
     if (standIn) return origIGNewTexture(self, _cmd, standIn);
     if (!igHizDisableOffset || !needsNoHiZ(descriptor)) return origIGNewTexture(self, _cmd, descriptor);
-    return createWithoutHiZ(self, ^{ return origIGNewTexture(self, _cmd, descriptor); });
+    bool saved = beginWithoutHiZ(self);
+    id texture = origIGNewTexture(self, _cmd, descriptor);
+    endWithoutHiZ(self, saved);
+    return texture;
 }
 
+static id igHeapNewTexture(id self, SEL _cmd, MTLTextureDescriptor *descriptor) RETURNS_RETAINED;
 static id igHeapNewTexture(id self, SEL _cmd, MTLTextureDescriptor *descriptor) {
     id device = [(id<MTLHeap>)self device];
     if (!igHizDisableOffset || !needsNoHiZ(descriptor) || ![device isKindOfClass:objc_getClass("MTLIGAccelDevice")])
         return origIGHeapNewTexture(self, _cmd, descriptor);
-    return createWithoutHiZ(device, ^{ return origIGHeapNewTexture(self, _cmd, descriptor); });
+    bool saved = beginWithoutHiZ(device);
+    id texture = origIGHeapNewTexture(self, _cmd, descriptor);
+    endWithoutHiZ(device, saved);
+    return texture;
 }
 
 // Items 22 and 36 (texture creation); 36's views below.
-typedef id (*NewViewIMP)(id, SEL, MTLPixelFormat);
-typedef id (*NewViewRangeIMP)(id, SEL, MTLPixelFormat, MTLTextureType, NSRange, NSRange);
+typedef id (*NewViewIMP)(id, SEL, MTLPixelFormat) RETURNS_RETAINED;
+typedef id (*NewViewRangeIMP)(id, SEL, MTLPixelFormat, MTLTextureType, NSRange, NSRange) RETURNS_RETAINED;
 static NewViewIMP origIGNewView;
 static NewViewRangeIMP origIGNewViewRange;
+static id igNewView(id self, SEL _cmd, MTLPixelFormat format) RETURNS_RETAINED;
 static id igNewView(id self, SEL _cmd, MTLPixelFormat format) {
     return origIGNewView(self, _cmd, sampleableStencilView(self, format));
 }
+static id igNewViewRange(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices) RETURNS_RETAINED;
 static id igNewViewRange(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices) {
     return origIGNewViewRange(self, _cmd, sampleableStencilView(self, format), type, levels, slices);
 }
@@ -1711,7 +1739,7 @@ static void encoderLodClamps(void) {
 // one-channel formats, RG01 for two); and R001 for depth and stencil formats, which shaders read in R only (sampling
 // one as float, G, B and A then come from the driver instead of 0, 0, 1). Other swizzles still get nil.
 // MTLSHIM_SWIZZLE_VIEW=0 turns it off. Test: s36.
-typedef id (*SwizzleViewIMP)(id, SEL, MTLPixelFormat, MTLTextureType, NSRange, NSRange, MTLTextureSwizzleChannels);
+typedef id (*SwizzleViewIMP)(id, SEL, MTLPixelFormat, MTLTextureType, NSRange, NSRange, MTLTextureSwizzleChannels) RETURNS_RETAINED;
 static SwizzleViewIMP origIGSwizzleView;
 
 static int channelCount(MTLPixelFormat f) {  // 1, 2, or 0 (other / not known)
@@ -1741,6 +1769,7 @@ static BOOL depthOrStencil(MTLPixelFormat f) {
 static BOOL swizzleIs(MTLTextureSwizzleChannels s, MTLTextureSwizzle r, MTLTextureSwizzle g, MTLTextureSwizzle b, MTLTextureSwizzle a) {
     return s.red == r && s.green == g && s.blue == b && s.alpha == a;
 }
+static id igSwizzleView(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices, MTLTextureSwizzleChannels swizzle) RETURNS_RETAINED;
 static id igSwizzleView(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices, MTLTextureSwizzleChannels swizzle) {
     format = sampleableStencilView(self, format);  // item 36
     id view = origIGSwizzleView(self, _cmd, format, type, levels, slices, swizzle);
@@ -1752,7 +1781,7 @@ static id igSwizzleView(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType
                     (channels == 2 && swizzleIs(swizzle, MTLTextureSwizzleRed, MTLTextureSwizzleGreen, MTLTextureSwizzleZero, MTLTextureSwizzleOne));
     if (!harmless) return nil;
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] swizzled texture view: made without the swizzle\n");
-    return ((id (*)(id, SEL, MTLPixelFormat, MTLTextureType, NSRange, NSRange))objc_msgSend)(
+    return ((NewViewRangeIMP)objc_msgSend)(
         self, @selector(newTextureViewWithPixelFormat:textureType:levels:slices:), format, type, levels, slices);
 }
 
