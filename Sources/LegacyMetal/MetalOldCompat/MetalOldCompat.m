@@ -56,6 +56,8 @@
 //      the left half): created as Depth32Float_Stencil8, whose stencil reads right, with Stencil8 views made X32_Stencil8
 //  37. stencil copied between a buffer and a mip level 1+ on the 12.x Intel driver with a buffer offset or bytesPerRow
 //      that isn't a multiple of 256 (a texel of each row taken from its neighbour): through a level-0 temporary texture
+//  38. stencil views (X32_Stencil8, X24_Stencil8) of depth/stencil textures on the 12.x Intel driver, which describe the
+//      stencil plane with the depth plane's 4-texel mip alignment (levels 2+ read 0 for many widths): 8, as laid out
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -1107,6 +1109,45 @@ static void *igInitView(void *self, SEL _cmd, void *parent, MTLPixelFormat forma
     return view;
 }
 
+// 38. Stencil views of depth/stencil textures on the 12.x Intel driver: shaders reading the stencil of
+// Depth32Float_Stencil8 (or Depth24Unorm_Stencil8) through an X32_Stencil8 view read 0 at mip level 2 and above for
+// many widths (20, 24, 36: level 2 of a 20x16 texture; 12, 16, 28, 32 were right). The view's surface state takes the
+// depth plane's horizontal mip alignment (4), but the stencil plane is laid out with 8, like a Stencil8 texture (whose
+// views read right): levels 2+, placed to the right of level 1 at its width rounded up to the alignment, are looked
+// for where level 1's width rounds differently. After the driver builds a stencil view's surface state
+// (-[MTLIGAccelTexture initializeHWSurfaceState]), its horizontal alignment is set to 8. Dawn backs WebGPU's stencil8
+// with Depth32Float_Stencil8. Only if m_Info.hwSurfaceState has the Gen7 SURFACE_STATE layout this expects.
+// MTLSHIM_STENCIL_VIEW_ALIGN=0 turns it off. Test: s43.
+typedef void (*InitSurfaceStateIMP)(id, SEL);
+static InitSurfaceStateIMP origIGInitSurfaceState;
+static ptrdiff_t igSurfaceStateOffset = -1;
+
+static void igInitSurfaceState(id self, SEL _cmd) {
+    origIGInitSurfaceState(self, _cmd);
+    MTLPixelFormat f = ((id<MTLTexture>)self).pixelFormat;
+    if (f != MTLPixelFormatX32_Stencil8 && f != MTLPixelFormatX24_Stencil8) return;
+    uint32_t *dword0 = (uint32_t *)((uint8_t *)(__bridge void *)self + igSurfaceStateOffset);
+    if (*dword0 & (1u << 15)) return;
+    *dword0 |= 1u << 15;  // SurfaceHorizontalAlignment: HALIGN_8
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] stencil view: surface horizontal alignment 8\n");
+}
+
+static void stencilViewAlignment(void) {
+    // m_Info starts with hwSurfaceState, a Gen7 SURFACE_STATE whose dword 0 has SurfaceHorizontalAlignment at bit 15
+    static const char kLayout[] = "{MTLIGAccelTextureInfo=\"hwSurfaceState\"{SGfxSurfaceState=\"CubeFaceEnablesPositiveZ\"b1"
+        "\"CubeFaceEnablesNegativeZ\"b1\"CubeFaceEnablesPositiveY\"b1\"CubeFaceEnablesNegativeY\"b1\"CubeFaceEnablesPositiveX\"b1"
+        "\"CubeFaceEnablesNegativeX\"b1\"MediaBoundaryPixelMode\"b2\"RenderCacheReadWriteMode\"b1\"\"b1\"SurfaceArraySpacing\"b1"
+        "\"VerticalLineStrideOffset\"b1\"VerticalLineStride\"b1\"TileWalk\"b1\"TiledSurface\"b1\"SurfaceHorizontalAlignment\"b1";
+    const char *setting = getenv("MTLSHIM_STENCIL_VIEW_ALIGN");
+    Class texture = objc_getClass("MTLIGAccelTexture");
+    Ivar info = texture ? class_getInstanceVariable(texture, "m_Info") : NULL;
+    if (origIGInitSurfaceState || (setting && !strcmp(setting, "0")) || !info || strncmp(ivar_getTypeEncoding(info), kLayout, sizeof kLayout - 1) ||
+        !definesMethod("MTLIGAccelTexture", "initializeHWSurfaceState"))
+        return;
+    igSurfaceStateOffset = ivar_getOffset(info);
+    origIGInitSurfaceState = (InitSurfaceStateIMP)swizzle("MTLIGAccelTexture", "initializeHWSurfaceState", (IMP)igInitSurfaceState);
+}
+
 // 20. Buffer fills on the 12.x Intel driver: -[MTLIGAccelBlitCommandEncoder fillBuffer:range:value:] fills the wrong
 // bytes when the length is exactly 8 and the offset is 4 mod 8: it fills the 8-aligned bytes below (offset 4 -> 0..7).
 // Other lengths and offsets are right. wgpu (Firefox's WebGPU) zero-fills buffer tails this way: a 4-byte copy into
@@ -1892,6 +1933,7 @@ static void patchDriverClasses(void) {
     swizzledViews();
     mpsStatisticsWidth();
     stencilCopies();
+    stencilViewAlignment();
     // item 29, once the Intel driver is in (WebKit's processes are named by then)
     if (!origSetSampleMask && !strncmp(getprogname(), "com.apple.WebKit", 16) && definesMethod("MTLRenderPipelineDescriptorInternal", "setSampleMask:"))
         origSetSampleMask = (SetSampleMaskIMP)swizzle("MTLRenderPipelineDescriptorInternal", "setSampleMask:", (IMP)compatSetSampleMask);
