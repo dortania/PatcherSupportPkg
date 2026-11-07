@@ -47,6 +47,10 @@
 // Tenth job: unpack normalized integers exactly (exactUnpackNorm): libAMDIL902's unpack_snorm2x16_to_float is up to
 // 6 ulp off, unpack_unorm2x16_to_float 2. AMD_UNPACK_FIX=0 turns it off.
 //
+// Eleventh job: private arrays written at variable indexes (privateArrayIndexedStores): SC's M0-relative register
+// writes lose updates across branches and loop iterations; such arrays are accessed at constant indexes only.
+// AMD_PRIVATE_STORE_FIX=0 turns it off.
+//
 // Installed: AMDShared.bundle/Contents/MacOS/AMDTextureAtomics.dylib, loaded by a weak load command in AMDShared.
 // Test use (in-process compiling): DYLD_INSERT_LIBRARIES=Tests/tools/localcc.dylib:build/texatomic.dylib <app>
 //   TEXATOMIC_LOG=1   log what is rewritten
@@ -185,6 +189,9 @@ static struct {
     unsigned (*namedMDNumOperands)(void *namedMD);
     void *(*namedMDGetOperand)(void *namedMD, unsigned i);
     void (*setInitializer)(void *global, void *constant);
+    // privateArrayIndexedStores
+    void *(*gepCreate)(void *sourceType, void *pointer, ArrayRef indices, const Twine *name, void *insertBefore);
+    void (*selectInit)(void *self, void *condition, void *ifTrue, void *ifFalse, const Twine *name, void *insertBefore);
 } api;
 
 static void *resolveIn(const char *bytes, size_t length, const struct symtab_command *table, uint64_t textAddress,
@@ -272,6 +279,8 @@ static bool resolveAPI(void) {
         RESOLVE(namedMDNumOperands, "__ZNK4llvm11NamedMDNode14getNumOperandsEv");
         RESOLVE(namedMDGetOperand, "__ZNK4llvm11NamedMDNode10getOperandEj");
         RESOLVE(setInitializer, "__ZN4llvm14GlobalVariable14setInitializerEPNS_8ConstantE");
+        RESOLVE(gepCreate, "__ZN4llvm17GetElementPtrInst6CreateEPNS_4TypeEPNS_5ValueENS_8ArrayRefIS4_EERKNS_5TwineEPNS_11InstructionE");
+        RESOLVE(selectInit, "__ZN4llvm10SelectInstC2EPNS_5ValueES2_S2_RKNS_5TwineEPNS_11InstructionE");
 #undef RESOLVE
         api.valid = api.getFunction && api.getOrInsertFunction && api.functionTypeGet && api.constantIntGet &&
                     api.getInt32Ty && api.getVoidTy && api.getContext && api.getUser && api.replaceUsesOfWith &&
@@ -1053,6 +1062,151 @@ static unsigned exactUnpackNorm(void *module) {
     return rewritten;
 }
 
+// SC (ATIRadeonX4000SCLib) keeps small private arrays in VGPRs: constant indexes become plain register writes, variable
+// ones M0-relative writes (v_movreld in a loop over the lanes' distinct indexes). Its handling of those writes loses
+// updates, found by differential fuzzing against a CPU reference (the IL is right, SC's output isn't):
+//   - `if (c) p[2] = a; else p[i] = b; p[j] = 1;` leaves p[2] as it was: SC drops the whole first branch;
+//   - `for (...) { p[i] += 1; p[j] = 1; }` loses the first write from the second iteration on.
+// A select between two element pointers counts as a variable index. Arrays of up to 32 scalars or vectors get each
+// variable-index store rewritten as one conditional store per element, `p[k] = i == k ? v : p[k]`, so SC only sees
+// constant-index writes, and each variable-index load of the same arrays as a chain of selects, `v = i == k ? p[k] : v`:
+// with the loads left indexed, SC merges them across the constant-index stores between them once a loop is unrolled
+// (`for (...) { p[k & 7] = a; s ^= p[i]; }` with k known: four of five loads read one value). Arrays only read at
+// variable indexes (lookup tables) stay as they are. AMD_PRIVATE_STORE_FIX=0 turns this off.
+enum { kOpcodeStore = 31, kMaxArrayLength = 32, kMaxIndexed = 64, kAllocaAllocatedType = 0x38, kGEPSourceType = 0x38 };
+typedef struct { void *access, *array; } IndexedAccess;
+
+static bool isAllocaInstruction(void *v) { return isInstruction(v, kOpcodeAlloca); }
+
+// The array alloca a store's pointer addresses, and the element index: a constant (*constant) or a value (*index).
+static void *storedArrayElement(void *pointer, void *i64, void **index, int *constant, void *before) {
+    *index = NULL;
+    *constant = -1;
+    if (isInstruction(pointer, kOpcodeGEP) && !hungOffUses(pointer) && numOperands(pointer) == 3) {
+        void *array = operand(pointer, 0), *zero = operand(pointer, 1), *element = operand(pointer, 2);
+        if (!isAllocaInstruction(array) || zero != api.constantIntGet(typeOf(zero), 0, false)) return NULL;
+        void *type = *(void **)((char *)array + kAllocaAllocatedType);
+        if (typeID(type) != kTypeArray || arrayLength(type) > kMaxArrayLength || *(void **)((char *)pointer + kGEPSourceType) != type)
+            return NULL;
+        unsigned elementKind = typeID(elementType(type));  // Type::TypeID: half 1, float 2, double 3, integer 11, vector 16
+        if (elementKind != 1 && elementKind != 2 && elementKind != 3 && elementKind != 11 && elementKind != 16) return NULL;
+        for (unsigned k = 0; k < arrayLength(type); k++)
+            if (element == api.constantIntGet(typeOf(element), k, false)) { *constant = (int)k; return array; }
+        *index = element;
+        return array;
+    }
+    if (isInstruction(pointer, kOpcodeSelect) && !hungOffUses(pointer) && numOperands(pointer) == 3 && i64) {
+        void *a, *b;
+        int ka, kb;
+        void *arrayA = storedArrayElement(operand(pointer, 1), i64, &a, &ka, NULL);
+        void *arrayB = storedArrayElement(operand(pointer, 2), i64, &b, &kb, NULL);
+        if (!arrayA || arrayA != arrayB || ka < 0 || kb < 0) return NULL;
+        if (before) {  // the index the select picks
+            char *pick = api.userNew(96, 3);
+            api.selectInit(pick, operand(pointer, 0), api.constantIntGet(i64, ka, false), api.constantIntGet(i64, kb, false), &kNoName,
+                           before);
+            *index = pick;
+        } else {
+            *index = pointer;  // just classifying
+        }
+        return arrayA;
+    }
+    return NULL;
+}
+
+static unsigned privateArrayIndexedStores(void *module) {
+    const char *setting = getenv("AMD_PRIVATE_STORE_FIX");
+    if ((setting && !strcmp(setting, "0")) || !api.gepCreate || !api.selectInit) return 0;
+    unsigned rewritten = 0;
+    char *functions = (char *)module + kModuleFunctions;
+    for (char *fn = nextNode(functions); fn != functions; fn = nextNode(fn)) {
+        char *function = fn - kFunctionNode, *blocks = function + kFunctionBlocks;
+        if (*(void **)(function + kFunctionParent) != module) return rewritten;  // layout mismatch: leave the module alone
+        if (nextNode(blocks) == blocks) continue;
+        void *i64 = api.getInt64Ty(api.getContext(function));
+        IndexedAccess stores[kMaxIndexed], loads[kMaxIndexed];
+        unsigned numStores = 0, numLoads = 0;
+        for (char *bn = nextNode(blocks); bn != blocks; bn = nextNode(bn)) {
+            char *block = bn - kBlockNode, *insts = block + kBlockInstructions;
+            if (*(void **)(block + kBlockParent) != function) return rewritten;
+            for (char *in = nextNode(insts); in != insts; in = nextNode(in)) {
+                char *inst = in - kInstructionNode;
+                if (*(void **)(inst + kInstructionParent) != block) return rewritten;
+                bool store = isInstruction(inst, kOpcodeStore) && !hungOffUses(inst) && numOperands(inst) == 2;
+                bool load = isInstruction(inst, kOpcodeLoad) && !hungOffUses(inst) && numOperands(inst) == 1 && !isVolatileLoad(inst);
+                if (!store && !load) continue;
+                void *index;
+                int constant;
+                void *array = storedArrayElement(operand(inst, store ? 1 : 0), i64, &index, &constant, NULL);
+                if (!array || !index) continue;
+                if (store && numStores < kMaxIndexed) stores[numStores++] = (IndexedAccess){inst, array};
+                if (load && numLoads < kMaxIndexed) loads[numLoads++] = (IndexedAccess){inst, array};
+            }
+        }
+        // The arrays written at a variable index: all their variable-index accesses become constant-index ones.
+        void *arrays[kMaxIndexed];
+        unsigned numArrays = 0;
+        for (unsigned s = 0; s < numStores; s++) {
+            unsigned a = 0;
+            while (a < numArrays && arrays[a] != stores[s].array) a++;
+            if (a == numArrays) arrays[numArrays++] = stores[s].array;
+        }
+        for (unsigned s = 0; s < numStores; s++) {
+            void *store = stores[s].access, *array = stores[s].array, *value = operand(store, 0);
+            void *type = *(void **)((char *)array + kAllocaAllocatedType), *element = elementType(type);
+            void *index;
+            int constant;
+            storedArrayElement(operand(store, 1), i64, &index, &constant, store);  // builds the select of indexes if needed
+            if (!index) continue;
+            void *indexType = typeOf(index);
+            for (unsigned k = 0; k < arrayLength(type); k++) {  // p[k] = i == k ? v : p[k]
+                void *indices[2] = {api.constantIntGet(indexType, 0, false), api.constantIntGet(indexType, k, false)};
+                void *slot = api.gepCreate(type, array, (ArrayRef){indices, 2}, &kNoName, store);
+                char *old = api.userNew(96, 1);
+                api.loadInst(old, element, slot, &kNoName, false, store);
+                void *hit = api.cmpCreate(kOpcodeICmp, kPredicateEQ, index, indices[1], &kNoName, store);
+                char *merged = api.userNew(96, 3);
+                api.selectInit(merged, hit, value, old, &kNoName, store);
+                char *write = api.userNew(96, 2);
+                api.storeInst(write, merged, slot, store);
+            }
+            api.eraseFromParent(store);
+            rewritten++;
+        }
+        for (unsigned l = 0; l < numLoads; l++) {
+            void *load = loads[l].access, *array = loads[l].array;
+            unsigned a = 0;
+            while (a < numArrays && arrays[a] != array) a++;
+            if (a == numArrays) continue;  // only read at variable indexes: SC handles that
+            void *type = *(void **)((char *)array + kAllocaAllocatedType), *element = elementType(type);
+            if (typeOf(load) != element) continue;
+            void *index;
+            int constant;
+            storedArrayElement(operand(load, 0), i64, &index, &constant, load);
+            if (!index) continue;
+            void *indexType = typeOf(index), *value = NULL;
+            for (unsigned k = 0; k < arrayLength(type); k++) {  // v = p[0]; v = i == k ? p[k] : v
+                void *indices[2] = {api.constantIntGet(indexType, 0, false), api.constantIntGet(indexType, k, false)};
+                void *slot = api.gepCreate(type, array, (ArrayRef){indices, 2}, &kNoName, load);
+                char *read = api.userNew(96, 1);
+                api.loadInst(read, element, slot, &kNoName, false, load);
+                if (!value) {
+                    value = read;
+                    continue;
+                }
+                void *hit = api.cmpCreate(kOpcodeICmp, kPredicateEQ, index, indices[1], &kNoName, load);
+                char *merged = api.userNew(96, 3);
+                api.selectInit(merged, hit, read, value, &kNoName, load);
+                value = merged;
+            }
+            api.replaceAllUsesWith(load, value);
+            api.eraseFromParent(load);
+            rewritten++;
+        }
+    }
+    return rewritten;
+}
+
 // The front end in Xcode 26 writes a constexpr sampler (!air.sampler_states) as a [2 x i64] constant: the sampler word with
 // bit 63 clear, then 0. Older front ends, including the runtime compiler that libAMDIL902 was built with, write one i64:
 // the same word with bit 63 set. ILSetupConstantSampler turns the global's initializer into an integer-to-pointer
@@ -1122,6 +1276,8 @@ static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *
         if (samplers && logging()) fprintf(stderr, "[texatomic] %u constexpr sampler(s) rewritten in the one-word form\n", samplers);
         unsigned unpacks = exactUnpackNorm(module);
         if (unpacks && logging()) fprintf(stderr, "[texatomic] %u unpack call(s) computed exactly\n", unpacks);
+        unsigned arrayStores = privateArrayIndexedStores(module);
+        if (arrayStores && logging()) fprintf(stderr, "[texatomic] %u variable-index private array store(s) done per element\n", arrayStores);
         unsigned n = lowerTextureAtomics(module);
         if (logging()) fprintf(stderr, "[texatomic] compileShader: %u texture atomic call(s) lowered\n", n);
     } else if (logging()) {
