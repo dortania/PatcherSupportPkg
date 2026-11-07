@@ -1174,6 +1174,10 @@ static unsigned dropSampleCompareBias(LLVMModuleRef module) {
 //   derivatives, plus the bias: the compiler can't compute an LOD, calculate_clamped_lod aborts it), the level is
 //   computed in the shader and the sample made explicit at it, so the offset and the texels come from the same level.
 //   Gathers and implicit LODs in other functions read level 0. INTEL_INTEGER_OFFSET_FIX=0 turns it off.
+// - In compute kernels the back end adds a gather's texel offset to the normalized coordinate as is (FADD coord, 1.0
+//   for an offset of 1), so offsets come out a whole texture size per texel, on any texture format (WebGPU CTS
+//   textureGather sampled_*_coords with offsets in compute, 639 cases); vertex and fragment functions are right. Those
+//   gathers get the same rewrite at level 0. INTEL_KERNEL_GATHER_OFFSET_FIX=0 turns that off.
 // The level computed for gradients is log2 of the longer gradient in texels of level 0 (+ the bias), rounded and clamped
 // to the texture's levels: a nearest mip filter's. A sampler that doesn't mipmap reads level 0 regardless (a mipmapped
 // integer texture with such a sampler, sampled minified: the offset is then in the wrong level's texels).
@@ -1208,6 +1212,20 @@ static bool isEntry(LLVMModuleRef module, const char *list, LLVMValueRef functio
     return false;
 }
 static LLVMValueRef callerOf(LLVMValueRef call) { return LLVMGetBasicBlockParent(LLVMGetInstructionParent(call)); }
+// Whether a function only runs in compute kernels: a kernel entry, or a function (Tint's helpers) whose every call is from
+// such a function
+static bool kernelOnly(LLVMModuleRef module, LLVMValueRef function, int depth = 0) {
+    if (isEntry(module, "air.kernel", function)) return true;
+    if (depth > 8 || isEntry(module, "air.vertex", function) || isEntry(module, "air.fragment", function)) return false;
+    bool called = false;
+    for (LLVMUseRef u = LLVMGetFirstUse(function); u; u = LLVMGetNextUse(u)) {
+        LLVMValueRef user = LLVMGetUser(u);
+        if (!LLVMIsACallInst(user) || LLVMGetOperand(user, LLVMGetNumOperands(user) - 1) != function) return false;
+        if (!kernelOnly(module, callerOf(user), depth + 1)) return false;
+        called = true;
+    }
+    return called;
+}
 // air.get_{width,height,depth}_<type>(texture, lod) as a float
 static LLVMValueRef textureSize(LLVMBuilderRef b, LLVMModuleRef module, LLVMValueRef texture, const char *type, unsigned d, LLVMValueRef lod) {
     static const char *const kSizes[3] = {"width", "height", "depth"};
@@ -1322,7 +1340,8 @@ static unsigned lowerIntegerGradients(LLVMModuleRef module) {
 
 // Texel offsets on integer textures: into the coordinates.
 static unsigned foldIntegerSampleOffsets(LLVMModuleRef module) {
-    if (disabled("INTEL_INTEGER_OFFSET_FIX")) return 0;
+    bool integers = !disabled("INTEL_INTEGER_OFFSET_FIX"), kernelGathers = !disabled("INTEL_KERNEL_GATHER_OFFSET_FIX");
+    if (!integers && !kernelGathers) return 0;
     bool bound = runtimeNamesBound(module);  // no air.* calls can be added (see fixFloat3Inputs)
     LLVMContextRef context = LLVMGetModuleContext(module);
     LLVMTypeRef i32 = LLVMInt32TypeInContext(context), f32 = LLVMFloatTypeInContext(context), i1 = LLVMInt1TypeInContext(context);
@@ -1342,7 +1361,8 @@ static unsigned foldIntegerSampleOffsets(LLVMModuleRef module) {
     unsigned fixed = 0;
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
         const char *name = LLVMGetValueName(f);
-        if (!integerResult(name, strlen(name))) continue;
+        bool integer = integerResult(name, strlen(name));
+        if (!(integer && integers) && !(kernelGathers && !strncmp(name, "air.gather_texture_", 19))) continue;
         for (const auto &kind : kKinds) {
             size_t prefix = strlen(kind.prefix);
             if (strncmp(name, kind.prefix, prefix) || strchr(name + prefix, '_')) continue;  // not 2d_array for 2d, no _grad
@@ -1358,6 +1378,7 @@ static unsigned foldIntegerSampleOffsets(LLVMModuleRef module) {
                 if (LLVMIsAConstantAggregateZero(offset) || lanes(LLVMTypeOf(offset)) != kind.dims || lanes(LLVMTypeOf(coord)) != kind.dims ||
                     !LLVMIsAConstantInt(hasLevel))
                     continue;
+                if (!(integer && integers) && !kernelOnly(module, callerOf(call))) continue;  // float: kernel gathers only
                 if (!b) b = LLVMCreateBuilderInContext(context);
                 LLVMPositionBuilderBefore(b, call);
                 LLVMValueRef texture = LLVMGetOperand(call, 0), lod = LLVMConstInt(i32, 0, false);
