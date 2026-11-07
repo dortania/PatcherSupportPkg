@@ -58,6 +58,8 @@
 //      that isn't a multiple of 256 (a texel of each row taken from its neighbour): through a level-0 temporary texture
 //  38. stencil views (X32_Stencil8, X24_Stencil8) of depth/stencil textures on the 12.x Intel driver, which describe the
 //      stencil plane with the depth plane's 4-texel mip alignment (levels 2+ read 0 for many widths): 8, as laid out
+//  39. size queries (get_width/height) on writable 2D-array views that start at mip level 1+ in fragment functions on
+//      the 12.x Intel driver (level 0's size): the view's render-target surface state gets the level as its min LOD too
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -1122,8 +1124,27 @@ typedef void (*InitSurfaceStateIMP)(id, SEL);
 static InitSurfaceStateIMP origIGInitSurfaceState;
 static ptrdiff_t igSurfaceStateOffset = -1;
 
+// 39. A texture view that starts at mip level L carries two surface states: the sampler's (min LOD L) and, for writes,
+// a render-target one, where the LOD field is L and the min LOD 0. Typed writes use the LOD field; the sampler's
+// resinfo (get_width / get_height) uses the min LOD. In fragment functions the driver binds the render-target state
+// for writable 2D-array views, so their size queries returned level 0's size (WebGPU CTS textureDimensions storage:
+// write, 2d-array, base level 1-2, every format: 40 cases; compute functions and 2D views got the sampler's). The
+// render-target state's min LOD is set to its LOD, which only the sampler reads. MTLSHIM_TARGET_MIN_LOD=0 turns it off.
+// Test: s45.
+static void targetMinLod(id self) {
+    static int enabled = -1;
+    if (enabled < 0) { const char *setting = getenv("MTLSHIM_TARGET_MIN_LOD"); enabled = !(setting && !strcmp(setting, "0")); }
+    if (!enabled) return;
+    uint32_t *dword5 = (uint32_t *)((uint8_t *)(__bridge void *)self + igSurfaceStateOffset + 32 + 20);  // hwSurfaceStateTarget
+    uint32_t lod = *dword5 & 0xf, minLod = (*dword5 >> 4) & 0xf;
+    if (!lod || minLod) return;
+    *dword5 |= lod << 4;
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] render-target surface state of a view at level %u: min LOD %u\n", lod, lod);
+}
+
 static void igInitSurfaceState(id self, SEL _cmd) {
     origIGInitSurfaceState(self, _cmd);
+    targetMinLod(self);  // item 39
     MTLPixelFormat f = ((id<MTLTexture>)self).pixelFormat;
     if (f != MTLPixelFormatX32_Stencil8 && f != MTLPixelFormatX24_Stencil8) return;
     uint32_t *dword0 = (uint32_t *)((uint8_t *)(__bridge void *)self + igSurfaceStateOffset);
@@ -1142,6 +1163,7 @@ static void stencilViewAlignment(void) {
     Class texture = objc_getClass("MTLIGAccelTexture");
     Ivar info = texture ? class_getInstanceVariable(texture, "m_Info") : NULL;
     if (origIGInitSurfaceState || (setting && !strcmp(setting, "0")) || !info || strncmp(ivar_getTypeEncoding(info), kLayout, sizeof kLayout - 1) ||
+        !strstr(ivar_getTypeEncoding(info), "}\"hwSurfaceStateTarget\"{SGfxSurfaceState=") ||
         !definesMethod("MTLIGAccelTexture", "initializeHWSurfaceState"))
         return;
     igSurfaceStateOffset = ivar_getOffset(info);
