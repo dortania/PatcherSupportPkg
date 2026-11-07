@@ -533,6 +533,86 @@ static unsigned sampleLodOperands(std::string &s) {
     return n;
 }
 
+// ---- a narrow mask after a narrower one --------------------------------------------------------------------------------
+// The IGIL writer re-truncates a 16-bit value after an operation (AND rC, rB, 0xFFFF), also right after an AND that
+// already left it narrower (AND rB, rA, 255 for a uchar lane). iCBE takes AND 0xFFFF for a zero-extension from 16 bits,
+// reads the word of rA instead of rB and drops the 255: in ushort2(...) & ushort2((uchar)x, ...) the uchar lane kept
+// bits 8-15 of x (seen in the disassembly as and g93, g67<16,8,2>UW, 0xffff9a4b, folding 255, 0xFFFF and 0x9a4b into
+// one mask; the MacBookPro11,5 session's narrow-vector fuzzing, seed 53). Such a second AND changes nothing, so it
+// becomes a MOV. INTEL_NARROW_MASK_FIX=0 turns it off.
+static unsigned redundantNarrowMasks(std::string &s) {
+    if (disabled("INTEL_NARROW_MASK_FIX")) return 0;
+    unsigned n = 0;
+    size_t previous = std::string::npos;
+    for (size_t pos = 0; pos < s.size();) {
+        size_t eol = s.find('\n', pos);
+        if (eol == std::string::npos) eol = s.size();
+        if (eol == pos) { pos = eol + 1; continue; }
+        unsigned c, b, b2, a;
+        char mask[32], first[32];
+        int at = 0;
+        if (previous != std::string::npos && sscanf(s.c_str() + pos, "\tAND r%u.x, r%u.x, %31[0-9A-Fx];%n", &c, &b, mask, &at) == 3 && at &&
+            sscanf(s.c_str() + previous, "\tAND r%u.x, r%u.x, %31[0-9A-Fx];", &b2, &a, first) == 3 && b2 == b) {
+            unsigned long outer = strtoul(mask, nullptr, 0), inner = strtoul(first, nullptr, 0);
+            if ((outer == 0xFFFF || outer == 0xFF) && inner && (inner & ~outer) == 0) {
+                char replacement[64];
+                int len = snprintf(replacement, sizeof replacement, "\tMOV r%u.x, r%u.x;", c, b);
+                s.replace(pos, (size_t)at, replacement, (size_t)len);
+                eol = s.find('\n', pos);
+                if (eol == std::string::npos) eol = s.size();
+                n++;
+            }
+        }
+        previous = pos;
+        pos = eol + 1;
+    }
+    return n;
+}
+
+// ---- narrow unsigned divides ---------------------------------------------------------------------------------------
+// The back end writes division of 8- and 16-bit unsigned lanes as UBDIV / USDIV. iCBE drops the AND 0xFF / 0xFFFF that
+// zero-extends such an operand (it takes the divide to read only the low byte or word) while the divide uses the whole
+// register: a uchar lane built from a select of 32-bit values was divided with its upper bits still in place (the
+// MacBookPro11,5 session's narrow-vector fuzzing, seed 31), and narrow constants arrive sign-extended (MOV r, -30467
+// for 35069). Each becomes a 32-bit UDIV of copies masked to the lane's width, in two new registers per divide.
+// INTEL_NARROW_UDIV_FIX=0 turns it off.
+static unsigned narrowUnsignedDivides(std::string &s) {
+    if (disabled("INTEL_NARROW_UDIV_FIX") || (s.find("\tUBDIV ") == std::string::npos && s.find("\tUSDIV ") == std::string::npos)) return 0;
+    size_t temps = s.find("\tDCL_TEMPS r0..r");
+    if (temps == std::string::npos) return 0;
+    unsigned last = (unsigned)strtoul(s.c_str() + temps + 16, nullptr, 10);
+    unsigned n = 0;
+    std::string out;
+    out.reserve(s.size() + 256);
+    for (size_t pos = 0; pos < s.size();) {
+        size_t eol = s.find('\n', pos);
+        if (eol == std::string::npos) eol = s.size();
+        std::string line = s.substr(pos, eol - pos);
+        char width;
+        unsigned q, r, a, b;
+        char cq, cr, ca, cb;
+        int at = 0;
+        if (sscanf(line.c_str(), "\tU%cDIV r%u.%c, r%u.%c, r%u.%c, r%u.%c;%n", &width, &q, &cq, &r, &cr, &a, &ca, &b, &cb, &at) == 9 && at &&
+            (width == 'B' || width == 'S')) {
+            const char *mask = width == 'B' ? "0xFF" : "0xFFFF";
+            unsigned t1 = ++last, t2 = ++last;
+            char buffer[256];
+            snprintf(buffer, sizeof buffer, "\tAND r%u.x, r%u.%c, %s;\n\tAND r%u.x, r%u.%c, %s;\n\tUDIV r%u.%c, r%u.%c, r%u.x, r%u.x;", t1, a, ca, mask,
+                     t2, b, cb, mask, q, cq, r, cr, t1, t2);
+            line = buffer;
+            n++;
+        }
+        out += line;
+        if (eol < s.size()) out += '\n';
+        pos = eol + 1;
+    }
+    if (!n) return 0;
+    size_t numberAt = out.find("\tDCL_TEMPS r0..r") + 16, numberEnd = out.find_first_not_of("0123456789", numberAt);
+    out.replace(numberAt, numberEnd - numberAt, std::to_string(last));
+    s = out;
+    return n;
+}
+
 static thread_local std::string lastIGILForDump;  // INTELTEX_DUMP_KERNELS: the IGIL text iCBE compiles next on this thread
 extern "C" void intelatomicsFixIGIL(std::string *text) {
     if (getenv("INTELTEX_DUMP_KERNELS")) lastIGILForDump = *text;
@@ -555,6 +635,8 @@ extern "C" void intelatomicsFixIGIL(std::string *text) {
     }
     if (declareBaseVertex(s) && logging()) fprintf(stderr, "[inteltex] vertex shader reads VERTEXID: BASE_VERTEX_ID declared\n");
     if (unsigned n = fineGradients(s); n && logging()) fprintf(stderr, "[inteltex] %u derivative(s) made fine\n", n);
+    if (unsigned n = narrowUnsignedDivides(s); n && logging()) fprintf(stderr, "[inteltex] %u UBDIV / USDIV done as UDIV of masked copies\n", n);
+    if (unsigned n = redundantNarrowMasks(s); n && logging()) fprintf(stderr, "[inteltex] %u AND 0xFFFF after a narrower AND made a MOV\n", n);
     if (unsigned n = sampleLodOperands(s); n && logging()) fprintf(stderr, "[inteltex] %u explicit-LOD sample(s) given the register holding the LOD\n", n);
     if (s.find("IMM_ATOMIC_") == std::string::npos) return;
     std::vector<std::string> lines;
@@ -1571,6 +1653,139 @@ static unsigned exactMadSat(LLVMModuleRef module) {
             LLVMInstructionEraseFromParent(call);
             fixed++;
         }
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
+// ---- narrow integer division -----------------------------------------------------------------------------------------
+// Division and remainder of 8- and 16-bit integers become the back end's narrow divides (USDIV and the like), which
+// expect operands extended from 16 bits the way the operation's signedness says. Constants and lanes built from them
+// arrive sign-extended instead (a lane of 0xffff is -1 in its 32-bit register): ushort2(35069, 25597) / (ushort2(65535,
+// x) | 1) gave 0x1200 in the first lane, not 0 (the MacBookPro11,5 session's narrow-vector fuzzing, VEC=1 ASTYPE=1,
+// seed 53). udiv / urem / sdiv / srem on i8 and i16, scalar or vector, are done on 32-bit lanes: operands zero- or
+// sign-extended, the i32 operation, the result truncated. INTEL_NARROW_DIV_FIX=0 turns it off.
+extern "C" {
+LLVMValueRef LLVMBuildUDiv(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildURem(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildSDiv(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildSRem(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+}
+static unsigned widenNarrowDivisions(LLVMModuleRef module) {
+    if (disabled("INTEL_NARROW_DIV_FIX") || runtimeNamesBound(module)) return 0;
+    enum { kOpcodeUDiv = 14, kOpcodeSDiv = 15, kOpcodeURem = 17, kOpcodeSRem = 18 };
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    std::vector<LLVMValueRef> divisions;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                int opcode = LLVMGetInstructionOpcode(inst);
+                if (opcode != kOpcodeUDiv && opcode != kOpcodeSDiv && opcode != kOpcodeURem && opcode != kOpcodeSRem) continue;
+                LLVMTypeRef type = LLVMTypeOf(inst);
+                LLVMTypeRef element = lanes(type) ? LLVMGetElementType(type) : type;
+                if (LLVMGetTypeKind(element) == kTypeKindInteger && LLVMGetIntTypeWidth(element) < 32) divisions.push_back(inst);
+            }
+    LLVMBuilderRef b = nullptr;
+    unsigned fixed = 0;
+    for (LLVMValueRef division : divisions) {
+        int opcode = LLVMGetInstructionOpcode(division);
+        bool sign = opcode == kOpcodeSDiv || opcode == kOpcodeSRem;
+        LLVMTypeRef type = LLVMTypeOf(division);
+        unsigned n = lanes(type);
+        LLVMTypeRef wide = n ? LLVMVectorType(i32, n) : i32;
+        if (!b) b = LLVMCreateBuilderInContext(context);
+        LLVMPositionBuilderBefore(b, division);
+        LLVMValueRef x = LLVMGetOperand(division, 0), y = LLVMGetOperand(division, 1);
+        x = sign ? LLVMBuildSExt(b, x, wide, "") : LLVMBuildZExt(b, x, wide, "");
+        y = sign ? LLVMBuildSExt(b, y, wide, "") : LLVMBuildZExt(b, y, wide, "");
+        LLVMValueRef r = opcode == kOpcodeUDiv ? LLVMBuildUDiv(b, x, y, "") : opcode == kOpcodeURem ? LLVMBuildURem(b, x, y, "")
+                       : opcode == kOpcodeSDiv ? LLVMBuildSDiv(b, x, y, "") : LLVMBuildSRem(b, x, y, "");
+        LLVMValueRef result = LLVMBuildTrunc(b, r, type, "");
+        LLVMReplaceAllUsesWith(division, result);
+        LLVMInstructionEraseFromParent(division);
+        fixed++;
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
+// ---- signed division by a power of two --------------------------------------------------------------------------------
+// iCBE turns a signed divide by a constant 2^k (or -2^k) into an arithmetic shift, which rounds toward minus infinity:
+// -7 / 4 came out -2, not -1, for every negative dividend that isn't a multiple (int / 2 on negative values; the
+// MacBookPro11,5 session's narrow-vector fuzzing found it through char4(...) / char4(-3, 7, -128, 5)). Remainders are
+// right. Such divides are done as (x + ((x >> (w - 1)) >>> (w - k))) >> k, negated for -2^k, lane by lane for constant
+// vectors (other lanes keep the divide). INTEL_SDIV_POW2_FIX=0 turns it off.
+extern "C" {
+LLVMValueRef LLVMGetElementAsConstant(LLVMValueRef, unsigned);
+LLVMValueRef LLVMIsAConstantDataSequential(LLVMValueRef);
+}
+static unsigned signedPowerOfTwoDivisions(LLVMModuleRef module) {
+    if (disabled("INTEL_SDIV_POW2_FIX") || runtimeNamesBound(module)) return 0;
+    enum { kOpcodeSDiv = 15 };
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    auto powerOfTwo = [](LLVMValueRef c, unsigned width, int &k, bool &negative) {  // c = +-2^k, 1 <= k < width
+        if (!LLVMIsAConstantInt(c)) return false;
+        uint64_t mask = width == 64 ? ~0ull : (1ull << width) - 1, v = LLVMConstIntGetZExtValue(c) & mask;
+        negative = (v >> (width - 1)) & 1;
+        uint64_t magnitude = negative ? ((~v + 1) & mask) : v;
+        if (negative && magnitude == (1ull << (width - 1))) magnitude = 1ull << (width - 1);  // INT_MIN
+        if (magnitude < 2 || (magnitude & (magnitude - 1))) return false;
+        k = __builtin_ctzll(magnitude);
+        return true;
+    };
+    std::vector<LLVMValueRef> divisions;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                if (LLVMGetInstructionOpcode(inst) != kOpcodeSDiv) continue;
+                LLVMTypeRef type = LLVMTypeOf(inst);
+                unsigned n = lanes(type);
+                LLVMTypeRef element = n ? LLVMGetElementType(type) : type;
+                if (LLVMGetTypeKind(element) != kTypeKindInteger || LLVMGetIntTypeWidth(element) > 32) continue;
+                unsigned width = LLVMGetIntTypeWidth(element);
+                LLVMValueRef divisor = LLVMGetOperand(inst, 1);
+                bool any = false;
+                for (unsigned lane = 0; lane < (n ? n : 1) && !any; lane++) {
+                    LLVMValueRef c = n ? (LLVMIsAConstantDataSequential(divisor) ? LLVMGetElementAsConstant(divisor, lane) : nullptr) : divisor;
+                    int k;
+                    bool negative;
+                    any = c && powerOfTwo(c, width, k, negative);
+                }
+                if (any) divisions.push_back(inst);
+            }
+    LLVMBuilderRef b = nullptr;
+    unsigned fixed = 0;
+    for (LLVMValueRef division : divisions) {
+        LLVMTypeRef type = LLVMTypeOf(division);
+        unsigned n = lanes(type);
+        LLVMTypeRef element = n ? LLVMGetElementType(type) : type;
+        unsigned width = LLVMGetIntTypeWidth(element);
+        if (!b) b = LLVMCreateBuilderInContext(context);
+        LLVMPositionBuilderBefore(b, division);
+        LLVMValueRef dividend = LLVMGetOperand(division, 0), divisor = LLVMGetOperand(division, 1);
+        LLVMValueRef result = n ? LLVMGetUndef(type) : nullptr;
+        for (unsigned lane = 0; lane < (n ? n : 1); lane++) {
+            LLVMValueRef index = LLVMConstInt(i32, lane, false);
+            LLVMValueRef x = n ? LLVMBuildExtractElement(b, dividend, index, "") : dividend;
+            LLVMValueRef c = n ? LLVMGetElementAsConstant(divisor, lane) : divisor;
+            int k;
+            bool negative;
+            LLVMValueRef q;
+            if (powerOfTwo(c, width, k, negative)) {
+                LLVMValueRef sign = LLVMBuildAShr(b, x, LLVMConstInt(element, width - 1, false), "");
+                LLVMValueRef bias = LLVMBuildLShr(b, sign, LLVMConstInt(element, width - k, false), "");
+                q = LLVMBuildAShr(b, LLVMBuildAdd(b, x, bias, ""), LLVMConstInt(element, k, false), "");
+                if (negative) q = LLVMBuildNeg(b, q, "");
+            } else {
+                q = LLVMBuildSDiv(b, x, c, "");
+            }
+            result = n ? LLVMBuildInsertElement(b, result, q, index, "") : q;
+        }
+        LLVMReplaceAllUsesWith(division, result);
+        LLVMInstructionEraseFromParent(division);
+        fixed++;
     }
     if (b) LLVMDisposeBuilder(b);
     return fixed;
@@ -2980,8 +3195,12 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] %u depth comparison(s) with an LOD bias: bias dropped\n", n);
         n = lowerIntegerGradients(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u integer gradient sample(s) done at the level the gradients select\n", n);
+        n = widenNarrowDivisions(module);  // before signedDivisionNegations, which then sees the 32-bit divides
+        if (n && logging()) fprintf(stderr, "[inteltex] %u 8/16-bit division(s) done on 32-bit lanes\n", n);
         n = signedDivisionNegations(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u signed division(s) of a negated value done on the value\n", n);
+        n = signedPowerOfTwoDivisions(module);  // after the two division rewrites above
+        if (n && logging()) fprintf(stderr, "[inteltex] %u signed division(s) by a power of two done with shifts\n", n);
         n = widenNarrowMinMax(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u 8/16-bit min / max / clamp call(s) done on 32-bit lanes\n", n);
         n = foldConstantSaturation(module);
