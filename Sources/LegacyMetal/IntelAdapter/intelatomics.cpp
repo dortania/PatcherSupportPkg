@@ -2184,7 +2184,11 @@ static bool step(LLVMBuilderRef b, LLVMValueRef f, LLVMValueRef yes, LLVMValueRe
 // and workgroup buffers; every unaliased case passed, and with every access volatile all passed). Loads and stores
 // reached (through GEPs and casts) from a cast of a device or threadgroup pointer whose root (the pointer under its
 // GEPs and casts: views at different byte offsets share it) is cast to two or more element types in the same function
-// are made volatile, which keeps them in order. INTEL_TYPE_PUN_FIX=0 turns it off.
+// are made volatile, which keeps them in order. The same goes for a root that a memcpy or memmove copies (an aggregate
+// copy of the buffer, as Tint writes `output.a = *bufferView<array<i32, 32>>(&A, 0)`) and a cast views: the back end
+// lowers the copy to loads and reuses an earlier load of a word past a store to it (bufferView mixed_types_aliasing
+// with constant offsets: the store through the view never reached the copied-out array, 96 cases); such roots' casts
+// count as punned, and their copies are made volatile too. INTEL_TYPE_PUN_FIX=0 turns it off.
 static bool sharedPointer(LLVMValueRef v) {
     LLVMTypeRef t = LLVMTypeOf(v);
     if (LLVMGetTypeKind(t) != kTypeKindPointer) return false;
@@ -2206,14 +2210,32 @@ static unsigned volatilizePunnedAccesses(LLVMModuleRef module) {
             for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst))
                 if (LLVMIsABitCastInst(inst) && sharedPointer(inst) && sharedPointer(LLVMGetOperand(inst, 0)))
                     castsOf[pointerRoot(LLVMGetOperand(inst, 0))].push_back(inst);
-        std::vector<LLVMValueRef> punned;
+        // memcpy / memmove calls and the shared roots they copy to or from
+        std::map<LLVMValueRef, std::vector<LLVMValueRef>> copiesOf;
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                if (!LLVMIsACallInst(inst) || LLVMGetNumOperands(inst) < 6) continue;
+                const char *name = LLVMGetValueName(LLVMGetCalledValue(inst));
+                if (!name || (strncmp(name, "llvm.memcpy.", 12) && strncmp(name, "llvm.memmove.", 13))) continue;
+                for (int k = 0; k < 2; k++)
+                    if (sharedPointer(LLVMGetOperand(inst, k))) copiesOf[pointerRoot(LLVMGetOperand(inst, k))].push_back(inst);
+            }
+        std::vector<LLVMValueRef> punned, copies;
         for (auto &entry : castsOf) {
             bool differ = false;
             for (LLVMValueRef c : entry.second)
                 differ = differ || LLVMGetElementType(LLVMTypeOf(c)) != LLVMGetElementType(LLVMTypeOf(entry.second[0]));
-            if (differ) punned.insert(punned.end(), entry.second.begin(), entry.second.end());
+            auto copied = copiesOf.find(entry.first);
+            if (copied != copiesOf.end()) copies.insert(copies.end(), copied->second.begin(), copied->second.end());
+            if (differ || copied != copiesOf.end()) punned.insert(punned.end(), entry.second.begin(), entry.second.end());
         }
         if (punned.empty()) continue;
+        LLVMValueRef yes = LLVMConstInt(LLVMInt1TypeInContext(LLVMGetModuleContext(module)), 1, false);
+        for (LLVMValueRef call : copies) {  // llvm.memcpy(dest, src, length, align, isvolatile)
+            if (LLVMGetOperand(call, 4) == yes) continue;
+            LLVMSetOperand(call, 4, yes);
+            marked++;
+        }
         for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
             for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
                 bool load = LLVMIsALoadInst(inst), store = LLVMIsAStoreInst(inst);
