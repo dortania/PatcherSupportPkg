@@ -15,7 +15,8 @@
 // AppleIntelHD4000GraphicsMTLDriver.bundle/Contents/MacOS/IntelTextureAtomics.dylib (Ivy Bridge, 11.7.10 payloads), a weak
 // dependency of each bundle's libMTLIntelCompilerPlugin.dylib. On Ivy Bridge the IGIL entry hooks (texture atomics) don't
 // match its plugin and stay off, and the Haswell sampler workaround is skipped; the IR fixes for compiler crashes apply. Test use: DYLD_INSERT_LIBRARIES=Tests/tools/localcc.dylib:build/intelatomics-test.dylib
-//   INTELTEX_LOG=1        log what is rewritten
+//   INTELTEX_LOG=1        log what is rewritten (INTELTEX_LOG=/path: append the log to that file, e.g. from
+//                         MTLCompilerService through __XPC_INTELTEX_LOG)
 //   INTELTEX_DUMP=<dir>   write each lowered module and the IGIL text before the fix
 //   INTELTEX_DUMP_INPUT=<dir>  write every module as it reaches the pass manager
 // Also (compiler compatibility, not texture atomics): air.max_work_group_size dropped (the back end aborts on it),
@@ -44,6 +45,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include "gen7eu.h"
 
 extern "C" {
 typedef struct LLVMOpaqueModule *LLVMModuleRef;
@@ -2074,9 +2076,67 @@ static unsigned flattenBranchChains(LLVMModuleRef module) {
     return rewrites;
 }
 
+// ---- SIMD16 pixel kernels with a clobbered value ---------------------------------------------------------------------
+// The plugin has the GL driver's back end, iCBE, turn each fragment function into EU code: a SIMD8 and a SIMD16 kernel,
+// the hardware dispatching SIMD16 for full pixel groups. Under the SIMD16 kernel's higher register pressure, iCBE's
+// register allocator can give a compare whose result is only used through the flag (cmp.nz.f0.0 gN, x, 0 before a
+// predicated sel) a register that still holds a live value; the compare overwrites it and the value's later read gets
+// 0/-1. dEQP's uniformbuffers multi_nested_struct instance_array_mixed (ANGLE): the SIMD16 kernel builds a bool in g6
+// (mov 0; (+f0.0) mov 1), a cmp.nz then takes g6 as its destination, and the last check reads g6: wrong in every SIMD16
+// dispatch (236 of 256 pixels), right in SIMD8 ones; one comparison fewer, and the pressure and the bug were gone.
+// So iCBE's CompilePixelShaderOpenGL is wrapped: after a compile, gen7eu::findCompareClobber looks for that in the SIMD16
+// kernel (a flag-writing instruction overwriting a value nothing has read yet, read again afterwards; optimized code
+// leaves no such dead stores), and if it's there the shader is compiled again with SIMD level 1, SIMD8 only (iCBE's
+// kernel program then builds no SIMD16 kernel). INTEL_SIMD16_CLOBBER_FIX=0 turns it off; INTEL_SIMD8_PIXEL=1 asks for
+// SIMD8 only for every fragment function (testing). Haswell's iCBE only (the Ivy Bridge plugin's is not looked at).
+// The C export: (compiler, platform index, ?, OPTIMIZER_LEVEL, SIMD_LEVEL, input state, ?, AIR::SCompilerOutputPixelShader
+// **, PLATFORM_STR *); it fills the caller's output block, which holds the SIMD8/16/32 kernel pointers at 0x47fb and their
+// sizes (uint32) at 0x4813.
+typedef long (*CompilePixelShaderFn)(void *, int, void *, int, int, void *, void *, void *, void *);
+static CompilePixelShaderFn originalCompilePixelShader;
+static const char *const kICBEPaths[] = {
+    "/Library/GPUBundles/AppleIntelHD5000GraphicsGLDriver.bundle/Contents/MacOS/iCBE.dylib",  // the plugin's order
+    "/System/Library/Extensions/AppleIntelHD5000GraphicsGLDriver.bundle/Contents/MacOS/iCBE.dylib",
+};
+static long hookedCompilePixelShader(void *compiler, int platform, void *a3, int optimizer, int simd, void *input, void *a7,
+                                     void *output, void *platformInfo) {
+    if (getenv("INTEL_SIMD8_PIXEL") && !disabled("INTEL_SIMD8_PIXEL")) simd = 1;
+    long result = originalCompilePixelShader(compiler, platform, a3, optimizer, simd, input, a7, output, platformInfo);
+    if (!result || simd == 1 || !output || disabled("INTEL_SIMD16_CLOBBER_FIX")) return result;
+    const uint8_t *block = *(uint8_t **)output, *kernel16 = nullptr;
+    uint32_t size16 = 0;
+    if (!block) return result;
+    memcpy(&kernel16, block + 0x4803, sizeof kernel16);
+    memcpy(&size16, block + 0x4817, sizeof size16);
+    if (!kernel16 || !size16 || size16 > (1u << 20)) return result;
+    gen7eu::Clobber c;
+    int found = gen7eu::findCompareClobber(kernel16, size16, &c);
+    if (found < 0) {
+        if (logging()) fprintf(stderr, "[inteltex] SIMD16 pixel kernel (%u bytes): %s\n", size16, found == -1 ? "no clobber" : "not followed");
+        return result;
+    }
+    if (logging()) fprintf(stderr, "[inteltex] SIMD16 pixel kernel: #%d overwrites #%d's value, which #%d reads: SIMD8 only\n",
+                           c.clobber, c.writer, c.reader);
+    long again = originalCompilePixelShader(compiler, platform, a3, optimizer, 1, input, a7, output, platformInfo);
+    if (again) return again;
+    return originalCompilePixelShader(compiler, platform, a3, optimizer, simd, input, a7, output, platformInfo);  // as before
+}
+static void installICBEHook() {
+    static bool done;
+    if (done || ivyBridgePlugin) return;
+    done = true;
+    void *h = nullptr;
+    for (const char *path : kICBEPaths) if ((h = dlopen(path, RTLD_NOLOAD | RTLD_LAZY))) break;
+    for (const char *path : kICBEPaths) if (!h && (h = dlopen(path, RTLD_LAZY))) break;  // the plugin loads it on demand
+    unsigned char *entry = h ? (unsigned char *)dlsym(h, "CompilePixelShaderOpenGL") : nullptr;
+    if (entry) originalCompilePixelShader = (CompilePixelShaderFn)hookFunction(entry, (void *)hookedCompilePixelShader);
+    if (logging()) fprintf(stderr, "[inteltex] iCBE CompilePixelShaderOpenGL %s\n", originalCompilePixelShader ? "hooked" : "NOT hooked");
+}
+
 static int hookedRun(void *self, LLVMModuleRef module) {
     pthread_mutex_lock(&installLock);
     installIntoPlugin(false);  // test process: the plugin was dlopened after we were inserted
+    installICBEHook();
     bool ready = textFixInstalled && resolveIGIL();
     pthread_mutex_unlock(&installLock);
     if (module && getenv("INTELTEX_DUMP_INPUT")) {  // debugging: every module as it reaches the pass manager
@@ -2143,7 +2203,10 @@ static int hookedRun(void *self, LLVMModuleRef module) {
     return passManagerRun(self, module);
 }
 
-__attribute__((constructor)) static void installFromConstructor() { installIntoPlugin(true); }
+__attribute__((constructor)) static void installFromConstructor() {
+    if (const char *log = getenv("INTELTEX_LOG"); log && log[0] == '/') freopen(log, "a", stderr);
+    installIntoPlugin(true);
+}
 
 #ifdef INTELTEX_INTERPOSE  // test build for DYLD_INSERT_LIBRARIES
 __attribute__((used, section("__DATA,__interpose"))) static struct { void *replacement, *original; } interposers[] = {
