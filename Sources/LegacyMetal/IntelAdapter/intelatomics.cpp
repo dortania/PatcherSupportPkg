@@ -46,6 +46,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <functional>
 #include <algorithm>
 #include <atomic>
 #include "gen7eu.h"
@@ -613,6 +614,69 @@ static unsigned narrowUnsignedDivides(std::string &s) {
     return n;
 }
 
+// ---- a narrow mask reached through copies ----------------------------------------------------------------------------
+// The same iCBE fold as above, when the narrower AND reaches the 16-bit one through MOVs, including the copy into a
+// shared case of a switch (AND r45, r388, 255; MOV r420, r45; CALL 9 ... MOV r46, r420; AND r389, r46, 65535): a uchar
+// read from a private array came out with bits 8-15 (mslfuzz2 seed 330). There the register is also set from a 32-bit
+// value on another path, so the AND can't go; it becomes SHL 16 / SHR 16 into a new register, which iCBE leaves alone.
+// INTEL_NARROW_MASK_FIX=0 turns it off with the above.
+static unsigned narrowMasksThroughCopies(std::string &s) {
+    if (disabled("INTEL_NARROW_MASK_FIX")) return 0;
+    size_t temps = s.find("\tDCL_TEMPS r0..r");
+    if (temps == std::string::npos) return 0;
+    unsigned last = (unsigned)strtoul(s.c_str() + temps + 16, nullptr, 10);
+    std::vector<std::string> lines;
+    for (size_t pos = 0; pos <= s.size();) {
+        size_t eol = s.find('\n', pos);
+        if (eol == std::string::npos) eol = s.size();
+        lines.push_back(s.substr(pos, eol - pos));
+        pos = eol + 1;
+    }
+    // every definition of rN.x: a MOV from rM.x (source M), an AND with an immediate (mask), or anything else
+    struct Def { int source; unsigned long mask; };
+    std::map<unsigned, std::vector<Def>> defs;
+    for (const std::string &l : lines) {
+        unsigned d, src;
+        char imm[32];
+        if (sscanf(l.c_str(), "\tMOV r%u.x, r%u.x;", &d, &src) == 2) defs[d].push_back({(int)src, 0});
+        else if (sscanf(l.c_str(), "\tAND r%u.x, r%u.x, %31[0-9A-Fx];", &d, &src, imm) == 3) defs[d].push_back({-1, strtoul(imm, nullptr, 0)});
+        else if (sscanf(l.c_str(), "\t%*[A-Z_] r%u.", &d) == 1) defs[d].push_back({-1, 0});
+    }
+    std::function<bool(unsigned, unsigned long, int)> narrower = [&](unsigned r, unsigned long outer, int depth) {
+        if (depth > 8) return false;
+        auto it = defs.find(r);
+        if (it == defs.end()) return false;
+        for (const Def &d : it->second) {
+            if (d.source >= 0 && narrower((unsigned)d.source, outer, depth + 1)) return true;
+            if (d.source < 0 && d.mask && d.mask != outer && (d.mask & ~outer) == 0) return true;
+        }
+        return false;
+    };
+    unsigned n = 0;
+    std::string out;
+    for (size_t i = 0; i < lines.size(); i++) {
+        unsigned c, b;
+        char imm[32];
+        int at = 0;
+        if (sscanf(lines[i].c_str(), "\tAND r%u.x, r%u.x, %31[0-9A-Fx];%n", &c, &b, imm, &at) == 3 && at) {
+            unsigned long outer = strtoul(imm, nullptr, 0);
+            if ((outer == 0xFFFF || outer == 0xFF) && narrower(b, outer, 0)) {
+                unsigned t = ++last, shift = outer == 0xFFFF ? 16 : 24;
+                char buffer[160];
+                snprintf(buffer, sizeof buffer, "\tSHL r%u.x, r%u.x, %u;\n\tSHR r%u.x, r%u.x, %u;", t, b, shift, c, t, shift);
+                lines[i] = buffer;
+                n++;
+            }
+        }
+    }
+    if (!n) return 0;
+    for (size_t i = 0; i < lines.size(); i++) { out += lines[i]; if (i + 1 < lines.size()) out += '\n'; }
+    size_t numberAt = out.find("\tDCL_TEMPS r0..r") + 16, numberEnd = out.find_first_not_of("0123456789", numberAt);
+    out.replace(numberAt, numberEnd - numberAt, std::to_string(last));
+    s = out;
+    return n;
+}
+
 static thread_local std::string lastIGILForDump;  // INTELTEX_DUMP_KERNELS: the IGIL text iCBE compiles next on this thread
 extern "C" void intelatomicsFixIGIL(std::string *text) {
     if (getenv("INTELTEX_DUMP_KERNELS")) lastIGILForDump = *text;
@@ -635,6 +699,7 @@ extern "C" void intelatomicsFixIGIL(std::string *text) {
     }
     if (declareBaseVertex(s) && logging()) fprintf(stderr, "[inteltex] vertex shader reads VERTEXID: BASE_VERTEX_ID declared\n");
     if (unsigned n = fineGradients(s); n && logging()) fprintf(stderr, "[inteltex] %u derivative(s) made fine\n", n);
+    if (unsigned n = narrowMasksThroughCopies(s); n && logging()) fprintf(stderr, "[inteltex] %u AND 0xFFFF / 0xFF over a narrower AND made shifts\n", n);
     if (unsigned n = narrowUnsignedDivides(s); n && logging()) fprintf(stderr, "[inteltex] %u UBDIV / USDIV done as UDIV of masked copies\n", n);
     if (unsigned n = redundantNarrowMasks(s); n && logging()) fprintf(stderr, "[inteltex] %u AND 0xFFFF after a narrower AND made a MOV\n", n);
     if (unsigned n = sampleLodOperands(s); n && logging()) fprintf(stderr, "[inteltex] %u explicit-LOD sample(s) given the register holding the LOD\n", n);
