@@ -210,6 +210,7 @@ static struct {
     void (*selectInit)(void *self, void *condition, void *ifTrue, void *ifFalse, const Twine *name, void *insertBefore);
     // cubeIntegerGathers
     void *(*extractValueCreate)(void *aggregate, ArrayRef indices, const Twine *name, void *insertBefore);
+    void *(*undefGet)(void *type);  // bitcastLaneExtracts
 } api;
 
 static void *resolveIn(const char *bytes, size_t length, const struct symtab_command *table, uint64_t textAddress,
@@ -299,6 +300,7 @@ static bool resolveAPI(void) {
         RESOLVE(setInitializer, "__ZN4llvm14GlobalVariable14setInitializerEPNS_8ConstantE");
         RESOLVE(gepCreate, "__ZN4llvm17GetElementPtrInst6CreateEPNS_4TypeEPNS_5ValueENS_8ArrayRefIS4_EERKNS_5TwineEPNS_11InstructionE");
         RESOLVE(selectInit, "__ZN4llvm10SelectInstC2EPNS_5ValueES2_S2_RKNS_5TwineEPNS_11InstructionE");
+        RESOLVE(undefGet, "__ZN4llvm10UndefValue3getEPNS_4TypeE");
         RESOLVE(extractValueCreate, "__ZN4llvm16ExtractValueInst6CreateEPNS_5ValueENS_8ArrayRefIjEERKNS_5TwineEPNS_11InstructionE");
 #undef RESOLVE
         api.valid = api.getFunction && api.getOrInsertFunction && api.functionTypeGet && api.constantIntGet &&
@@ -1499,6 +1501,64 @@ static unsigned singleBitTestsAsExtracts(void *module, void *function, void *i32
     return rewritten;
 }
 
+// A vector reinterpreted with narrower lanes (`as_type<uchar4>(ushort2 v)`, or the bitcast the front end itself makes
+// when only the low bytes of a ushort2's lanes are used, as in `uchar(vf(a & b))`) comes out with the other byte of lane 1
+// still in the register of its narrow lanes 2 and 3: libAMDIL902 doesn't shift and mask them into place. Stored into a
+// uchar array the compiler keeps in registers (4 elements packed into one), those bits land in the neighbouring elements
+// (found by differential fuzzing with narrow vectors; the bytes of lane 0 come out right). So each such bitcast of an
+// integer vector to one with narrower integer lanes becomes a vector built lane by lane: the wide lane extracted,
+// shifted and truncated, which store right (the shifts then go through narrowUnsignedConstants).
+// AMD_BITCAST_LANE_FIX=0 turns this off. Test: a18.
+enum { kOpcodeExtractElement = 59, kLaneOpTrunc = 36 };
+static unsigned intBits(void *type) { return *(uint32_t *)((char *)type + 8) >> 8; }  // IntegerType width: Type SubclassData
+static unsigned bitcastLaneExtracts(void *module) {
+    const char *setting = getenv("AMD_BITCAST_LANE_FIX");
+    if ((setting && !strcmp(setting, "0")) || !api.binaryCreate || !api.castCreate || !api.undefGet) return 0;
+    enum { kMax = 512 };
+    void *found[kMax];
+    unsigned count = 0, rewritten = 0;
+    char *functions = (char *)module + kModuleFunctions;
+    for (char *fn = nextNode(functions); fn != functions; fn = nextNode(fn)) {
+        char *function = fn - kFunctionNode, *blocks = function + kFunctionBlocks;
+        if (*(void **)(function + kFunctionParent) != module) return 0;  // layout mismatch: leave the module alone
+        for (char *bn = nextNode(blocks); bn != blocks; bn = nextNode(bn)) {
+            char *block = bn - kBlockNode, *insts = block + kBlockInstructions;
+            if (*(void **)(block + kBlockParent) != function) return 0;
+            for (char *in = nextNode(insts); in != insts; in = nextNode(in)) {
+                char *inst = in - kInstructionNode;
+                if (*(void **)(inst + kInstructionParent) != block) return 0;
+                if (!isInstruction(inst, kOpcodeBitCast) || hungOffUses(inst) || numOperands(inst) != 1 || count == kMax) continue;
+                void *to = typeOf(inst), *from = typeOf(operand(inst, 0));
+                if (typeID(to) != kTypeVector || typeID(from) != kTypeVector) continue;
+                void *narrow = elementType(to), *wide = elementType(from);
+                if (typeID(narrow) != kTypeInteger || typeID(wide) != kTypeInteger) continue;
+                unsigned narrowBits = intBits(narrow), wideBits = intBits(wide);
+                if (wideBits <= narrowBits || wideBits > 32 || wideBits % narrowBits || arrayLength(to) > 16) continue;
+                found[count++] = inst;
+            }
+        }
+    }
+    for (unsigned c = 0; c < count; c++) {
+        void *cast = found[c], *source = operand(cast, 0), *to = typeOf(cast), *narrow = elementType(to);
+        void *wide = elementType(typeOf(source)), *i32 = api.getInt32Ty(api.getContext(cast));
+        unsigned narrowBits = intBits(narrow), ratio = intBits(wide) / narrowBits, lanes = (unsigned)arrayLength(to);
+        void *vector = api.undefGet(to);
+        for (unsigned k = 0; k < lanes; k++) {
+            char *lane = api.userNew(96, 2);
+            api.extractElement(lane, source, api.constantIntGet(i32, k / ratio, false), &kNoName, cast);
+            void *value = lane;
+            if (k % ratio) value = api.binaryCreate(kOpcodeLShr, value, api.constantIntGet(wide, (k % ratio) * narrowBits, false), &kNoName, cast);
+            value = api.castCreate(kLaneOpTrunc, value, narrow, &kNoName, cast);
+            char *merged = api.userNew(96, 3);
+            api.insertElement(merged, vector, value, api.constantIntGet(i32, k, false), &kNoName, cast);
+            vector = merged;
+        }
+        api.replaceAllUsesWith(cast, vector);
+        rewritten++;
+    }
+    return rewritten;
+}
+
 // The front end narrows 32-bit integer code to i8 / i16 when the values fit (`136u / (c[1] | 1u)` with c a uchar array
 // becomes `udiv i8 -120, %c`). libAMDIL902 keeps such values in 32-bit registers without clearing or extending their
 // upper bits: it widens a narrow constant by sign extension (the IL divides 0xFFFFFF88 by the zero-extended divisor),
@@ -1684,6 +1744,8 @@ static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *
         if (samplers && logging()) fprintf(stderr, "[texatomic] %u constexpr sampler(s) rewritten in the one-word form\n", samplers);
         unsigned unpacks = exactUnpackNorm(module);
         if (unpacks && logging()) fprintf(stderr, "[texatomic] %u unpack call(s) computed exactly\n", unpacks);
+        unsigned lanes = bitcastLaneExtracts(module);
+        if (lanes && logging()) fprintf(stderr, "[texatomic] %u vector bitcast(s) to narrower lanes built lane by lane\n", lanes);
         unsigned narrow = narrowUnsignedConstants(module);
         if (narrow && logging()) fprintf(stderr, "[texatomic] %u narrow division(s), shift(s) or comparison(s) done in 32 bits\n", narrow);
         unsigned bitTests = singleBitTests(module);
