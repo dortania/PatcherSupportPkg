@@ -211,6 +211,11 @@ static struct {
     // cubeIntegerGathers
     void *(*extractValueCreate)(void *aggregate, ArrayRef indices, const Twine *name, void *insertBefore);
     void *(*undefGet)(void *type);  // bitcastLaneExtracts
+    // floatAtomicsAsInteger
+    void *(*splitBasicBlock)(void *block, void *instructionNode, const Twine *name);
+    void (*branchInit)(void *self, void *destination, void *insertBefore);
+    void (*condBranchInit)(void *self, void *ifTrue, void *ifFalse, void *condition, void *insertBefore);
+    void (*allocaInit)(void *self, void *type, unsigned addressSpace, const Twine *name, void *insertBefore);
 } api;
 
 static void *resolveIn(const char *bytes, size_t length, const struct symtab_command *table, uint64_t textAddress,
@@ -301,6 +306,10 @@ static bool resolveAPI(void) {
         RESOLVE(gepCreate, "__ZN4llvm17GetElementPtrInst6CreateEPNS_4TypeEPNS_5ValueENS_8ArrayRefIS4_EERKNS_5TwineEPNS_11InstructionE");
         RESOLVE(selectInit, "__ZN4llvm10SelectInstC2EPNS_5ValueES2_S2_RKNS_5TwineEPNS_11InstructionE");
         RESOLVE(undefGet, "__ZN4llvm10UndefValue3getEPNS_4TypeE");
+        RESOLVE(splitBasicBlock, "__ZN4llvm10BasicBlock15splitBasicBlockENS_14ilist_iteratorINS_12ilist_detail12node_optionsINS_11InstructionELb0ELb0EvEELb0ELb0EEERKNS_5TwineE");
+        RESOLVE(branchInit, "__ZN4llvm10BranchInstC2EPNS_10BasicBlockEPNS_11InstructionE");
+        RESOLVE(condBranchInit, "__ZN4llvm10BranchInstC2EPNS_10BasicBlockES2_PNS_5ValueEPNS_11InstructionE");
+        RESOLVE(allocaInit, "__ZN4llvm10AllocaInstC2EPNS_4TypeEjRKNS_5TwineEPNS_11InstructionE");
         RESOLVE(extractValueCreate, "__ZN4llvm16ExtractValueInst6CreateEPNS_5ValueENS_8ArrayRefIjEERKNS_5TwineEPNS_11InstructionE");
 #undef RESOLVE
         api.valid = api.getFunction && api.getOrInsertFunction && api.functionTypeGet && api.constantIntGet &&
@@ -644,6 +653,7 @@ enum { kOpcodeAlloca = 29, kOpcodeLoad = 30, kOpcodeGEP = 32, kOpcodeBitCast = 4
 enum { kMaxHandleArrays = 8, kMaxHandleElements = 32, kMaxHandleLoads = 256, kMaxUsers = 64 };
 
 static void *nextNode(void *node) { return *(void **)((char *)node + 8); }
+static void *prevNode(void *node) { return *(void **)node; }  // ilist_node_base: Prev @0, Next @8
 static unsigned typeID(void *type) { return *(unsigned char *)((char *)type + 8); }
 static void *elementType(void *type) { return (*(void ***)((char *)type + 16))[0]; }  // pointee / array element
 static uint64_t arrayLength(void *type) { return *(uint64_t *)((char *)type + 32); }
@@ -1050,6 +1060,95 @@ static unsigned cubeIntegerGathers(void *module) {
                 if (subclassID(user) == kValueInstruction + kOpcodeExtractValue && typeOf(user) == typeOf(result))
                     api.replaceAllUsesWith(user, result);
             }
+            rewritten++;
+        }
+    }
+    return rewritten;
+}
+
+// Float atomics (MSL 3.0 atomic_float in device memory: fetch_add, fetch_sub, exchange, compare_exchange) are a Mac2
+// feature this GPU claims, but libAMDIL902 has no float forms and stops with an internal error (wgpu float32_atomic).
+// Exchange and compare-exchange are the same on the bits, so they become the 32-bit integer calls through bitcasts. GCN1
+// has no float atomic add, so fetch_add / fetch_sub become a compare-exchange loop: the current value (a plain load
+// first, then what each failed compare-exchange read, which comes from L2, not a stale L1) plus the operand, swapped in
+// if the value hasn't changed meanwhile; the result is the value it was added to. AMD_FLOAT_ATOMIC_FIX=0 turns this off.
+// Test: a19.
+static void *firstInstruction(void *block) { return (char *)nextNode((char *)block + kBlockInstructions) - kInstructionNode; }
+static unsigned floatAtomicsAsInteger(void *module) {
+    const char *setting = getenv("AMD_FLOAT_ATOMIC_FIX");
+    if ((setting && !strcmp(setting, "0")) || !api.splitBasicBlock || !api.branchInit || !api.condBranchInit || !api.allocaInit ||
+        !api.binaryCreate || !api.castCreate || !api.getFloatTy || !api.getInt1Ty)
+        return 0;
+    static const char *const kSpaces[] = {"global", "local"};
+    static const unsigned kAddressSpaces[] = {1, 3};
+    static const char *const kOps[] = {"xchg", "cmpxchg.weak", "cmpxchg.strong", "add", "sub"};
+    unsigned rewritten = 0;
+    for (size_t sp = 0; sp < 2; sp++)
+    for (size_t op = 0; op < sizeof kOps / sizeof kOps[0]; op++) {
+        char name[64], intName[64];
+        snprintf(name, sizeof name, "air.atomic.%s.%s.f32", kSpaces[sp], kOps[op]);
+        void *atomic = api.getFunction(module, name, strlen(name));
+        if (!atomic) continue;
+        bool compare = op == 1 || op == 2, loop = op >= 3;
+        snprintf(intName, sizeof intName, "air.atomic.%s.%s.i32", kSpaces[sp], loop ? "cmpxchg.weak" : kOps[op]);
+        void *context = api.getContext(atomic);
+        void *i32 = api.getInt32Ty(context), *f32 = api.getFloatTy(context), *i1 = api.getInt1Ty(context);
+        void *pointer = api.pointerTypeGet(i32, kAddressSpaces[sp]), *privatePointer = api.pointerTypeGet(i32, 0);
+        void *params[7] = {pointer, i32, i32, i32, i1}, *intType;
+        if (compare || loop) {
+            void *cp[7] = {pointer, privatePointer, i32, i32, i32, i32, i1};
+            memcpy(params, cp, sizeof cp);
+            intType = api.functionTypeGet(i32, params, 7, false);
+        } else intType = api.functionTypeGet(i32, params, 5, false);
+        void *intAtomic = api.getOrInsertFunction(module, intName, strlen(intName), intType);
+        if (!intAtomic || subclassID(intAtomic) != kValueFunction) continue;  // a bitcast: another declaration
+        void *next;
+        for (void *use = firstUse(atomic); use; use = next) {
+            next = nextUse(use);
+            void *call = api.getUser(use);
+            unsigned args = compare || loop ? (loop ? 5 : 7) : 5;
+            if (hungOffUses(call) || numOperands(call) != args + 1 || operand(call, args) != atomic) continue;
+            void *address = api.castCreate(kOpcodeBitCast, operand(call, 0), pointer, &kNoName, call);
+            if (!loop) {
+                void *a[7];
+                for (unsigned i = 0; i < args; i++) a[i] = operand(call, i);
+                a[0] = address;
+                if (compare) {
+                    a[1] = api.castCreate(kOpcodeBitCast, a[1], privatePointer, &kNoName, call);
+                    a[2] = api.castCreate(kOpcodeBitCast, a[2], i32, &kNoName, call);
+                } else a[1] = api.castCreate(kOpcodeBitCast, a[1], i32, &kNoName, call);
+                void *result = createCall(intAtomic, intType, a, args, call);
+                api.replaceAllUsesWith(call, api.castCreate(kOpcodeBitCast, result, f32, &kNoName, call));
+                api.eraseFromParent(call);
+                rewritten++;
+                continue;
+            }
+            // add / sub: slot (private) holds the value expected in memory.
+            void *block = *(void **)((char *)call + kInstructionParent), *function = *(void **)((char *)block + kBlockParent);
+            void *entry = (char *)nextNode((char *)function + kFunctionBlocks) - kBlockNode;
+            char *slot = api.userNew(96, 1);
+            api.allocaInit(slot, i32, 0, &kNoName, firstInstruction(entry));
+            char *initial = api.userNew(96, 1);
+            api.loadInst(initial, i32, address, &kNoName, true, call);
+            char *first = api.userNew(96, 2);
+            api.storeInst(first, initial, slot, call);
+            void *tail = api.splitBasicBlock(block, (char *)call + kInstructionNode, &kNoName);  // tail starts at the call
+            void *jump = (char *)prevNode((char *)block + kBlockInstructions) - kInstructionNode;      // block's new branch to tail
+            void *body = api.splitBasicBlock(block, (char *)jump + kInstructionNode, &kNoName); // body: just that branch
+            void *bodyJump = firstInstruction(body);
+            char *expected = api.userNew(96, 1);
+            api.loadInst(expected, i32, slot, &kNoName, false, bodyJump);
+            void *value = api.castCreate(kOpcodeBitCast, expected, f32, &kNoName, bodyJump);
+            void *sum = api.binaryCreate(op == 3 ? kOpcodeFAdd : kOpcodeFSub, value, operand(call, 1), &kNoName, bodyJump);
+            void *a[7] = {address, slot, api.castCreate(kOpcodeBitCast, sum, i32, &kNoName, bodyJump), operand(call, 2),
+                          api.constantIntGet(i32, 0, false), operand(call, 3), operand(call, 4)};
+            void *seen = createCall(intAtomic, intType, a, 7, bodyJump);
+            void *same = api.cmpCreate(kOpcodeICmp, kPredicateEQ, seen, expected, &kNoName, bodyJump);
+            char *branch = api.userNew(96, 3);
+            api.condBranchInit(branch, tail, body, same, bodyJump);
+            api.eraseFromParent(bodyJump);
+            api.replaceAllUsesWith(call, api.castCreate(kOpcodeBitCast, expected, f32, &kNoName, call));
+            api.eraseFromParent(call);
             rewritten++;
         }
     }
@@ -1744,6 +1843,8 @@ static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *
         if (samplers && logging()) fprintf(stderr, "[texatomic] %u constexpr sampler(s) rewritten in the one-word form\n", samplers);
         unsigned unpacks = exactUnpackNorm(module);
         if (unpacks && logging()) fprintf(stderr, "[texatomic] %u unpack call(s) computed exactly\n", unpacks);
+        unsigned floats = floatAtomicsAsInteger(module);
+        if (floats && logging()) fprintf(stderr, "[texatomic] %u float atomic(s) done on the integer bits\n", floats);
         unsigned lanes = bitcastLaneExtracts(module);
         if (lanes && logging()) fprintf(stderr, "[texatomic] %u vector bitcast(s) to narrower lanes built lane by lane\n", lanes);
         unsigned narrow = narrowUnsignedConstants(module);
