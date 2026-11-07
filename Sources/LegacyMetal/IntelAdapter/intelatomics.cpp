@@ -28,7 +28,8 @@
 // compute kernels remapped so the sampler's narrow mip blend there comes out linear, threadgroup bools widened to i8
 // (the back end can't select i1 loads and stores there), aligned subword accesses to private memory done on their word,
 // float3 vertex inputs read through fmax (a bare copy to an output reads an unset register), and variable-index accesses to
-// small private arrays done at constant indices (the back end addresses such arrays two incompatible ways).
+// small private arrays done at constant indices (the back end addresses such arrays two incompatible ways), and loads
+// and stores through a select of private pointers split per pointer (the back end forwards stale loads of such arrays).
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
@@ -1754,8 +1755,8 @@ static unsigned foldNumSamples(LLVMModuleRef module) {
 // an array of at most 16 elements becomes accesses at every constant index plus selects (a load: one load per element and
 // a select chain; a store: for each element, store select(i == k, value, old)), so only constant offsets remain. Out of
 // range indices read the last element and store nothing. Only loads and stores of numbers and vectors of them: arrays of
-// textures or samplers are left alone (the back end can't pick a handle with a select). INTEL_PRIVATE_ARRAY_FIX=0 turns
-// it off.
+// textures or samplers are left alone (the back end can't pick a handle with a select), and so are arrays that something
+// other than loads and stores reaches (onlyDirectAccesses below). INTEL_PRIVATE_ARRAY_FIX=0 turns it off.
 extern "C" {
 LLVMValueRef LLVMBuildGEP(LLVMBuilderRef, LLVMValueRef, LLVMValueRef *, unsigned, const char *);
 LLVMValueRef LLVMIsAGetElementPtrInst(LLVMValueRef);
@@ -1771,9 +1772,40 @@ static LLVMValueRef allocaBase(LLVMValueRef pointer) {  // the alloca a pointer 
     return nullptr;
 }
 
+// Whether a private array is only ever loaded and stored through GEPs and bitcasts of it (and named by llvm.* intrinsics:
+// lifetime markers, memcpy, memset). Anything else -- a select or phi of pointers into it, a call, the pointer stored or
+// converted -- keeps it in private memory, where the back end forwards a stale load of an element past a store to it
+// (see splitPrivatePointerSelects); the selects below would turn every variable-index store into such loads and stores.
+extern "C" {
+int LLVMGetVolatile(LLVMValueRef);
+LLVMValueRef LLVMIsASelectInst(LLVMValueRef);
+}
+static bool onlyDirectAccesses(LLVMValueRef pointer, int depth = 0) {
+    if (depth > 8) return false;
+    for (LLVMUseRef u = LLVMGetFirstUse(pointer); u; u = LLVMGetNextUse(u)) {
+        LLVMValueRef user = LLVMGetUser(u);
+        if (LLVMIsALoadInst(user)) continue;
+        if (LLVMIsAStoreInst(user)) {
+            if (LLVMGetOperand(user, 0) == pointer) return false;  // the address itself stored
+            continue;
+        }
+        if ((LLVMIsAGetElementPtrInst(user) || LLVMIsABitCastInst(user)) && LLVMGetOperand(user, 0) == pointer) {
+            if (!onlyDirectAccesses(user, depth + 1)) return false;
+            continue;
+        }
+        if (LLVMIsACallInst(user)) {
+            const char *name = LLVMGetValueName(LLVMGetCalledValue(user));
+            if (name && !strncmp(name, "llvm.", 5)) continue;
+        }
+        return false;
+    }
+    return true;
+}
+
 static unsigned selectPrivateArrayIndices(LLVMModuleRef module) {
     const char *setting = getenv("INTEL_PRIVATE_ARRAY_FIX");
     if (setting && !strcmp(setting, "0")) return 0;
+    std::map<LLVMValueRef, bool> direct;  // alloca -> onlyDirectAccesses
     enum { kArrayKind = 11, kStructKind = 10, kPointerKind = 12, kIntEQ = 32, kMaxElements = 16 };
     std::vector<LLVMValueRef> geps;
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
@@ -1797,6 +1829,10 @@ static unsigned selectPrivateArrayIndices(LLVMModuleRef module) {
             else t = nullptr;
         }
         if (!t || LLVMGetTypeKind(t) != kArrayKind || LLVMGetArrayLength(t) < 2 || LLVMGetArrayLength(t) > kMaxElements) continue;
+        LLVMValueRef base = allocaBase(LLVMGetOperand(gep, 0));
+        auto known = direct.find(base);
+        if (known == direct.end()) known = direct.emplace(base, onlyDirectAccesses(base)).first;
+        if (!known->second) continue;  // stays in memory: left as the front end wrote it
         unsigned length = LLVMGetArrayLength(t);
         std::vector<LLVMValueRef> users;
         for (LLVMUseRef u = LLVMGetFirstUse(gep); u && usable; u = LLVMGetNextUse(u)) {
@@ -1836,6 +1872,64 @@ static unsigned selectPrivateArrayIndices(LLVMModuleRef module) {
             fixed++;
         }
         if (!LLVMGetFirstUse(gep)) LLVMInstructionEraseFromParent(gep);
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
+// ---- loads and stores through a select of private pointers ----------------------------------------------------------
+// A pointer into a private array picked with a select (`thread uint *q = c ? &p[2] : &p[5]; *q += x;`) keeps the array in
+// private memory, and there the back end forwards a load of an element past a store to that same element: in
+// `p[5] = p[5] + a; p[5] = p[5] * 3u;` the second statement reads the value the first one loaded (stock compiler too).
+// The variable-index rewrite above turns every store into such loads and stores, so with it random integer kernels with
+// a pointer select came out wrong 43% of the time (differential fuzzing, mslfuzz). A load through such a select
+// becomes a select of the two loads, a store two stores (each pointer gets the value or its own old contents), so no
+// pointer into the array is selected any more and the back end keeps it in registers. Only selects whose arms both point
+// into allocas and whose uses are all non-volatile loads and stores of numbers or vectors of them. Runs before the
+// variable-index rewrite, which then also takes the arms. INTEL_PRIVATE_SELECT_FIX=0 turns it off.
+static unsigned splitPrivatePointerSelects(LLVMModuleRef module) {
+    const char *setting = getenv("INTEL_PRIVATE_SELECT_FIX");
+    if (setting && !strcmp(setting, "0")) return 0;
+    enum { kPointerKind = 12 };
+    std::vector<LLVMValueRef> selects;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst))
+                if (LLVMIsASelectInst(inst) && LLVMGetTypeKind(LLVMTypeOf(inst)) == kPointerKind &&
+                    allocaBase(LLVMGetOperand(inst, 1)) && allocaBase(LLVMGetOperand(inst, 2)))
+                    selects.push_back(inst);
+    LLVMBuilderRef b = nullptr;
+    unsigned fixed = 0;
+    for (LLVMValueRef sel : selects) {
+        std::vector<LLVMValueRef> users;
+        bool usable = true;
+        for (LLVMUseRef u = LLVMGetFirstUse(sel); u && usable; u = LLVMGetNextUse(u)) {
+            LLVMValueRef user = LLVMGetUser(u);
+            bool load = LLVMIsALoadInst(user), store = !load && LLVMIsAStoreInst(user) && LLVMGetOperand(user, 1) == sel && LLVMGetOperand(user, 0) != sel;
+            LLVMTypeRef value = load ? LLVMTypeOf(user) : store ? LLVMTypeOf(LLVMGetOperand(user, 0)) : nullptr;
+            int kind = value ? LLVMGetTypeKind(scalarOf(value)) : -1;
+            if (value && !LLVMGetVolatile(user) && (kind == kTypeKindInteger || kind == 1 /* half */ || kind == 2 /* float */ || kind == 3 /* double */))
+                users.push_back(user);
+            else
+                usable = false;
+        }
+        if (!usable || users.empty()) continue;
+        if (!b) b = LLVMCreateBuilderInContext(LLVMGetModuleContext(module));
+        LLVMValueRef condition = LLVMGetOperand(sel, 0), first = LLVMGetOperand(sel, 1), second = LLVMGetOperand(sel, 2);
+        for (LLVMValueRef user : users) {
+            LLVMPositionBuilderBefore(b, user);
+            if (LLVMIsALoadInst(user)) {
+                LLVMValueRef a = LLVMBuildLoad(b, first, ""), c = LLVMBuildLoad(b, second, "");
+                LLVMReplaceAllUsesWith(user, LLVMBuildSelect(b, condition, a, c, ""));
+            } else {  // in order, so that two arms naming one element end with the stored value
+                LLVMValueRef value = LLVMGetOperand(user, 0);
+                LLVMBuildStore(b, LLVMBuildSelect(b, condition, value, LLVMBuildLoad(b, first, ""), ""), first);
+                LLVMBuildStore(b, LLVMBuildSelect(b, condition, LLVMBuildLoad(b, second, ""), value, ""), second);
+            }
+            LLVMInstructionEraseFromParent(user);
+            fixed++;
+        }
+        if (!LLVMGetFirstUse(sel)) LLVMInstructionEraseFromParent(sel);
     }
     if (b) LLVMDisposeBuilder(b);
     return fixed;
@@ -2280,6 +2374,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] %u float3 vertex/fragment input(s) read through fmax\n", n);
         n = foldNumSamples(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u get_num_samples() call(s) replaced by the pipeline's sample count\n", n);
+        n = splitPrivatePointerSelects(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u load(s)/store(s) through a select of private pointers split per pointer\n", n);
         n = selectPrivateArrayIndices(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u variable-index private array access(es) done at constant indices\n", n);
         n = volatilizePunnedAccesses(module);
