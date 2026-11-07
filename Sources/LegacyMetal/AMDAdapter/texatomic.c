@@ -609,7 +609,7 @@ enum { kModuleFunctions = 0x18, kFunctionValueType = 0x18, kFunctionParent = 0x2
        kFunctionArgs = 0x58, kFunctionNumArgs = 0x60, kArgumentSize = 40, kBlockNode = 0x18, kBlockInstructions = 0x28,
        kBlockParent = 0x38, kInstructionNode = 0x18, kInstructionParent = 0x28 };
 enum { kTypeStruct = 13, kTypeArray = 14, kTypePointer = 15 };  // Type::TypeID @8
-enum { kValueArgument = 0, kValueInstruction = 24 };  // SubclassID; an instruction's is kValueInstruction + opcode
+enum { kValueArgument = 0, kValueGlobalVariable = 8, kValueInstruction = 24 };  // SubclassID; an instruction's is kValueInstruction + opcode
 enum { kOpcodeAlloca = 29, kOpcodeLoad = 30, kOpcodeGEP = 32, kOpcodeBitCast = 47, kOpcodeSelect = 55 };
 enum { kMaxHandleArrays = 8, kMaxHandleElements = 32, kMaxHandleLoads = 256, kMaxUsers = 64 };
 
@@ -618,6 +618,7 @@ static unsigned typeID(void *type) { return *(unsigned char *)((char *)type + 8)
 static void *elementType(void *type) { return (*(void ***)((char *)type + 16))[0]; }  // pointee / array element
 static uint64_t arrayLength(void *type) { return *(uint64_t *)((char *)type + 32); }
 static bool isInstruction(void *value, unsigned opcode) { return subclassID(value) == kValueInstruction + opcode; }
+static bool isVolatileLoad(void *load) { return *(uint16_t *)((char *)load + 0x12) & 1; }  // LoadInst: SubclassData bit 0
 
 // Texture or sampler handle: a pointer to %struct._texture_*, %struct._depth_* or %struct._sampler_t.
 static bool isHandleType(void *type) {
@@ -935,7 +936,10 @@ static unsigned clampCubeArrayIndices(void *module) {
 // LLVM shrinks a threadgroup variable that only ever holds two values to an i1 global, and libAMDIL902 then miscompiles zext
 // of its load: `iand load, r` with r holding whatever 0 it last materialized, so the variable always reads as false (WebGPU CTS
 // builtin,workgroupUniformLoad:types, type="bool", in Safari). Its stores write the byte as 0 or 0xFF, so load the byte and
-// compare it with 0. AMD_LDS_BOOL_FIX=0 turns this off.
+// compare it with 0. libAMDIL902 runs the same shrinking itself, after this, on a variable the front end left a byte (a
+// threadgroup bool set and read between barriers, found by differential fuzzing): every load of a scalar threadgroup
+// variable is made volatile, which stops LLVM's global optimizer from touching the variable. AMD_LDS_BOOL_FIX=0 turns
+// this off.
 static unsigned loadThreadgroupBoolsAsBytes(void *module) {
     const char *setting = getenv("AMD_LDS_BOOL_FIX");
     if ((setting && !strcmp(setting, "0")) || !api.getInt1Ty || !api.getInt8Ty) return 0;
@@ -962,18 +966,30 @@ static unsigned loadThreadgroupBoolsAsBytes(void *module) {
             for (char *in = nextNode(insts); in != insts; in = nextNode(in)) {
                 char *inst = in - kInstructionNode;
                 if (*(void **)(inst + kInstructionParent) != block) return 0;
-                if (isInstruction(inst, kOpcodeLoad) && !hungOffUses(inst) && numOperands(inst) == 1 && typeOf(inst) == i1 &&
-                    typeOf(operand(inst, 0)) == boolPointer && numLoads < kMaxLoads)
+                if (!isInstruction(inst, kOpcodeLoad) || hungOffUses(inst) || numOperands(inst) != 1 || numLoads == kMaxLoads) continue;
+                void *pointer = operand(inst, 0), *type = typeOf(inst);
+                if (type == i1 && typeOf(pointer) == boolPointer) {
                     loads[numLoads++] = inst;
+                } else if (subclassID(pointer) == kValueGlobalVariable && typeID(type) != kTypeStruct && typeID(type) != kTypeArray &&
+                           typeOf(pointer) == api.pointerTypeGet(type, kAddressSpaceThreadgroup) && !isVolatileLoad(inst)) {
+                    loads[numLoads++] = inst;  // a scalar threadgroup variable, loaded straight from the global
+                }
             }
         }
     }
     for (unsigned l = 0; l < numLoads; l++) {
-        void *pointer = api.castCreate(kOpcodeBitCast, operand(loads[l], 0), bytePointer, &kNoName, loads[l]);
-        void *byte = api.userNew(96, 1);  // sizeof(LoadInst) is 56 in LLVM 5; extra room is harmless
-        api.loadInst(byte, i8, pointer, &kNoName, false, loads[l]);
-        api.replaceAllUsesWith(loads[l], api.cmpCreate(kOpcodeICmp, kPredicateNE, byte, zero, &kNoName, loads[l]));
-        api.eraseFromParent(loads[l]);
+        void *load = loads[l], *value;
+        if (typeOf(load) == i1) {
+            void *pointer = api.castCreate(kOpcodeBitCast, operand(load, 0), bytePointer, &kNoName, load);
+            void *byte = api.userNew(96, 1);  // sizeof(LoadInst) is 56 in LLVM 5; extra room is harmless
+            api.loadInst(byte, i8, pointer, &kNoName, false, load);
+            value = api.cmpCreate(kOpcodeICmp, kPredicateNE, byte, zero, &kNoName, load);
+        } else {
+            value = api.userNew(96, 1);
+            api.loadInst(value, typeOf(load), operand(load, 0), &kNoName, true, load);
+        }
+        api.replaceAllUsesWith(load, value);
+        api.eraseFromParent(load);
     }
     return numLoads;
 }
