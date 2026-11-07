@@ -14,10 +14,11 @@
 //   8. memoryless textures (only Apple GPUs have them, and Metal's texture validation aborts the process)
 //   9. MSL 3.2 device coherence on buffers (the driver's compiler fails the pipeline: MoltenVK's coherent buffers)
 //  10. depth of mipmapped depth-stencil textures read by shaders (small levels come from the wrong place)
+//  12. depth-stencil textures attached as stencil only (the depth unit misaddresses them up to 32 texels wide)
 // 1 and 2 come from riptidewave93's bronzefix, found and tested on Tahoe with a MacPro6,1's FirePro D700s.
 // AMD_BRONZE_COMPAT=0 turns everything off for a process, AMD_EXACT_TRILINEAR=0 only item 3,
 // AMD_BRONZE_SRGB_RESOLVE=0 only item 4, AMD_BRONZE_MEMORYLESS=0 only item 8, AMD_BRONZE_DEPTH_MIPS=0 only item 10,
-// AMD_BRONZE_STENCIL_VIEW=0 only item 1's stencil view descriptors;
+// AMD_BRONZE_STENCIL_VIEW=0 only item 1's stencil view descriptors, AMD_BRONZE_STENCIL_DEPTH=0 only item 12;
 // AMD_BRONZE_VERBOSE=1 logs.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -408,10 +409,38 @@ static MTLRenderPassDescriptor *takeSrgbResolves(MTLRenderPassDescriptor *descri
     return rewritten ?: descriptor;
 }
 
+// ---- 12. Depth-stencil textures attached as stencil only -------------------------------------------------------------
+// A render pass whose stencil attachment is a Depth32Float_Stencil8 or Depth24Unorm_Stencil8 texture and that has no depth
+// attachment gets the driver's stencil-only depth-unit setup (amdMtlBronze_SI_SetupHwStencilRegs with no depth), which
+// leaves the depth surface state (DB_Z_INFO's tile mode) at what it was. The stencil plane of these formats is 1D tiled
+// (tile index 4); the depth unit then addresses it wrongly on textures up to 32 texels wide: an EQUAL test against blitted
+// stencil passes for a quarter to a half of a 32x16 texture's texels, some in the wrong place, and REPLACE writes half
+// (a Stencil8 texture, 2D tiled like the leftover state, is right). ANGLE attaches a packed depth-stencil buffer this way
+// when GL binds it as GL_STENCIL_ATTACHMENT only. The same texture, level and slice is attached as depth too, loaded
+// and stored, so its depth stays what it was; with the app's stencil-only pipeline nothing tests or writes depth.
+// Test: s47.
+static MTLRenderPassDescriptor *stencilOnlyWithDepth(MTLRenderPassDescriptor *descriptor) {
+    static int enabled = -1;
+    if (enabled < 0) enabled = !disabled("AMD_BRONZE_STENCIL_DEPTH");
+    id<MTLTexture> stencil = descriptor.stencilAttachment.texture;
+    if (!enabled || !stencil || descriptor.depthAttachment.texture) return descriptor;
+    MTLPixelFormat format = stencil.pixelFormat;
+    if (format != MTLPixelFormatDepth32Float_Stencil8 && format != MTLPixelFormatDepth24Unorm_Stencil8) return descriptor;
+    MTLRenderPassDescriptor *fixed = [descriptor copy];
+    fixed.depthAttachment.texture = stencil;
+    fixed.depthAttachment.level = descriptor.stencilAttachment.level;
+    fixed.depthAttachment.slice = descriptor.stencilAttachment.slice;
+    fixed.depthAttachment.depthPlane = descriptor.stencilAttachment.depthPlane;
+    fixed.depthAttachment.loadAction = MTLLoadActionLoad;
+    fixed.depthAttachment.storeAction = MTLStoreActionStore;
+    if (verbose()) fprintf(stderr, "[bronzecompat] stencil-only attachment: depth attached too\n");
+    return fixed;
+}
+
 static id renderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor) {
     NSMutableArray *resolves = nil;
     NSArray *route = nil;
-    MTLRenderPassDescriptor *fixed = takeSrgbResolves(stencilViewToParent(descriptor), &resolves);
+    MTLRenderPassDescriptor *fixed = takeSrgbResolves(stencilOnlyWithDepth(stencilViewToParent(descriptor)), &resolves);
     fixed = routeDepthMipStencil(self, fixed, &route);
     id encoder = origRenderEncoder(self, _cmd, fixed);
     if (encoder && (resolves || route)) {

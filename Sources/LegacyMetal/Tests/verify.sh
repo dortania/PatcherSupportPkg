@@ -3,7 +3,7 @@
 #   with the fixes   the payload built by ../build.sh (shim, AMD and Intel adapters, patched libAMDIL902)
 #   without the fix  the same, minus only the fix the test is about:
 #                      shim tests          the no-op MetalOldCompat build (same load commands, does nothing)
-#                      s12, s25, s26, s29, s44, s43@AMD, s46
+#                      s12, s25, s26, s29, s44, s43@AMD, s46, s47
 #                                          AMDBronzeCompat off (not injected, AMD_BRONZE_COMPAT=0 in case it is installed)
 #                      s17                 AMDBronzeCompat off and MTLSHIM_STENCIL_SUBRESOURCE=0
 #                      s19                 AMDBronzeCompat off and INTEL_COMPUTE_TRILINEAR_FIX=0
@@ -74,7 +74,7 @@ SHIM=$B/MetalOldCompat.dylib NOOP=$B/MetalOldCompat-noop.dylib CC=$PWD/tools/loc
 CASES="s01-device-methods:shim s02-reflection:shim s03-shader-atomic-usage:shim s27-memoryless-texture:memoryless s07-vertex-descriptor:shim
 s08-sdk-properties:shim s09-msl-3.2:bronzeshim s10-device-over-release:shim s12-srgb-mipmaps:bronze s13-new-air-metallib:shim
 s14-safari-argument-encoders:shim s15a-intel-msaa-resolve:shim s15b-intel-narrow-clear:shim s16-intel-array-view:shim
-s17-amd-depth-stencil-view:bronzestencil s18-pipeline-cache-key:shim s19-amd-trilinear-blend:trilinear s25-amd-srgb-resolve:bronze s26-amd-depth-stencil-copy-pitch:bronze s29-amd-webkit-vertex-stride:bronze s30-amd-webkit-sample-mask:bronzeshim s44-amd-depth-stencil-mip-read:bronze s43-intel-stencil-view-mips@AMD:bronze s46-amd-stencil-view-subresources:bronze
+s17-amd-depth-stencil-view:bronzestencil s18-pipeline-cache-key:shim s19-amd-trilinear-blend:trilinear s25-amd-srgb-resolve:bronze s26-amd-depth-stencil-copy-pitch:bronze s29-amd-webkit-vertex-stride:bronze s30-amd-webkit-sample-mask:bronzeshim s44-amd-depth-stencil-mip-read:bronze s43-intel-stencil-view-mips@AMD:bronze s46-amd-stencil-view-subresources:bronze s47-amd-stencil-only-attachment:bronze
 s20-intel-fill-buffer:shim s21-intel-depth-only-pipeline:shim s22-intel-depth-hiz-levels:shim s23-intel-3d-mip-plane:shim
 s24-intel-narrow-mip-clear:shim s31-angle-family-one:shim s32-intel-depth-stencil-blit:shim s33-intel-nil-argument-buffer:shim s34-intel-small-integer-cube:shim s35-intel-encoder-lod-clamp:shim s36-intel-swizzle-view:shim s37-intel-stencil-subresources:shim s38-intel-coverage-without-writes:shim s39-intel-mps-statistics:shim s40-intel-msaa-stencil8-read:shim s41-intel-stencil-copy-rows:shim s42-shim-owned-returns:shim s43-intel-stencil-view-mips:shim s45-intel-writable-view-size:shim a01-texture-atomics:adapter
 a01-texture-atomics@Intel:adapter a02-si-smrd-hazard:smrd a04-si-threadgroup-pointer:ldsbase
