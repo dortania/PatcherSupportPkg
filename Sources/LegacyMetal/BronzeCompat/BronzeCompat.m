@@ -12,6 +12,7 @@
 //   6. WebKit's one-vertex pipelines, whose stride the driver refuses (Safari's GPU process crashes on the draw)
 //   7. WebKit's sample mask of 0 (the driver draws every sample)
 //   8. memoryless textures (only Apple GPUs have them, and Metal's texture validation aborts the process)
+//   9. MSL 3.2 device coherence on buffers (the driver's compiler fails the pipeline: MoltenVK's coherent buffers)
 // 1 and 2 come from riptidewave93's bronzefix, found and tested on Tahoe with a MacPro6,1's FirePro D700s.
 // AMD_BRONZE_COMPAT=0 turns everything off for a process, AMD_EXACT_TRILINEAR=0 only item 3,
 // AMD_BRONZE_SRGB_RESOLVE=0 only item 4, AMD_BRONZE_MEMORYLESS=0 only item 8; AMD_BRONZE_VERBOSE=1 logs.
@@ -476,6 +477,53 @@ static void installMemorylessFix(void) {
     origNewTexture = (NewTextureIMP)swizzle(objc_getClass("BronzeMtlDevice"), @selector(newTextureWithDescriptor:), (IMP)newTexture);
 }
 
+// ---- 9. MSL 3.2 device coherence ----------------------------------------------------------------------------------
+// MSL 3.2 (macOS 15) added memory coherence, and SPIRV-Cross (MoltenVK) uses it for every Vulkan Coherent storage buffer
+// (`coherent device T *`). This driver's compiler fails any buffer with device coherence when the pipeline is made
+// ("Compiler encountered an internal error"), so the Vulkan pipeline isn't created. Metal implements coherence for
+// Apple silicon only, so on these GPUs it means what volatile means in 3.1, which is how MetalOldCompat item 9 rewrites
+// it on MetalOld. Here only the failing forms are rewritten (`coherent(device)` and `coherent device` -> `volatile`),
+// in source compiled on this driver's device as MSL 3.2 or newer. Coherent textures and threadgroup coherence compile.
+// Test: s09.
+typedef id (*NewLibrarySyncIMP)(id, SEL, NSString *, MTLCompileOptions *, NSError **) __attribute__((ns_returns_retained));
+typedef void (*NewLibraryAsyncIMP)(id, SEL, NSString *, MTLCompileOptions *, id);
+
+static NSString *withoutDeviceCoherence(NSString *source, MTLCompileOptions *options) {
+    if (!source || [source rangeOfString:@"coherent"].location == NSNotFound) return source;
+    if (options && options.languageVersion < (MTLLanguageVersion)0x30002 /* 3.2; no options = the newest */) return source;
+    static NSRegularExpression *qualifier;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        qualifier = [NSRegularExpression regularExpressionWithPattern:@"\\bcoherent(?:\\s*\\(\\s*device\\s*\\)|(?=\\s+device\\b))"
+                                                              options:0 error:nil];
+    });
+    NSString *rewritten = [qualifier stringByReplacingMatchesInString:source options:0 range:NSMakeRange(0, source.length)
+                                                         withTemplate:@"volatile"];
+    if (verbose() && ![rewritten isEqualToString:source]) fprintf(stderr, "[bronzecompat] MSL device coherence compiled as volatile\n");
+    return rewritten;
+}
+
+// Metal's _MTLDevice implements both; the driver's device gets its own, which call the inherited one.
+static IMP inherited(SEL selector) {
+    return class_getMethodImplementation(class_getSuperclass(objc_getClass("BronzeMtlDevice")), selector);
+}
+
+static id newLibrarySync(id self, SEL _cmd, NSString *source, MTLCompileOptions *options, NSError **error) __attribute__((ns_returns_retained));
+static id newLibrarySync(id self, SEL _cmd, NSString *source, MTLCompileOptions *options, NSError **error) {
+    return ((NewLibrarySyncIMP)inherited(_cmd))(self, _cmd, withoutDeviceCoherence(source, options), options, error);
+}
+
+static void newLibraryAsync(id self, SEL _cmd, NSString *source, MTLCompileOptions *options, id handler) {
+    ((NewLibraryAsyncIMP)inherited(_cmd))(self, _cmd, withoutDeviceCoherence(source, options), options, handler);
+}
+
+static BOOL installCoherenceFix(void) {
+    Class device = objc_getClass("BronzeMtlDevice");
+    return device &&
+           class_addMethod(device, @selector(newLibraryWithSource:options:error:), (IMP)newLibrarySync, "@@:@@^@") &&
+           class_addMethod(device, @selector(newLibraryWithSource:options:completionHandler:), (IMP)newLibraryAsync, "v@:@@@?");
+}
+
 // This library is a dependency of the driver, so its initializer runs after the driver is mapped and its classes are
 // registered with the ObjC runtime, but before any driver code runs. No driver loaded: nothing to do.
 __attribute__((constructor)) static void init(void) {
@@ -492,9 +540,12 @@ __attribute__((constructor)) static void init(void) {
         installWebKitFixes();
         if (!disabled("AMD_BRONZE_MEMORYLESS")) installMemorylessFix();
         if (!disabled("AMD_EXACT_TRILINEAR")) installTrilinearFix(name);
-        if (verbose()) fprintf(stderr, "[bronzecompat] view fix %s, sRGB mipmaps %s, trilinear %s, sRGB resolve %s, copy pitch %s, memoryless %s\n",
+        BOOL coherence = installCoherenceFix();
+        if (verbose()) fprintf(stderr, "[bronzecompat] view fix %s, sRGB mipmaps %s, trilinear %s, sRGB resolve %s, copy pitch %s, memoryless %s, "
+                               "device coherence %s\n",
                                origViewInit ? "on" : "off", origGenerateMipmaps ? "on" : "off", origSamplerInit ? "on" : "off",
-                               origRenderEndEncoding ? "on" : "off", origCopyToBuffer ? "on" : "off", origNewTexture ? "on" : "off");
+                               origRenderEndEncoding ? "on" : "off", origCopyToBuffer ? "on" : "off", origNewTexture ? "on" : "off",
+                               coherence ? "on" : "off");
         return;
     }
 }

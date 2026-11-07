@@ -6,7 +6,7 @@
 #                      s12                 AMDBronzeCompat off (not injected, AMD_BRONZE_COMPAT=0 in case it is installed)
 #                      s17                 AMDBronzeCompat off and MTLSHIM_STENCIL_SUBRESOURCE=0
 #                      s19                 AMDBronzeCompat off and INTEL_COMPUTE_TRILINEAR_FIX=0
-#                      s30                 AMDBronzeCompat off and the no-op MetalOldCompat build
+#                      s09, s30            AMDBronzeCompat off and the no-op MetalOldCompat build
 #                      s27                 the no-op MetalOldCompat build and AMD_BRONZE_MEMORYLESS=0
 #                      a01, a05@Intel, i01 the stock AMDShared / libMTLIntelCompilerPlugin (adapters not loaded)
 #                      a02, a04-a11, r01   the AMD adapter's own switch (AMD_SI_HAZARD_FIX=0, AMD_LDS_BASE_FIX=0,
@@ -67,9 +67,9 @@ SHIM=$B/MetalOldCompat.dylib NOOP=$B/MetalOldCompat-noop.dylib CC=$PWD/tools/loc
 
 # <test[@gpu]>:<what "without the fix" removes>
 CASES="s01-device-methods:shim s02-reflection:shim s03-shader-atomic-usage:shim s27-memoryless-texture:memoryless s07-vertex-descriptor:shim
-s08-sdk-properties:shim s09-msl-3.2:shim s10-device-over-release:shim s12-srgb-mipmaps:bronze s13-new-air-metallib:shim
+s08-sdk-properties:shim s09-msl-3.2:bronzeshim s10-device-over-release:shim s12-srgb-mipmaps:bronze s13-new-air-metallib:shim
 s14-safari-argument-encoders:shim s15a-intel-msaa-resolve:shim s15b-intel-narrow-clear:shim s16-intel-array-view:shim
-s17-amd-depth-stencil-view:bronzestencil s18-pipeline-cache-key:shim s19-amd-trilinear-blend:trilinear s25-amd-srgb-resolve:bronze s26-amd-depth-stencil-copy-pitch:bronze s29-amd-webkit-vertex-stride:bronze s30-amd-webkit-sample-mask:samplemask
+s17-amd-depth-stencil-view:bronzestencil s18-pipeline-cache-key:shim s19-amd-trilinear-blend:trilinear s25-amd-srgb-resolve:bronze s26-amd-depth-stencil-copy-pitch:bronze s29-amd-webkit-vertex-stride:bronze s30-amd-webkit-sample-mask:bronzeshim
 s20-intel-fill-buffer:shim s21-intel-depth-only-pipeline:shim s22-intel-depth-hiz-levels:shim s23-intel-3d-mip-plane:shim
 s24-intel-narrow-mip-clear:shim s31-angle-family-one:shim s32-intel-depth-stencil-blit:shim s33-intel-nil-argument-buffer:shim s34-intel-small-integer-cube:shim s35-intel-encoder-lod-clamp:shim s36-intel-swizzle-view:shim s37-intel-stencil-subresources:shim s38-intel-coverage-without-writes:shim s39-intel-mps-statistics:shim a01-texture-atomics:adapter
 a01-texture-atomics@Intel:adapter a02-si-smrd-hazard:smrd a04-si-threadgroup-pointer:ldsbase
@@ -86,7 +86,7 @@ run() {  # <test[@gpu]> <removed fix or "fixed">
     local inject=$BRONZELOAD
     local -a env=()
     case $2 in
-        bronze) inject= env=(AMD_BRONZE_COMPAT=0) ;; bronzestencil) inject= env=(AMD_BRONZE_COMPAT=0 MTLSHIM_STENCIL_SUBRESOURCE=0) ;; samplemask) inject= shim=$NOOP env=(AMD_BRONZE_COMPAT=0) ;; trilinear) inject= env=(AMD_BRONZE_COMPAT=0 INTEL_COMPUTE_TRILINEAR_FIX=0) ;; shim) shim=$NOOP ;; memoryless) shim=$NOOP env=(AMD_BRONZE_MEMORYLESS=0) ;; adapter) libs=$NOADAPTER ;; stock) libs=$STOCK ;; patch3) libs=$PATCH3 env=(INTEL_PRIVATE_ALIGN_FIX=0) ;; patch4) libs=$PATCH4 ;;
+        bronze) inject= env=(AMD_BRONZE_COMPAT=0) ;; bronzestencil) inject= env=(AMD_BRONZE_COMPAT=0 MTLSHIM_STENCIL_SUBRESOURCE=0) ;; bronzeshim) inject= shim=$NOOP env=(AMD_BRONZE_COMPAT=0) ;; trilinear) inject= env=(AMD_BRONZE_COMPAT=0 INTEL_COMPUTE_TRILINEAR_FIX=0) ;; shim) shim=$NOOP ;; memoryless) shim=$NOOP env=(AMD_BRONZE_MEMORYLESS=0) ;; adapter) libs=$NOADAPTER ;; stock) libs=$STOCK ;; patch3) libs=$PATCH3 env=(INTEL_PRIVATE_ALIGN_FIX=0) ;; patch4) libs=$PATCH4 ;;
         smrd) env=(AMD_SI_HAZARD_FIX=0) ;; ldsbase) env=(AMD_LDS_BASE_FIX=0) ;; handle) env=(AMD_HANDLE_FIX=0 INTEL_HANDLE_FIX=0) ;;
         nan) env=(AMD_NAN_FIX=0) ;; ldexp) env=(AMD_LDEXP_FIX=0) ;; gather) env=(AMD_GATHER_FIX=0 INTEL_INTEGER_OFFSET_FIX=0) ;; cubearray) env=(AMD_CUBE_ARRAY_FIX=0) ;; ldsbool) env=(AMD_LDS_BOOL_FIX=0 INTEL_THREADGROUP_BOOL_FIX=0) ;; fmask) env=(AMD_FMASK_FIX=0) ;;
         subword) env=(INTEL_SIGNED_SUBWORD_FIX=0) ;; comparebias) env=(INTEL_COMPARE_BIAS_FIX=0) ;; intoffset) env=(INTEL_INTEGER_OFFSET_FIX=0) ;; samplerstate) env=(INTEL_SAMPLER_STATE_FIX=0) ;; float3) env=(INTEL_VERTEX_FLOAT3_FIX=0) ;; privatearray) env=(INTEL_PRIVATE_ARRAY_FIX=0) ;; kernelgradient) env=(INTEL_KERNEL_GRADIENT_FIX=0) ;; fragfloat3) env=(INTEL_FRAGMENT_FLOAT3_FIX=0) ;; numsamples) env=(INTEL_NUM_SAMPLES_FIX=0) ;; swizzleimm) env=(INTEL_SWIZZLE_IMMEDIATE_FIX=0) ;; branchchain) env=(INTEL_BRANCH_CHAIN_FIX=0) ;; basevertex) env=(INTEL_BASE_VERTEX_FIX=0) ;; simd16clobber) env=(INTEL_SIMD16_CLOBBER_FIX=0) ;;

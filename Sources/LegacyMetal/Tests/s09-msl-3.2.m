@@ -1,7 +1,9 @@
-// s09-msl-3.2 (MetalOldCompat item 9): MSL 3.2 source (MTLLanguageVersion3_2, macOS 15) on this stack. The front end
-// that compiles source for MetalOld supports MSL up to 3.1, so every 3.2 request fails; MoltenVK and SPIRV-Cross assume
-// 3.2 on macOS 15 and emit its memory-coherence qualifiers (`coherent(device)`, `memory_coherence_device` textures).
-// Compiles and runs a kernel using them, requested as MSL 3.2.
+// s09-msl-3.2 (MetalOldCompat item 9, AMDBronzeCompat item 9): MSL 3.2 source (MTLLanguageVersion3_2, macOS 15) on this
+// stack. The front end that compiles source for MetalOld supports MSL up to 3.1, so every 3.2 request fails; MoltenVK
+// and SPIRV-Cross assume 3.2 on macOS 15 and emit its memory-coherence qualifiers (`coherent(device)`,
+// `memory_coherence_device` textures). With native Metal (GCN-only Macs) 3.2 compiles, but the 12.5 AMD driver's
+// compiler fails device coherence on buffers when the pipeline is made, so MoltenVK can't create pipelines with Vulkan
+// Coherent buffers. Compiles and runs a kernel using them, requested as MSL 3.2.
 // Stock OCLP: FAIL (compile error). Fixed: PASS. Argument: GPU name substring (default: AMD).
 #import "repro.h"
 
