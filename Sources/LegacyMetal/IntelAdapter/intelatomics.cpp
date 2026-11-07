@@ -45,6 +45,8 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <algorithm>
+#include <atomic>
 #include "gen7eu.h"
 
 extern "C" {
@@ -464,7 +466,27 @@ static bool declareBaseVertex(std::string &s) {
     return true;
 }
 
+// ---- fine derivatives -------------------------------------------------------------------------------------------------
+// MSL has one dfdx / dfdy (fine on Apple GPUs: each row of a 2x2 quad gets its own difference), and WGSL's dpdxFine,
+// dpdyFine and fwidthFine compile to it. The IGIL back end writes them as GRADIENT_X / GRADIENT_Y, which iCBE evaluates
+// coarse (one difference per quad), so fine derivatives were wrong wherever the rows differ (WebGPU CTS dpdxFine,
+// dpdyFine, fwidthFine: 8 of 8 cases each; the coarse ones pass either way). iCBE also reads GRADIENT_X_FINE /
+// GRADIENT_Y_FINE, which these become. INTEL_FINE_DERIVATIVES_FIX=0 turns it off.
+static unsigned fineGradients(std::string &s) {
+    if (disabled("INTEL_FINE_DERIVATIVES_FIX")) return 0;
+    unsigned n = 0;
+    for (size_t pos = 0; (pos = s.find("GRADIENT_", pos)) != std::string::npos; pos += 9) {
+        if (pos && !isspace((unsigned char)s[pos - 1])) continue;
+        if (s.compare(pos, 11, "GRADIENT_X ") && s.compare(pos, 11, "GRADIENT_Y ")) continue;
+        s.insert(pos + 10, "_FINE");
+        n++;
+    }
+    return n;
+}
+
+static thread_local std::string lastIGILForDump;  // INTELTEX_DUMP_KERNELS: the IGIL text iCBE compiles next on this thread
 extern "C" void intelatomicsFixIGIL(std::string *text) {
+    if (getenv("INTELTEX_DUMP_KERNELS")) lastIGILForDump = *text;
     std::string &s = *text;
     if (getenv("INTELTEX_DUMP")) {  // debugging: the IGIL text as the back end produced it
         static int serial;
@@ -483,6 +505,7 @@ extern "C" void intelatomicsFixIGIL(std::string *text) {
         }
     }
     if (declareBaseVertex(s) && logging()) fprintf(stderr, "[inteltex] vertex shader reads VERTEXID: BASE_VERTEX_ID declared\n");
+    if (unsigned n = fineGradients(s); n && logging()) fprintf(stderr, "[inteltex] %u derivative(s) made fine\n", n);
     if (s.find("IMM_ATOMIC_") == std::string::npos) return;
     std::vector<std::string> lines;
     for (size_t pos = 0; pos <= s.size();) {
@@ -2059,6 +2082,60 @@ static bool step(LLVMBuilderRef b, LLVMValueRef f, LLVMValueRef yes, LLVMValueRe
 }
 }  // namespace flatten
 
+// ---- one buffer viewed as different types --------------------------------------------------------------------------
+// WGSL lets a shader view the same buffer bytes as different types (bufferArrayView); Tint casts one byte pointer to
+// each view's element type. The 3802 back end then reorders or forwards an access of one type past an access of the
+// other to the same address, with or without the front end's alias metadata: in WebGPU CTS bufferArrayView
+// mixed_types_aliasing, "load int, store vec2f there, load int" returned the first value (285 aliased cases, storage
+// and workgroup buffers; every unaliased case passed, and with every access volatile all passed). Loads and stores
+// reached (through GEPs and casts) from a cast of a device or threadgroup pointer whose root (the pointer under its
+// GEPs and casts: views at different byte offsets share it) is cast to two or more element types in the same function
+// are made volatile, which keeps them in order. INTEL_TYPE_PUN_FIX=0 turns it off.
+static bool sharedPointer(LLVMValueRef v) {
+    LLVMTypeRef t = LLVMTypeOf(v);
+    if (LLVMGetTypeKind(t) != kTypeKindPointer) return false;
+    unsigned space = LLVMGetPointerAddressSpace(t);
+    return space == 1 || space == 3;
+}
+static LLVMValueRef pointerRoot(LLVMValueRef p) {
+    for (int depth = 0; depth < 16 && p && (LLVMIsAGetElementPtrInst(p) || LLVMIsABitCastInst(p)); depth++) p = LLVMGetOperand(p, 0);
+    return p;
+}
+static unsigned volatilizePunnedAccesses(LLVMModuleRef module) {
+    if (disabled("INTEL_TYPE_PUN_FIX")) return 0;
+    unsigned marked = 0;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
+        if (!LLVMGetFirstBasicBlock(f)) continue;
+        // casts of one shared pointer to different element types
+        std::map<LLVMValueRef, std::vector<LLVMValueRef>> castsOf;
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst))
+                if (LLVMIsABitCastInst(inst) && sharedPointer(inst) && sharedPointer(LLVMGetOperand(inst, 0)))
+                    castsOf[pointerRoot(LLVMGetOperand(inst, 0))].push_back(inst);
+        std::vector<LLVMValueRef> punned;
+        for (auto &entry : castsOf) {
+            bool differ = false;
+            for (LLVMValueRef c : entry.second)
+                differ = differ || LLVMGetElementType(LLVMTypeOf(c)) != LLVMGetElementType(LLVMTypeOf(entry.second[0]));
+            if (differ) punned.insert(punned.end(), entry.second.begin(), entry.second.end());
+        }
+        if (punned.empty()) continue;
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                bool load = LLVMIsALoadInst(inst), store = LLVMIsAStoreInst(inst);
+                if (!load && !store) continue;
+                bool reached = false;
+                for (LLVMValueRef p = LLVMGetOperand(inst, load ? 0 : 1); p && !reached;
+                     p = (LLVMIsAGetElementPtrInst(p) || LLVMIsABitCastInst(p)) ? LLVMGetOperand(p, 0) : nullptr)
+                    reached = std::find(punned.begin(), punned.end(), p) != punned.end();
+                if (!reached) continue;
+                LLVMSetVolatile(inst, 1);
+                marked++;
+            }
+    }
+    return marked;
+}
+
 static unsigned flattenBranchChains(LLVMModuleRef module) {
     if (disabled("INTEL_BRANCH_CHAIN_FIX")) return 0;
     const char *setting = getenv("INTEL_BRANCH_CHAIN_MIN");
@@ -2098,11 +2175,34 @@ static const char *const kICBEPaths[] = {
     "/Library/GPUBundles/AppleIntelHD5000GraphicsGLDriver.bundle/Contents/MacOS/iCBE.dylib",  // the plugin's order
     "/System/Library/Extensions/AppleIntelHD5000GraphicsGLDriver.bundle/Contents/MacOS/iCBE.dylib",
 };
+// INTELTEX_DUMP_KERNELS=<dir> (debugging): each pixel shader compile's SIMD8 and SIMD16 kernels as
+// ps-<pid>-<n>[-clobbered]-simd8/16.bin, and the IGIL text they came from as ps-<pid>-<n>.igil.
+static void dumpPixelKernels(void *output, const char *tag) {
+    const char *dir = getenv("INTELTEX_DUMP_KERNELS");
+    const uint8_t *block = output ? *(uint8_t **)output : nullptr;
+    if (!dir || !block) return;
+    static std::atomic<int> serial;
+    int n = serial++;
+    char path[1024];
+    for (int k = 0; k < 2; k++) {
+        const uint8_t *kernel = nullptr;
+        uint32_t size = 0;
+        memcpy(&kernel, block + 0x47fb + 8 * k, sizeof kernel);
+        memcpy(&size, block + 0x4813 + 4 * k, sizeof size);
+        if (!kernel || !size || size > (1u << 20)) continue;
+        snprintf(path, sizeof path, "%s/ps-%d-%04d%s-simd%d.bin", dir, getpid(), n, tag, k ? 16 : 8);
+        if (FILE *f = fopen(path, "wb")) { fwrite(kernel, 1, size, f); fclose(f); }
+    }
+    snprintf(path, sizeof path, "%s/ps-%d-%04d%s.igil", dir, getpid(), n, tag);
+    if (!lastIGILForDump.empty())
+        if (FILE *f = fopen(path, "w")) { fputs(lastIGILForDump.c_str(), f); fclose(f); }
+}
+
 static long hookedCompilePixelShader(void *compiler, int platform, void *a3, int optimizer, int simd, void *input, void *a7,
                                      void *output, void *platformInfo) {
     if (getenv("INTEL_SIMD8_PIXEL") && !disabled("INTEL_SIMD8_PIXEL")) simd = 1;
     long result = originalCompilePixelShader(compiler, platform, a3, optimizer, simd, input, a7, output, platformInfo);
-    if (!result || simd == 1 || !output || disabled("INTEL_SIMD16_CLOBBER_FIX")) return result;
+    if (!result || simd == 1 || !output || disabled("INTEL_SIMD16_CLOBBER_FIX")) return dumpPixelKernels(output, ""), result;
     const uint8_t *block = *(uint8_t **)output, *kernel16 = nullptr;
     uint32_t size16 = 0;
     if (!block) return result;
@@ -2113,12 +2213,14 @@ static long hookedCompilePixelShader(void *compiler, int platform, void *a3, int
     int found = gen7eu::findCompareClobber(kernel16, size16, &c);
     if (found < 0) {
         if (logging()) fprintf(stderr, "[inteltex] SIMD16 pixel kernel (%u bytes): %s\n", size16, found == -1 ? "no clobber" : "not followed");
+        dumpPixelKernels(output, "");
         return result;
     }
     if (logging()) fprintf(stderr, "[inteltex] SIMD16 pixel kernel: #%d overwrites #%d's value, which #%d reads: SIMD8 only\n",
                            c.clobber, c.writer, c.reader);
+    dumpPixelKernels(output, "-clobbered");
     long again = originalCompilePixelShader(compiler, platform, a3, optimizer, 1, input, a7, output, platformInfo);
-    if (again) return again;
+    if (again) return dumpPixelKernels(output, ""), again;
     return originalCompilePixelShader(compiler, platform, a3, optimizer, simd, input, a7, output, platformInfo);  // as before
 }
 static void installICBEHook() {
@@ -2174,6 +2276,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] %u get_num_samples() call(s) replaced by the pipeline's sample count\n", n);
         n = selectPrivateArrayIndices(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u variable-index private array access(es) done at constant indices\n", n);
+        n = volatilizePunnedAccesses(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u access(es) to a buffer viewed as different types made volatile\n", n);
         unsigned flattened = flattenBranchChains(module);
         if (flattened && logging()) fprintf(stderr, "[inteltex] %u short branch(es) folded into selects\n", flattened);
         if (getenv("INTELTEX_DUMP_REWRITTEN")) {  // debugging: every module after these rewrites
