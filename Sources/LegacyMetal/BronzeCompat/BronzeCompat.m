@@ -3,7 +3,7 @@
 // that runs this driver, whether or not OCLP's MetalOld wrapper is installed (AMD-only Macs such as the MacPro6,1 don't
 // have the wrapper). The driver is the same code in all of PatcherSupportPkg's copies (12.5, 12.5-24, 12.5-25,
 // 12.5-GCN-SKL-*); each hook checks for what it relies on and stays out otherwise.
-//   1. stencil through texture views of mip 1+ (written to the wrong level and slice)
+//   1. stencil through texture views of mip 1+ (written to the wrong level and slice; shaders read the wrong place)
 //   2. sRGB mipmaps (the driver's blit averages the encoded bytes)
 //   3. trilinear filtering (blends between mip levels only in the middle of the interval)
 //   4. sRGB MSAA resolve (the hardware resolve averages the encoded bytes); on 12.5-24 its shader read of the samples
@@ -16,7 +16,8 @@
 //  10. depth of mipmapped depth-stencil textures read by shaders (small levels come from the wrong place)
 // 1 and 2 come from riptidewave93's bronzefix, found and tested on Tahoe with a MacPro6,1's FirePro D700s.
 // AMD_BRONZE_COMPAT=0 turns everything off for a process, AMD_EXACT_TRILINEAR=0 only item 3,
-// AMD_BRONZE_SRGB_RESOLVE=0 only item 4, AMD_BRONZE_MEMORYLESS=0 only item 8, AMD_BRONZE_DEPTH_MIPS=0 only item 10;
+// AMD_BRONZE_SRGB_RESOLVE=0 only item 4, AMD_BRONZE_MEMORYLESS=0 only item 8, AMD_BRONZE_DEPTH_MIPS=0 only item 10,
+// AMD_BRONZE_STENCIL_VIEW=0 only item 1's stencil view descriptors;
 // AMD_BRONZE_VERBOSE=1 logs.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -68,17 +69,52 @@ static IMP swizzle(Class c, SEL selector, IMP replacement) {
 // the parent's stencil index is put back when the field shows exactly that subtraction. Stencil8 views also ignore their
 // base slice in the depth/stencil setup, so a Stencil8 attachment that is a view is attached as its parent with the
 // view's level and slice added. Test: s17.
+// The same init computes the image descriptor of a stencil view of a depth-stencil texture (X32_Stencil8 or
+// X24_Stencil8 of Depth32Float_Stencil8 / Depth24Unorm_Stencil8) from that subtracted index and adds the first slice's
+// offset as well, while the descriptor's BASE_LEVEL and BASE_ARRAY already select the view's level and slice: shaders
+// reading such a view of level 1+ or slice 1+ read level 0 / slice 0 or somewhere else (Dawn backs WebGPU's stencil8 with
+// Depth32Float_Stencil8 and reads it through such views). Its base address is set back to the stencil plane's start,
+// which is what a view of the whole texture has, and copied to the device's descriptor table again. Test: s43.
 //
 // init methods consume self and return +1, so this hook stays outside ARC (void *): no retain or release gets added.
 typedef void *(*ViewInitIMP)(void *, SEL, void *, MTLPixelFormat, MTLTextureType, NSRange, NSRange, MTLTextureSwizzleChannels,
                              NSUInteger);
 static ViewInitIMP origViewInit;
-static ptrdiff_t membersOffset;
+static ptrdiff_t membersOffset, resOffset = -1;
+// amdMtlBronzeDeviceSetGlobalSRD(device, table, index, dwords, descriptor, flag): the init's last step
+// (amdMtlBronzeTextureCommonPostInit) copies the descriptor into the device's global table at m_members+0x50.
+static void (*setGlobalSRD)(void *device, unsigned table, unsigned index, unsigned dwords, const void *descriptor, bool flag);
+
+// A stencil view of a depth-stencil texture: point its image descriptor (MTLIOAccelResource _res, dword 0: address >> 8)
+// at the start of the root texture's stencil plane, as -initWithTexture:pixelFormat:resourceIndex: does for a view of the
+// whole texture: (table[stencil index].offset + resource address) >> 8 | the view's m_members+0x1c.
+static void stencilViewBase(void *view, void *parent, MTLPixelFormat format) {
+    if (resOffset < 0 || (format != MTLPixelFormatX32_Stencil8 && format != MTLPixelFormatX24_Stencil8 && format != MTLPixelFormatStencil8)) return;
+    id root = (__bridge id)parent;
+    while ([root parentTexture]) root = [root parentTexture];
+    MTLPixelFormat rootFormat = [(id<MTLTexture>)root pixelFormat];
+    if ((rootFormat != MTLPixelFormatDepth32Float_Stencil8 && rootFormat != MTLPixelFormatDepth24Unorm_Stencil8) ||
+        object_getClass(root) != object_getClass((__bridge id)view))
+        return;
+    uint8_t *rootMembers = (uint8_t *)(__bridge void *)root + membersOffset, *table = *(uint8_t **)rootMembers;
+    unsigned index = (*(uint64_t *)(rootMembers + 8) >> 21) & 31;
+    if (!table || !index) return;
+    uint64_t address = *(uint64_t *)((uint8_t *)(__bridge void *)root + resOffset + 0x48) + *(uint64_t *)(table + 64 * index + 8);
+    uint32_t *descriptor = (uint32_t *)((uint8_t *)view + resOffset), base = (uint32_t)(address >> 8) | *(uint16_t *)((uint8_t *)view + membersOffset + 0x1c);
+    if (descriptor[0] == base) return;
+    unsigned slot = (unsigned)*(uint64_t *)((uint8_t *)view + membersOffset + 0x50);
+    if (!setGlobalSRD || !slot) return;  // the copy the GPU reads couldn't be updated: leave both as they are
+    if (verbose()) fprintf(stderr, "[bronzecompat] stencil view: descriptor base %08x -> %08x (slot %u)\n", descriptor[0], base, slot);
+    descriptor[0] = base;
+    setGlobalSRD((__bridge void *)[(__bridge id)view device], 0, slot, 8, descriptor, false);
+}
 
 static void *viewInit(void *self, SEL _cmd, void *parent, MTLPixelFormat format, MTLTextureType type, NSRange levels,
                       NSRange slices, MTLTextureSwizzleChannels swizzleChannels, NSUInteger resourceIndex) {
     void *view = origViewInit(self, _cmd, parent, format, type, levels, slices, swizzleChannels, resourceIndex);
     if (!view || !parent || object_getClass((__bridge id)parent) != object_getClass((__bridge id)view)) return view;
+    if ((levels.location || slices.location || [(__bridge id)parent parentTexture]) && !disabled("AMD_BRONZE_STENCIL_VIEW"))
+        stencilViewBase(view, parent, format);
     uint8_t *parentMembers = (uint8_t *)parent + membersOffset, *viewMembers = (uint8_t *)view + membersOffset;
     uint64_t parentField = *(uint64_t *)(parentMembers + 8), *viewField = (uint64_t *)(viewMembers + 8);
     unsigned parentIndex = (parentField >> 21) & 31, viewIndex = (*viewField >> 21) & 31;
@@ -134,6 +170,9 @@ static void installViewFix(const struct mach_header_64 *driver) {
     Ivar members = texture ? class_getInstanceVariable(texture, "m_members") : NULL;
     if (!members) return;
     membersOffset = ivar_getOffset(members);
+    Ivar res = class_getInstanceVariable(objc_getClass("MTLIOAccelResource"), "_res");
+    if (res) resOffset = ivar_getOffset(res);
+    setGlobalSRD = dlsym(RTLD_DEFAULT, "_Z30amdMtlBronzeDeviceSetGlobalSRDP15BronzeMtlDevicejjjPKvb");
     origViewInit = (ViewInitIMP)swizzle(texture, sel_registerName("initWithTexture:pixelFormat:textureType:levels:slices:swizzle:resourceIndex:"),
                                         (IMP)viewInit);
 }
