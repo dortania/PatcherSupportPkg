@@ -1576,6 +1576,122 @@ static unsigned exactMadSat(LLVMModuleRef module) {
     return fixed;
 }
 
+// ---- 64-bit multiplies ----------------------------------------------------------------------------------------------
+// The back end splits a 64-bit multiply into 32-bit ones, and the high word of a 32-bit product is wrong when one factor
+// is a constant (see buildMulHi): a factor whose low word is a known constant, (x << 32) | 139, came out with a wrong
+// high word for a * b and a wrong mulhi(a, b) (the 11,5 session's 64-bit fuzzing, LONG=1: 3 of 6 random kernels).
+// Multiplies whose factors are both 32-bit values widened (zext / sext, or constants below 2^32) stay as they are: that
+// is a single widening multiply, and every buffer index is one. The others are built from 32-bit limbs: the low 64
+// bits of a * b from one exact 32-bit high word and three 32-bit products; mulhi / madhi of 64-bit integers
+// (air.mul_hi / air.mad_hi .i64) from the four limb products with exact high words, the carries summed in 64 bits, then
+// corrected for signed factors (hi_s = hi_u - (a < 0 ? b : 0) - (b < 0 ? a : 0)). Scalars and vectors (lane by lane).
+// INTEL_MUL64_FIX=0 turns it off.
+extern "C" {
+LLVMValueRef LLVMIsAInstruction(LLVMValueRef);
+}
+static bool widened32(LLVMValueRef v) {  // a 64-bit value that is a 32-bit one zero- or sign-extended
+    if (LLVMIsAConstantInt(v)) return LLVMConstIntGetZExtValue(v) < (1ull << 32);
+    if (!LLVMIsAInstruction(v)) return false;
+    int opcode = LLVMGetInstructionOpcode(v);
+    return (opcode == 31 /* ZExt */ || opcode == 32 /* SExt */) && LLVMGetIntTypeWidth(LLVMTypeOf(LLVMGetOperand(v, 0))) <= 32;
+}
+
+static unsigned exact64BitMultiplies(LLVMModuleRef module) {
+    if (disabled("INTEL_MUL64_FIX") || runtimeNamesBound(module)) return 0;
+    enum { kOpcodeMul = 12 };
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context), i64 = LLVMInt64TypeInContext(context);
+    LLVMBuilderRef b = nullptr;
+    unsigned fixed = 0;
+    LLVMValueRef c32 = LLVMConstInt(i64, 32, false);
+    auto lo = [&](LLVMValueRef v) { return LLVMBuildTrunc(b, v, i32, ""); };
+    auto hi = [&](LLVMValueRef v) { return LLVMBuildTrunc(b, LLVMBuildLShr(b, v, c32, ""), i32, ""); };
+    auto join = [&](LLVMValueRef l, LLVMValueRef h) {
+        return LLVMBuildOr(b, LLVMBuildZExt(b, l, i64, ""), LLVMBuildShl(b, LLVMBuildZExt(b, h, i64, ""), c32, ""), "");
+    };
+    auto z = [&](LLVMValueRef v) { return LLVMBuildZExt(b, v, i64, ""); };
+    auto mul64 = [&](LLVMValueRef x, LLVMValueRef y) {  // the low 64 bits of x * y
+        LLVMValueRef x0 = lo(x), x1 = hi(x), y0 = lo(y), y1 = hi(y);
+        LLVMValueRef h = LLVMBuildAdd(b, LLVMBuildAdd(b, buildMulHi(b, i32, x0, y0, false), LLVMBuildMul(b, x0, y1, ""), ""),
+                                      LLVMBuildMul(b, x1, y0, ""), "");
+        return join(LLVMBuildMul(b, x0, y0, ""), h);
+    };
+    auto mulhi64 = [&](LLVMValueRef x, LLVMValueRef y, bool sign) {  // the high 64 bits of x * y
+        LLVMValueRef x0 = lo(x), x1 = hi(x), y0 = lo(y), y1 = hi(y);
+        LLVMValueRef s1 = LLVMBuildAdd(b, LLVMBuildAdd(b, z(buildMulHi(b, i32, x0, y0, false)), z(LLVMBuildMul(b, x0, y1, "")), ""),
+                                       z(LLVMBuildMul(b, x1, y0, "")), "");
+        LLVMValueRef s2 = LLVMBuildAdd(b, LLVMBuildAdd(b, z(buildMulHi(b, i32, x0, y1, false)), z(buildMulHi(b, i32, x1, y0, false)), ""),
+                                       LLVMBuildAdd(b, z(LLVMBuildMul(b, x1, y1, "")), LLVMBuildLShr(b, s1, c32, ""), ""), "");
+        LLVMValueRef top = LLVMBuildAdd(b, buildMulHi(b, i32, x1, y1, false), hi(s2), "");
+        LLVMValueRef r = join(lo(s2), top);
+        if (!sign) return r;
+        LLVMValueRef zero = LLVMConstInt(i64, 0, false);
+        LLVMValueRef fromX = LLVMBuildSelect(b, LLVMBuildICmp(b, 40 /* SLT */, x, zero, ""), y, zero, "");
+        LLVMValueRef fromY = LLVMBuildSelect(b, LLVMBuildICmp(b, 40 /* SLT */, y, zero, ""), x, zero, "");
+        return LLVMBuildSub(b, LLVMBuildSub(b, r, fromX, ""), fromY, "");
+    };
+    auto lanewise = [&](LLVMValueRef inst, int operands, auto &&scalar) {  // scalar(x, y[, z]) per lane
+        LLVMTypeRef type = LLVMTypeOf(inst);
+        unsigned n = lanes(type);
+        LLVMValueRef result = n ? LLVMGetUndef(type) : nullptr;
+        for (unsigned lane = 0; lane < (n ? n : 1); lane++) {
+            LLVMValueRef v[3];
+            for (int k = 0; k < operands; k++)
+                v[k] = n ? LLVMBuildExtractElement(b, LLVMGetOperand(inst, k), LLVMConstInt(i32, lane, false), "") : LLVMGetOperand(inst, k);
+            LLVMValueRef r = scalar(v);
+            result = n ? LLVMBuildInsertElement(b, result, r, LLVMConstInt(i32, lane, false), "") : r;
+        }
+        return result;
+    };
+    auto is64 = [&](LLVMTypeRef type) {
+        LLVMTypeRef element = lanes(type) ? LLVMGetElementType(type) : type;
+        return LLVMGetTypeKind(element) == kTypeKindInteger && LLVMGetIntTypeWidth(element) == 64;
+    };
+    // a * b
+    std::vector<LLVMValueRef> muls;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst))
+                if (LLVMGetInstructionOpcode(inst) == kOpcodeMul && is64(LLVMTypeOf(inst)) &&
+                    (lanes(LLVMTypeOf(inst)) || !widened32(LLVMGetOperand(inst, 0)) || !widened32(LLVMGetOperand(inst, 1))))
+                    muls.push_back(inst);
+    for (LLVMValueRef mul : muls) {
+        if (!b) b = LLVMCreateBuilderInContext(context);
+        LLVMPositionBuilderBefore(b, mul);
+        LLVMValueRef r = lanewise(mul, 2, [&](LLVMValueRef *v) { return mul64(v[0], v[1]); });
+        LLVMReplaceAllUsesWith(mul, r);
+        LLVMInstructionEraseFromParent(mul);
+        fixed++;
+    }
+    // mulhi / madhi
+    std::vector<LLVMValueRef> functions;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) functions.push_back(f);
+    for (LLVMValueRef f : functions) {
+        const char *name = LLVMGetValueName(f);
+        int kind = !strncmp(name, "air.mul_hi.", 11) ? 1 : !strncmp(name, "air.mad_hi.", 11) ? 2 : -1;
+        if (kind < 0 || (name[11] != 'u' && name[11] != 's') || name[12] != '.') continue;
+        bool sign = name[11] == 's';
+        int operands = kind == 1 ? 2 : 3;
+        std::vector<LLVMValueRef> calls;
+        for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u)) calls.push_back(LLVMGetUser(u));
+        for (LLVMValueRef call : calls) {
+            if (!LLVMIsACallInst(call) || LLVMGetNumOperands(call) != operands + 1 || LLVMGetOperand(call, operands) != f || !is64(LLVMTypeOf(call)))
+                continue;
+            if (!b) b = LLVMCreateBuilderInContext(context);
+            LLVMPositionBuilderBefore(b, call);
+            LLVMValueRef r = lanewise(call, operands, [&](LLVMValueRef *v) {
+                LLVMValueRef h = mulhi64(v[0], v[1], sign);
+                return kind == 1 ? h : LLVMBuildAdd(b, h, v[2], "");
+            });
+            LLVMReplaceAllUsesWith(call, r);
+            LLVMInstructionEraseFromParent(call);
+            fixed++;
+        }
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
 // ---- narrow integer min / max / clamp ---------------------------------------------------------------------------------
 // min, max and clamp on 8- and 16-bit integers (air.{min,max,clamp}.{u,s}.{i8,i16,vNi8,vNi16}) compare a lane the back end
 // zero-extended against a constant it sign-extended: min(uchar2 a, uchar2(130, 183)) returned a (UBMIN of a & 0xff and
@@ -1630,6 +1746,75 @@ static unsigned widenNarrowMinMax(LLVMModuleRef module) {
             LLVMInstructionEraseFromParent(call);
             fixed++;
         }
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
+// ---- signed division of a negated value ------------------------------------------------------------------------------
+// iCBE folds a negation (0 - v) into the operand of the integer divide that uses it, as a source modifier, and the
+// divide drops it: (-v) % d came out as v % d, (-v) / d and v / (-d) as v / d (mslfuzz2 seed 223: a remainder of a
+// negated product picked a vector lane, so the loop accumulated the wrong lane; unsigned division is right). A signed
+// divide or remainder of 0 - v is done on v and the result negated, and a divide by 0 - d is done by d and negated:
+// select(v == INT_MIN, r, 0 - r), since 0 - INT_MIN is INT_MIN again. A remainder by 0 - d is a remainder by d.
+// Integers up to 32 bits, scalar or vector. INTEL_SIGNED_DIV_NEG_FIX=0 turns it off.
+extern "C" {
+int LLVMIsNull(LLVMValueRef);
+LLVMValueRef LLVMIsABinaryOperator(LLVMValueRef);
+}
+static unsigned signedDivisionNegations(LLVMModuleRef module) {
+    if (disabled("INTEL_SIGNED_DIV_NEG_FIX") || runtimeNamesBound(module)) return 0;
+    enum { kOpcodeSub = 10, kOpcodeSDiv = 15, kOpcodeSRem = 18, kIntEQ = 32 };
+    std::vector<LLVMValueRef> divisions;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                int opcode = LLVMGetInstructionOpcode(inst);
+                if (opcode != kOpcodeSDiv && opcode != kOpcodeSRem) continue;
+                LLVMTypeRef type = LLVMTypeOf(inst);
+                LLVMTypeRef element = lanes(type) ? LLVMGetElementType(type) : type;
+                if (LLVMGetTypeKind(element) == kTypeKindInteger && LLVMGetIntTypeWidth(element) <= 32) divisions.push_back(inst);
+            }
+    auto negated = [](LLVMValueRef v) -> LLVMValueRef {  // v = 0 - x: x, else null
+        if (!LLVMIsABinaryOperator(v) || LLVMGetInstructionOpcode(v) != kOpcodeSub || !LLVMIsNull(LLVMGetOperand(v, 0))) return nullptr;
+        return LLVMGetOperand(v, 1);
+    };
+    LLVMBuilderRef b = nullptr;
+    unsigned fixed = 0;
+    for (LLVMValueRef division : divisions) {
+        bool remainder = LLVMGetInstructionOpcode(division) == kOpcodeSRem;
+        LLVMValueRef dividend = negated(LLVMGetOperand(division, 0)), divisor = negated(LLVMGetOperand(division, 1));
+        if (divisor && remainder) {  // the remainder takes the dividend's sign: the divisor's doesn't matter
+            LLVMSetOperand(division, 1, divisor);
+            divisor = nullptr;
+            fixed++;
+        }
+        if (!dividend && !divisor) continue;
+        if (dividend && divisor) {  // (-v) / (-d) = v / d, the INT_MIN cases included
+            LLVMSetOperand(division, 0, dividend);
+            LLVMSetOperand(division, 1, divisor);
+            fixed++;
+            continue;
+        }
+        LLVMValueRef x = dividend ? dividend : divisor;
+        LLVMSetOperand(division, dividend ? 0 : 1, x);
+        if (!b) b = LLVMCreateBuilderInContext(LLVMGetModuleContext(module));
+        LLVMPositionBuilderBefore(b, LLVMGetNextInstruction(division));
+        LLVMTypeRef type = LLVMTypeOf(division);
+        unsigned n = lanes(type);
+        LLVMTypeRef element = n ? LLVMGetElementType(type) : type;
+        LLVMValueRef intMin = LLVMConstInt(element, 1ull << (LLVMGetIntTypeWidth(element) - 1), false);
+        if (n) {
+            std::vector<LLVMValueRef> splat(n, intMin);
+            intMin = LLVMConstVector(splat.data(), n);
+        }
+        LLVMValueRef isMin = LLVMBuildICmp(b, kIntEQ, x, intMin, "");
+        LLVMValueRef negative = LLVMBuildNeg(b, division, "");
+        LLVMValueRef result = LLVMBuildSelect(b, isMin, division, negative, "");
+        LLVMReplaceAllUsesWith(division, result);
+        LLVMSetOperand(negative, 1, division);  // the replacement reached them too
+        LLVMSetOperand(result, 1, division);
+        fixed++;
     }
     if (b) LLVMDisposeBuilder(b);
     return fixed;
@@ -2795,12 +2980,16 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] %u depth comparison(s) with an LOD bias: bias dropped\n", n);
         n = lowerIntegerGradients(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u integer gradient sample(s) done at the level the gradients select\n", n);
+        n = signedDivisionNegations(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u signed division(s) of a negated value done on the value\n", n);
         n = widenNarrowMinMax(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u 8/16-bit min / max / clamp call(s) done on 32-bit lanes\n", n);
         n = foldConstantSaturation(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u addsat / subsat of constants folded\n", n);
         n = exactMadSat(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u madsat / mulhi / madhi call(s) done with 32-bit operations\n", n);
+        n = exact64BitMultiplies(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u 64-bit multiply / mulhi / madhi call(s) built from 32-bit limbs\n", n);
         n = linearCubeGathers(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u cube gather(s) given a linear constexpr sampler (seamless at face edges)\n", n);
         n = foldIntegerSampleOffsets(module);
