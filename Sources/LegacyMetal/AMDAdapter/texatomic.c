@@ -1670,6 +1670,50 @@ static unsigned bitcastLaneExtracts(void *module) {
 // result truncated. AMD_NARROW_CONSTANT_FIX=0 turns this off.
 enum { kOpcodeUDiv = 17, kOpcodeSDiv = 18, kOpcodeURem = 20, kOpcodeSRem = 21, kOpcodeTrunc = 36, kPredicateUGT = 34,
        kPredicateULE = 37, kPredicateSGT = 38, kPredicateSLE = 41 };
+// A narrow (i8 / i16) value the back end holds exactly, nothing above its width: constants below the top bit (the back
+// end sign-extends immediates: uchar 136 becomes -120), arguments, loads from memory (not private arrays, which live
+// in registers with whatever a truncation left there), lanes of
+// such vectors, zext, add / mul / shl that can't wrap (nuw), lshr / udiv / urem of an exact value, and / or / xor of
+// exact values (and: either), phis and selects of exact values. What remains (trunc, sub, add without nuw, not, ...)
+// can carry the garbage this job is for. Exact operands compare and divide right natively: rewriting them anyway keeps
+// loop counters from being seen (the opaque extract_bits hides trip counts), and Apple's MPS kernels in Geekbench came
+// out wrong and many times slower that way (ushort counters with `i == 4` exits, ushort2 thread positions).
+enum { kOpcodeExtractElementValue = 59, kOpcodePHI = 53, kOpcodeOr2 = 27, kOpcodeXor2 = 28, kOpcodeMul2 = 15 };
+static void *anyOperand(void *user, unsigned i) {  // fixed or hung-off (phi) operands
+    if (!hungOffUses(user)) return operand(user, i);
+    char *uses = *(char **)((char *)user - sizeof(void *));
+    return *(void **)(uses + i * kUseSize);
+}
+static bool exactNarrow(void *v, void **stack, int depth) {
+    if (depth >= 12) return false;
+    unsigned char id = subclassID(v);
+    uint64_t value;
+    if (constantIntValue(v, &value)) return !((value >> (intBits(typeOf(v)) - 1)) & 1);  // immediates with the top bit set come out sign-extended
+    if (id == kValueArgument) return true;
+    if (isInstruction(v, kOpcodeZExt)) return true;
+    if (isInstruction(v, kOpcodeLoad))  // memory loads zero-extend; private arrays live in registers, garbage included
+        return (*(uint32_t *)((char *)typeOf(operand(v, 0)) + 8) >> 8) != 0;  // PointerType address space: SubclassData
+    for (int d = 0; d < depth; d++) if (stack[d] == v) return true;  // a cycle through phis: the other inputs decide
+    stack[depth] = v;
+    unsigned n = numOperands(v);
+    bool nuw = (*(unsigned char *)((char *)v + 17) >> 1) & 1;  // byte 17: HasValueHandle:1, SubclassOptionalData:7 (bit 0 there: NoUnsignedWrap)
+    if (isInstruction(v, kOpcodeExtractElementValue)) return exactNarrow(operand(v, 0), stack, depth + 1);
+    if ((isInstruction(v, kOpcodeAdd) || isInstruction(v, kOpcodeMul2) || isInstruction(v, kOpcodeShl)) && nuw)
+        return exactNarrow(operand(v, 0), stack, depth + 1) && exactNarrow(operand(v, 1), stack, depth + 1);
+    if (isInstruction(v, kOpcodeLShr) || isInstruction(v, kOpcodeUDiv) || isInstruction(v, kOpcodeURem))
+        return exactNarrow(operand(v, 0), stack, depth + 1);
+    if (isInstruction(v, kOpcodeAnd))
+        return exactNarrow(operand(v, 0), stack, depth + 1) || exactNarrow(operand(v, 1), stack, depth + 1);
+    if (isInstruction(v, kOpcodeOr2) || (isInstruction(v, kOpcodeXor2) && subclassID(operand(v, 1)) != kValueConstantInt))
+        return exactNarrow(operand(v, 0), stack, depth + 1) && exactNarrow(operand(v, 1), stack, depth + 1);
+    if (isInstruction(v, kOpcodeSelect)) return exactNarrow(operand(v, 1), stack, depth + 1) && exactNarrow(operand(v, 2), stack, depth + 1);
+    if (isInstruction(v, kOpcodePHI)) {
+        for (unsigned i = 0; i < n; i++) if (!exactNarrow(anyOperand(v, i), stack, depth + 1)) return false;
+        return n > 0;
+    }
+    return false;
+}
+
 static unsigned narrowUnsignedConstants(void *module) {
     const char *setting = getenv("AMD_NARROW_CONSTANT_FIX");
     if ((setting && !strcmp(setting, "0")) || !api.binaryCreate || !api.castCreate || !api.functionTypeGet || !api.getOrInsertFunction ||
@@ -1702,7 +1746,15 @@ static unsigned narrowUnsignedConstants(void *module) {
                 }
                 if (typeID(element) != kTypeInteger) continue;
                 unsigned width = *(uint32_t *)((char *)element + 8) >> 8;  // IntegerType bit width: Type SubclassData
-                if (width == 8 || width == 16) found[count++] = inst;
+                if (width != 8 && width != 16) continue;
+                bool isSignedOp = isInstruction(inst, kOpcodeSDiv) || isInstruction(inst, kOpcodeSRem) || isInstruction(inst, kOpcodeAShr);
+                if (isInstruction(inst, kOpcodeICmp)) {
+                    unsigned p = *(uint16_t *)(inst + 0x12) & kOpcodeICmpPredicateMask;
+                    isSignedOp = p >= kPredicateSGT && p <= kPredicateSLE;
+                }
+                void *stack[12];
+                if (!isSignedOp && exactNarrow(operand(inst, 0), stack, 0) && exactNarrow(operand(inst, 1), stack, 0)) continue;
+                found[count++] = inst;
             }
         }
     }
