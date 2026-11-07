@@ -24,7 +24,7 @@ static float draw(id<MTLDevice> dev, id<MTLCommandQueue> q, int first, char comp
     vd.attributes[a].format = format;
     vd.attributes[a].bufferIndex = 1;
     vd.layouts[0].stride = 16;
-    vd.layouts[1].stride = format == MTLVertexFormatHalf3 ? 6 : 12;
+    vd.layouts[1].stride = format == MTLVertexFormatHalf3 ? 8 : 12;  // Metal on macOS (the AMD driver) wants multiples of 4
     MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
     pd.vertexFunction = [lib newFunctionWithName:@"v"];
     pd.fragmentFunction = [lib newFunctionWithName:@"f"];
@@ -34,8 +34,8 @@ static float draw(id<MTLDevice> dev, id<MTLCommandQueue> q, int first, char comp
     if (!ps) return NAN;
     const float positions[12] = {-1, -1, 0, 1, 3, -1, 0, 1, -1, 3, 0, 1};
     float floats[9];
-    __fp16 halves[9];
-    for (int i = 0; i < 9; i++) floats[i] = halves[i] = 0.25f * (i % 3 + 1);  // x 0.25, y 0.5, z 0.75
+    __fp16 halves[12] = {0};  // x, y, z and a pad half per vertex
+    for (int i = 0; i < 9; i++) floats[i] = halves[i / 3 * 4 + i % 3] = 0.25f * (i % 3 + 1);  // x 0.25, y 0.5, z 0.75
     id<MTLBuffer> pb = [dev newBufferWithBytes:positions length:sizeof positions options:MTLResourceStorageModeShared];
     id<MTLBuffer> ab = format == MTLVertexFormatHalf3 ? [dev newBufferWithBytes:halves length:sizeof halves options:MTLResourceStorageModeShared]
                                                       : [dev newBufferWithBytes:floats length:sizeof floats options:MTLResourceStorageModeShared];
