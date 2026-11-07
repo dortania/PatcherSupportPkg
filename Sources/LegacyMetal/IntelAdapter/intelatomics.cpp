@@ -485,6 +485,54 @@ static unsigned fineGradients(std::string &s) {
     return n;
 }
 
+// ---- explicit-LOD sample coordinates ---------------------------------------------------------------------------------
+// For a sample with an explicit LOD in a compute kernel the IGIL writer builds the message in the destination register
+// (rD.xyz = the coordinates, rD.w = the LOD) and then names the coordinate register itself as the operand:
+//     MOV r58.xyz, r56.xyzx;  MOV r58.w, r57.xxxx;  SAMPLE_LC r58, r56(0, 0, 0), t0, s0, r38.x, 2D;
+// iCBE takes the LOD from the operand's w, which nothing wrote when the coordinates came from a select of 2-component
+// values (Dawn loads them from a uniform array): whatever the register last held became the LOD, so the level, and with
+// a linear mip filter the blend, changed from run to run (WebGPU CTS textureSampleCompareLevel in compute: 160 cases,
+// with wrong results in different places on every run). The operand becomes the destination register, which holds
+// the coordinates and the LOD. 2D samples only: a cube array's coordinate operand carries the array index in w, and the
+// back end finds the LOD elsewhere there (the CTS's cube, 2D-array and cube-array cases passed already, a09 relies on
+// it). INTEL_SAMPLE_LOD_OPERAND_FIX=0 turns it off.
+static unsigned sampleLodOperands(std::string &s) {
+    if (disabled("INTEL_SAMPLE_LOD_OPERAND_FIX") || s.find("\tSAMPLE_L") == std::string::npos) return 0;
+    unsigned n = 0;
+    size_t previous[2] = {std::string::npos, std::string::npos};  // starts of the two lines before this one
+    for (size_t pos = 0; pos < s.size();) {
+        size_t eol = s.find('\n', pos);
+        if (eol == std::string::npos) eol = s.size();
+        if (eol > pos) {
+            char op[32];
+            unsigned d, c;
+            int at = 0;
+            if (sscanf(s.c_str() + pos, "\t%31[A-Z_] r%u, r%u(%n", op, &d, &c, &at) == 3 && at && !strncmp(op, "SAMPLE_L", 8) && d != c &&
+                previous[0] != std::string::npos) {
+                char coords[64], lod[64];
+                snprintf(coords, sizeof coords, "\tMOV r%u.xyz, r%u.xyzx;", d, c);
+                snprintf(lod, sizeof lod, "\tMOV r%u.w, ", d);
+                bool plain2D = eol >= pos + 5 && !s.compare(eol - 5, 5, ", 2D;");
+                if (plain2D && !s.compare(previous[0], strlen(coords), coords) && !s.compare(previous[1], strlen(lod), lod)) {
+                    size_t operand = s.find(" r", pos + strlen(op) + 1);  // the coordinate operand, after "rD,"
+                    operand = s.find(" r", operand + 2);
+                    std::string replacement = " r" + std::to_string(d) + "(";
+                    size_t old = operand + 2 + std::to_string(c).size() + 1 - operand;
+                    s.replace(operand, old, replacement);
+                    eol = s.find('\n', pos);
+                    if (eol == std::string::npos) eol = s.size();
+                    n++;
+                }
+            }
+            previous[0] = previous[1];
+            previous[1] = pos;
+            if (s.compare(pos, 1, "\t") || eol - pos < 2) previous[0] = previous[1] = std::string::npos;  // blank or label: no pattern across it
+        }
+        pos = eol + 1;
+    }
+    return n;
+}
+
 static thread_local std::string lastIGILForDump;  // INTELTEX_DUMP_KERNELS: the IGIL text iCBE compiles next on this thread
 extern "C" void intelatomicsFixIGIL(std::string *text) {
     if (getenv("INTELTEX_DUMP_KERNELS")) lastIGILForDump = *text;
@@ -507,6 +555,7 @@ extern "C" void intelatomicsFixIGIL(std::string *text) {
     }
     if (declareBaseVertex(s) && logging()) fprintf(stderr, "[inteltex] vertex shader reads VERTEXID: BASE_VERTEX_ID declared\n");
     if (unsigned n = fineGradients(s); n && logging()) fprintf(stderr, "[inteltex] %u derivative(s) made fine\n", n);
+    if (unsigned n = sampleLodOperands(s); n && logging()) fprintf(stderr, "[inteltex] %u explicit-LOD sample(s) given the register holding the LOD\n", n);
     if (s.find("IMM_ATOMIC_") == std::string::npos) return;
     std::vector<std::string> lines;
     for (size_t pos = 0; pos <= s.size();) {
@@ -1527,6 +1576,65 @@ static unsigned exactMadSat(LLVMModuleRef module) {
     return fixed;
 }
 
+// ---- narrow integer min / max / clamp ---------------------------------------------------------------------------------
+// min, max and clamp on 8- and 16-bit integers (air.{min,max,clamp}.{u,s}.{i8,i16,vNi8,vNi16}) compare a lane the back end
+// zero-extended against a constant it sign-extended: min(uchar2 a, uchar2(130, 183)) returned a (UBMIN of a & 0xff and
+// -126), and max returned the constant; clamp((uchar)y, 100, 200) returned y (the MacBookPro11,5 session's narrow-vector
+// fuzzing; the 16-bit forms came out right but go the same way). They're done on 32-bit lanes: operands zero- or
+// sign-extended, the i32 function called, the result truncated. INTEL_NARROW_MINMAX_FIX=0 turns it off.
+static unsigned widenNarrowMinMax(LLVMModuleRef module) {
+    if (disabled("INTEL_NARROW_MINMAX_FIX") || runtimeNamesBound(module)) return 0;
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    LLVMBuilderRef b = nullptr;
+    unsigned fixed = 0;
+    std::vector<LLVMValueRef> functions;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) functions.push_back(f);
+    for (LLVMValueRef f : functions) {
+        const char *name = LLVMGetValueName(f);
+        static const char *const kOps[3] = {"air.min.", "air.max.", "air.clamp."};
+        int op = -1;
+        for (int k = 0; k < 3; k++) if (!strncmp(name, kOps[k], strlen(kOps[k]))) op = k;
+        if (op < 0) continue;
+        size_t at = strlen(kOps[op]);
+        if ((name[at] != 'u' && name[at] != 's') || name[at + 1] != '.') continue;
+        bool sign = name[at] == 's';
+        std::vector<LLVMValueRef> calls;
+        for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u)) calls.push_back(LLVMGetUser(u));
+        for (LLVMValueRef call : calls) {
+            int operands = op == 2 ? 3 : 2;
+            if (!LLVMIsACallInst(call) || LLVMGetNumOperands(call) != operands + 1 || LLVMGetOperand(call, operands) != f) continue;
+            LLVMTypeRef type = LLVMTypeOf(call);
+            unsigned n = lanes(type);
+            LLVMTypeRef element = n ? LLVMGetElementType(type) : type;
+            if (LLVMGetTypeKind(element) != kTypeKindInteger) continue;
+            unsigned bits = LLVMGetIntTypeWidth(element);
+            if (bits != 8 && bits != 16) continue;
+            if (!b) b = LLVMCreateBuilderInContext(context);
+            LLVMPositionBuilderBefore(b, call);
+            LLVMTypeRef wide = n ? LLVMVectorType(i32, n) : i32;
+            std::vector<LLVMValueRef> args;
+            std::vector<LLVMTypeRef> params;
+            for (int k = 0; k < operands; k++) {
+                LLVMValueRef v = LLVMGetOperand(call, k);
+                args.push_back(sign ? LLVMBuildSExt(b, v, wide, "") : LLVMBuildZExt(b, v, wide, ""));
+                params.push_back(wide);
+            }
+            char wideName[64];
+            if (n) snprintf(wideName, sizeof wideName, "%s%c.v%ui32", kOps[op], name[at], n);
+            else snprintf(wideName, sizeof wideName, "%s%c.i32", kOps[op], name[at]);
+            LLVMValueRef target = LLVMGetNamedFunction(module, wideName);
+            if (!target) target = LLVMAddFunction(module, wideName, LLVMFunctionType(wide, params.data(), (unsigned)params.size(), 0));
+            LLVMValueRef result = LLVMBuildTrunc(b, LLVMBuildCall(b, target, args.data(), (unsigned)args.size(), ""), type, "");
+            LLVMReplaceAllUsesWith(call, result);
+            LLVMInstructionEraseFromParent(call);
+            fixed++;
+        }
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
 // ---- saturating add / subtract of constants --------------------------------------------------------------------------
 // The back end folds addsat with two constant operands as a plain add: addsat(95u, 4294967295u) came out 94 instead of
 // 0xffffffff (mslfuzz2; with a variable operand it's right). Such calls (air.add_sat / air.sub_sat, unsigned or signed,
@@ -2115,6 +2223,73 @@ static unsigned selectPrivateArrayIndices(LLVMModuleRef module) {
     return fixed;
 }
 
+// ---- selects of pointers into one buffer -----------------------------------------------------------------------------
+// `c ? in[i] : in[j]` comes out of the front end as a load through select(c, &in[i], &in[j]). The back end can't tell
+// that both pointers name the same buffer, so it loads through a loop over the distinct surfaces in the SIMD group, and
+// that loop takes flag register f0.1 without saving it: when the select sits in the then-branch of an if/else whose
+// else-branch tests a condition the back end kept in f0.1, lanes that took the else came out as if the condition held
+// (a switch whose case 0 broke out ran the default's code whenever a case-1 lane shared its SIMD8 group: differential
+// fuzzing, mslfuzz2). A select whose arms are GEPs of the same pointer with indices of the same types becomes one GEP
+// with the differing indices selected (a pointer itself counts as a GEP by 0): the same address, no surface loop. Device
+// and constant pointers only (private ones are split by splitPrivatePointerSelects). INTEL_BUFFER_SELECT_FIX=0 turns it off.
+static unsigned selectBufferIndices(LLVMModuleRef module) {
+    if (disabled("INTEL_BUFFER_SELECT_FIX")) return 0;
+    enum { kArrayKind = 11, kStructKind = 10, kPointerKind = 12, kVectorKind = 13 };
+    std::vector<LLVMValueRef> selects;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst))
+                if (LLVMIsASelectInst(inst) && LLVMGetTypeKind(LLVMTypeOf(inst)) == kPointerKind) {
+                    unsigned space = LLVMGetPointerAddressSpace(LLVMTypeOf(inst));
+                    if (space == 1 || space == 2) selects.push_back(inst);
+                }
+    LLVMBuilderRef b = nullptr;
+    unsigned fixed = 0;
+    auto parts = [](LLVMValueRef v, LLVMValueRef &base, std::vector<LLVMValueRef> &indices) {
+        indices.clear();
+        if (!LLVMIsAGetElementPtrInst(v)) { base = v; return; }
+        base = LLVMGetOperand(v, 0);
+        for (int i = 1; i < LLVMGetNumOperands(v); i++) indices.push_back(LLVMGetOperand(v, i));
+    };
+    for (LLVMValueRef sel : selects) {
+        LLVMValueRef condition = LLVMGetOperand(sel, 0), baseA, baseB;
+        std::vector<LLVMValueRef> a, b2;
+        parts(LLVMGetOperand(sel, 1), baseA, a);
+        parts(LLVMGetOperand(sel, 2), baseB, b2);
+        if (baseA != baseB) continue;
+        if (a.empty() && b2.size() == 1) a.push_back(LLVMConstNull(LLVMTypeOf(b2[0])));
+        if (b2.empty() && a.size() == 1) b2.push_back(LLVMConstNull(LLVMTypeOf(a[0])));
+        if (a.empty() || a.size() != b2.size()) continue;
+        // indices may differ only where they step through a pointer, an array or a vector (struct field numbers are constants)
+        bool usable = true;
+        LLVMTypeRef t = LLVMTypeOf(baseA);
+        for (size_t k = 0; k < a.size() && usable && t; k++) {
+            if (LLVMTypeOf(a[k]) != LLVMTypeOf(b2[k])) usable = false;
+            int kind = LLVMGetTypeKind(t);
+            if (kind == kStructKind) {
+                if (a[k] != b2[k]) usable = false;
+                else t = LLVMStructGetTypeAtIndex(t, (unsigned)LLVMConstIntGetZExtValue(a[k]));
+            } else if (kind == kPointerKind || kind == kArrayKind || kind == kVectorKind) t = LLVMGetElementType(t);
+            else usable = false;
+        }
+        if (!usable || !t) continue;
+        if (!b) b = LLVMCreateBuilderInContext(LLVMGetModuleContext(module));
+        LLVMPositionBuilderBefore(b, sel);
+        std::vector<LLVMValueRef> indices(a.size());
+        for (size_t k = 0; k < a.size(); k++) indices[k] = a[k] == b2[k] ? a[k] : LLVMBuildSelect(b, condition, a[k], b2[k], "");
+        LLVMValueRef gep = LLVMBuildGEP(b, baseA, indices.data(), (unsigned)indices.size(), "");
+        if (LLVMTypeOf(gep) != LLVMTypeOf(sel)) {  // shouldn't happen: both arms had the select's type
+            LLVMInstructionEraseFromParent(gep);
+            continue;
+        }
+        LLVMReplaceAllUsesWith(sel, gep);
+        LLVMInstructionEraseFromParent(sel);
+        fixed++;
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
 // ---- loads and stores through a select of private pointers ----------------------------------------------------------
 // A pointer into a private array picked with a select (`thread uint *q = c ? &p[2] : &p[5]; *q += x;`) keeps the array in
 // private memory, and there the back end forwards a load of an element past a store to that same element: in
@@ -2620,6 +2795,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] %u depth comparison(s) with an LOD bias: bias dropped\n", n);
         n = lowerIntegerGradients(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u integer gradient sample(s) done at the level the gradients select\n", n);
+        n = widenNarrowMinMax(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u 8/16-bit min / max / clamp call(s) done on 32-bit lanes\n", n);
         n = foldConstantSaturation(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u addsat / subsat of constants folded\n", n);
         n = exactMadSat(module);
@@ -2648,6 +2825,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] %u access(es) to a buffer viewed as different types made volatile\n", n);
         unsigned flattened = flattenBranchChains(module);
         if (flattened && logging()) fprintf(stderr, "[inteltex] %u short branch(es) folded into selects\n", flattened);
+        n = selectBufferIndices(module);  // after flattenBranchChains, whose selects can pick pointers
+        if (n && logging()) fprintf(stderr, "[inteltex] %u select(s) of pointers into one buffer turned into a selected index\n", n);
         if (getenv("INTELTEX_DUMP_REWRITTEN")) {  // debugging: every module after these rewrites
             static int serial;
             char path[1024];

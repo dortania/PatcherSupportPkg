@@ -1134,9 +1134,14 @@ static ptrdiff_t igSurfaceStateOffset = -1;
 // through it and were right; vertex and fragment functions are too. The function is wrapped (an inline hook on its
 // standard 12-byte prologue, the first 42 bytes checked against this driver's) to copy DW1 bits 3:1 from the sampler
 // object afterwards. MTLSHIM_COMPUTE_SAMPLER_COMPARE=0 turns it off. Test: s50.
+// The same template has LOD PreClamp Enable (DW0 bit 28) clear, so the hardware chose between the min and mag filters
+// on the unclamped LOD: a level at or below 0 magnified (base level only) even with a lodMinClamp of 0.25, which should
+// have blended a quarter of level 1 in (WebGPU CTS textureSampleLevel lodClamp in compute, linear filter: 90 cases).
+// The bit is copied from the sampler object too. MTLSHIM_COMPUTE_LOD_PRECLAMP=0 leaves it. Test: s51.
 typedef void (*PatchSamplerObjectFn)(void *, const void *, const void *, void *, const void *);
 static PatchSamplerObjectFn origPatchSamplerObject;
 static ptrdiff_t igSamplerStateIvarOffset;
+static bool computeLodPreClamp;
 
 static void computePatchSamplerObject(void *context, const void *patchInfo, const void *samplerArgument, void *packet,
                                       const void *textures) {
@@ -1147,6 +1152,7 @@ static void computePatchSamplerObject(void *context, const void *patchInfo, cons
     uint32_t *hardware = (uint32_t *)(heap + *(const uint32_t *)((const char *)patchInfo + 0xc));
     const uint32_t *state = (const uint32_t *)(sampler + igSamplerStateIvarOffset);
     hardware[1] = (hardware[1] & ~0xeu) | (state[1] & 0xeu);  // ShadowFunction
+    if (computeLodPreClamp) hardware[0] = (hardware[0] & ~(1u << 28)) | (state[0] & (1u << 28));  // LODPreClampEnable
 }
 
 // entry -> replacement, for a function starting push rbp; mov rbp, rsp; push r15; push r14; push r13; push r12 (position
@@ -1185,8 +1191,12 @@ static void computeSamplerCompare(void) {
                                                "sSamplerArgumentPNS_20tagCHALCommandPacketEPK16sTextureArgument");
     if (!entry || memcmp(entry, kExpected, sizeof kExpected)) return;
     igSamplerStateIvarOffset = ivar_getOffset(state);
+    const char *preclamp = getenv("MTLSHIM_COMPUTE_LOD_PRECLAMP");
+    computeLodPreClamp = !(preclamp && !strcmp(preclamp, "0")) && strstr(ivar_getTypeEncoding(state), "\"LODPreClampEnable\"b1\"TextureBorderColorMode\"b1\"\"b1\"SamplerDisable\"b1");
     origPatchSamplerObject = (PatchSamplerObjectFn)hookStandardPrologue(entry, (void *)computePatchSamplerObject);
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] compute sampler compare functions: %s\n", origPatchSamplerObject ? "hooked" : "hook failed");
+    if (getenv("MTLSHIM_VERBOSE"))
+        shimLog("[mtlshim] compute sampler compare functions: %s%s\n", origPatchSamplerObject ? "hooked" : "hook failed",
+                computeLodPreClamp ? ", LOD pre-clamp" : "");
 }
 
 // 39. A texture view that starts at mip level L carries two surface states: the sampler's (min LOD L) and, for writes,
