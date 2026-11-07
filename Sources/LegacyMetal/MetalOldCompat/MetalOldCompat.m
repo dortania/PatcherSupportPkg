@@ -60,6 +60,8 @@
 //      stencil plane with the depth plane's 4-texel mip alignment (levels 2+ read 0 for many widths): 8, as laid out
 //  39. size queries (get_width/height) on writable 2D-array views that start at mip level 1+ in fragment functions on
 //      the 12.x Intel driver (level 0's size): the view's render-target surface state gets the level as its min LOD too
+//  40. depth comparisons (sample_compare, gather_compare) through a sampler argument in compute kernels on the 12.x
+//      Intel driver, which always returned 0: the compute path drops the sampler's compare function; it is copied in
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -1124,13 +1126,80 @@ typedef void (*InitSurfaceStateIMP)(id, SEL);
 static InitSurfaceStateIMP origIGInitSurfaceState;
 static ptrdiff_t igSurfaceStateOffset = -1;
 
+// 40. Compute kernels get their samplers' hardware state from CHAL_INTEL::ChalContext::PatchSamplerObject, which copies
+// the filters, address modes and LOD clamps of the app's MTLIGSampler into the kernel's sampler-state template but keeps
+// the template's low byte of DW1, where the shadow (compare) function is: an argument sampler's compare function never
+// reaches the hardware, so every sample_compare and gather_compare in a compute kernel compared with "never" and returned
+// 0 (WebGPU CTS textureGatherCompare in compute: 300 cases, textureSampleCompareLevel too). Constexpr samplers don't go
+// through it and were right; vertex and fragment functions are too. The function is wrapped (an inline hook on its
+// standard 12-byte prologue, the first 42 bytes checked against this driver's) to copy DW1 bits 3:1 from the sampler
+// object afterwards. MTLSHIM_COMPUTE_SAMPLER_COMPARE=0 turns it off. Test: s50.
+typedef void (*PatchSamplerObjectFn)(void *, const void *, const void *, void *, const void *);
+static PatchSamplerObjectFn origPatchSamplerObject;
+static ptrdiff_t igSamplerStateIvarOffset;
+
+static void computePatchSamplerObject(void *context, const void *patchInfo, const void *samplerArgument, void *packet,
+                                      const void *textures) {
+    origPatchSamplerObject(context, patchInfo, samplerArgument, packet, textures);
+    char *sampler = samplerArgument ? *(char *const *)samplerArgument : NULL;
+    char *heap = packet ? *(char **)((char *)packet + 0x1d8) : NULL;
+    if (!sampler || !heap) return;
+    uint32_t *hardware = (uint32_t *)(heap + *(const uint32_t *)((const char *)patchInfo + 0xc));
+    const uint32_t *state = (const uint32_t *)(sampler + igSamplerStateIvarOffset);
+    hardware[1] = (hardware[1] & ~0xeu) | (state[1] & 0xeu);  // ShadowFunction
+}
+
+// entry -> replacement, for a function starting push rbp; mov rbp, rsp; push r15; push r14; push r13; push r12 (position
+// independent): returns a trampoline running those 12 bytes and continuing after them
+static void *hookStandardPrologue(unsigned char *entry, void *replacement) {
+    unsigned char *stub = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
+    if (stub == MAP_FAILED) return NULL;
+    unsigned char *p = stub;
+    memcpy(p, entry, 12), p += 12;
+    *p++ = 0x48, *p++ = 0xb8;  // mov rax, entry + 12
+    uint64_t back = (uint64_t)(entry + 12);
+    memcpy(p, &back, 8), p += 8;
+    *p++ = 0xff, *p++ = 0xe0;  // jmp rax
+    if (mprotect(stub, 4096, PROT_READ | PROT_EXEC)) return NULL;
+    vm_address_t page = (vm_address_t)entry & ~(vm_address_t)(vm_page_size - 1);
+    if (vm_protect(mach_task_self(), page, vm_page_size * 2, FALSE, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY) != KERN_SUCCESS) return NULL;
+    unsigned char patch[12] = {0x48, 0xb8};
+    uint64_t target = (uint64_t)replacement;
+    memcpy(patch + 2, &target, 8);
+    patch[10] = 0xff, patch[11] = 0xe0;
+    memcpy(entry, patch, sizeof patch);
+    vm_protect(mach_task_self(), page, vm_page_size * 2, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
+    return stub;
+}
+
+static void computeSamplerCompare(void) {
+    static const unsigned char kExpected[42] = {
+        0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x53, 0xff, 0x87, 0x6c, 0x06, 0x00, 0x00, 0x4c, 0x8b,
+        0x1a, 0x4d, 0x85, 0xdb, 0x0f, 0x84, 0x13, 0x04, 0x00, 0x00, 0x4c, 0x8b, 0x89, 0xd8, 0x01, 0x00, 0x00, 0x44, 0x8b, 0x56, 0x0c};
+    const char *setting = getenv("MTLSHIM_COMPUTE_SAMPLER_COMPARE");
+    if (origPatchSamplerObject || (setting && !strcmp(setting, "0"))) return;
+    Class c = objc_getClass("MTLIGSampler");
+    Ivar state = c ? class_getInstanceVariable(c, "samplerState") : NULL;
+    if (!state || !strstr(ivar_getTypeEncoding(state), "\"SamplerDisable\"b1\"CubeSurfaceControlMode\"b1\"ShadowFunction\"b3")) return;
+    unsigned char *entry = dlsym(RTLD_DEFAULT, "_ZN10CHAL_INTEL11ChalContext18PatchSamplerObjectEPKNS_20tagArgumentPatchInfoERK16"
+                                               "sSamplerArgumentPNS_20tagCHALCommandPacketEPK16sTextureArgument");
+    if (!entry || memcmp(entry, kExpected, sizeof kExpected)) return;
+    igSamplerStateIvarOffset = ivar_getOffset(state);
+    origPatchSamplerObject = (PatchSamplerObjectFn)hookStandardPrologue(entry, (void *)computePatchSamplerObject);
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] compute sampler compare functions: %s\n", origPatchSamplerObject ? "hooked" : "hook failed");
+}
+
 // 39. A texture view that starts at mip level L carries two surface states: the sampler's (min LOD L) and, for writes,
 // a render-target one, where the LOD field is L and the min LOD 0. Typed writes use the LOD field; the sampler's
 // resinfo (get_width / get_height) uses the min LOD. In fragment functions the driver binds the render-target state
 // for writable 2D-array views, so their size queries returned level 0's size (WebGPU CTS textureDimensions storage:
 // write, 2d-array, base level 1-2, every format: 40 cases; compute functions and 2D views got the sampler's). The
 // render-target state's min LOD is set to its LOD, which only the sampler reads. MTLSHIM_TARGET_MIN_LOD=0 turns it off.
-// Test: s45.
+// Test: s45. The same goes for the layer count of a 2D-array view whose first layer isn't 0: the render-target state
+// keeps the whole texture's Depth (array size - 1; the sampler's has the view's, with Minimum Array Element as the offset),
+// so get_array_size() on such a writable view in a fragment function returned the texture's layer count (WebGPU CTS
+// textureNumLayers storage, write, partial views: 40 cases). The sampler's Depth is copied in; typed writes still land at
+// Minimum Array Element + index (they don't bound-check against Depth). MTLSHIM_TARGET_DEPTH=0 turns that off. Test: s49.
 static void targetMinLod(id self) {
     static int enabled = -1;
     if (enabled < 0) { const char *setting = getenv("MTLSHIM_TARGET_MIN_LOD"); enabled = !(setting && !strcmp(setting, "0")); }
@@ -1141,10 +1210,21 @@ static void targetMinLod(id self) {
     *dword5 |= lod << 4;
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] render-target surface state of a view at level %u: min LOD %u\n", lod, lod);
 }
+static void targetDepth(id self) {
+    static int enabled = -1;
+    if (enabled < 0) { const char *setting = getenv("MTLSHIM_TARGET_DEPTH"); enabled = !(setting && !strcmp(setting, "0")); }
+    if (!enabled) return;
+    uint32_t *sampler = (uint32_t *)((uint8_t *)(__bridge void *)self + igSurfaceStateOffset), *target = sampler + 8;
+    uint32_t samplerDepth = sampler[3] >> 21, targetDepth = target[3] >> 21, minimumElement = (sampler[4] >> 18) & 0x7ff;
+    if (!minimumElement || targetDepth <= samplerDepth || (sampler[0] >> 29) != 1 /* SURFTYPE_2D */) return;
+    target[3] = (target[3] & 0x1fffff) | (samplerDepth << 21);
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] render-target surface state of a view from layer %u: depth %u\n", minimumElement, samplerDepth);
+}
 
 static void igInitSurfaceState(id self, SEL _cmd) {
     origIGInitSurfaceState(self, _cmd);
     targetMinLod(self);  // item 39
+    targetDepth(self);
     MTLPixelFormat f = ((id<MTLTexture>)self).pixelFormat;
     if (f != MTLPixelFormatX32_Stencil8 && f != MTLPixelFormatX24_Stencil8) return;
     uint32_t *dword0 = (uint32_t *)((uint8_t *)(__bridge void *)self + igSurfaceStateOffset);
@@ -1709,7 +1789,9 @@ static void nilArgumentBuffers(void) {
 // spans a face edge), so samplers whose min and mag filters are nearest get the programmed (clamped) addressing. The
 // WebGL suite uploads such faces from canvases and ImageData (integer-cubemap-texture-sampling, tex-2d-*ui-*_integer-*:
 // about 2400 failures in Chrome and Safari). A nearest gather's 2x2 footprint does span face edges, so the Intel adapter
-// gives cube gathers a linear constexpr sampler, which this leaves seamless (i20). MTLSHIM_NEAREST_CUBE_CLAMP=0 turns it off.
+// gives cube gathers a linear constexpr sampler, which this leaves seamless (i20). Samplers with a compare function are
+// left alone too: they only ever compare depth (and cube gather_compare at a face edge needs seamless addressing: WebGPU
+// CTS textureGatherCompare, 60 cases). MTLSHIM_NEAREST_CUBE_CLAMP=0 turns it off.
 typedef void (*InitSamplerStateIMP)(id, SEL, id);
 static InitSamplerStateIMP origIGInitSamplerState;
 static ptrdiff_t igSamplerStateOffset = -1;
@@ -1718,7 +1800,8 @@ static void igInitSamplerState(id self, SEL _cmd, id descriptor) {
     origIGInitSamplerState(self, _cmd, descriptor);
     uint32_t *state = (uint32_t *)((char *)(__bridge void *)self + igSamplerStateOffset);
     BOOL nearest = !((state[0] >> 14) & 7) && !((state[0] >> 17) & 7);  // MinModeFilter, MagModeFilter
-    if (nearest && (state[1] & 1)) {
+    BOOL compares = (state[1] >> 1) & 7;  // ShadowFunction: a comparison sampler, only ever used on depth textures
+    if (nearest && !compares && (state[1] & 1)) {
         state[1] &= ~1u;  // CubeSurfaceControlMode: programmed
         if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] nearest sampler: programmed cube addressing\n");
     }
@@ -1957,6 +2040,7 @@ static void patchDriverClasses(void) {
     mpsStatisticsWidth();
     stencilCopies();
     stencilViewAlignment();
+    computeSamplerCompare();
     // item 29, once the Intel driver is in (WebKit's processes are named by then)
     if (!origSetSampleMask && !strncmp(getprogname(), "com.apple.WebKit", 16) && definesMethod("MTLRenderPipelineDescriptorInternal", "setSampleMask:"))
         origSetSampleMask = (SetSampleMaskIMP)swizzle("MTLRenderPipelineDescriptorInternal", "setSampleMask:", (IMP)compatSetSampleMask);
