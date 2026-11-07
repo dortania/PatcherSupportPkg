@@ -52,6 +52,8 @@
 //      blendable color attachment is written through a blend that keeps it
 //  35. Metal Performance Shaders' statistics reductions (compute_final_*_statistics) dispatched with 16 threads on these
 //      Intel GPUs, which those kernels can't handle (min/max, mean and variance wrong): 32 threads
+//  36. multisampled Stencil8 textures on the 12.x Intel driver, which shaders read wrong (most of the right half reads
+//      the left half): created as Depth32Float_Stencil8, whose stencil reads right, with Stencil8 views made X32_Stencil8
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -1155,28 +1157,71 @@ static id createWithoutHiZ(id device, id (^create)(void)) {
     return texture;
 }
 
+// 36. Multisampled Stencil8 textures on the 12.x Intel driver: render passes write their stencil right, but shaders read
+// it wrong. The sampler addresses only part of the surface: past the largest power of two below the width, most rows read
+// the left half again (a 4x 256x128 texture: 14464 of 32768 texels wrong). ANGLE reads it that way to resolve or blit a
+// GL_STENCIL_INDEX8 multisampled renderbuffer (dEQP fbomultisample stencil_index8). The stencil of
+// Depth32Float_Stencil8 reads right at every size, also as a stencil-only attachment drawn with a pipeline that says
+// Stencil8, so multisampled Stencil8 textures made on the device are created as Depth32Float_Stencil8 (5 bytes a sample
+// instead of 1), and Stencil8 views of them become X32_Stencil8 views. The texture reports Depth32Float_Stencil8; ANGLE
+// then makes its stencil view from that by itself. Heap textures are left alone (the heap was sized for Stencil8).
+// MTLSHIM_MSAA_STENCIL8=0 turns it off. Test: s40.
+static MTLTextureDescriptor *sampleableStencilStandIn(MTLTextureDescriptor *descriptor) {
+    if (descriptor.pixelFormat != MTLPixelFormatStencil8 || descriptor.sampleCount <= 1) return nil;
+    const char *setting = getenv("MTLSHIM_MSAA_STENCIL8");
+    if (setting && !strcmp(setting, "0")) return nil;
+    MTLTextureDescriptor *standIn = [descriptor copy];
+    standIn.pixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+    standIn.usage |= MTLTextureUsagePixelFormatView;
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] multisampled Stencil8 texture created as Depth32Float_Stencil8\n");
+    return standIn;
+}
+static MTLPixelFormat sampleableStencilView(id texture, MTLPixelFormat format) {
+    if (format != MTLPixelFormatStencil8) return format;
+    id<MTLTexture> t = texture;
+    return t.pixelFormat == MTLPixelFormatDepth32Float_Stencil8 && t.sampleCount > 1 ? MTLPixelFormatX32_Stencil8 : format;
+}
+
 static id igNewTexture(id self, SEL _cmd, MTLTextureDescriptor *descriptor) {
-    if (!needsNoHiZ(descriptor)) return origIGNewTexture(self, _cmd, descriptor);
+    MTLTextureDescriptor *standIn = sampleableStencilStandIn(descriptor);
+    if (standIn) return origIGNewTexture(self, _cmd, standIn);
+    if (!igHizDisableOffset || !needsNoHiZ(descriptor)) return origIGNewTexture(self, _cmd, descriptor);
     return createWithoutHiZ(self, ^{ return origIGNewTexture(self, _cmd, descriptor); });
 }
 
 static id igHeapNewTexture(id self, SEL _cmd, MTLTextureDescriptor *descriptor) {
     id device = [(id<MTLHeap>)self device];
-    if (!needsNoHiZ(descriptor) || ![device isKindOfClass:objc_getClass("MTLIGAccelDevice")])
+    if (!igHizDisableOffset || !needsNoHiZ(descriptor) || ![device isKindOfClass:objc_getClass("MTLIGAccelDevice")])
         return origIGHeapNewTexture(self, _cmd, descriptor);
     return createWithoutHiZ(device, ^{ return origIGHeapNewTexture(self, _cmd, descriptor); });
 }
 
+// Items 22 and 36 (texture creation); 36's views below.
+typedef id (*NewViewIMP)(id, SEL, MTLPixelFormat);
+typedef id (*NewViewRangeIMP)(id, SEL, MTLPixelFormat, MTLTextureType, NSRange, NSRange);
+static NewViewIMP origIGNewView;
+static NewViewRangeIMP origIGNewViewRange;
+static id igNewView(id self, SEL _cmd, MTLPixelFormat format) {
+    return origIGNewView(self, _cmd, sampleableStencilView(self, format));
+}
+static id igNewViewRange(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices) {
+    return origIGNewViewRange(self, _cmd, sampleableStencilView(self, format), type, levels, slices);
+}
 static void intelDepthWithoutHiZ(void) {
     Class device = objc_getClass("MTLIGAccelDevice");
     Ivar hiz = device ? class_getInstanceVariable(device, "bHizDisable") : NULL;
-    if (origIGNewTexture || !hiz || strcmp(ivar_getTypeEncoding(hiz), "B") ||
-        !definesMethod("MTLIGAccelDevice", "newTextureWithDescriptor:"))
-        return;
-    igHizDisableOffset = ivar_getOffset(hiz);
+    if (origIGNewTexture || !definesMethod("MTLIGAccelDevice", "newTextureWithDescriptor:")) return;
+    if (hiz && !strcmp(ivar_getTypeEncoding(hiz), "B")) igHizDisableOffset = ivar_getOffset(hiz);
     origIGNewTexture = (NewTextureIMP)swizzle("MTLIGAccelDevice", "newTextureWithDescriptor:", (IMP)igNewTexture);
-    if (definesMethod("MTLIGAccelHeap", "newTextureWithDescriptor:"))
+    if (igHizDisableOffset && definesMethod("MTLIGAccelHeap", "newTextureWithDescriptor:"))
         origIGHeapNewTexture = (NewTextureIMP)swizzle("MTLIGAccelHeap", "newTextureWithDescriptor:", (IMP)igHeapNewTexture);
+    if (definesMethod("MTLIGAccelTexture", "newTextureViewWithPixelFormat:"))
+        origIGNewView = (NewViewIMP)swizzle("MTLIGAccelTexture", "newTextureViewWithPixelFormat:", (IMP)igNewView);
+    if (definesMethod("MTLIGAccelTexture", "newTextureViewWithPixelFormat:textureType:levels:slices:"))
+        origIGNewViewRange = (NewViewRangeIMP)swizzle("MTLIGAccelTexture", "newTextureViewWithPixelFormat:textureType:levels:slices:", (IMP)igNewViewRange);
+    if (getenv("MTLSHIM_VERBOSE"))
+        shimLog("[mtlshim] Intel textures: HiZ fix %s, multisampled Stencil8 stand-in on, views %s/%s\n", igHizDisableOffset ? "on" : "off",
+                origIGNewView ? "on" : "off", origIGNewViewRange ? "on" : "off");
 }
 
 static BOOL definesMethod(const char *cls, const char *sel);
@@ -1619,6 +1664,7 @@ static BOOL swizzleIs(MTLTextureSwizzleChannels s, MTLTextureSwizzle r, MTLTextu
     return s.red == r && s.green == g && s.blue == b && s.alpha == a;
 }
 static id igSwizzleView(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices, MTLTextureSwizzleChannels swizzle) {
+    format = sampleableStencilView(self, format);  // item 36
     id view = origIGSwizzleView(self, _cmd, format, type, levels, slices, swizzle);
     if (view) return view;
     int channels = channelCount(format);

@@ -71,7 +71,7 @@ s08-sdk-properties:shim s09-msl-3.2:bronzeshim s10-device-over-release:shim s12-
 s14-safari-argument-encoders:shim s15a-intel-msaa-resolve:shim s15b-intel-narrow-clear:shim s16-intel-array-view:shim
 s17-amd-depth-stencil-view:bronzestencil s18-pipeline-cache-key:shim s19-amd-trilinear-blend:trilinear s25-amd-srgb-resolve:bronze s26-amd-depth-stencil-copy-pitch:bronze s29-amd-webkit-vertex-stride:bronze s30-amd-webkit-sample-mask:bronzeshim
 s20-intel-fill-buffer:shim s21-intel-depth-only-pipeline:shim s22-intel-depth-hiz-levels:shim s23-intel-3d-mip-plane:shim
-s24-intel-narrow-mip-clear:shim s31-angle-family-one:shim s32-intel-depth-stencil-blit:shim s33-intel-nil-argument-buffer:shim s34-intel-small-integer-cube:shim s35-intel-encoder-lod-clamp:shim s36-intel-swizzle-view:shim s37-intel-stencil-subresources:shim s38-intel-coverage-without-writes:shim s39-intel-mps-statistics:shim a01-texture-atomics:adapter
+s24-intel-narrow-mip-clear:shim s31-angle-family-one:shim s32-intel-depth-stencil-blit:shim s33-intel-nil-argument-buffer:shim s34-intel-small-integer-cube:shim s35-intel-encoder-lod-clamp:shim s36-intel-swizzle-view:shim s37-intel-stencil-subresources:shim s38-intel-coverage-without-writes:shim s39-intel-mps-statistics:shim s40-intel-msaa-stencil8-read:shim a01-texture-atomics:adapter
 a01-texture-atomics@Intel:adapter a02-si-smrd-hazard:smrd a04-si-threadgroup-pointer:ldsbase
 a05-escaped-texture-pointer:handle a05-escaped-texture-pointer@Intel:handle a06-fast-math-nan-compare:nan a07-half-ldexp:ldexp a08-integer-gather:gather a09-cube-array-index:cubearray a10-threadgroup-bool:ldsbool a11-msaa-shader-read:fmask
 c01-amdil-argument-buffer:stock c02-amdil-color-input:stock c03-amdil-gep-select:patch3 c04-amdil-struct-type-map:patch4
