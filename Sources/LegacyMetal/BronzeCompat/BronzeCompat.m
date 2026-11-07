@@ -13,9 +13,11 @@
 //   7. WebKit's sample mask of 0 (the driver draws every sample)
 //   8. memoryless textures (only Apple GPUs have them, and Metal's texture validation aborts the process)
 //   9. MSL 3.2 device coherence on buffers (the driver's compiler fails the pipeline: MoltenVK's coherent buffers)
+//  10. depth of mipmapped depth-stencil textures read by shaders (small levels come from the wrong place)
 // 1 and 2 come from riptidewave93's bronzefix, found and tested on Tahoe with a MacPro6,1's FirePro D700s.
 // AMD_BRONZE_COMPAT=0 turns everything off for a process, AMD_EXACT_TRILINEAR=0 only item 3,
-// AMD_BRONZE_SRGB_RESOLVE=0 only item 4, AMD_BRONZE_MEMORYLESS=0 only item 8; AMD_BRONZE_VERBOSE=1 logs.
+// AMD_BRONZE_SRGB_RESOLVE=0 only item 4, AMD_BRONZE_MEMORYLESS=0 only item 8, AMD_BRONZE_DEPTH_MIPS=0 only item 10;
+// AMD_BRONZE_VERBOSE=1 logs.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <objc/message.h>
@@ -23,7 +25,9 @@
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
+#include <mach/mach.h>
 #include <os/lock.h>
+#include <sys/mman.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -463,17 +467,25 @@ static void installWebKitFixes(void) {
 // newTextureWithDescriptor: is hooked: heap, buffer and IOSurface textures take their storage from what backs them. Test: s27.
 typedef void *(*NewTextureIMP)(void *, SEL, void *);
 static NewTextureIMP origNewTexture;
+static BOOL memorylessFix;
+static BOOL needsDepthMipLayout(MTLTextureDescriptor *descriptor);
+static __thread BOOL creatingDepthMips;  // item 10
 
 static void *newTexture(void *self, SEL _cmd, void *descriptor) {
     MTLTextureDescriptor *requested = (__bridge MTLTextureDescriptor *)descriptor;
-    if (requested.storageMode != MTLStorageModeMemoryless) return origNewTexture(self, _cmd, descriptor);
-    MTLTextureDescriptor *copy = [requested copy];
-    copy.storageMode = MTLStorageModePrivate;
-    if (verbose()) fprintf(stderr, "[bronzecompat] memoryless texture made private\n");
-    return origNewTexture(self, _cmd, (__bridge void *)copy);
+    if (memorylessFix && requested.storageMode == MTLStorageModeMemoryless) {
+        requested = [requested copy];
+        requested.storageMode = MTLStorageModePrivate;
+        if (verbose()) fprintf(stderr, "[bronzecompat] memoryless texture made private\n");
+    }
+    BOOL outer = creatingDepthMips;
+    creatingDepthMips = needsDepthMipLayout(requested);
+    void *texture = origNewTexture(self, _cmd, (__bridge void *)requested);
+    creatingDepthMips = outer;
+    return texture;
 }
 
-static void installMemorylessFix(void) {
+static void installNewTextureHook(void) {
     origNewTexture = (NewTextureIMP)swizzle(objc_getClass("BronzeMtlDevice"), @selector(newTextureWithDescriptor:), (IMP)newTexture);
 }
 
@@ -524,6 +536,81 @@ static BOOL installCoherenceFix(void) {
            class_addMethod(device, @selector(newLibraryWithSource:options:completionHandler:), (IMP)newLibraryAsync, "v@:@@@?");
 }
 
+// ---- 10. Depth of mipmapped depth-stencil textures read by shaders ------------------------------------------------
+// For the depth plane of Depth24Unorm_Stencil8 and Depth32Float_Stencil8 the driver asks AMD's addrlib
+// (AddrComputeSurfaceInfo) for a layout with a separate stencil plane (noStencil off). addrlib then pads the pitch of small
+// levels to what the stencil plane needs, since the depth unit addresses both planes with one pitch, and warns in its own
+// source that "this actually does not work for mipmap". The texture unit doesn't know about the padding, so shaders read
+// the depth of levels 4 or fewer texels wide (and 8x1, 8x2, 8x4, 8x16) from the wrong place: in WebGL, depth24_stencil8
+// shadow lookups and texture storage checks (dEQP textureshadow, texstorage*_format_depth_stencil). Render passes and
+// blits agree with each other, so only shader reads show it. radeonsi does what this does: mipmapped depth-stencil
+// surfaces get their depth plane without the padding ("Keep the depth mip-tail compatible with texturing", Mesa's
+// ac_surface.c), here for textures made with ShaderRead usage through newTextureWithDescriptor:.
+// What's left, as in radeonsi: at levels 16 tall and 8 or fewer wide the stencil plane needs a larger pitch than the depth
+// plane now has, and the depth unit uses the depth plane's, so stencil written by render passes there reads back
+// differently through blits and shaders (radeonsi copies stencil through the depth unit; WebGL never reads stencil back).
+// The driver calls AddrComputeSurfaceInfo directly, so its entry is patched, after checking its first instructions (the
+// same in every copy of the driver), to run the depth-plane call with noStencil set while such a texture is made.
+// AMD_BRONZE_DEPTH_MIPS=0 turns it off. Test: s44.
+typedef int (*AddrComputeSurfaceInfoFn)(void *, const void *, void *);
+static AddrComputeSurfaceInfoFn origAddrComputeSurfaceInfo;  // a copy of the patched entry instructions, then a jump back
+
+// ADDR_COMPUTE_SURFACE_INFO_INPUT (addrinterface.h): the fields used here.
+enum { kAddrInputSize = 0x58, kAddrInputSamples = 0x10, kAddrInputFlags = 0x2c };
+enum { kAddrFlagDepth = 1u << 1, kAddrFlagNoStencil = 1u << 10 };
+
+static BOOL needsDepthMipLayout(MTLTextureDescriptor *descriptor) {
+    MTLPixelFormat format = descriptor.pixelFormat;
+    return origAddrComputeSurfaceInfo && descriptor.mipmapLevelCount > 1 && descriptor.sampleCount <= 1 &&
+           (descriptor.usage & MTLTextureUsageShaderRead) &&
+           (format == MTLPixelFormatDepth24Unorm_Stencil8 || format == MTLPixelFormatDepth32Float_Stencil8);
+}
+
+static int addrComputeSurfaceInfo(void *lib, const void *in, void *out) {
+    uint32_t size, flags, samples;
+    if (creatingDepthMips && in) {
+        memcpy(&size, in, 4);
+        memcpy(&flags, (const char *)in + kAddrInputFlags, 4);
+        memcpy(&samples, (const char *)in + kAddrInputSamples, 4);
+        if (size == kAddrInputSize && (flags & kAddrFlagDepth) && !(flags & kAddrFlagNoStencil) && samples <= 1) {
+            char input[kAddrInputSize];
+            memcpy(input, in, sizeof input);
+            flags |= kAddrFlagNoStencil;
+            memcpy(input + kAddrInputFlags, &flags, 4);
+            return origAddrComputeSurfaceInfo(lib, input, out);
+        }
+    }
+    return origAddrComputeSurfaceInfo(lib, in, out);
+}
+
+// push rbp; mov rbp, rsp; push r14; push rbx; mov r14, rdx; mov rbx, rsi: nothing in them depends on where they run.
+static const uint8_t kAddrPrologue[] = {0x55, 0x48, 0x89, 0xe5, 0x41, 0x56, 0x53, 0x49, 0x89, 0xd6, 0x48, 0x89, 0xf3};
+
+static uint8_t *emitJump(uint8_t *p, const void *target) {  // mov rax, target; jmp rax
+    p[0] = 0x48, p[1] = 0xb8;
+    memcpy(p + 2, &target, 8);
+    p[10] = 0xff, p[11] = 0xe0;
+    return p + 12;
+}
+
+static void installDepthMipFix(const char *driverPath) {
+    void *driver = dlopen(driverPath, RTLD_NOLOAD | RTLD_LAZY);
+    uint8_t *entry = driver ? dlsym(driver, "AddrComputeSurfaceInfo") : NULL;
+    if (!entry || memcmp(entry, kAddrPrologue, sizeof kAddrPrologue)) return;
+    uint8_t *trampoline = mmap(NULL, vm_page_size, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
+    if (trampoline == MAP_FAILED) return;
+    memcpy(trampoline, kAddrPrologue, sizeof kAddrPrologue);
+    emitJump(trampoline + sizeof kAddrPrologue, entry + sizeof kAddrPrologue);
+    if (mprotect(trampoline, vm_page_size, PROT_READ | PROT_EXEC)) return;
+    vm_address_t page = (vm_address_t)entry & ~(vm_address_t)(vm_page_size - 1);
+    if (vm_protect(mach_task_self(), page, vm_page_size * 2, false, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY)) return;
+    origAddrComputeSurfaceInfo = (AddrComputeSurfaceInfoFn)trampoline;
+    uint8_t patch[12];
+    emitJump(patch, (const void *)addrComputeSurfaceInfo);
+    memcpy(entry, patch, sizeof patch);
+    vm_protect(mach_task_self(), page, vm_page_size * 2, false, VM_PROT_READ | VM_PROT_EXECUTE);
+}
+
 // This library is a dependency of the driver, so its initializer runs after the driver is mapped and its classes are
 // registered with the ObjC runtime, but before any driver code runs. No driver loaded: nothing to do.
 __attribute__((constructor)) static void init(void) {
@@ -538,14 +625,17 @@ __attribute__((constructor)) static void init(void) {
         installRenderPassHooks();
         installCopyFix();
         installWebKitFixes();
-        if (!disabled("AMD_BRONZE_MEMORYLESS")) installMemorylessFix();
+        memorylessFix = !disabled("AMD_BRONZE_MEMORYLESS");
+        if (!disabled("AMD_BRONZE_DEPTH_MIPS")) installDepthMipFix(name);
+        installNewTextureHook();
         if (!disabled("AMD_EXACT_TRILINEAR")) installTrilinearFix(name);
         BOOL coherence = installCoherenceFix();
         if (verbose()) fprintf(stderr, "[bronzecompat] view fix %s, sRGB mipmaps %s, trilinear %s, sRGB resolve %s, copy pitch %s, memoryless %s, "
-                               "device coherence %s\n",
+                               "device coherence %s, depth mips %s\n",
                                origViewInit ? "on" : "off", origGenerateMipmaps ? "on" : "off", origSamplerInit ? "on" : "off",
-                               origRenderEndEncoding ? "on" : "off", origCopyToBuffer ? "on" : "off", origNewTexture ? "on" : "off",
-                               coherence ? "on" : "off");
+                               origRenderEndEncoding ? "on" : "off", origCopyToBuffer ? "on" : "off",
+                               origNewTexture && memorylessFix ? "on" : "off", coherence ? "on" : "off",
+                               origNewTexture && origAddrComputeSurfaceInfo ? "on" : "off");
         return;
     }
 }
