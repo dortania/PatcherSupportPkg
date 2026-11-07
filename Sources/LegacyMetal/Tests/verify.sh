@@ -51,7 +51,9 @@ unset MTL_USE_AIRNT_BA
 V=  # the AMDShared copy: "" (12.5) or -GCN-25
 case ${PAYLOAD:-12.5} in 12.5) ;; 12.5-GCN-25) V=-GCN-25 ;; *) echo "PAYLOAD: 12.5 or 12.5-GCN-25" >&2; exit 2 ;; esac
 FIXED=$(mktemp -d) NOADAPTER=$(mktemp -d) STOCK=$(mktemp -d) PATCH3=$(mktemp -d) PATCH4=$(mktemp -d)
-cp "$B/AMDTextureAtomics.dylib" "$B/IntelTextureAtomics.dylib" "$B/libMTLIntelCompilerPlugin.dylib" "$FIXED/"
+# AMDBronzeCompat goes in the library folders too: where it is installed, the driver loads it by leaf name from there
+# instead of the installed copy, which would otherwise take the driver code first.
+cp "$B/AMDTextureAtomics.dylib" "$B/IntelTextureAtomics.dylib" "$B/libMTLIntelCompilerPlugin.dylib" "$B/AMDBronzeCompat.dylib" "$FIXED/"
 cp "$B/AMDShared$V" "$FIXED/AMDShared"
 cp "$B/libAMDIL902$V.dylib" "$FIXED/libAMDIL902.dylib"
 for d in "$NOADAPTER" "$STOCK" "$PATCH3" "$PATCH4"; do cp "$FIXED"/* "$d/"; done
@@ -101,7 +103,7 @@ run() {  # <test[@gpu]> <removed fix or "fixed">
     local inserted
     inserted=$(printf '%s\n' "$shim" "$cc" "$inject" | grep . | paste -sd: -)
     rm -rf "$(getconf DARWIN_USER_CACHE_DIR)com.apple.metal"
-    env ${env[@]+"${env[@]}"} AMD_BRONZE_COMPAT_PATH=$B/AMDBronzeCompat.dylib \
+    env ${env[@]+"${env[@]}"} AMD_BRONZE_COMPAT_PATH=$libs/AMDBronzeCompat.dylib \
         DYLD_INSERT_LIBRARIES=$inserted DYLD_LIBRARY_PATH=$libs ./build/"$t" ${gpu:+"$gpu"} 2>/dev/null |
         grep -E '^(PASS|FAIL|SKIP) ' | tail -1
 }

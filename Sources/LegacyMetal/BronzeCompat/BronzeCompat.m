@@ -338,11 +338,17 @@ static void installTrilinearFix(const char *driverPath) {
 typedef id (*RenderEncoderIMP)(id, SEL, MTLRenderPassDescriptor *);
 static RenderEncoderIMP origRenderEncoder;
 static EndEncodingIMP origRenderEndEncoding;
+static BOOL srgbResolveFix;
 static const void *kPendingResolves = &kPendingResolves, *kResolveCommandBuffer = &kResolveCommandBuffer;
+static MTLRenderPassDescriptor *routeDepthMipStencil(id<MTLCommandBuffer> commandBuffer, MTLRenderPassDescriptor *descriptor,
+                                                     NSArray **route);  // item 10
+static void finishDepthMipRoute(id<MTLCommandBuffer> commandBuffer, NSArray *route);
+static const void *kDepthMipRoute = &kDepthMipRoute;
+static BOOL depthMipFixInstalled(void);  // item 10
 
 static MTLRenderPassDescriptor *takeSrgbResolves(MTLRenderPassDescriptor *descriptor, NSMutableArray **resolves) {
     MTLRenderPassDescriptor *rewritten = nil;
-    for (NSUInteger i = 0; origRenderEndEncoding && i < 8; i++) {
+    for (NSUInteger i = 0; srgbResolveFix && i < 8; i++) {
         MTLRenderPassColorAttachmentDescriptor *attachment = descriptor.colorAttachments[i];
         id<MTLTexture> texture = attachment.texture;
         MTLPixelFormat f = texture.pixelFormat;
@@ -365,10 +371,13 @@ static MTLRenderPassDescriptor *takeSrgbResolves(MTLRenderPassDescriptor *descri
 
 static id renderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor) {
     NSMutableArray *resolves = nil;
+    NSArray *route = nil;
     MTLRenderPassDescriptor *fixed = takeSrgbResolves(stencilViewToParent(descriptor), &resolves);
+    fixed = routeDepthMipStencil(self, fixed, &route);
     id encoder = origRenderEncoder(self, _cmd, fixed);
-    if (encoder && resolves) {
+    if (encoder && (resolves || route)) {
         objc_setAssociatedObject(encoder, kPendingResolves, resolves, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(encoder, kDepthMipRoute, route, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(encoder, kResolveCommandBuffer, self, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     return encoder;
@@ -376,11 +385,15 @@ static id renderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor) 
 
 static void renderEndEncoding(id self, SEL _cmd) {
     NSArray *resolves = objc_getAssociatedObject(self, kPendingResolves);
+    NSArray *route = objc_getAssociatedObject(self, kDepthMipRoute);
     id<MTLCommandBuffer> commandBuffer = objc_getAssociatedObject(self, kResolveCommandBuffer);
     origRenderEndEncoding(self, _cmd);
-    if (!resolves) return;
+    if (!resolves && !route) return;
     objc_setAssociatedObject(self, kPendingResolves, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, kDepthMipRoute, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, kResolveCommandBuffer, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (route) finishDepthMipRoute(commandBuffer, route);
+    if (!resolves) return;
     if (verbose()) fprintf(stderr, "[bronzecompat] %lu sRGB attachment(s) resolved in a shader\n", (unsigned long)resolves.count);
     for (MTLRenderPassColorAttachmentDescriptor *attachment in resolves) {
         MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -401,8 +414,10 @@ static void renderEndEncoding(id self, SEL _cmd) {
 static void installRenderPassHooks(void) {
     Class commandBuffer = objc_getClass("BronzeMtlCmdBuffer"), encoder = objc_getClass("BronzeMtlRenderCmdEncoder");
     if (!definesMethod(commandBuffer, @selector(renderCommandEncoderWithDescriptor:))) return;
-    if (definesMethod(encoder, @selector(endEncoding)) && !disabled("AMD_BRONZE_SRGB_RESOLVE"))
+    BOOL srgbResolve = !disabled("AMD_BRONZE_SRGB_RESOLVE");
+    if (definesMethod(encoder, @selector(endEncoding)) && (srgbResolve || depthMipFixInstalled()))
         origRenderEndEncoding = (EndEncodingIMP)swizzle(encoder, @selector(endEncoding), (IMP)renderEndEncoding);
+    srgbResolveFix = srgbResolve && origRenderEndEncoding;
     if (origViewInit || origRenderEndEncoding)
         origRenderEncoder = (RenderEncoderIMP)swizzle(commandBuffer, @selector(renderCommandEncoderWithDescriptor:), (IMP)renderEncoder);
 }
@@ -470,6 +485,8 @@ static NewTextureIMP origNewTexture;
 static BOOL memorylessFix;
 static BOOL needsDepthMipLayout(MTLTextureDescriptor *descriptor);
 static __thread BOOL creatingDepthMips;  // item 10
+static __thread uint32_t changedDepthLevels;  // item 10: levels whose depth plane lost the stencil padding
+static void markDepthMipTexture(void *texture, uint32_t levels);
 
 static void *newTexture(void *self, SEL _cmd, void *descriptor) {
     MTLTextureDescriptor *requested = (__bridge MTLTextureDescriptor *)descriptor;
@@ -479,9 +496,13 @@ static void *newTexture(void *self, SEL _cmd, void *descriptor) {
         if (verbose()) fprintf(stderr, "[bronzecompat] memoryless texture made private\n");
     }
     BOOL outer = creatingDepthMips;
+    uint32_t outerLevels = changedDepthLevels;
     creatingDepthMips = needsDepthMipLayout(requested);
+    changedDepthLevels = 0;
     void *texture = origNewTexture(self, _cmd, (__bridge void *)requested);
+    if (texture && creatingDepthMips && changedDepthLevels) markDepthMipTexture(texture, changedDepthLevels);
     creatingDepthMips = outer;
+    changedDepthLevels = outerLevels;
     return texture;
 }
 
@@ -558,6 +579,9 @@ static AddrComputeSurfaceInfoFn origAddrComputeSurfaceInfo;  // a copy of the pa
 // ADDR_COMPUTE_SURFACE_INFO_INPUT (addrinterface.h): the fields used here.
 enum { kAddrInputSize = 0x58, kAddrInputSamples = 0x10, kAddrInputFlags = 0x2c };
 enum { kAddrFlagDepth = 1u << 1, kAddrFlagNoStencil = 1u << 10 };
+enum { kAddrInputMipLevel = 0x24 };
+// ADDR_COMPUTE_SURFACE_INFO_OUTPUT: size u32 @0, pitch @4, height @8.
+enum { kAddrOutputPitch = 4, kAddrOutputHeight = 8, kAddrOutputMaxSize = 512 };
 
 static BOOL needsDepthMipLayout(MTLTextureDescriptor *descriptor) {
     MTLPixelFormat format = descriptor.pixelFormat;
@@ -573,14 +597,120 @@ static int addrComputeSurfaceInfo(void *lib, const void *in, void *out) {
         memcpy(&flags, (const char *)in + kAddrInputFlags, 4);
         memcpy(&samples, (const char *)in + kAddrInputSamples, 4);
         if (size == kAddrInputSize && (flags & kAddrFlagDepth) && !(flags & kAddrFlagNoStencil) && samples <= 1) {
+            // The padded layout first, to know whether this level changes (see the routing below).
+            uint32_t outSize, level, padded[2], plain[2];
+            memcpy(&outSize, out, 4);
+            memcpy(&level, (const char *)in + kAddrInputMipLevel, 4);
+            char scratch[kAddrOutputMaxSize];
+            BOOL compared = outSize >= kAddrOutputHeight + 4 && outSize <= sizeof scratch;
+            if (compared) {
+                memcpy(scratch, out, outSize);
+                if (origAddrComputeSurfaceInfo(lib, in, scratch)) compared = NO;
+                memcpy(padded, scratch + kAddrOutputPitch, 8);
+            }
             char input[kAddrInputSize];
             memcpy(input, in, sizeof input);
             flags |= kAddrFlagNoStencil;
             memcpy(input + kAddrInputFlags, &flags, 4);
-            return origAddrComputeSurfaceInfo(lib, input, out);
+            int result = origAddrComputeSurfaceInfo(lib, input, out);
+            memcpy(plain, (const char *)out + kAddrOutputPitch, 8);
+            if (!result && level < 32 && (!compared || memcmp(padded, plain, 8))) changedDepthLevels |= 1u << level;
+            return result;
         }
     }
     return origAddrComputeSurfaceInfo(lib, in, out);
+}
+
+// What the depth unit can't follow: it addresses the stencil plane with the depth plane's pitch and slice size, which
+// match only while the depth plane keeps the padding. On a level that lost it, render passes would read and write
+// stencil away from where blits and shaders have it (stencil tests against blitted stencil fail, from the first slice
+// after 0, and at some levels already on slice 0). radeonsi works around the same thing by copying stencil through the
+// depth unit; here a render pass whose stencil attachment is such a level goes through a one-level 2D texture of the same
+// format: the subresource's depth and stencil are copied in (if the pass loads them), the pass renders there, and they are
+// copied back when the encoder ends (if the pass stores them), each way through buffers, which use the stencil plane's own
+// layout, as shaders do.
+// Parallel render encoders aren't routed.
+static const void *kDepthMipLevels = &kDepthMipLevels;
+
+static BOOL depthMipFixInstalled(void) { return origAddrComputeSurfaceInfo != NULL; }
+
+static void markDepthMipTexture(void *texture, uint32_t levels) {
+    objc_setAssociatedObject((__bridge id)texture, kDepthMipLevels, @(levels), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+// Depth and stencil of one subresource into another, through buffers: a texture-to-texture copy writes depth-stencil
+// through the depth unit, which on such a level doesn't put stencil where blits and shaders read it. Two encoders, so the
+// copies into the buffers are done before the copies out of them.
+static void copyDepthStencil(id<MTLCommandBuffer> commandBuffer, id<MTLTexture> from, NSUInteger fromLevel, NSUInteger fromSlice,
+                             id<MTLTexture> to, NSUInteger toLevel, NSUInteger toSlice, MTLSize size) {
+    NSUInteger pixels = size.width * size.height;
+    id<MTLBuffer> depth = [from.device newBufferWithLength:pixels * 4 options:MTLResourceStorageModePrivate];
+    id<MTLBuffer> stencil = [from.device newBufferWithLength:pixels options:MTLResourceStorageModePrivate];
+    MTLOrigin zero = MTLOriginMake(0, 0, 0);
+    id<MTLBlitCommandEncoder> blit = [commandBuffer blitCommandEncoder];
+    [blit copyFromTexture:from sourceSlice:fromSlice sourceLevel:fromLevel sourceOrigin:zero sourceSize:size toBuffer:depth destinationOffset:0
+        destinationBytesPerRow:size.width * 4 destinationBytesPerImage:pixels * 4 options:MTLBlitOptionDepthFromDepthStencil];
+    [blit copyFromTexture:from sourceSlice:fromSlice sourceLevel:fromLevel sourceOrigin:zero sourceSize:size toBuffer:stencil destinationOffset:0
+        destinationBytesPerRow:size.width destinationBytesPerImage:pixels options:MTLBlitOptionStencilFromDepthStencil];
+    [blit endEncoding];
+    blit = [commandBuffer blitCommandEncoder];
+    [blit copyFromBuffer:depth sourceOffset:0 sourceBytesPerRow:size.width * 4 sourceBytesPerImage:pixels * 4 sourceSize:size toTexture:to
+        destinationSlice:toSlice destinationLevel:toLevel destinationOrigin:zero options:MTLBlitOptionDepthFromDepthStencil];
+    [blit copyFromBuffer:stencil sourceOffset:0 sourceBytesPerRow:size.width sourceBytesPerImage:pixels sourceSize:size toTexture:to
+        destinationSlice:toSlice destinationLevel:toLevel destinationOrigin:zero options:MTLBlitOptionStencilFromDepthStencil];
+    [blit endEncoding];
+}
+
+// route: @[temporary, texture, level, slice, size (NSValue of MTLSize), copy back]
+static MTLRenderPassDescriptor *routeDepthMipStencil(id<MTLCommandBuffer> commandBuffer, MTLRenderPassDescriptor *descriptor,
+                                                     NSArray **route) {
+    MTLRenderPassStencilAttachmentDescriptor *stencil = descriptor.stencilAttachment;
+    id<MTLTexture> texture = stencil.texture;
+    if (!origAddrComputeSurfaceInfo || !texture) return descriptor;
+    NSUInteger level = stencil.level, slice = stencil.slice;
+    while (texture.parentTexture) {  // views: the texture that owns the layout
+        level += texture.parentRelativeLevel;
+        slice += texture.parentRelativeSlice;
+        texture = texture.parentTexture;
+    }
+    NSNumber *levels = objc_getAssociatedObject(texture, kDepthMipLevels);
+    if (!levels || level >= 32 || !(levels.unsignedIntValue & 1u << level)) return descriptor;
+    MTLRenderPassDepthAttachmentDescriptor *depth = descriptor.depthAttachment;
+    id<MTLTexture> depthTexture = depth.texture;
+    if (depthTexture && (depthTexture != stencil.texture || depth.level != stencil.level || depth.slice != stencil.slice))
+        return descriptor;  // depth from somewhere else: leave the pass as it is
+    MTLSize size = MTLSizeMake(MAX(texture.width >> level, 1), MAX(texture.height >> level, 1), 1);
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:texture.pixelFormat width:size.width
+                                                                                height:size.height mipmapped:NO];
+    td.storageMode = MTLStorageModePrivate;
+    td.usage = MTLTextureUsageRenderTarget;
+    id<MTLTexture> temporary = [texture.device newTextureWithDescriptor:td];
+    if (!temporary) return descriptor;
+    BOOL load = stencil.loadAction == MTLLoadActionLoad || (depthTexture && depth.loadAction == MTLLoadActionLoad);
+    BOOL store = stencil.storeAction != MTLStoreActionDontCare || (depthTexture && depth.storeAction != MTLStoreActionDontCare);
+    if (load) copyDepthStencil(commandBuffer, texture, level, slice, temporary, 0, 0, size);
+    MTLRenderPassDescriptor *rewritten = [descriptor copy];
+    rewritten.stencilAttachment.texture = temporary;
+    rewritten.stencilAttachment.level = 0;
+    rewritten.stencilAttachment.slice = 0;
+    if (depthTexture) {
+        rewritten.depthAttachment.texture = temporary;
+        rewritten.depthAttachment.level = 0;
+        rewritten.depthAttachment.slice = 0;
+    }
+    if (stencil.storeAction == MTLStoreActionUnknown) rewritten.stencilAttachment.storeAction = MTLStoreActionStore;
+    if (depthTexture && depth.storeAction == MTLStoreActionUnknown) rewritten.depthAttachment.storeAction = MTLStoreActionStore;
+    *route = @[temporary, texture, @(level), @(slice), [NSValue valueWithBytes:&size objCType:@encode(MTLSize)], @(store)];
+    if (verbose()) fprintf(stderr, "[bronzecompat] depth-stencil level %lu slice %lu rendered through a temporary\n",
+                           (unsigned long)level, (unsigned long)slice);
+    return rewritten;
+}
+
+static void finishDepthMipRoute(id<MTLCommandBuffer> commandBuffer, NSArray *route) {
+    if (![route[5] boolValue]) return;
+    MTLSize size;
+    [route[4] getValue:&size];
+    copyDepthStencil(commandBuffer, route[0], 0, 0, route[1], [route[2] unsignedIntegerValue], [route[3] unsignedIntegerValue], size);
 }
 
 // push rbp; mov rbp, rsp; push r14; push rbx; mov r14, rdx; mov rbx, rsi: nothing in them depends on where they run.
@@ -622,18 +752,18 @@ __attribute__((constructor)) static void init(void) {
         if (length < sizeof kSuffix - 1 || strcmp(name + length - (sizeof kSuffix - 1), kSuffix)) continue;
         installViewFix((const struct mach_header_64 *)_dyld_get_image_header(i));
         installMipFix();
+        if (!disabled("AMD_BRONZE_DEPTH_MIPS")) installDepthMipFix(name);  // before the render pass hooks, which route for it
         installRenderPassHooks();
         installCopyFix();
         installWebKitFixes();
         memorylessFix = !disabled("AMD_BRONZE_MEMORYLESS");
-        if (!disabled("AMD_BRONZE_DEPTH_MIPS")) installDepthMipFix(name);
         installNewTextureHook();
         if (!disabled("AMD_EXACT_TRILINEAR")) installTrilinearFix(name);
         BOOL coherence = installCoherenceFix();
         if (verbose()) fprintf(stderr, "[bronzecompat] view fix %s, sRGB mipmaps %s, trilinear %s, sRGB resolve %s, copy pitch %s, memoryless %s, "
                                "device coherence %s, depth mips %s\n",
                                origViewInit ? "on" : "off", origGenerateMipmaps ? "on" : "off", origSamplerInit ? "on" : "off",
-                               origRenderEndEncoding ? "on" : "off", origCopyToBuffer ? "on" : "off",
+                               srgbResolveFix ? "on" : "off", origCopyToBuffer ? "on" : "off",
                                origNewTexture && memorylessFix ? "on" : "off", coherence ? "on" : "off",
                                origNewTexture && origAddrComputeSurfaceInfo ? "on" : "off");
         return;
