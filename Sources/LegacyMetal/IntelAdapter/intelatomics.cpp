@@ -1972,6 +1972,76 @@ static unsigned exact64BitMultiplies(LLVMModuleRef module) {
     return fixed;
 }
 
+// ---- vector lanes picked by a 64-bit quotient ------------------------------------------------------------------------
+// The back end expands 64-bit division into loops. A vector lane picked with a dynamic index computed from such a
+// quotient, w[q & 3], read the index from a register the loop hadn't written yet: with a constant dividend
+// (0x200000002 / d) the lane picked was the dividend's low word, & 3, whatever q was; q itself, and a select on q & 3,
+// were right (the MacBookPro11,5 session's 64-bit fuzzing, LONG=1 seed 6). An extractelement or insertelement whose
+// index comes (through casts, masks and arithmetic) from a 64-bit div / rem becomes selects on the index.
+// INTEL_WIDE_DIV_INDEX_FIX=0 turns it off.
+static bool fromWideDivision(LLVMValueRef v, int depth = 0) {
+    if (depth > 6 || !LLVMIsAInstruction(v)) return false;
+    int opcode = LLVMGetInstructionOpcode(v);
+    if (opcode == 14 || opcode == 15 || opcode == 17 || opcode == 18) {  // udiv, sdiv, urem, srem
+        LLVMTypeRef type = LLVMTypeOf(v);
+        return LLVMGetTypeKind(type) == kTypeKindInteger && LLVMGetIntTypeWidth(type) == 64;
+    }
+    bool passes = (opcode >= 8 && opcode <= 25 && opcode != 9 && opcode != 11 && opcode != 13 && opcode != 16 && opcode != 19) ||
+                  opcode == 30 || opcode == 31 || opcode == 32 || opcode == 46;  // integer arithmetic, trunc / zext / sext, select
+    if (!passes) return false;
+    for (int k = 0; k < LLVMGetNumOperands(v); k++)
+        if (fromWideDivision(LLVMGetOperand(v, k), depth + 1)) return true;
+    return false;
+}
+
+static unsigned selectWideDivisionLanes(LLVMModuleRef module) {
+    if (disabled("INTEL_WIDE_DIV_INDEX_FIX") || runtimeNamesBound(module)) return 0;
+    enum { kOpcodeExtractElement = 50, kOpcodeInsertElement = 51, kIntEQ = 32 };
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    std::vector<LLVMValueRef> picks;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                int opcode = LLVMGetInstructionOpcode(inst);
+                if (opcode != kOpcodeExtractElement && opcode != kOpcodeInsertElement) continue;
+                LLVMValueRef index = LLVMGetOperand(inst, opcode == kOpcodeExtractElement ? 1 : 2);
+                if (!LLVMIsAConstantInt(index) && fromWideDivision(index)) picks.push_back(inst);
+            }
+    LLVMBuilderRef b = nullptr;
+    unsigned fixed = 0;
+    for (LLVMValueRef pick : picks) {
+        bool extract = LLVMGetInstructionOpcode(pick) == kOpcodeExtractElement;
+        LLVMValueRef vector = LLVMGetOperand(pick, 0), index = LLVMGetOperand(pick, extract ? 1 : 2);
+        unsigned n = LLVMGetVectorSize(LLVMTypeOf(vector));
+        if (n < 2 || n > 16) continue;
+        if (!b) b = LLVMCreateBuilderInContext(context);
+        LLVMPositionBuilderBefore(b, pick);
+        LLVMTypeRef indexType = LLVMTypeOf(index);
+        LLVMValueRef result;
+        if (extract) {
+            result = LLVMBuildExtractElement(b, vector, LLVMConstInt(i32, n - 1, false), "");
+            for (int k = (int)n - 2; k >= 0; k--)
+                result = LLVMBuildSelect(b, LLVMBuildICmp(b, kIntEQ, index, LLVMConstInt(indexType, (unsigned)k, false), ""),
+                                         LLVMBuildExtractElement(b, vector, LLVMConstInt(i32, (unsigned)k, false), ""), result, "");
+        } else {
+            LLVMValueRef value = LLVMGetOperand(pick, 1);
+            result = vector;
+            for (unsigned k = 0; k < n; k++) {
+                LLVMValueRef lane = LLVMConstInt(i32, k, false);
+                LLVMValueRef chosen = LLVMBuildSelect(b, LLVMBuildICmp(b, kIntEQ, index, LLVMConstInt(indexType, k, false), ""), value,
+                                                      LLVMBuildExtractElement(b, vector, lane, ""), "");
+                result = LLVMBuildInsertElement(b, result, chosen, lane, "");
+            }
+        }
+        LLVMReplaceAllUsesWith(pick, result);
+        LLVMInstructionEraseFromParent(pick);
+        fixed++;
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
 // ---- narrow integer min / max / clamp ---------------------------------------------------------------------------------
 // min, max and clamp on 8- and 16-bit integers (air.{min,max,clamp}.{u,s}.{i8,i16,vNi8,vNi16}) compare a lane the back end
 // zero-extended against a constant it sign-extended: min(uchar2 a, uchar2(130, 183)) returned a (UBMIN of a & 0xff and
@@ -3264,6 +3334,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] %u 8/16-bit division(s) done on 32-bit lanes\n", n);
         n = signedDivisionNegations(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u signed division(s) of a negated value done on the value\n", n);
+        n = selectWideDivisionLanes(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u vector lane(s) picked by a 64-bit quotient done with selects\n", n);
         n = signedPowerOfTwoDivisions(module);  // after the two division rewrites above
         if (n && logging()) fprintf(stderr, "[inteltex] %u signed division(s) by a power of two done with shifts\n", n);
         n = widenNarrowMinMax(module);
