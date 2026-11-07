@@ -3,7 +3,8 @@
 // `udiv i8 -120, b`), and libAMDIL902 doesn't clear or extend the upper bits of narrow values: it widens the narrow
 // constant by sign extension (0xFFFFFF88) before dividing the zero-extended operand (kernel k), and divides a uchar it
 // computed as ~x, kept in a register once the adapter has made a uchar array registers, with its upper bits set
-// (kernel garbage). The quotient, remainder, shift or comparison comes out wrong (found by
+// (kernel garbage; kernel vectors: the same in a uchar4 lane). The quotient, remainder, shift or comparison comes out
+// wrong (found by
 // differential fuzzing). uchar and ushort values read from private arrays (what lets the front end narrow), each operation against 136 / 200 / 0x8001 / 0xF000,
 // 256 threads, checked against the same code on the CPU. Stock OCLP: FAIL. Fixed: PASS.
 // Argument: GPU name substring (default: AMD).
@@ -31,7 +32,35 @@ static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n
     "    out[t * 8u + 0u] = uint(c[in[t * 4u] & 7u]) / (uint(c[in[t * 4u + 3u] & 7u]) | 1u);\n"
     "    out[t * 8u + 1u] = uint(c[in[t * 4u + 1u] & 7u]) % (uint(c[1]) | 1u);\n"
     "    for (uint w = 2u; w < 8u; w++) out[t * 8u + w] = 0u;\n"
+    "}\n"
+    "kernel void vectors(device const uint *in [[buffer(0)]], device uint *out [[buffer(1)]], uint t [[thread_position_in_grid]]) {\n"
+    "    uchar4 c0 = as_type<uchar4>(in[t * 4u]), c1 = as_type<uchar4>(in[t * 4u + 1u]);\n"
+    "    ushort2 h0 = as_type<ushort2>(in[t * 4u + 2u]);\n"
+    "    uchar4 m = c1;\n"
+    "    m.y = uchar(~in[t * 4u]);\n"
+    "    bool4 eq = c1 == uchar4(0x88), lt = c0 < uchar4(200);\n"
+    "    out[t * 8u + 0u] = as_type<uint>(uchar4(136) / (c0 | uchar4(1)));\n"
+    "    out[t * 8u + 1u] = as_type<uint>(ushort2(0x8001) % (h0 | ushort2(1)));\n"
+    "    out[t * 8u + 2u] = as_type<uint>(m / (c0 | uchar4(1)));\n"
+    "    out[t * 8u + 3u] = uint(eq.x) | uint(eq.y) << 1u | uint(lt.z) << 2u | uint(lt.w) << 3u;\n"
+    "    for (uint w = 4u; w < 8u; w++) out[t * 8u + w] = 0u;\n"
     "}\n";
+
+static void vectorsReference(const uint32_t *in, uint32_t t, uint32_t out[8]) {
+    uint8_t c0[4], c1[4], m[4];
+    uint16_t h0[2];
+    memset(out, 0, 8 * sizeof *out);
+    for (int k = 0; k < 4; k++) {
+        c0[k] = (uint8_t)(in[t * 4] >> (8 * k));
+        c1[k] = m[k] = (uint8_t)(in[t * 4 + 1] >> (8 * k));
+    }
+    m[1] = (uint8_t)~in[t * 4];
+    for (int k = 0; k < 2; k++) h0[k] = (uint16_t)(in[t * 4 + 2] >> (16 * k));
+    for (int k = 0; k < 4; k++) out[0] |= (uint32_t)(uint8_t)(136 / (c0[k] | 1)) << (8 * k);
+    for (int k = 0; k < 2; k++) out[1] |= (uint32_t)(uint16_t)(0x8001 % (h0[k] | 1)) << (16 * k);
+    for (int k = 0; k < 4; k++) out[2] |= (uint32_t)(uint8_t)(m[k] / (c0[k] | 1)) << (8 * k);
+    out[3] = (c1[0] == 0x88) | (c1[1] == 0x88) << 1 | (c0[2] < 200) << 2 | (c0[3] < 200) << 3;
+}
 
 static void garbageReference(const uint32_t *in, uint32_t t, uint32_t out[8]) {
     uint8_t c[8];
@@ -74,12 +103,15 @@ int main(int argc, char **argv) {
         }
         words[4 + 2] = 0x88u << 6;  // thread 1: c[6] == 0x88
         id<MTLCommandQueue> queue = [dev newCommandQueue];
-        static const char *const names[2][8] = {{"136 / uchar", "200 % uchar", "136 % int(uchar)", "0x8001 / ushort", "0xF000 % ushort",
+        static const char *const names[3][8] = {{"136 / uchar", "200 % uchar", "136 % int(uchar)", "0x8001 / ushort", "0xF000 % ushort",
                                                  "200 >> n", "uchar / ushort compares", "0x8001 >> n"},
-                                                {"uchar / uchar", "uchar % uchar(~x)", "", "", "", "", "", ""}};
+                                                {"uchar / uchar", "uchar % uchar(~x)", "", "", "", "", "", ""},
+                                                {"uchar4(136) / uchar4", "ushort2(0x8001) % ushort2", "uchar4 with uchar(~x) / uchar4", "uchar4 compares",
+                                                 "", "", "", ""}};
         char report[700] = "";
-        for (int k = 0; k < 2; k++) {
-            id<MTLComputePipelineState> ps = [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:k ? @"garbage" : @"k"] error:&err];
+        for (int k = 0; k < 3; k++) {
+            id<MTLComputePipelineState> ps = [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:k == 2 ? @"vectors" : k ? @"garbage" : @"k"]
+                                                                                 error:&err];
             if (!ps) return FAIL(bug, "%s: pipeline: %s", dev.name.UTF8String, err.localizedDescription.UTF8String);
             id<MTLBuffer> out = [dev newBufferWithLength:T * 32 options:MTLResourceStorageModeShared];
             id<MTLCommandBuffer> cb = [queue commandBuffer];
@@ -95,7 +127,7 @@ int main(int argc, char **argv) {
                 uint32_t got = 0, want = 0;
                 for (uint32_t t = 0; t < T; t++) {
                     uint32_t w[8];
-                    if (k) garbageReference(words, t, w); else reference(words, t, w);
+                    if (k == 2) vectorsReference(words, t, w); else if (k) garbageReference(words, t, w); else reference(words, t, w);
                     uint32_t g = ((uint32_t *)out.contents)[t * 8 + i];
                     if (g != w[i] && wrong++ == 0) { first = (int)t; got = g; want = w[i]; }
                 }
@@ -107,6 +139,6 @@ int main(int argc, char **argv) {
             }
         }
         if (report[0]) return FAIL(bug, "%s: %s", dev.name.UTF8String, report);
-        return PASS(bug, "%s: uchar / ushort division, remainder, shifts and compares against constants with the top bit set", dev.name.UTF8String);
+        return PASS(bug, "%s: uchar / ushort division, remainder, shifts and compares (scalars and vectors) come out right", dev.name.UTF8String);
     }
 }

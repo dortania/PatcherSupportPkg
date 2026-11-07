@@ -1359,20 +1359,23 @@ static unsigned singleBitTestsAsExtracts(void *module, void *function, void *i32
 // upper bits: it widens a narrow constant by sign extension (the IL divides 0xFFFFFF88 by the zero-extended divisor),
 // and a narrow value computed by 32-bit operations and truncated (`uchar(~x)`, kept in a register once job 11 has made
 // a uchar array registers) goes into the division as it is. Operations whose result depends on those upper bits come
-// out wrong (found by differential fuzzing). Each udiv / urem / sdiv / srem / lshr / ashr and each comparison on scalar
-// i8 / i16 is done in i32 instead: constants zero- or sign-extended as the operation needs, other operands through
-// air.extract_bits (zero-extending, or sign-extending for the signed operations; the optimizer can't see through it and
-// narrow back), the result truncated. AMD_NARROW_CONSTANT_FIX=0 turns this off.
+// out wrong (found by differential fuzzing; a uchar4 lane holding uchar(~x) divides wrong too). Each udiv / urem / sdiv
+// / srem / lshr / ashr and each comparison on i8 / i16 scalars and 2- to 4-element vectors is done in i32 instead:
+// scalar constants zero- or sign-extended as the operation needs, other operands through air.extract_bits (zero-
+// extending, or sign-extending for the signed operations; the optimizer can't see through it and narrow back), the
+// result truncated. AMD_NARROW_CONSTANT_FIX=0 turns this off.
 enum { kOpcodeUDiv = 17, kOpcodeSDiv = 18, kOpcodeURem = 20, kOpcodeSRem = 21, kOpcodeTrunc = 36, kPredicateUGT = 34,
        kPredicateULE = 37, kPredicateSGT = 38, kPredicateSLE = 41 };
 static unsigned narrowUnsignedConstants(void *module) {
     const char *setting = getenv("AMD_NARROW_CONSTANT_FIX");
-    if ((setting && !strcmp(setting, "0")) || !api.binaryCreate || !api.castCreate || !api.functionTypeGet || !api.getOrInsertFunction) return 0;
+    if ((setting && !strcmp(setting, "0")) || !api.binaryCreate || !api.castCreate || !api.functionTypeGet || !api.getOrInsertFunction ||
+        !api.vectorTypeGet)
+        return 0;
     enum { kMax = 512 };
     static const unsigned kBinary[] = {kOpcodeUDiv, kOpcodeSDiv, kOpcodeURem, kOpcodeSRem, kOpcodeLShr, kOpcodeAShr};
     void *found[kMax];
     unsigned count = 0, rewritten = 0;
-    void *i32 = NULL, *extract[2] = {NULL, NULL}, *extractType = NULL;  // [0] unsigned, [1] signed
+    void *i32 = NULL, *extract[2][5] = {{NULL}}, *extractType[5] = {NULL};  // [signed][lanes: 1 scalar, 2-4 vectors]
     char *functions = (char *)module + kModuleFunctions;
     for (char *fn = nextNode(functions); fn != functions; fn = nextNode(fn)) {
         char *function = fn - kFunctionNode, *blocks = function + kFunctionBlocks;
@@ -1388,16 +1391,26 @@ static unsigned narrowUnsignedConstants(void *module) {
                 bool candidate = isInstruction(inst, kOpcodeICmp);
                 for (size_t k = 0; k < sizeof kBinary / sizeof *kBinary && !candidate; k++) candidate = isInstruction(inst, kBinary[k]);
                 if (!candidate || hungOffUses(inst) || numOperands(inst) != 2 || count == kMax) continue;
-                void *type = typeOf(operand(inst, 0));
-                if (typeID(type) != kTypeInteger) continue;
-                unsigned width = *(uint32_t *)((char *)type + 8) >> 8;  // IntegerType bit width: Type SubclassData
+                void *type = typeOf(operand(inst, 0)), *element = type;
+                if (typeID(type) == kTypeVector) {
+                    if (arrayLength(type) < 2 || arrayLength(type) > 4) continue;
+                    element = elementType(type);
+                }
+                if (typeID(element) != kTypeInteger) continue;
+                unsigned width = *(uint32_t *)((char *)element + 8) >> 8;  // IntegerType bit width: Type SubclassData
                 if (width == 8 || width == 16) found[count++] = inst;
             }
         }
     }
     for (unsigned c = 0; c < count; c++) {
-        void *inst = found[c], *type = typeOf(operand(inst, 0)), *wide[2];
-        unsigned width = *(uint32_t *)((char *)type + 8) >> 8, predicate = 0, opcode = 0;
+        void *inst = found[c], *type = typeOf(operand(inst, 0)), *element = type, *wide[2];
+        unsigned lanes = 1;
+        if (typeID(type) == kTypeVector) {
+            lanes = (unsigned)arrayLength(type);
+            element = elementType(type);
+        }
+        void *wideType = lanes > 1 ? api.vectorTypeGet(i32, lanes) : i32;
+        unsigned width = *(uint32_t *)((char *)element + 8) >> 8, predicate = 0, opcode = 0;
         bool compare = isInstruction(inst, kOpcodeICmp), isSigned;
         if (compare) {
             predicate = *(uint16_t *)((char *)inst + 0x12) & kOpcodeICmpPredicateMask;
@@ -1411,24 +1424,26 @@ static unsigned narrowUnsignedConstants(void *module) {
             bool extendSigned = isSigned && !(opcode == kOpcodeAShr && k == 1);  // a shift amount is unsigned
             uint64_t value;
             void *v = operand(inst, k);
-            if (constantIntValue(v, &value)) {
+            if (lanes == 1 && constantIntValue(v, &value)) {
                 value &= (1ull << width) - 1;
                 if (extendSigned && (value >> (width - 1)) & 1) value |= ~((1ull << width) - 1);
                 wide[k] = api.constantIntGet(i32, value & 0xffffffffu, false);
                 continue;
             }
             int s = extendSigned ? 1 : 0;
-            if (!extract[s]) {
-                if (!extractType) {
-                    void *params[3] = {i32, i32, i32};
-                    extractType = api.functionTypeGet(i32, params, 3, false);
+            if (!extract[s][lanes]) {
+                if (!extractType[lanes]) {
+                    void *params[3] = {wideType, i32, i32};
+                    extractType[lanes] = api.functionTypeGet(wideType, params, 3, false);
                 }
-                const char *name = s ? "air.extract_bits.s.i32" : "air.extract_bits.u.i32";
-                extract[s] = api.getOrInsertFunction(module, name, strlen(name), extractType);
-                if (!extract[s] || subclassID(extract[s]) != kValueFunction) return rewritten;  // a bitcast: another declaration
+                char name[40];
+                if (lanes > 1) snprintf(name, sizeof name, "air.extract_bits.%c.v%ui32", s ? 's' : 'u', lanes);
+                else snprintf(name, sizeof name, "air.extract_bits.%c.i32", s ? 's' : 'u');
+                extract[s][lanes] = api.getOrInsertFunction(module, name, strlen(name), extractType[lanes]);
+                if (!extract[s][lanes] || subclassID(extract[s][lanes]) != kValueFunction) return rewritten;  // a bitcast: another declaration
             }
-            void *args[3] = {api.castCreate(kOpcodeZExt, v, i32, &kNoName, inst), api.constantIntGet(i32, 0, false), api.constantIntGet(i32, width, false)};
-            wide[k] = createCall(extract[s], extractType, args, 3, inst);
+            void *args[3] = {api.castCreate(kOpcodeZExt, v, wideType, &kNoName, inst), api.constantIntGet(i32, 0, false), api.constantIntGet(i32, width, false)};
+            wide[k] = createCall(extract[s][lanes], extractType[lanes], args, 3, inst);
         }
         void *result = compare ? api.cmpCreate(kOpcodeICmp, predicate, wide[0], wide[1], &kNoName, inst)
                                : api.castCreate(kOpcodeTrunc, api.binaryCreate(opcode, wide[0], wide[1], &kNoName, inst), type, &kNoName, inst);
