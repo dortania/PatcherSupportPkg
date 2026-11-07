@@ -51,6 +51,12 @@
 // writes lose updates across branches and loop iterations; such arrays are accessed at constant indexes only.
 // AMD_PRIVATE_STORE_FIX=0 turns it off.
 //
+// Twelfth job: unsigned saturating adds and subtracts as plain arithmetic (plainSaturatingAddSub): SC turns
+// `usub_sat x, 0` into a float clamp. AMD_SATURATE_FIX=0 turns it off.
+//
+// Thirteenth job: rotates as shifts (rotatesAsShifts): SC folds a constant rotate by a multiple of 8 the wrong way.
+// AMD_ROTATE_FIX=0 turns it off.
+//
 // Installed: AMDShared.bundle/Contents/MacOS/AMDTextureAtomics.dylib, loaded by a weak load command in AMDShared.
 // Test use (in-process compiling): DYLD_INSERT_LIBRARIES=Tests/tools/localcc.dylib:build/texatomic.dylib <app>
 //   TEXATOMIC_LOG=1   log what is rewritten
@@ -1207,6 +1213,94 @@ static unsigned privateArrayIndexedStores(void *module) {
     return rewritten;
 }
 
+// SC lowers the AMD IL's usub_sat / uadd_sat right only while the second operand isn't known to be 0: `usub_sat x, 0`
+// (and uadd_sat) becomes `v_max_f32 x, x clamp`, a float clamp to [0, 1], so subsat(x, z) with z = 0 in the shader gives
+// 0 for x >= 0x80000000 and 0x3f800000 for other large x (found by differential fuzzing; the signed forms and madsat are
+// right). Every air.add_sat.u / air.sub_sat.u call becomes the arithmetic, with nothing left for SC to fold:
+//   add_sat(a, b) = a + b < a ? ~0 : a + b        sub_sat(a, b) = a < b ? 0 : a - b
+// Scalars and vectors of 8 to 64 bits. AMD_SATURATE_FIX=0 turns this off.
+enum { kOpcodeAdd = 11, kOpcodeSub = 13, kPredicateULT = 36, kTypeInteger = 11, kTypeVector = 16 };
+static unsigned plainSaturatingAddSub(void *module) {
+    const char *setting = getenv("AMD_SATURATE_FIX");
+    if ((setting && !strcmp(setting, "0")) || !api.binaryCreate || !api.selectInit || !api.splat) return 0;
+    static const char *const kOps[] = {"add", "sub"}, *const kTypes[] = {"i8", "i16", "i32", "i64"}, *const kWidths[] = {"", "v2", "v3", "v4"};
+    unsigned rewritten = 0;
+    for (int o = 0; o < 2; o++)
+        for (int w = 0; w < 4; w++)
+            for (int t = 0; t < 4; t++) {
+                char name[48];
+                snprintf(name, sizeof name, "air.%s_sat.u.%s%s", kOps[o], kWidths[w], kTypes[t]);
+                void *function = api.getFunction(module, name, strlen(name));
+                if (!function) continue;
+                for (void *use = firstUse(function); use;) {
+                    void *call = api.getUser(use);
+                    use = nextUse(use);
+                    if (!isCall(call, function, 3)) continue;
+                    void *a = operand(call, 0), *b = operand(call, 1), *type = typeOf(a);
+                    if (typeOf(b) != type || typeOf(call) != type) continue;
+                    bool vector = typeID(type) == kTypeVector;
+                    void *element = vector ? elementType(type) : type;
+                    if (typeID(element) != kTypeInteger) continue;
+                    void *limit = api.constantIntGet(element, o == 0 ? ~0ull : 0, false);  // ~0 is truncated to the width
+                    if (vector) limit = api.splat((unsigned)arrayLength(type), limit);
+                    void *value = api.binaryCreate(o == 0 ? kOpcodeAdd : kOpcodeSub, a, b, &kNoName, call);
+                    void *clamped = o == 0 ? api.cmpCreate(kOpcodeICmp, kPredicateULT, value, a, &kNoName, call)
+                                           : api.cmpCreate(kOpcodeICmp, kPredicateULT, a, b, &kNoName, call);
+                    char *result = api.userNew(96, 3);
+                    api.selectInit(result, clamped, limit, value, &kNoName, call);
+                    api.replaceAllUsesWith(call, result);
+                    api.eraseFromParent(call);
+                    rewritten++;
+                }
+            }
+    return rewritten;
+}
+
+// libAMDIL902 lowers air.rotate to the IL's bitalign (a rotate right by width - n), which is right; but when SC knows both
+// operands it folds bitalign by a multiple of 8 the other way: rotate(37u, 24u) is 0x2500 and rotate(37u, 8u) 0x25000000
+// (found by differential fuzzing; other amounts, and either operand at run time, are right). Every air.rotate call
+// becomes (x << m) | (x >> ((width - m) & (width - 1))) with m = n & (width - 1): LLVM folds that itself when it can,
+// and otherwise the back end still selects a rotate. Scalars and vectors of 8 to 64 bits. AMD_ROTATE_FIX=0 turns this
+// off.
+enum { kOpcodeOr = 27 };
+static unsigned rotatesAsShifts(void *module) {
+    const char *setting = getenv("AMD_ROTATE_FIX");
+    if ((setting && !strcmp(setting, "0")) || !api.binaryCreate || !api.splat) return 0;
+    static const char *const kTypes[] = {"i8", "i16", "i32", "i64"}, *const kWidths[] = {"", "v2", "v3", "v4"};
+    static const unsigned kBits[] = {8, 16, 32, 64};
+    unsigned rewritten = 0;
+    for (int w = 0; w < 4; w++)
+        for (int t = 0; t < 4; t++) {
+            char name[48];
+            snprintf(name, sizeof name, "air.rotate.%s%s", kWidths[w], kTypes[t]);
+            void *function = api.getFunction(module, name, strlen(name));
+            if (!function) continue;
+            for (void *use = firstUse(function); use;) {
+                void *call = api.getUser(use);
+                use = nextUse(use);
+                if (!isCall(call, function, 3)) continue;
+                void *x = operand(call, 0), *n = operand(call, 1), *type = typeOf(x);
+                if (typeOf(n) != type || typeOf(call) != type) continue;
+                bool vector = typeID(type) == kTypeVector;
+                void *element = vector ? elementType(type) : type;
+                if (typeID(element) != kTypeInteger) continue;
+                void *mask = api.constantIntGet(element, kBits[t] - 1, false), *width = api.constantIntGet(element, kBits[t], false);
+                if (vector) {
+                    mask = api.splat((unsigned)arrayLength(type), mask);
+                    width = api.splat((unsigned)arrayLength(type), width);
+                }
+                void *m = api.binaryCreate(kOpcodeAnd, n, mask, &kNoName, call);
+                void *back = api.binaryCreate(kOpcodeAnd, api.binaryCreate(kOpcodeSub, width, m, &kNoName, call), mask, &kNoName, call);
+                void *left = api.binaryCreate(kOpcodeShl, x, m, &kNoName, call);
+                void *right = api.binaryCreate(kOpcodeLShr, x, back, &kNoName, call);
+                api.replaceAllUsesWith(call, api.binaryCreate(kOpcodeOr, left, right, &kNoName, call));
+                api.eraseFromParent(call);
+                rewritten++;
+            }
+        }
+    return rewritten;
+}
+
 // The front end in Xcode 26 writes a constexpr sampler (!air.sampler_states) as a [2 x i64] constant: the sampler word with
 // bit 63 clear, then 0. Older front ends, including the runtime compiler that libAMDIL902 was built with, write one i64:
 // the same word with bit 63 set. ILSetupConstantSampler turns the global's initializer into an integer-to-pointer
@@ -1276,6 +1370,10 @@ static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *
         if (samplers && logging()) fprintf(stderr, "[texatomic] %u constexpr sampler(s) rewritten in the one-word form\n", samplers);
         unsigned unpacks = exactUnpackNorm(module);
         if (unpacks && logging()) fprintf(stderr, "[texatomic] %u unpack call(s) computed exactly\n", unpacks);
+        unsigned saturating = plainSaturatingAddSub(module);
+        if (saturating && logging()) fprintf(stderr, "[texatomic] %u unsigned saturating add/sub call(s) done as arithmetic\n", saturating);
+        unsigned rotates = rotatesAsShifts(module);
+        if (rotates && logging()) fprintf(stderr, "[texatomic] %u rotate call(s) done as shifts\n", rotates);
         unsigned arrayStores = privateArrayIndexedStores(module);
         if (arrayStores && logging()) fprintf(stderr, "[texatomic] %u variable-index private array store(s) done per element\n", arrayStores);
         unsigned n = lowerTextureAtomics(module);
