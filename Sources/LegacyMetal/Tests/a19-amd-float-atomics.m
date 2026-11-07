@@ -24,6 +24,8 @@ int main(int argc, char **argv) {
         const char *bug = "a19-amd-float-atomics";
         id<MTLDevice> dev = reproDevice(argc, argv, "AMD");
         if (!dev) return SKIP(bug, "no such GPU");
+        if (![dev supportsFamily:MTLGPUFamilyMac2] && ![dev supportsFamily:MTLGPUFamilyApple7])
+            return SKIP(bug, "%s: float atomics need the Mac2 or Apple7 family", dev.name.UTF8String);
         NSError *err = nil;
         MTLCompileOptions *options = [MTLCompileOptions new];
         options.languageVersion = MTLLanguageVersion3_0;

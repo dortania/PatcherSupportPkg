@@ -1758,6 +1758,65 @@ static unsigned narrowUnsignedConstants(void *module) {
     return rewritten;
 }
 
+// A 64-bit comparison whose result is sign-extended or branched on (`x -= (uint)(bool)(w & m)` with w a ulong, or `if`
+// on one) stops libAMDIL902 with "Cannot select": its setcc on i64 operands has an i64 result, which no select or brcond
+// pattern takes (found by fuzzing with 64-bit integers). So every i64 comparison is done on the 32-bit halves:
+// equality as (lo ^ lo') | (hi ^ hi') against 0, an ordered comparison as the high halves compared (signed or unsigned
+// as asked), or equal high halves and the low halves compared unsigned. AMD_WIDE_COMPARE_FIX=0 turns this off. Test a20.
+enum { kWideXor = 28, kPredicateUGE = 35, kPredicateSGE = 39, kPredicateSLT = 40 };
+static unsigned wideCompares(void *module) {
+    const char *setting = getenv("AMD_WIDE_COMPARE_FIX");
+    if ((setting && !strcmp(setting, "0")) || !api.binaryCreate || !api.castCreate || !api.getInt64Ty) return 0;
+    enum { kMax = 512 };
+    void *found[kMax];
+    unsigned count = 0, rewritten = 0;
+    char *functions = (char *)module + kModuleFunctions;
+    for (char *fn = nextNode(functions); fn != functions; fn = nextNode(fn)) {
+        char *function = fn - kFunctionNode, *blocks = function + kFunctionBlocks;
+        if (*(void **)(function + kFunctionParent) != module) return 0;  // layout mismatch: leave the module alone
+        for (char *bn = nextNode(blocks); bn != blocks; bn = nextNode(bn)) {
+            char *block = bn - kBlockNode, *insts = block + kBlockInstructions;
+            if (*(void **)(block + kBlockParent) != function) return 0;
+            for (char *in = nextNode(insts); in != insts; in = nextNode(in)) {
+                char *inst = in - kInstructionNode;
+                if (*(void **)(inst + kInstructionParent) != block) return 0;
+                if (!isInstruction(inst, kOpcodeICmp) || hungOffUses(inst) || numOperands(inst) != 2 || count == kMax) continue;
+                void *type = typeOf(operand(inst, 0));
+                if (typeID(type) == kTypeInteger && intBits(type) == 64) found[count++] = inst;
+            }
+        }
+    }
+    for (unsigned c = 0; c < count; c++) {
+        void *inst = found[c], *i64 = typeOf(operand(inst, 0)), *i32 = api.getInt32Ty(api.getContext(inst));
+        unsigned predicate = *(unsigned short *)((char *)inst + 0x12) & kOpcodeICmpPredicateMask;  // CmpInst predicate: SubclassData
+        void *lo[2], *hi[2];
+        for (unsigned k = 0; k < 2; k++) {
+            void *v = operand(inst, k);
+            lo[k] = api.castCreate(kOpcodeTrunc, v, i32, &kNoName, inst);
+            hi[k] = api.castCreate(kOpcodeTrunc, api.binaryCreate(kOpcodeLShr, v, api.constantIntGet(i64, 32, false), &kNoName, inst), i32, &kNoName, inst);
+        }
+        void *result;
+        if (predicate == kPredicateEQ || predicate == kPredicateNE) {
+            void *diff = api.binaryCreate(kOpcodeOrBits, api.binaryCreate(kWideXor, lo[0], lo[1], &kNoName, inst),
+                                          api.binaryCreate(kWideXor, hi[0], hi[1], &kNoName, inst), &kNoName, inst);
+            result = api.cmpCreate(kOpcodeICmp, predicate, diff, api.constantIntGet(i32, 0, false), &kNoName, inst);
+        } else if (predicate >= kPredicateUGT && predicate <= kPredicateSLE) {
+            bool isSigned = predicate >= kPredicateSGT;
+            unsigned unsignedForm = isSigned ? predicate - 4 : predicate;              // SGT..SLE -> UGT..ULE
+            unsigned strict = (unsignedForm == kPredicateUGE) ? kPredicateUGT : (unsignedForm == kPredicateULE) ? kPredicateULT : unsignedForm;
+            unsigned highStrict = isSigned ? strict + 4 : strict;
+            void *higher = api.cmpCreate(kOpcodeICmp, highStrict, hi[0], hi[1], &kNoName, inst);
+            void *same = api.cmpCreate(kOpcodeICmp, kPredicateEQ, hi[0], hi[1], &kNoName, inst);
+            void *low = api.cmpCreate(kOpcodeICmp, unsignedForm, lo[0], lo[1], &kNoName, inst);
+            result = api.binaryCreate(kOpcodeOrBits, higher, api.binaryCreate(kOpcodeAndBits, same, low, &kNoName, inst), &kNoName, inst);
+        } else continue;
+        api.replaceAllUsesWith(inst, result);
+        api.eraseFromParent(inst);
+        rewritten++;
+    }
+    return rewritten;
+}
+
 static unsigned singleBitTests(void *module) {
     const char *setting = getenv("AMD_BIT_TEST_FIX");
     if ((setting && !strcmp(setting, "0")) || !api.functionTypeGet || !api.getOrInsertFunction) return 0;
@@ -1845,6 +1904,8 @@ static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *
         if (unpacks && logging()) fprintf(stderr, "[texatomic] %u unpack call(s) computed exactly\n", unpacks);
         unsigned floats = floatAtomicsAsInteger(module);
         if (floats && logging()) fprintf(stderr, "[texatomic] %u float atomic(s) done on the integer bits\n", floats);
+        unsigned wide = wideCompares(module);
+        if (wide && logging()) fprintf(stderr, "[texatomic] %u 64-bit comparison(s) done on the 32-bit halves\n", wide);
         unsigned lanes = bitcastLaneExtracts(module);
         if (lanes && logging()) fprintf(stderr, "[texatomic] %u vector bitcast(s) to narrower lanes built lane by lane\n", lanes);
         unsigned narrow = narrowUnsignedConstants(module);
