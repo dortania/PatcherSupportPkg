@@ -1708,7 +1708,8 @@ static void nilArgumentBuffers(void) {
 // textures are only sampled with nearest filtering, where seamless addressing changes nothing (a nearest texel never
 // spans a face edge), so samplers whose min and mag filters are nearest get the programmed (clamped) addressing. The
 // WebGL suite uploads such faces from canvases and ImageData (integer-cubemap-texture-sampling, tex-2d-*ui-*_integer-*:
-// about 2400 failures in Chrome and Safari). MTLSHIM_NEAREST_CUBE_CLAMP=0 turns it off.
+// about 2400 failures in Chrome and Safari). A nearest gather's 2x2 footprint does span face edges, so the Intel adapter
+// gives cube gathers a linear constexpr sampler, which this leaves seamless (i20). MTLSHIM_NEAREST_CUBE_CLAMP=0 turns it off.
 typedef void (*InitSamplerStateIMP)(id, SEL, id);
 static InitSamplerStateIMP origIGInitSamplerState;
 static ptrdiff_t igSamplerStateOffset = -1;

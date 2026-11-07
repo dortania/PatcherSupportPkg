@@ -1212,20 +1212,24 @@ static bool isEntry(LLVMModuleRef module, const char *list, LLVMValueRef functio
     return false;
 }
 static LLVMValueRef callerOf(LLVMValueRef call) { return LLVMGetBasicBlockParent(LLVMGetInstructionParent(call)); }
-// Whether a function only runs in compute kernels: a kernel entry, or a function (Tint's helpers) whose every call is from
-// such a function
-static bool kernelOnly(LLVMModuleRef module, LLVMValueRef function, int depth = 0) {
-    if (isEntry(module, "air.kernel", function)) return true;
-    if (depth > 8 || isEntry(module, "air.vertex", function) || isEntry(module, "air.fragment", function)) return false;
+// Whether a function only runs in one kind of entry point (list: "air.kernel", "air.vertex" or "air.fragment"): such an
+// entry, or a function (Tint's and ANGLE's helpers) whose every call is from such a function
+static bool onlyIn(LLVMModuleRef module, const char *list, LLVMValueRef function, int depth = 0) {
+    if (isEntry(module, list, function)) return true;
+    static const char *const kLists[3] = {"air.kernel", "air.vertex", "air.fragment"};
+    for (const char *other : kLists)
+        if (strcmp(other, list) && isEntry(module, other, function)) return false;
+    if (depth > 8) return false;
     bool called = false;
     for (LLVMUseRef u = LLVMGetFirstUse(function); u; u = LLVMGetNextUse(u)) {
         LLVMValueRef user = LLVMGetUser(u);
         if (!LLVMIsACallInst(user) || LLVMGetOperand(user, LLVMGetNumOperands(user) - 1) != function) return false;
-        if (!kernelOnly(module, callerOf(user), depth + 1)) return false;
+        if (!onlyIn(module, list, callerOf(user), depth + 1)) return false;
         called = true;
     }
     return called;
 }
+static bool kernelOnly(LLVMModuleRef module, LLVMValueRef function) { return onlyIn(module, "air.kernel", function); }
 // air.get_{width,height,depth}_<type>(texture, lod) as a float
 static LLVMValueRef textureSize(LLVMBuilderRef b, LLVMModuleRef module, LLVMValueRef texture, const char *type, unsigned d, LLVMValueRef lod) {
     static const char *const kSizes[3] = {"width", "height", "depth"};
@@ -1409,6 +1413,64 @@ static unsigned foldIntegerSampleOffsets(LLVMModuleRef module) {
         }
     }
     if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
+// ---- cube gathers: a sampler that keeps seamless addressing -----------------------------------------------------------
+// MetalOldCompat item 30 gives samplers whose min and mag filters are nearest the programmed (clamped) cube addressing,
+// because integer cube textures with tiny faces sample as 0 with the seamless kind in vertex and fragment functions (and
+// a texel read can't stand in there: in fragment functions read_texture_cube ignores the face). A nearest sample never
+// spans a face edge, but a gather's 2x2 footprint does, so cube gathers through such a sampler came back clamped at face
+// edges (WebGPU CTS textureGather sampled_3d_coords, nearest: 330 cases; also any cube shadow-map PCF done with gathers).
+// A gather doesn't filter, and seamless cube addressing ignores the address modes, so cube gathers (not compare gathers)
+// in vertex and fragment functions take a constexpr sampler with linear filtering instead of the app's: item 30 leaves
+// that one seamless. INTEL_CUBE_GATHER_SAMPLER_FIX=0 turns it off.
+extern "C" {
+void LLVMAddNamedMetadataOperand(LLVMModuleRef, const char *, LLVMValueRef);
+LLVMValueRef LLVMMDStringInContext(LLVMContextRef, const char *, unsigned);
+LLVMValueRef LLVMGetNamedGlobal(LLVMModuleRef, const char *);
+void LLVMSetInitializer(LLVMValueRef, LLVMValueRef);
+LLVMValueRef LLVMAddGlobalInAddressSpace(LLVMModuleRef, LLVMTypeRef, const char *, unsigned);
+void LLVMSetGlobalConstant(LLVMValueRef, int);
+void LLVMSetLinkage(LLVMValueRef, int);
+LLVMValueRef LLVMConstBitCast(LLVMValueRef, LLVMTypeRef);
+LLVMValueRef LLVMMDNodeInContext(LLVMContextRef, LLVMValueRef *, unsigned);
+LLVMTypeRef LLVMInt64TypeInContext(LLVMContextRef);
+void LLVMSetAlignment(LLVMValueRef, unsigned);
+}
+static unsigned linearCubeGathers(LLVMModuleRef module) {
+    if (disabled("INTEL_CUBE_GATHER_SAMPLER_FIX") || runtimeNamesBound(module)) return 0;
+    static const char kGlobal[] = "__air_sampler_state.cube_gather";
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMValueRef state = nullptr;
+    unsigned fixed = 0;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
+        const char *name = LLVMGetValueName(f);
+        if (strncmp(name, "air.gather_texture_cube.", 24) && strncmp(name, "air.gather_texture_cube_array.", 30)) continue;
+        std::vector<LLVMValueRef> calls;
+        for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u)) calls.push_back(LLVMGetUser(u));
+        for (LLVMValueRef call : calls) {
+            int n = LLVMGetNumOperands(call);
+            if (!LLVMIsACallInst(call) || n < 3 || LLVMGetOperand(call, n - 1) != f) continue;
+            LLVMValueRef sampler = LLVMGetOperand(call, 1);
+            if (LLVMIsAConstant(sampler) || kernelOnly(module, callerOf(call))) continue;  // constexpr already; kernels are right
+            if (!state) {
+                state = LLVMGetNamedGlobal(module, kGlobal);
+                if (!state) {
+                    LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
+                    state = LLVMAddGlobalInAddressSpace(module, i64, kGlobal, 2);
+                    LLVMSetInitializer(state, LLVMConstInt(i64, 0x807bff0000080a49ull, false));  // filter::linear, the rest default
+                    LLVMSetGlobalConstant(state, 1);
+                    LLVMSetLinkage(state, 8 /* internal */);
+                    LLVMSetAlignment(state, 8);
+                    LLVMValueRef parts[2] = {LLVMMDStringInContext(context, "air.sampler_state", 17), state};
+                    LLVMAddNamedMetadataOperand(module, "air.sampler_states", LLVMMDNodeInContext(context, parts, 2));
+                }
+            }
+            LLVMSetOperand(call, 1, LLVMConstBitCast(state, LLVMTypeOf(sampler)));
+            fixed++;
+        }
+    }
     return fixed;
 }
 
@@ -2403,6 +2465,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] %u depth comparison(s) with an LOD bias: bias dropped\n", n);
         n = lowerIntegerGradients(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u integer gradient sample(s) done at the level the gradients select\n", n);
+        n = linearCubeGathers(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u cube gather(s) given a linear constexpr sampler (seamless at face edges)\n", n);
         n = foldIntegerSampleOffsets(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u integer texture sample(s): texel offset moved into the coordinates\n", n);
         n = fixSamplerStateWords(module);
