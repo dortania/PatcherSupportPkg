@@ -1799,9 +1799,11 @@ static void nilArgumentBuffers(void) {
 // spans a face edge), so samplers whose min and mag filters are nearest get the programmed (clamped) addressing. The
 // WebGL suite uploads such faces from canvases and ImageData (integer-cubemap-texture-sampling, tex-2d-*ui-*_integer-*:
 // about 2400 failures in Chrome and Safari). A nearest gather's 2x2 footprint does span face edges, so the Intel adapter
-// gives cube gathers a linear constexpr sampler, which this leaves seamless (i20). Samplers with a compare function are
-// left alone too: they only ever compare depth (and cube gather_compare at a face edge needs seamless addressing: WebGPU
-// CTS textureGatherCompare, 60 cases). MTLSHIM_NEAREST_CUBE_CLAMP=0 turns it off.
+// gives cube gathers a linear constexpr sampler, which this leaves seamless (i20). Samplers with a compare function get
+// the programmed addressing too: ANGLE passes GL's default compare function (LEQUAL) to every sampler, comparison on or
+// off, so leaving those seamless (as tried for WebGPU's compare gathers) broke every WebGL integer cube again (s52). A
+// cube gather_compare at a face edge through a nearest compare sampler therefore reads one face (WebGPU CTS
+// textureGatherCompare, 60 cases), the smaller loss. MTLSHIM_NEAREST_CUBE_CLAMP=0 turns it off.
 typedef void (*InitSamplerStateIMP)(id, SEL, id);
 static InitSamplerStateIMP origIGInitSamplerState;
 static ptrdiff_t igSamplerStateOffset = -1;
@@ -1810,8 +1812,7 @@ static void igInitSamplerState(id self, SEL _cmd, id descriptor) {
     origIGInitSamplerState(self, _cmd, descriptor);
     uint32_t *state = (uint32_t *)((char *)(__bridge void *)self + igSamplerStateOffset);
     BOOL nearest = !((state[0] >> 14) & 7) && !((state[0] >> 17) & 7);  // MinModeFilter, MagModeFilter
-    BOOL compares = (state[1] >> 1) & 7;  // ShadowFunction: a comparison sampler, only ever used on depth textures
-    if (nearest && !compares && (state[1] & 1)) {
+    if (nearest && (state[1] & 1)) {
         state[1] &= ~1u;  // CubeSurfaceControlMode: programmed
         if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] nearest sampler: programmed cube addressing\n");
     }
