@@ -8,6 +8,8 @@
 // one built for macOS 14 (one-word samplers, the control).
 // Inputs: i05-air-macos14.metallib and i05-air-macos15.4.metallib (build.sh makes them with Xcode's metal compiler from
 // data/i05-samplers.metal). Stock OCLP: FAIL (no pipeline; in-process compiler: crash). Fixed: PASS.
+// On the AMD GPU (the AMD adapter, AMD_SAMPLER_STATE_FIX), libAMDIL902 builds the pipeline but reads such a sampler as 0:
+// stock FAIL (the clamp-to-edge read returns 0), fixed PASS.
 // Argument: GPU name substring (default: Intel).
 #import "repro.h"
 

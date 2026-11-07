@@ -40,6 +40,10 @@
 // (BronzeCompressionMgr_SubmitCondExpand), so the identity sample map is right. AMD_FMASK_FIX=0 turns it off,
 // AMD_FMASK_FIX=1 turns it on with any driver.
 //
+// Ninth job: constexpr samplers from newer front ends (twoWordSamplerStates): libraries built for macOS 15 or later (AIR 2.7)
+// store each one as a [2 x i64] constant, which libAMDIL902 can't read, so the sampler comes out as 0.
+// AMD_SAMPLER_STATE_FIX=0 turns it off.
+//
 // Installed: AMDShared.bundle/Contents/MacOS/AMDTextureAtomics.dylib, loaded by a weak load command in AMDShared.
 // Test use (in-process compiling): DYLD_INSERT_LIBRARIES=Tests/tools/localcc.dylib:build/texatomic.dylib <app>
 //   TEXATOMIC_LOG=1   log what is rewritten
@@ -173,6 +177,11 @@ static struct {
     void *(*constantFP)(void *type, double value);  // same
     void *(*getInt1Ty)(void *context);  // loadThreadgroupBoolsAsBytes
     void *(*getInt8Ty)(void *context);  // same
+    // twoWordSamplerStates
+    void *(*getNamedMetadata)(void *module, const Twine *name);
+    unsigned (*namedMDNumOperands)(void *namedMD);
+    void *(*namedMDGetOperand)(void *namedMD, unsigned i);
+    void (*setInitializer)(void *global, void *constant);
 } api;
 
 static void *resolveIn(const char *bytes, size_t length, const struct symtab_command *table, uint64_t textAddress,
@@ -256,6 +265,10 @@ static bool resolveAPI(void) {
         RESOLVE(getInt8Ty, "__ZN4llvm4Type9getInt8TyERNS_11LLVMContextE");
         RESOLVE(binaryCreate, "__ZN4llvm14BinaryOperator6CreateENS_11Instruction9BinaryOpsEPNS_5ValueES4_RKNS_5TwineEPS1_");
         RESOLVE(constantFP, "__ZN4llvm10ConstantFP3getEPNS_4TypeEd");
+        RESOLVE(getNamedMetadata, "__ZNK4llvm6Module16getNamedMetadataERKNS_5TwineE");
+        RESOLVE(namedMDNumOperands, "__ZNK4llvm11NamedMDNode14getNumOperandsEv");
+        RESOLVE(namedMDGetOperand, "__ZNK4llvm11NamedMDNode10getOperandEj");
+        RESOLVE(setInitializer, "__ZN4llvm14GlobalVariable14setInitializerEPNS_8ConstantE");
 #undef RESOLVE
         api.valid = api.getFunction && api.getOrInsertFunction && api.functionTypeGet && api.constantIntGet &&
                     api.getInt32Ty && api.getVoidTy && api.getContext && api.getUser && api.replaceUsesOfWith &&
@@ -962,6 +975,47 @@ static unsigned loadThreadgroupBoolsAsBytes(void *module) {
     return numLoads;
 }
 
+// The front end in Xcode 26 writes a constexpr sampler (!air.sampler_states) as a [2 x i64] constant: the sampler word with
+// bit 63 clear, then 0. Older front ends, including the runtime compiler that libAMDIL902 was built with, write one i64:
+// the same word with bit 63 set. ILSetupConstantSampler turns the global's initializer into an integer-to-pointer
+// constant, which only works with the one-word form, so such a sampler reads as 0 (i05: a clamp-to-edge read returns 0).
+// Each such global gets the one-word initializer. The global keeps its declared type: ILSetupConstantSampler only reads
+// the initializer and then erases the global. AMD_SAMPLER_STATE_FIX=0 turns this off.
+// Metadata (LLVM 5): kind u8 @0; MDNode: NumOperands u32 @8, operands (Metadata *) right before the node;
+// ConstantAsMetadata (kind 1): Value * @0x80, after Metadata (8 bytes) and its ReplaceableMetadataImpl base (Context,
+// NextIndex, a SmallDenseMap with 4 inline buckets: 120 bytes). The global found there must name this module as its
+// parent. ConstantDataSequential: DataElements @24.
+enum { kMDNodeNumOperands = 8, kConstantAsMetadataKind = 1, kValueAsMetadataValue = 0x80, kConstantDataElements = 24 };
+static unsigned twoWordSamplerStates(void *module) {
+    const char *setting = getenv("AMD_SAMPLER_STATE_FIX");
+    if ((setting && !strcmp(setting, "0")) || !api.getNamedMetadata || !api.namedMDNumOperands || !api.namedMDGetOperand ||
+        !api.setInitializer)
+        return 0;
+    Twine name = {"air.sampler_states", NULL, kTwineCString, kTwineEmpty};
+    void *states = api.getNamedMetadata(module, &name);
+    if (!states) return 0;
+    unsigned fixed = 0;
+    void *i64 = NULL;
+    for (unsigned i = 0, n = api.namedMDNumOperands(states); i < n; i++) {
+        char *node = api.namedMDGetOperand(states, i);  // !{!"air.sampler_state", [2 x i64] addrspace(2)* @sampler}
+        if (!node || *(uint32_t *)(node + kMDNodeNumOperands) != 2) continue;
+        char *global = ((char **)node)[-1];
+        if (!global || *(unsigned char *)global != kConstantAsMetadataKind) continue;
+        global = *(char **)(global + kValueAsMetadataValue);
+        if (!global || *(void **)(global + kFunctionParent) != module) continue;  // GlobalValue::Parent, as for functions
+        if (hungOffUses(global) || numOperands(global) != 1) continue;  // a global with an initializer
+        char *words = operand(global, 0);
+        void *type = words ? typeOf(words) : NULL;
+        if (!i64 && type) i64 = api.getInt64Ty(api.getContext(global));
+        if (!type || typeID(type) != kTypeArray || arrayLength(type) != 2 || elementType(type) != i64) continue;
+        const uint64_t *data = *(const uint64_t **)(words + kConstantDataElements);
+        if (!data || (data[0] >> 63) || data[1]) continue;  // not the two-word form described above
+        api.setInitializer(global, api.constantIntGet(i64, data[0] | 1ull << 63, false));
+        fixed++;
+    }
+    return fixed;
+}
+
 static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *c, void *d, void *e) {
     if (module && resolveAPI()) {
         static bool optionsParsed;  // TEXATOMIC_LLVM_ARGS="-print-after-all ...": libAMDIL902's LLVM options (diagnostics)
@@ -986,6 +1040,8 @@ static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *
         if (cubeArrays && logging()) fprintf(stderr, "[texatomic] %u cube array index(es) clamped\n", cubeArrays);
         unsigned bools = loadThreadgroupBoolsAsBytes(module);
         if (bools && logging()) fprintf(stderr, "[texatomic] %u threadgroup bool load(s) done as bytes\n", bools);
+        unsigned samplers = twoWordSamplerStates(module);
+        if (samplers && logging()) fprintf(stderr, "[texatomic] %u constexpr sampler(s) rewritten in the one-word form\n", samplers);
         unsigned n = lowerTextureAtomics(module);
         if (logging()) fprintf(stderr, "[texatomic] compileShader: %u texture atomic call(s) lowered\n", n);
     } else if (logging()) {
