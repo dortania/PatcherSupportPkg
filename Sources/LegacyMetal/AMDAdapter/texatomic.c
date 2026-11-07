@@ -44,6 +44,9 @@
 // store each one as a [2 x i64] constant, which libAMDIL902 can't read, so the sampler comes out as 0.
 // AMD_SAMPLER_STATE_FIX=0 turns it off.
 //
+// Tenth job: unpack normalized integers exactly (exactUnpackNorm): libAMDIL902's unpack_snorm2x16_to_float is up to
+// 6 ulp off, unpack_unorm2x16_to_float 2. AMD_UNPACK_FIX=0 turns it off.
+//
 // Installed: AMDShared.bundle/Contents/MacOS/AMDTextureAtomics.dylib, loaded by a weak load command in AMDShared.
 // Test use (in-process compiling): DYLD_INSERT_LIBRARIES=Tests/tools/localcc.dylib:build/texatomic.dylib <app>
 //   TEXATOMIC_LOG=1   log what is rewritten
@@ -975,6 +978,65 @@ static unsigned loadThreadgroupBoolsAsBytes(void *module) {
     return numLoads;
 }
 
+// libAMDIL902's air.unpack.snorm2x16 / unorm2x16 come out up to 6 / 2 ulp off in every shader stage (all 65536 values on
+// the R9 M370X); GLSL ES 3.0 (and dEQP shaderpackingfunction, in WebGL 2) allows 1, and the Iris Pro stays within it.
+// Each call becomes the arithmetic the specification describes: each half sign- or zero-extended, converted to float and
+// multiplied by the float 1 / 32767 (1 / 65535), the signed one clamped to -1 by raising -32768 to -32767 first. That's
+// within 1 ulp of the exact quotient for every value. The 4x8 forms are already within 1 ulp and stay as they are.
+// AMD_UNPACK_FIX=0 turns this off.
+enum { kOpcodeFMul = 16, kOpcodeShl = 23, kOpcodeLShr = 24, kOpcodeAShr = 25, kOpcodeAnd = 26, kOpcodeSIToFP = 42 };
+static unsigned exactUnpackNorm(void *module) {
+    const char *setting = getenv("AMD_UNPACK_FIX");
+    if ((setting && !strcmp(setting, "0")) || !api.getFloatTy || !api.binaryCreate || !api.constantFP) return 0;
+    static const struct { const char *name; unsigned fields, bits; bool isSigned; } kForms[] = {
+        {"air.unpack.snorm2x16.v2f32", 2, 16, true},
+        {"air.unpack.unorm2x16.v2f32", 2, 16, false},
+    };
+    unsigned rewritten = 0;
+    for (size_t f = 0; f < sizeof kForms / sizeof kForms[0]; f++) {
+        void *unpack = api.getFunction(module, kForms[f].name, strlen(kForms[f].name));
+        if (!unpack) continue;
+        void *context = api.getContext(unpack);
+        void *i32 = api.getInt32Ty(context), *f32 = api.getFloatTy(context), *maxParams[2] = {i32, i32};
+        void *maxType = api.functionTypeGet(i32, maxParams, 2, false);
+        void *max = kForms[f].isSigned ? api.getOrInsertFunction(module, "air.max.s.i32", strlen("air.max.s.i32"), maxType) : NULL;
+        if (kForms[f].isSigned && (!max || subclassID(max) != subclassID(unpack))) continue;  // a bitcast: another declaration
+        unsigned largest = kForms[f].isSigned ? (1u << (kForms[f].bits - 1)) - 1 : (1u << kForms[f].bits) - 1;
+        void *scale = api.constantFP(f32, (double)(1.0f / (float)largest));
+        void *lowest = api.constantIntGet(i32, (uint64_t)-(int64_t)largest, true);
+        void *mask = api.constantIntGet(i32, (1u << kForms[f].bits) - 1, false);
+        for (void *use = firstUse(unpack); use;) {
+            void *call = api.getUser(use);
+            use = nextUse(use);
+            if (!isCall(call, unpack, 2) || typeOf(operand(call, 0)) != i32) continue;
+            void *packed = operand(call, 0), *result = api.splat(kForms[f].fields, api.constantFP(f32, 0.0));
+            for (unsigned c = 0; c < kForms[f].fields; c++) {
+                void *field;
+                if (kForms[f].isSigned) {  // the field's top bit to bit 31, then an arithmetic shift down: sign-extended
+                    void *up = api.constantIntGet(i32, 32 - kForms[f].bits * (c + 1), false);
+                    void *down = api.constantIntGet(i32, 32 - kForms[f].bits, false);
+                    field = api.binaryCreate(kOpcodeAShr, api.binaryCreate(kOpcodeShl, packed, up, &kNoName, call), down, &kNoName, call);
+                    void *args[2] = {field, lowest};
+                    field = api.castCreate(kOpcodeSIToFP, createCall(max, maxType, args, 2, call), f32, &kNoName, call);
+                } else {
+                    void *shift = api.constantIntGet(i32, kForms[f].bits * c, false);
+                    field = api.binaryCreate(kOpcodeAnd, api.binaryCreate(kOpcodeLShr, packed, shift, &kNoName, call), mask, &kNoName, call);
+                    field = api.castCreate(kOpcodeUIToFP, field, f32, &kNoName, call);
+                }
+                void *merged = api.userNew(96, 3);
+                api.insertElement(merged, result, api.binaryCreate(kOpcodeFMul, field, scale, &kNoName, call),
+                                  api.constantIntGet(i32, c, false), &kNoName, call);
+                result = merged;
+            }
+            api.replaceAllUsesWith(call, result);
+            api.eraseFromParent(call);
+            rewritten++;
+        }
+        if (!firstUse(unpack) && api.eraseFunction) api.eraseFunction(unpack);
+    }
+    return rewritten;
+}
+
 // The front end in Xcode 26 writes a constexpr sampler (!air.sampler_states) as a [2 x i64] constant: the sampler word with
 // bit 63 clear, then 0. Older front ends, including the runtime compiler that libAMDIL902 was built with, write one i64:
 // the same word with bit 63 set. ILSetupConstantSampler turns the global's initializer into an integer-to-pointer
@@ -1042,6 +1104,8 @@ static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *
         if (bools && logging()) fprintf(stderr, "[texatomic] %u threadgroup bool load(s) done as bytes\n", bools);
         unsigned samplers = twoWordSamplerStates(module);
         if (samplers && logging()) fprintf(stderr, "[texatomic] %u constexpr sampler(s) rewritten in the one-word form\n", samplers);
+        unsigned unpacks = exactUnpackNorm(module);
+        if (unpacks && logging()) fprintf(stderr, "[texatomic] %u unpack call(s) computed exactly\n", unpacks);
         unsigned n = lowerTextureAtomics(module);
         if (logging()) fprintf(stderr, "[texatomic] compileShader: %u texture atomic call(s) lowered\n", n);
     } else if (logging()) {
