@@ -1176,8 +1176,9 @@ static unsigned dropSampleCompareBias(LLVMModuleRef module) {
 //   Gathers and implicit LODs in other functions read level 0. INTEL_INTEGER_OFFSET_FIX=0 turns it off.
 // - In compute kernels the back end adds a gather's texel offset to the normalized coordinate as is (FADD coord, 1.0
 //   for an offset of 1), so offsets come out a whole texture size per texel, on any texture format (WebGPU CTS
-//   textureGather sampled_*_coords with offsets in compute, 639 cases); vertex and fragment functions are right. Those
-//   gathers get the same rewrite at level 0. INTEL_KERNEL_GATHER_OFFSET_FIX=0 turns that off.
+//   textureGather sampled_*_coords with offsets in compute, 639 cases; depth_*_coords, 45); vertex and fragment functions
+//   are right; textureGatherCompare, 120). Those gathers (color, depth and compare) get the same rewrite at level 0.
+//   INTEL_KERNEL_GATHER_OFFSET_FIX=0 turns that off.
 // The level computed for gradients is log2 of the longer gradient in texels of level 0 (+ the bias), rounded and clamped
 // to the texture's levels: a nearest mip filter's. A sampler that doesn't mipmap reads level 0 regardless (a mipmapped
 // integer texture with such a sampler, sampled minified: the offset is then in the wrong level's texels).
@@ -1357,6 +1358,10 @@ static unsigned foldIntegerSampleOffsets(LLVMModuleRef module) {
         {"air.sample_texture_3d.", "texture_3d", 3, 2, 4, 3},
         {"air.gather_texture_2d.", "texture_2d", 2, 2, 4, 2},                   // tex, sampler, coord, i1, offset, i32 component, i32
         {"air.gather_texture_2d_array.", "texture_2d_array", 2, 2, 5, 2},       // ..., coord, i32 layer, i1, offset, ...
+        {"air.gather_depth_2d.", "depth_2d", 2, 3, 5, 1},                       // tex, sampler, i32, coord, i1, offset, i32
+        {"air.gather_depth_2d_array.", "depth_2d_array", 2, 3, 6, 1},           // ..., coord, i32 layer, i1, offset, i32
+        {"air.gather_compare_depth_2d.", "depth_2d", 2, 3, 6, 1},               // tex, sampler, i32, coord, float ref, i1, offset, i32
+        {"air.gather_compare_depth_2d_array.", "depth_2d_array", 2, 3, 7, 1},   // ..., coord, i32 layer, float ref, i1, offset, i32
         {"air.sample_texture_2d_grad.", "texture_2d", 2, 2, 6, 1},              // tex, sampler, coord, dPdx, dPdy, i1, offset, i32
         {"air.sample_texture_2d_array_grad.", "texture_2d_array", 2, 2, 7, 1},  // ..., coord, i32 layer, dPdx, dPdy, i1, offset, i32
         {"air.sample_texture_3d_grad.", "texture_3d", 3, 2, 6, 1},
@@ -1366,7 +1371,10 @@ static unsigned foldIntegerSampleOffsets(LLVMModuleRef module) {
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
         const char *name = LLVMGetValueName(f);
         bool integer = integerResult(name, strlen(name));
-        if (!(integer && integers) && !(kernelGathers && !strncmp(name, "air.gather_texture_", 19))) continue;
+        if (!(integer && integers) &&
+            !(kernelGathers && (!strncmp(name, "air.gather_texture_", 19) || !strncmp(name, "air.gather_depth_", 17) ||
+                                !strncmp(name, "air.gather_compare_depth_", 25))))
+            continue;
         for (const auto &kind : kKinds) {
             size_t prefix = strlen(kind.prefix);
             if (strncmp(name, kind.prefix, prefix) || strchr(name + prefix, '_')) continue;  // not 2d_array for 2d, no _grad
@@ -1416,13 +1424,158 @@ static unsigned foldIntegerSampleOffsets(LLVMModuleRef module) {
     return fixed;
 }
 
+// ---- saturating multiply-add ----------------------------------------------------------------------------------------
+// The back end's lowering of madsat (air.mad_sat.{u,s}.*) is wrong: it multiplies into a 64-bit pair, adds c to one half
+// and checks a bit-masked half against 0, missing the carry out of the addition, so madsat(a, 3u, b) returned the wrapped
+// a * 3 + b instead of 0xffffffff for most inputs (differential fuzzing, mslfuzz2: 162 of 195 disagreements; a unit
+// kernel: 180 of 256 threads). It's done with 32-bit operations instead, per lane: lo = a * b, hi = mulhi(a, b),
+// sum = lo + c with its carry; unsigned: saturate to 0xffffffff when hi != 0 or the sum carries; signed: the 64-bit sum's
+// high word hi + (c >> 31) + carry must equal sum >> 31, else saturate to INT_MIN / INT_MAX by its sign. 32-bit elements
+// only. mulhi (air.mul_hi) and madhi (air.mad_hi) are wrong too, with a constant operand or signed (mulhi(a, 3u)
+// returned 0): those take the same high word, buildMulHi below. INTEL_MAD_SAT_FIX=0 turns it off.
+extern "C" {
+LLVMValueRef LLVMBuildMul(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildAdd(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildOr(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildAShr(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildZExt(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
+LLVMValueRef LLVMBuildLShr(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildAnd(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildSub(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+}
+// The high word of a 32 x 32-bit product from 16-bit halves (every partial product fits in 32 bits): unsigned, then
+// corrected for signed operands (hi_s = hi_u - (a < 0 ? b : 0) - (b < 0 ? a : 0)). The back end's own mul_hi is wrong
+// with a constant operand (mulhi(a, 3u) returned 0) and for signed operands (177 of 256 threads wrong).
+static LLVMValueRef buildMulHi(LLVMBuilderRef b, LLVMTypeRef i32, LLVMValueRef x, LLVMValueRef y, bool sign) {
+    LLVMValueRef sixteen = LLVMConstInt(i32, 16, false), mask = LLVMConstInt(i32, 0xffff, false);
+    LLVMValueRef xl = LLVMBuildAnd(b, x, mask, ""), xh = LLVMBuildLShr(b, x, sixteen, "");
+    LLVMValueRef yl = LLVMBuildAnd(b, y, mask, ""), yh = LLVMBuildLShr(b, y, sixteen, "");
+    LLVMValueRef ll = LLVMBuildMul(b, xl, yl, ""), lh = LLVMBuildMul(b, xl, yh, ""), hl = LLVMBuildMul(b, xh, yl, ""), hh = LLVMBuildMul(b, xh, yh, "");
+    LLVMValueRef mid = LLVMBuildAdd(b, LLVMBuildAdd(b, LLVMBuildLShr(b, ll, sixteen, ""), LLVMBuildAnd(b, lh, mask, ""), ""),
+                                    LLVMBuildAnd(b, hl, mask, ""), "");
+    LLVMValueRef hi = LLVMBuildAdd(b, LLVMBuildAdd(b, hh, LLVMBuildLShr(b, lh, sixteen, ""), ""),
+                                   LLVMBuildAdd(b, LLVMBuildLShr(b, hl, sixteen, ""), LLVMBuildLShr(b, mid, sixteen, ""), ""), "");
+    if (!sign) return hi;
+    LLVMValueRef zero = LLVMConstInt(i32, 0, false);
+    LLVMValueRef fromX = LLVMBuildSelect(b, LLVMBuildICmp(b, 40 /* SLT */, x, zero, ""), y, zero, "");
+    LLVMValueRef fromY = LLVMBuildSelect(b, LLVMBuildICmp(b, 40 /* SLT */, y, zero, ""), x, zero, "");
+    return LLVMBuildSub(b, LLVMBuildSub(b, hi, fromX, ""), fromY, "");
+}
+
+static unsigned exactMadSat(LLVMModuleRef module) {
+    if (disabled("INTEL_MAD_SAT_FIX") || runtimeNamesBound(module)) return 0;
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    LLVMBuilderRef b = nullptr;
+    unsigned fixed = 0;
+    std::vector<LLVMValueRef> functions;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) functions.push_back(f);
+    for (LLVMValueRef f : functions) {
+        const char *name = LLVMGetValueName(f);
+        int kind = !strncmp(name, "air.mad_sat.", 12) ? 0 : !strncmp(name, "air.mul_hi.", 11) ? 1 : !strncmp(name, "air.mad_hi.", 11) ? 2 : -1;
+        if (kind < 0) continue;
+        size_t at = kind == 0 ? 12 : 11;  // the u / s after the prefix
+        if ((name[at] != 'u' && name[at] != 's') || name[at + 1] != '.') continue;
+        bool sign = name[at] == 's';
+        int operands = kind == 1 ? 2 : 3;
+        std::vector<LLVMValueRef> calls;
+        for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u)) calls.push_back(LLVMGetUser(u));
+        for (LLVMValueRef call : calls) {
+            if (!LLVMIsACallInst(call) || LLVMGetNumOperands(call) != operands + 1 || LLVMGetOperand(call, operands) != f) continue;
+            LLVMTypeRef type = LLVMTypeOf(call);
+            unsigned n = lanes(type);
+            LLVMTypeRef element = n ? LLVMGetElementType(type) : type;
+            if (LLVMGetTypeKind(element) != kTypeKindInteger || LLVMGetIntTypeWidth(element) != 32) continue;
+            if (!b) b = LLVMCreateBuilderInContext(context);
+            LLVMPositionBuilderBefore(b, call);
+            LLVMValueRef zero = LLVMConstInt(i32, 0, false), all = LLVMConstInt(i32, 0xffffffffu, false);
+            LLVMValueRef result = n ? LLVMGetUndef(type) : nullptr;
+            for (unsigned lane = 0; lane < (n ? n : 1); lane++) {
+                LLVMValueRef v[3];
+                for (int k = 0; k < operands; k++)
+                    v[k] = n ? LLVMBuildExtractElement(b, LLVMGetOperand(call, k), LLVMConstInt(i32, lane, false), "") : LLVMGetOperand(call, k);
+                LLVMValueRef hi = buildMulHi(b, i32, v[0], v[1], sign);
+                if (kind) {  // mulhi(a, b); madhi(a, b, c) = mulhi(a, b) + c
+                    LLVMValueRef r = kind == 1 ? hi : LLVMBuildAdd(b, hi, v[2], "");
+                    result = n ? LLVMBuildInsertElement(b, result, r, LLVMConstInt(i32, lane, false), "") : r;
+                    continue;
+                }
+                LLVMValueRef lo = LLVMBuildMul(b, v[0], v[1], "");
+                LLVMValueRef sum = LLVMBuildAdd(b, lo, v[2], "");
+                LLVMValueRef carry = LLVMBuildICmp(b, 36 /* ULT */, sum, lo, "");
+                LLVMValueRef r;
+                if (!sign) {
+                    LLVMValueRef saturate = LLVMBuildOr(b, LLVMBuildICmp(b, 33 /* NE */, hi, zero, ""), carry, "");
+                    r = LLVMBuildSelect(b, saturate, all, sum, "");
+                } else {
+                    LLVMValueRef thirtyOne = LLVMConstInt(i32, 31, false);
+                    LLVMValueRef high = LLVMBuildAdd(b, LLVMBuildAdd(b, hi, LLVMBuildAShr(b, v[2], thirtyOne, ""), ""),
+                                                     LLVMBuildZExt(b, carry, i32, ""), "");
+                    LLVMValueRef fits = LLVMBuildICmp(b, 32 /* EQ */, high, LLVMBuildAShr(b, sum, thirtyOne, ""), "");
+                    LLVMValueRef bound = LLVMBuildSelect(b, LLVMBuildICmp(b, 40 /* SLT */, high, zero, ""), LLVMConstInt(i32, 0x80000000u, false),
+                                                         LLVMConstInt(i32, 0x7fffffffu, false), "");
+                    r = LLVMBuildSelect(b, fits, sum, bound, "");
+                }
+                result = n ? LLVMBuildInsertElement(b, result, r, LLVMConstInt(i32, lane, false), "") : r;
+            }
+            LLVMReplaceAllUsesWith(call, result);
+            LLVMInstructionEraseFromParent(call);
+            fixed++;
+        }
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
+// ---- saturating add / subtract of constants --------------------------------------------------------------------------
+// The back end folds addsat with two constant operands as a plain add: addsat(95u, 4294967295u) came out 94 instead of
+// 0xffffffff (mslfuzz2; with a variable operand it's right). Such calls (air.add_sat / air.sub_sat, unsigned or signed,
+// 8 to 32 bits) are folded here, exactly. INTEL_CONST_SAT_FIX=0 turns it off.
+extern "C" {
+long long LLVMConstIntGetSExtValue(LLVMValueRef);
+}
+static unsigned foldConstantSaturation(LLVMModuleRef module) {
+    if (disabled("INTEL_CONST_SAT_FIX")) return 0;
+    unsigned fixed = 0;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
+        const char *name = LLVMGetValueName(f);
+        bool add = !strncmp(name, "air.add_sat.", 12), sub = !strncmp(name, "air.sub_sat.", 12);
+        if ((!add && !sub) || (name[12] != 'u' && name[12] != 's') || name[13] != '.') continue;
+        bool sign = name[12] == 's';
+        std::vector<LLVMValueRef> calls;
+        for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u)) calls.push_back(LLVMGetUser(u));
+        for (LLVMValueRef call : calls) {
+            if (!LLVMIsACallInst(call) || LLVMGetNumOperands(call) != 3 || LLVMGetOperand(call, 2) != f) continue;
+            LLVMValueRef x = LLVMGetOperand(call, 0), y = LLVMGetOperand(call, 1);
+            LLVMTypeRef type = LLVMTypeOf(call);
+            if (!LLVMIsAConstantInt(x) || !LLVMIsAConstantInt(y) || LLVMGetTypeKind(type) != kTypeKindInteger) continue;
+            unsigned bits = LLVMGetIntTypeWidth(type);
+            if (bits > 32) continue;
+            long long r, lo, hi;
+            if (sign) {
+                long long a = LLVMConstIntGetSExtValue(x), b = LLVMConstIntGetSExtValue(y);
+                r = add ? a + b : a - b; lo = -(1ll << (bits - 1)); hi = (1ll << (bits - 1)) - 1;
+            } else {
+                long long a = (long long)LLVMConstIntGetZExtValue(x), b = (long long)LLVMConstIntGetZExtValue(y);
+                r = add ? a + b : a - b; lo = 0; hi = (1ll << bits) - 1;
+            }
+            r = r < lo ? lo : r > hi ? hi : r;
+            LLVMReplaceAllUsesWith(call, LLVMConstInt(type, (unsigned long long)r, sign));
+            LLVMInstructionEraseFromParent(call);
+            fixed++;
+        }
+    }
+    return fixed;
+}
+
 // ---- cube gathers: a sampler that keeps seamless addressing -----------------------------------------------------------
 // MetalOldCompat item 30 gives samplers whose min and mag filters are nearest the programmed (clamped) cube addressing,
 // because integer cube textures with tiny faces sample as 0 with the seamless kind in vertex and fragment functions (and
 // a texel read can't stand in there: in fragment functions read_texture_cube ignores the face). A nearest sample never
 // spans a face edge, but a gather's 2x2 footprint does, so cube gathers through such a sampler came back clamped at face
 // edges (WebGPU CTS textureGather sampled_3d_coords, nearest: 330 cases; also any cube shadow-map PCF done with gathers).
-// A gather doesn't filter, and seamless cube addressing ignores the address modes, so cube gathers (not compare gathers)
+// A gather doesn't filter, and seamless cube addressing ignores the address modes, so cube gathers, color and depth (not
+// compare gathers, whose sampler carries the compare function; depth_3d_coords: 60 cases),
 // in vertex and fragment functions take a constexpr sampler with linear filtering instead of the app's: item 30 leaves
 // that one seamless. INTEL_CUBE_GATHER_SAMPLER_FIX=0 turns it off.
 extern "C" {
@@ -1446,7 +1599,9 @@ static unsigned linearCubeGathers(LLVMModuleRef module) {
     unsigned fixed = 0;
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
         const char *name = LLVMGetValueName(f);
-        if (strncmp(name, "air.gather_texture_cube.", 24) && strncmp(name, "air.gather_texture_cube_array.", 30)) continue;
+        if (strncmp(name, "air.gather_texture_cube.", 24) && strncmp(name, "air.gather_texture_cube_array.", 30) &&
+            strncmp(name, "air.gather_depth_cube.", 22) && strncmp(name, "air.gather_depth_cube_array.", 28))
+            continue;
         std::vector<LLVMValueRef> calls;
         for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u)) calls.push_back(LLVMGetUser(u));
         for (LLVMValueRef call : calls) {
@@ -2465,6 +2620,10 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] %u depth comparison(s) with an LOD bias: bias dropped\n", n);
         n = lowerIntegerGradients(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u integer gradient sample(s) done at the level the gradients select\n", n);
+        n = foldConstantSaturation(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u addsat / subsat of constants folded\n", n);
+        n = exactMadSat(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u madsat / mulhi / madhi call(s) done with 32-bit operations\n", n);
         n = linearCubeGathers(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u cube gather(s) given a linear constexpr sampler (seamless at face edges)\n", n);
         n = foldIntegerSampleOffsets(module);

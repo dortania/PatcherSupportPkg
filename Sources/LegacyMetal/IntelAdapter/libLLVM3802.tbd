@@ -22,7 +22,7 @@ exports:
                    _LLVMGetMDNodeNumOperands, _LLVMGetMDNodeOperands, _LLVMGetMDString, _LLVMIsAMDNode, _LLVMIsAMDString,
                    _LLVMIsAConstantInt, _LLVMConstIntGetZExtValue, _LLVMMDNodeInContext,
                    '__ZN4llvm6MDNode18replaceOperandWithEjPNS_8MetadataE',
-                   _LLVMIsAAllocaInst, _LLVMIsAGetElementPtrInst, _LLVMIsABitCastInst, _LLVMIsASelectInst, _LLVMGetVolatile, _LLVMAddNamedMetadataOperand, _LLVMMDStringInContext, _LLVMIsAConstant,
+                   _LLVMIsAAllocaInst, _LLVMIsAGetElementPtrInst, _LLVMIsABitCastInst, _LLVMIsASelectInst, _LLVMGetVolatile, _LLVMAddNamedMetadataOperand, _LLVMMDStringInContext, _LLVMBuildMul, _LLVMBuildAdd, _LLVMConstIntGetSExtValue, _LLVMBuildLShr, _LLVMIsAConstant,
                    _LLVMIsDeclaration, _LLVMGetAttribute, _LLVMGetArrayLength, _LLVMGetStructName, _LLVMBuildInBoundsGEP,
                    _LLVMBuildSelect, _LLVMBuildShl, _LLVMBuildAShr, _LLVMBuildSExt, _LLVMBuildTrunc, _LLVMBuildSIToFP,
                    _LLVMBuildFDiv, _LLVMBuildFCmp, _LLVMGetBasicBlockTerminator, _LLVMGetNumSuccessors, _LLVMGetSuccessor,
