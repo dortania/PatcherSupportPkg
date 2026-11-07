@@ -14,11 +14,13 @@
 //   8. memoryless textures (only Apple GPUs have them, and Metal's texture validation aborts the process)
 //   9. MSL 3.2 device coherence on buffers (the driver's compiler fails the pipeline: MoltenVK's coherent buffers)
 //  10. depth of mipmapped depth-stencil textures read by shaders (small levels come from the wrong place)
+//  11. Stencil8 textures with several levels or slices (blits, the depth unit and shaders address them differently)
 //  12. depth-stencil textures attached as stencil only (the depth unit misaddresses them up to 32 texels wide)
 // 1 and 2 come from riptidewave93's bronzefix, found and tested on Tahoe with a MacPro6,1's FirePro D700s.
 // AMD_BRONZE_COMPAT=0 turns everything off for a process, AMD_EXACT_TRILINEAR=0 only item 3,
 // AMD_BRONZE_SRGB_RESOLVE=0 only item 4, AMD_BRONZE_MEMORYLESS=0 only item 8, AMD_BRONZE_DEPTH_MIPS=0 only item 10,
-// AMD_BRONZE_STENCIL_VIEW=0 only item 1's stencil view descriptors, AMD_BRONZE_STENCIL_DEPTH=0 only item 12;
+// AMD_BRONZE_STENCIL_VIEW=0 only item 1's stencil view descriptors, AMD_BRONZE_STENCIL8=0 only item 11,
+// AMD_BRONZE_STENCIL_DEPTH=0 only item 12;
 // AMD_BRONZE_VERBOSE=1 logs.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -130,12 +132,14 @@ static void *viewInit(void *self, SEL _cmd, void *parent, MTLPixelFormat format,
     return view;
 }
 
+static BOOL isStencil8StandIn(id texture);  // item 11
 static MTLRenderPassDescriptor *stencilViewToParent(MTLRenderPassDescriptor *descriptor) {
     id<MTLTexture> view = descriptor.stencilAttachment.texture;
-    if (!origViewInit || view.pixelFormat != MTLPixelFormatStencil8 || !view.parentTexture) return descriptor;
+    BOOL standIn = view.parentTexture && isStencil8StandIn(view);  // item 11: any view of a stand-in goes to the stand-in
+    if (!standIn && (!origViewInit || view.pixelFormat != MTLPixelFormatStencil8 || !view.parentTexture)) return descriptor;
     NSUInteger level = descriptor.stencilAttachment.level, slice = descriptor.stencilAttachment.slice;
     id<MTLTexture> root = view;
-    while (root.parentTexture && root.parentTexture.pixelFormat == root.pixelFormat) {
+    while (root.parentTexture && (standIn || root.parentTexture.pixelFormat == root.pixelFormat)) {
         level += root.parentRelativeLevel;
         slice += root.parentRelativeSlice;
         root = root.parentTexture;
@@ -497,8 +501,11 @@ static void installRenderPassHooks(void) {
 typedef void (*CopyToBufferIMP)(id, SEL, id, NSUInteger, NSUInteger, MTLOrigin, MTLSize, id, NSUInteger, NSUInteger, NSUInteger, MTLBlitOption);
 static CopyToBufferIMP origCopyToBuffer;
 
+static BOOL isStencil8StandIn(id texture);  // item 11
 static void copyToBuffer(id self, SEL _cmd, id texture, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLSize size, id buffer,
                          NSUInteger offset, NSUInteger bytesPerRow, NSUInteger bytesPerImage, MTLBlitOption options) {
+    if (!(options & (MTLBlitOptionDepthFromDepthStencil | MTLBlitOptionStencilFromDepthStencil)) && isStencil8StandIn(texture))
+        options |= MTLBlitOptionStencilFromDepthStencil;  // item 11
     NSUInteger bytes = options & MTLBlitOptionStencilFromDepthStencil ? 1 : options & MTLBlitOptionDepthFromDepthStencil ? 4 : 0;
     if (bytes && !bytesPerRow) bytesPerRow = size.width * bytes;
     if (bytes && !bytesPerImage) bytesPerImage = bytesPerRow * size.height;
@@ -555,6 +562,8 @@ static BOOL needsDepthMipLayout(MTLTextureDescriptor *descriptor);
 static __thread BOOL creatingDepthMips;  // item 10
 static __thread uint32_t changedDepthLevels;  // item 10: levels whose depth plane lost the stencil padding
 static void markDepthMipTexture(void *texture, uint32_t levels);
+static BOOL needsStencil8StandIn(MTLTextureDescriptor *descriptor);  // item 11
+static void finishStencil8StandIn(void *texture);
 
 static void *newTexture(void *self, SEL _cmd, void *descriptor) {
     MTLTextureDescriptor *requested = (__bridge MTLTextureDescriptor *)descriptor;
@@ -563,12 +572,19 @@ static void *newTexture(void *self, SEL _cmd, void *descriptor) {
         requested.storageMode = MTLStorageModePrivate;
         if (verbose()) fprintf(stderr, "[bronzecompat] memoryless texture made private\n");
     }
+    BOOL standIn = needsStencil8StandIn(requested);
+    if (standIn) {
+        requested = [requested copy];
+        requested.pixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+        requested.usage |= MTLTextureUsagePixelFormatView;
+    }
     BOOL outer = creatingDepthMips;
     uint32_t outerLevels = changedDepthLevels;
     creatingDepthMips = needsDepthMipLayout(requested);
     changedDepthLevels = 0;
     void *texture = origNewTexture(self, _cmd, (__bridge void *)requested);
     if (texture && creatingDepthMips && changedDepthLevels) markDepthMipTexture(texture, changedDepthLevels);
+    if (texture && standIn) finishStencil8StandIn(texture);
     creatingDepthMips = outer;
     changedDepthLevels = outerLevels;
     return texture;
@@ -576,6 +592,152 @@ static void *newTexture(void *self, SEL _cmd, void *descriptor) {
 
 static void installNewTextureHook(void) {
     origNewTexture = (NewTextureIMP)swizzle(objc_getClass("BronzeMtlDevice"), @selector(newTextureWithDescriptor:), (IMP)newTexture);
+}
+
+// ---- 11. Stencil8 textures with several levels or slices --------------------------------------------------------------
+// The driver lays a Stencil8 texture out like the stencil plane of Depth32Float_Stencil8 (1D tiled) but gives its mip
+// table and image descriptor tile index 0 (2D tiled), which only one level and slice survive: past that, blits, the depth
+// unit and shaders address it three different ways (s37: after a pass on level 0 / slice 0, the stencil test and shader
+// reads see nothing that blits put there; WebGPU stencil8 textures with mips or array layers in Safari and Firefox).
+// Setting tile index 4 everywhere makes shaders and blits agree but not the depth unit, whose stencil-only setup keeps
+// a leftover depth tiling (item 12). So such textures (single sample, more than one level or slice) are made as
+// Depth32Float_Stencil8, which is right everywhere: their image descriptor is the stencil view's (shaders read stencil
+// from the texture itself), copied into the device's descriptor table again; blits to and from buffers get
+// MTLBlitOptionStencilFromDepthStencil; copies with a real Stencil8 texture go through a buffer; render passes get the
+// depth attachment of item 12; Stencil8 views of them are stencil views (item 1). The texture reports
+// Depth32Float_Stencil8 (5 bytes a texel instead of 1), and Stencil8 views of it are X32_Stencil8 views (Metal refuses
+// Stencil8 ones). Heap textures are left alone. Test: s37, s48.
+static const void *const kStencil8StandIn = &kStencil8StandIn;
+
+static BOOL needsStencil8StandIn(MTLTextureDescriptor *descriptor) {
+    static int enabled = -1;
+    if (enabled < 0) enabled = !disabled("AMD_BRONZE_STENCIL8");
+    return enabled && descriptor.pixelFormat == MTLPixelFormatStencil8 && descriptor.sampleCount <= 1 &&
+           (descriptor.mipmapLevelCount > 1 || descriptor.arrayLength > 1 || descriptor.textureType == MTLTextureTypeCube ||
+            descriptor.textureType == MTLTextureTypeCubeArray) &&
+           membersOffset && resOffset >= 0 && setGlobalSRD;
+}
+
+static void finishStencil8StandIn(void *texture) {
+    id<MTLTexture> t = (__bridge id)texture, view = [t newTextureViewWithPixelFormat:MTLPixelFormatX32_Stencil8];
+    unsigned slot = (unsigned)*(uint64_t *)((uint8_t *)texture + membersOffset + 0x50);
+    if (view && slot) {
+        memcpy((uint8_t *)texture + resOffset, (uint8_t *)(__bridge void *)view + resOffset, 32);
+        setGlobalSRD((__bridge void *)t.device, 0, slot, 8, (uint8_t *)texture + resOffset, false);
+    }
+    objc_setAssociatedObject(t, kStencil8StandIn, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (verbose()) fprintf(stderr, "[bronzecompat] Stencil8 texture (%lu levels, %lu slices) made as Depth32Float_Stencil8\n",
+                           (unsigned long)t.mipmapLevelCount, (unsigned long)t.arrayLength);
+}
+
+static BOOL isStencil8StandIn(id texture) {
+    if (!texture || ![texture respondsToSelector:@selector(parentTexture)]) return NO;
+    while ([texture parentTexture]) texture = [texture parentTexture];
+    return objc_getAssociatedObject(texture, kStencil8StandIn) != nil;
+}
+
+typedef void (*FromBufferIMP)(id, SEL, id, NSUInteger, NSUInteger, NSUInteger, MTLSize, id, NSUInteger, NSUInteger, MTLOrigin);
+typedef void (*FromBufferOptionsIMP)(id, SEL, id, NSUInteger, NSUInteger, NSUInteger, MTLSize, id, NSUInteger, NSUInteger, MTLOrigin, MTLBlitOption);
+typedef void (*ToBufferIMP)(id, SEL, id, NSUInteger, NSUInteger, MTLOrigin, MTLSize, id, NSUInteger, NSUInteger, NSUInteger);
+typedef void (*TextureToTextureIMP)(id, SEL, id, NSUInteger, NSUInteger, MTLOrigin, MTLSize, id, NSUInteger, NSUInteger, MTLOrigin);
+typedef void (*TextureLevelsIMP)(id, SEL, id, NSUInteger, NSUInteger, id, NSUInteger, NSUInteger, NSUInteger, NSUInteger);
+static FromBufferIMP origFromBuffer;
+static FromBufferOptionsIMP origFromBufferOptions;
+static ToBufferIMP origToBuffer;
+static TextureToTextureIMP origTextureToTexture;
+static TextureLevelsIMP origTextureLevels;
+
+static void fromBuffer(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInteger bytesPerRow, NSUInteger bytesPerImage, MTLSize size,
+                       id texture, NSUInteger slice, NSUInteger level, MTLOrigin origin) {
+    if (!isStencil8StandIn(texture)) return origFromBuffer(self, _cmd, buffer, offset, bytesPerRow, bytesPerImage, size, texture, slice, level, origin);
+    [self copyFromBuffer:buffer sourceOffset:offset sourceBytesPerRow:bytesPerRow sourceBytesPerImage:bytesPerImage sourceSize:size
+               toTexture:texture destinationSlice:slice destinationLevel:level destinationOrigin:origin options:MTLBlitOptionStencilFromDepthStencil];
+}
+
+static void fromBufferOptions(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInteger bytesPerRow, NSUInteger bytesPerImage, MTLSize size,
+                              id texture, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLBlitOption options) {
+    if (!(options & (MTLBlitOptionDepthFromDepthStencil | MTLBlitOptionStencilFromDepthStencil)) && isStencil8StandIn(texture))
+        options |= MTLBlitOptionStencilFromDepthStencil;
+    origFromBufferOptions(self, _cmd, buffer, offset, bytesPerRow, bytesPerImage, size, texture, slice, level, origin, options);
+}
+
+static void toBuffer(id self, SEL _cmd, id texture, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLSize size, id buffer,
+                     NSUInteger offset, NSUInteger bytesPerRow, NSUInteger bytesPerImage) {
+    if (!isStencil8StandIn(texture)) return origToBuffer(self, _cmd, texture, slice, level, origin, size, buffer, offset, bytesPerRow, bytesPerImage);
+    [self copyFromTexture:texture sourceSlice:slice sourceLevel:level sourceOrigin:origin sourceSize:size toBuffer:buffer destinationOffset:offset
+        destinationBytesPerRow:bytesPerRow destinationBytesPerImage:bytesPerImage options:MTLBlitOptionStencilFromDepthStencil];
+}
+
+// One region between a stand-in and a real Stencil8 texture: stencil bytes through a temporary buffer.
+static void stencilThroughBuffer(id<MTLBlitCommandEncoder> blit, id<MTLTexture> from, NSUInteger fromSlice, NSUInteger fromLevel, MTLOrigin fromOrigin,
+                                 MTLSize size, id<MTLTexture> to, NSUInteger toSlice, NSUInteger toLevel, MTLOrigin toOrigin) {
+    NSUInteger rowBytes = size.width, imageBytes = rowBytes * size.height;
+    id<MTLBuffer> bounce = [from.device newBufferWithLength:MAX(imageBytes * size.depth, 1) options:MTLResourceStorageModePrivate];
+    [blit copyFromTexture:from sourceSlice:fromSlice sourceLevel:fromLevel sourceOrigin:fromOrigin sourceSize:size toBuffer:bounce destinationOffset:0
+        destinationBytesPerRow:rowBytes destinationBytesPerImage:imageBytes
+                  options:isStencil8StandIn(from) ? MTLBlitOptionStencilFromDepthStencil : MTLBlitOptionNone];
+    [blit copyFromBuffer:bounce sourceOffset:0 sourceBytesPerRow:rowBytes sourceBytesPerImage:imageBytes sourceSize:size toTexture:to
+        destinationSlice:toSlice destinationLevel:toLevel destinationOrigin:toOrigin
+                 options:isStencil8StandIn(to) ? MTLBlitOptionStencilFromDepthStencil : MTLBlitOptionNone];
+}
+
+static void textureToTexture(id self, SEL _cmd, id from, NSUInteger fromSlice, NSUInteger fromLevel, MTLOrigin fromOrigin, MTLSize size, id to,
+                             NSUInteger toSlice, NSUInteger toLevel, MTLOrigin toOrigin) {
+    if (isStencil8StandIn(from) == isStencil8StandIn(to))
+        return origTextureToTexture(self, _cmd, from, fromSlice, fromLevel, fromOrigin, size, to, toSlice, toLevel, toOrigin);
+    stencilThroughBuffer(self, from, fromSlice, fromLevel, fromOrigin, size, to, toSlice, toLevel, toOrigin);
+}
+
+static void textureLevels(id self, SEL _cmd, id from, NSUInteger fromSlice, NSUInteger fromLevel, id to, NSUInteger toSlice, NSUInteger toLevel,
+                          NSUInteger sliceCount, NSUInteger levelCount) {
+    if (isStencil8StandIn(from) == isStencil8StandIn(to))
+        return origTextureLevels(self, _cmd, from, fromSlice, fromLevel, to, toSlice, toLevel, sliceCount, levelCount);
+    id<MTLTexture> source = from;
+    for (NSUInteger l = 0; l < levelCount; l++)
+        for (NSUInteger s = 0; s < sliceCount; s++) {
+            MTLSize size = MTLSizeMake(MAX(source.width >> (fromLevel + l), 1), MAX(source.height >> (fromLevel + l), 1), 1);
+            stencilThroughBuffer(self, from, fromSlice + s, fromLevel + l, MTLOriginMake(0, 0, 0), size, to, toSlice + s, toLevel + l,
+                                 MTLOriginMake(0, 0, 0));
+        }
+}
+
+// Metal itself refuses a Stencil8 view of a Depth32Float_Stencil8 texture (it asserts), so a Stencil8 view of a stand-in
+// is made as the X32_Stencil8 view it means. As a stencil attachment, such a view becomes its stand-in (item 1). The
+// hooks return the +1 view as void *, outside ARC, as the view init hook does.
+typedef void *(*ViewIMP)(id, SEL, MTLPixelFormat);
+typedef void *(*ViewRangeIMP)(id, SEL, MTLPixelFormat, MTLTextureType, NSRange, NSRange);
+typedef void *(*ViewSwizzleIMP)(id, SEL, MTLPixelFormat, MTLTextureType, NSRange, NSRange, MTLTextureSwizzleChannels);
+static ViewIMP origView;
+static ViewRangeIMP origViewRange;
+static ViewSwizzleIMP origViewSwizzle;
+static MTLPixelFormat standInViewFormat(id texture, MTLPixelFormat format) {
+    return format == MTLPixelFormatStencil8 && isStencil8StandIn(texture) ? MTLPixelFormatX32_Stencil8 : format;
+}
+static void *view(id self, SEL _cmd, MTLPixelFormat format);
+static void *view(id self, SEL _cmd, MTLPixelFormat format) { return origView(self, _cmd, standInViewFormat(self, format)); }
+static void *viewRange(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices);
+static void *viewRange(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices) {
+    return origViewRange(self, _cmd, standInViewFormat(self, format), type, levels, slices);
+}
+static void *viewSwizzle(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices,
+                         MTLTextureSwizzleChannels swizzle);
+static void *viewSwizzle(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices,
+                         MTLTextureSwizzleChannels swizzle) {
+    return origViewSwizzle(self, _cmd, standInViewFormat(self, format), type, levels, slices, swizzle);
+}
+
+static void installStencil8Fix(void) {
+    if (disabled("AMD_BRONZE_STENCIL8")) return;
+    Class texture = objc_getClass("BronzeMtlTexture");
+    origView = (ViewIMP)swizzle(texture, @selector(newTextureViewWithPixelFormat:), (IMP)view);
+    origViewRange = (ViewRangeIMP)swizzle(texture, @selector(newTextureViewWithPixelFormat:textureType:levels:slices:), (IMP)viewRange);
+    origViewSwizzle = (ViewSwizzleIMP)swizzle(texture, @selector(newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:), (IMP)viewSwizzle);
+    Class blit = objc_getClass("BronzeMtlBlitCmdEncoder");
+    origFromBuffer = (FromBufferIMP)swizzle(blit, @selector(copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:), (IMP)fromBuffer);
+    origFromBufferOptions = (FromBufferOptionsIMP)swizzle(blit, @selector(copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:options:), (IMP)fromBufferOptions);
+    origToBuffer = (ToBufferIMP)swizzle(blit, @selector(copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:), (IMP)toBuffer);
+    origTextureToTexture = (TextureToTextureIMP)swizzle(blit, @selector(copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:), (IMP)textureToTexture);
+    origTextureLevels = (TextureLevelsIMP)swizzle(blit, @selector(copyFromTexture:sourceSlice:sourceLevel:toTexture:destinationSlice:destinationLevel:sliceCount:levelCount:), (IMP)textureLevels);
 }
 
 // ---- 9. MSL 3.2 device coherence ----------------------------------------------------------------------------------
@@ -823,6 +985,7 @@ __attribute__((constructor)) static void init(void) {
         if (!disabled("AMD_BRONZE_DEPTH_MIPS")) installDepthMipFix(name);  // before the render pass hooks, which route for it
         installRenderPassHooks();
         installCopyFix();
+        installStencil8Fix();
         installWebKitFixes();
         memorylessFix = !disabled("AMD_BRONZE_MEMORYLESS");
         installNewTextureHook();
