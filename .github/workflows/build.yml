@@ -11,8 +11,18 @@ concurrency:
     group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
 
 jobs:
+  # Nothing is signed, built or uploaded while a license or attribution violation or
+  # malware is present (see build-gate.yml). The gate opens again once it is fixed.
+  gate:
+    name: Build gate
+    uses: ./.github/workflows/build-gate.yml
+    permissions:
+      contents: read
+      issues: read
+
   build_mojave:
     name: Zip and Upload Binaries
+    needs: gate
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v3
