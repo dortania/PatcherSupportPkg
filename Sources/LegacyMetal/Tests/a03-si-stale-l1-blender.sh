@@ -9,7 +9,8 @@
 # shader writes.
 # Small shaders didn't reproduce it (the race needs the G-buffer shader's scheduling), so this renders Blender's own
 # test scene 3 times with EEVEE on the GPU, as its render tests do. Each render is compared with Blender's reference
-# inside Blender (FAIL: > 1% of pixels off by > 0.05 in a channel).
+# inside Blender (FAIL: > 0.1% of pixels off by > 0.05 in a channel; fixed renders are identical, 0.00%, while
+# without the fix 0.5-1% of pixels are black blocks, which the earlier 1% bound let through).
 # Stock OCLP (SI GPU): FAIL (every render had blocks here). Fixed: PASS (identical to the reference).
 set -u
 BLENDER=${1:?usage: $0 <Blender binary> <Blender checkout>} SRC=${2:?usage: $0 <Blender binary> <Blender checkout>}
@@ -33,5 +34,5 @@ for run in 1 2 3; do
     case "$pct" in ''|size*) worst=100 ;; *) awk "BEGIN{exit !($pct > $worst)}" && worst=$pct ;; esac
 done
 rm -rf "$OUT"
-if awk "BEGIN{exit !($worst > 1)}"; then echo "FAIL a03-si-stale-l1: object_info renders differ from the reference:$results of pixels (black blocks)"; exit 1; fi
+if awk "BEGIN{exit !($worst > 0.1)}"; then echo "FAIL a03-si-stale-l1: object_info renders differ from the reference:$results of pixels (black blocks)"; exit 1; fi
 echo "PASS a03-si-stale-l1: 3 object_info renders match the reference ($results of pixels off)"

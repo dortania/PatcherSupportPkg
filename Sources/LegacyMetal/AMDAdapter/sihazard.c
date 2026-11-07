@@ -192,33 +192,84 @@ static bool mtbufLoad(unsigned op) { return op <= 3; }                          
 static bool mimgLoad(unsigned op) { return op <= 3; }                                     // image_load, _mip, _pck, _pck_sgn
 static bool mimgWrite(unsigned op) { return (op >= 8 && op <= 11) || (op >= 15 && op <= 31); }  // image_store*, atomics
 
+// Only loads a store to the same descriptor can come before need it: the state before each instruction (descriptors
+// stored to, image stores) flows forward along fall-through and branch edges, loop back edges included, to a fixed
+// point. Loads that no store reaches keep their L1 caching. Indirect jumps (s_setpc and friends) fall back to every
+// load of a written resource; AMD_SI_L1_FIX=all asks for that everywhere.
 unsigned siBypassL1ForWrittenResources(uint32_t *code, uint32_t bytes, const char **unsupported) {
     *unsupported = NULL;
     uint32_t count = bytes / 4;
     if (!count || bytes % 4) return 0;
-    uint32_t written[2] = {0, 0};  // buffer descriptor SGPRs (first of 4) used by a store or atomic
+    // Per call, not static: MTLCompilerService can compile on several threads at once.
+    struct L1Inst {
+        uint32_t start, target;                     // dword offset; branch target in dwords
+        uint32_t stored[2], storeMask[2], loads[2];  // descriptors stored to before it / by it / it loads from
+        uint8_t flags;  // 1 terminator, 2 branch, 4 image store, 8 buffer load, 16 image load, 32 image state in
+    } *t = calloc(count, sizeof *t);
+    if (!t) { *unsupported = "out of memory"; return 0; }
+    uint32_t n = 0, written[2] = {0, 0};
     bool imageWrites = false, indirect = false;
     Inst in;
-    for (int pass = 0; pass < 2; pass++) {
-        unsigned changed = 0;
-        for (uint32_t i = 0; i < count; i += in.dwords) {
-            if (!decode(code, count, i, &in, &indirect)) { *unsupported = "unknown encoding"; return 0; }
-            uint32_t w = code[i], w1 = in.dwords > 1 ? code[i + 1] : 0;  // never past the end (1-dword s_endpgm last)
-            unsigned fmt = w >> 26, srsrc = ((w1 >> 16) & 0x1f) * 4;
-            if (fmt == 0x38 || fmt == 0x3a) {  // MUBUF, MTBUF
-                unsigned op = fmt == 0x38 ? (w >> 18) & 0x7f : (w >> 16) & 0x7;
-                bool load = fmt == 0x38 ? mubufLoad(op) : mtbufLoad(op), write = fmt == 0x38 ? mubufWrite(op) : !mtbufLoad(op);
-                uint32_t mask[2] = {0, 0};
-                setReg(mask, srsrc);
-                if (pass == 0 && write) setReg(written, srsrc);
-                if (pass == 1 && load && overlaps(mask, written) && !(w & (1u << 14))) { code[i] = w | (1u << 14); changed++; }
-            } else if (fmt == 0x3c) {  // MIMG: GLC is bit 13
-                unsigned op = (w >> 18) & 0x7f;
-                if (pass == 0 && mimgWrite(op)) imageWrites = true;
-                if (pass == 1 && imageWrites && mimgLoad(op) && !(w & (1u << 13))) { code[i] = w | (1u << 13); changed++; }
-            }
+    for (uint32_t i = 0; i < count; i += in.dwords) {
+        if (!decode(code, count, i, &in, &indirect)) { free(t); *unsupported = "unknown encoding"; return 0; }
+        uint32_t w = code[i], w1 = in.dwords > 1 ? code[i + 1] : 0;  // never past the end (1-dword s_endpgm last)
+        unsigned fmt = w >> 26, srsrc = ((w1 >> 16) & 0x1f) * 4;
+        struct L1Inst *k = &t[n++];
+        k->start = i;
+        k->flags = (in.terminator ? 1 : 0) | (in.branch ? 2 : 0);
+        k->target = in.branch ? (uint32_t)((int32_t)(i + 1) + (int16_t)(w & 0xffff)) : 0;
+        if (fmt == 0x38 || fmt == 0x3a) {  // MUBUF, MTBUF
+            unsigned op = fmt == 0x38 ? (w >> 18) & 0x7f : (w >> 16) & 0x7;
+            bool load = fmt == 0x38 ? mubufLoad(op) : mtbufLoad(op), write = fmt == 0x38 ? mubufWrite(op) : !mtbufLoad(op);
+            if (write) { setReg(k->storeMask, srsrc); setReg(written, srsrc); }
+            if (load) { k->flags |= 8; setReg(k->loads, srsrc); }
+        } else if (fmt == 0x3c) {  // MIMG
+            unsigned op = (w >> 18) & 0x7f;
+            if (mimgWrite(op)) { k->flags |= 4; imageWrites = true; }
+            if (mimgLoad(op)) k->flags |= 16;
         }
-        if (pass == 1) return changed;
     }
-    return 0;
+    const char *setting = getenv("AMD_SI_L1_FIX");
+    bool everywhere = indirect || (setting && !strcmp(setting, "all"));
+    if (!everywhere) {
+        // Forward dataflow: t[k].stored = what may have been stored before instruction k.
+        bool changed = true;
+        for (int round = 0; changed && round < 64; round++) {
+            changed = false;
+            for (uint32_t k = 0; k < n && !everywhere; k++) {
+                uint32_t out0 = t[k].stored[0] | t[k].storeMask[0], out1 = t[k].stored[1] | t[k].storeMask[1];
+                bool img = (t[k].flags & 32) || (t[k].flags & 4);
+                uint32_t succ[2] = {k + 1, UINT32_MAX};
+                if (t[k].flags & 1) succ[0] = UINT32_MAX;  // s_endpgm / s_branch: no fall-through
+                if (t[k].flags & 2) {                      // branch target: the instruction starting at that dword
+                    uint32_t lo = 0, hi = n;
+                    while (lo < hi) { uint32_t mid = (lo + hi) / 2; if (t[mid].start < t[k].target) lo = mid + 1; else hi = mid; }
+                    if (lo < n && t[lo].start == t[k].target) succ[1] = lo; else everywhere = true;  // a branch into an instruction
+                }
+                for (int e = 0; e < 2; e++) {
+                    uint32_t j = succ[e];
+                    if (j >= n) continue;
+                    if ((t[j].stored[0] | out0) != t[j].stored[0] || (t[j].stored[1] | out1) != t[j].stored[1] || (img && !(t[j].flags & 32))) {
+                        t[j].stored[0] |= out0; t[j].stored[1] |= out1;
+                        if (img) t[j].flags |= 32;
+                        changed = true;
+                    }
+                }
+            }
+            if (round == 63 && changed) everywhere = true;
+        }
+    }
+    unsigned glc = 0;
+    for (uint32_t k = 0; k < n; k++) {
+        uint32_t i = t[k].start, w = code[i];
+        if (t[k].flags & 8) {
+            bool hit = overlaps(t[k].loads, everywhere ? written : t[k].stored);
+            if (hit && !(w & (1u << 14))) { code[i] = w | (1u << 14); glc++; }
+        } else if (t[k].flags & 16) {
+            bool hit = everywhere ? imageWrites : (t[k].flags & 32) != 0;
+            if (hit && !(w & (1u << 13))) { code[i] = w | (1u << 13); glc++; }  // MIMG: GLC is bit 13
+        }
+    }
+    free(t);
+    return glc;
 }
