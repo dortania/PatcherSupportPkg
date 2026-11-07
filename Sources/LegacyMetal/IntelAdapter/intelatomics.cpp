@@ -2176,7 +2176,8 @@ static const char *const kICBEPaths[] = {
     "/System/Library/Extensions/AppleIntelHD5000GraphicsGLDriver.bundle/Contents/MacOS/iCBE.dylib",
 };
 // INTELTEX_DUMP_KERNELS=<dir> (debugging): each pixel shader compile's SIMD8 and SIMD16 kernels as
-// ps-<pid>-<n>[-clobbered]-simd8/16.bin, and the IGIL text they came from as ps-<pid>-<n>.igil.
+// ps-<pid>-<n>[-clobbered]-simd8/16.bin, their first constant register as ps-<pid>-<n>.info and the IGIL text they came
+// from as ps-<pid>-<n>.igil.
 static void dumpPixelKernels(void *output, const char *tag) {
     const char *dir = getenv("INTELTEX_DUMP_KERNELS");
     const uint8_t *block = output ? *(uint8_t **)output : nullptr;
@@ -2193,6 +2194,11 @@ static void dumpPixelKernels(void *output, const char *tag) {
         snprintf(path, sizeof path, "%s/ps-%d-%04d%s-simd%d.bin", dir, getpid(), n, tag, k ? 16 : 8);
         if (FILE *f = fopen(path, "wb")) { fwrite(kernel, 1, size, f); fclose(f); }
     }
+    uint32_t start8 = 0, start16 = 0;  // the kernels' first constant/setup register (3DSTATE_PS dispatch GRF start)
+    memcpy(&start8, block + 0x481f, 4);
+    memcpy(&start16, block + 0x4823, 4);
+    snprintf(path, sizeof path, "%s/ps-%d-%04d%s.info", dir, getpid(), n, tag);
+    if (FILE *f = fopen(path, "w")) { fprintf(f, "start8 %u start16 %u\n", start8, start16); fclose(f); }
     snprintf(path, sizeof path, "%s/ps-%d-%04d%s.igil", dir, getpid(), n, tag);
     if (!lastIGILForDump.empty())
         if (FILE *f = fopen(path, "w")) { fputs(lastIGILForDump.c_str(), f); fclose(f); }

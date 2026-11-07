@@ -90,7 +90,7 @@ static inline Bits uncompact(uint64_t c) {
     return n;
 }
 
-enum { kSel = 2, kSend = 49, kSendc = 50, kPln = 90, kLine = 89, kNop = 126 };
+enum { kSel = 2, kSend = 49, kSendc = 50, kMath = 56, kPln = 90, kLine = 89, kNop = 126 };
 static inline bool isFlow(unsigned op) { return op >= 32 && op <= 47; }
 static inline bool isThreeSource(unsigned op) { return op == 24 || op == 26 || op == 91 || op == 92; }
 static inline bool isOneSource(unsigned op) {
@@ -102,7 +102,7 @@ static inline int strideOf(unsigned code) { return code ? 1 << (code - 1) : 0; }
 // GRF byte ranges an instruction reads and writes. ok = false: something this doesn't follow (indirect addressing, a
 // message descriptor in a register).
 struct Access {
-    bool ok = true, flagWrite = false, flow = false, eot = false;
+    bool ok = true, flagWrite = false, predicated = false, flow = false, eot = false;
     unsigned opcode = 0;
     std::vector<int> reads, writes;  // byte addresses (reg * 32 + offset)
 };
@@ -122,7 +122,9 @@ static inline Access decode(const Bits &n) {
     int lanes = 1 << n.get(23, 21);
     if (isFlow(op)) { a.flow = true; return a; }
     if (op == kNop) return a;
-    a.flagWrite = n.get(27, 24) != 0 && op != kSend && op != kSendc && op != kSel;  // sel's field picks min/max
+    // bits 27:24 are a conditional modifier except in sel (min/max), math (the function) and sends (the shared function)
+    a.flagWrite = n.get(27, 24) != 0 && op != kSend && op != kSendc && op != kSel && op != kMath;
+    a.predicated = n.get(19, 16) != 0 && op != kSel;  // a predicated write keeps the old value in the other lanes
     if (isThreeSource(op)) {  // align16: dst and sources in whole dwords; a replicated source reads one
         int dst = (int)n.get(63, 56) * 32 + (int)n.get(55, 53) * 4;
         for (int i = 0; i < lanes * 4; i++) a.writes.push_back(dst + i);
@@ -208,6 +210,7 @@ static inline int findCompareClobber(const uint8_t *kernel, size_t size, Clobber
         }
         for (int b : a.writes) {
             if (b < 0 || b >= kRegs) return -2;
+            if (a.predicated) { clobberedBy[b] = -1; continue; }  // merged with the old value: not an overwrite
             if (a.flagWrite && unread[b] && lastWrite[b] >= 0) { clobberedBy[b] = index; clobberedFrom[b] = lastWrite[b]; }
             else clobberedBy[b] = -1;
             lastWrite[b] = index;
