@@ -208,6 +208,8 @@ static struct {
     // privateArrayIndexedStores
     void *(*gepCreate)(void *sourceType, void *pointer, ArrayRef indices, const Twine *name, void *insertBefore);
     void (*selectInit)(void *self, void *condition, void *ifTrue, void *ifFalse, const Twine *name, void *insertBefore);
+    // cubeIntegerGathers
+    void *(*extractValueCreate)(void *aggregate, ArrayRef indices, const Twine *name, void *insertBefore);
 } api;
 
 static void *resolveIn(const char *bytes, size_t length, const struct symtab_command *table, uint64_t textAddress,
@@ -297,6 +299,7 @@ static bool resolveAPI(void) {
         RESOLVE(setInitializer, "__ZN4llvm14GlobalVariable14setInitializerEPNS_8ConstantE");
         RESOLVE(gepCreate, "__ZN4llvm17GetElementPtrInst6CreateEPNS_4TypeEPNS_5ValueENS_8ArrayRefIS4_EERKNS_5TwineEPNS_11InstructionE");
         RESOLVE(selectInit, "__ZN4llvm10SelectInstC2EPNS_5ValueES2_S2_RKNS_5TwineEPNS_11InstructionE");
+        RESOLVE(extractValueCreate, "__ZN4llvm16ExtractValueInst6CreateEPNS_5ValueENS_8ArrayRefIjEERKNS_5TwineEPNS_11InstructionE");
 #undef RESOLVE
         api.valid = api.getFunction && api.getOrInsertFunction && api.functionTypeGet && api.constantIntGet &&
                     api.getInt32Ty && api.getVoidTy && api.getContext && api.getUser && api.replaceUsesOfWith &&
@@ -907,6 +910,148 @@ static unsigned shiftIntegerGatherCoords(void *module) {
         }
     }
     return shifted;
+}
+
+// Gather on integer cube textures: the forced nearest filtering above hits cube textures too (every point but the texel
+// centres reads the footprint one texel over), and no shifted coordinate fixes it, because the footprint of a point near
+// a face edge takes texels from the neighbouring face and integer fetch4 doesn't cross edges. So such a gather becomes 4
+// nearest samples at level 0, at the centres of the footprint's texels, found in face space with Metal's (Vulkan's)
+// face selection: the two coordinates across the face snap to the 2x2 texel centres around the point, and a centre past
+// an edge moves onto the neighbouring face (that coordinate clamped to +-1, the major one scaled by 1 - 1 / size: the
+// centre of the neighbour's edge row; extending the face plane instead would land near texel boundaries on big faces).
+// Corners, where gather is undefined, give one of the three texels. AMD_CUBE_GATHER_FIX=0 turns it off. Test: a17.
+enum { kOpcodeFAdd = 12, kCubeFMul = 16, kOpcodeAndBits = 26, kOpcodeOrBits = 27, kOpcodeFCmp = 52, kOpcodeExtractValue = 62,
+       kPredicateOGT = 2, kPredicateOGE = 3, kPredicateOLT = 4 };
+
+typedef struct { void *before, *f32, *i32, *i1; } CubeEmit;
+static void *cgSelect(CubeEmit *e, void *c, void *a, void *b) {
+    char *s = api.userNew(96, 3);
+    api.selectInit(s, c, a, b, &kNoName, e->before);
+    return s;
+}
+static void *cgOp(CubeEmit *e, unsigned op, void *a, void *b) { return api.binaryCreate(op, a, b, &kNoName, e->before); }
+static void *cgCmp(CubeEmit *e, unsigned p, void *a, void *b) { return api.cmpCreate(kOpcodeFCmp, p, a, b, &kNoName, e->before); }
+static void *cgF(CubeEmit *e, double v) { return api.constantFP(e->f32, v); }
+static void *cgCall(CubeEmit *e, void *function, void *type, void **args, unsigned count) {
+    return createCall(function, type, args, count, e->before);
+}
+static void *cgGet(CubeEmit *e, void *vector, void *index) {
+    char *x = api.userNew(96, 2);
+    api.extractElement(x, vector, index, &kNoName, e->before);
+    return x;
+}
+static void *cgSet(CubeEmit *e, void *vector, void *value, unsigned index) {
+    char *x = api.userNew(96, 3);
+    api.insertElement(x, vector, value, api.constantIntGet(e->i32, index, false), &kNoName, e->before);
+    return x;
+}
+
+static unsigned cubeIntegerGathers(void *module) {
+    const char *setting = getenv("AMD_CUBE_GATHER_FIX");
+    if (!gatherFixEnabled() || (setting && !strcmp(setting, "0")) || !api.getFloatTy || !api.binaryCreate ||
+        !api.constantFP || !api.selectInit || !api.extractValueCreate || !api.getInt1Ty)
+        return 0;
+    static const char *const kTypes[] = {"s.v4i32", "u.v4i32", "s.v4i16", "u.v4i16"};
+    unsigned rewritten = 0;
+    for (unsigned array = 0; array < 2; array++)
+    for (size_t t = 0; t < sizeof kTypes / sizeof kTypes[0]; t++) {
+        const char *dim = array ? "cube_array" : "cube";
+        char name[64];
+        snprintf(name, sizeof name, "air.gather_texture_%s.%s", dim, kTypes[t]);
+        void *gather = api.getFunction(module, name, strlen(name));
+        if (!gather) continue;
+        void *context = api.getContext(gather);
+        CubeEmit e = {NULL, api.getFloatTy(context), api.getInt32Ty(context), api.getInt1Ty(context)};
+        void *next;
+        for (void *use = firstUse(gather); use; use = next) {
+            next = nextUse(use);
+            void *call = api.getUser(use);
+            if (hungOffUses(call) || numOperands(call) != 6 + array || operand(call, numOperands(call) - 1) != gather) continue;
+            void *texture = operand(call, 0), *sampler = operand(call, 1), *coord = operand(call, 2);
+            void *layer = array ? operand(call, 3) : NULL, *component = operand(call, 3 + array);
+            // Every function it calls, before anything changes: a declaration of another type (a bitcast) stops here.
+            void *fParams[1] = {e.f32}, *fType = api.functionTypeGet(e.f32, fParams, 1, false);
+            void *floorF = api.getOrInsertFunction(module, "air.floor.f32", strlen("air.floor.f32"), fType);
+            void *fabsF = api.getOrInsertFunction(module, "air.fabs.f32", strlen("air.fabs.f32"), fType);
+            char widthName[64], sampleName[64];
+            snprintf(widthName, sizeof widthName, "air.get_width_texture_%s", dim);
+            snprintf(sampleName, sizeof sampleName, "air.sample_texture_%s.%s", dim, kTypes[t]);
+            void *wParams[2] = {typeOf(texture), e.i32}, *wType = api.functionTypeGet(e.i32, wParams, 2, false);
+            void *widthF = api.getOrInsertFunction(module, widthName, strlen(widthName), wType);
+            void *sParams[8] = {typeOf(texture), typeOf(sampler), typeOf(coord), e.i32, e.i1, e.f32, e.f32, e.i32};
+            if (!array) memmove(sParams + 3, sParams + 4, 4 * sizeof sParams[0]);
+            void *sType = api.functionTypeGet(typeOf(call), sParams, 7 + array, false);
+            void *sampleF = api.getOrInsertFunction(module, sampleName, strlen(sampleName), sType);
+            if (!floorF || !fabsF || !widthF || !sampleF || subclassID(floorF) != kValueFunction || subclassID(fabsF) != kValueFunction ||
+                subclassID(widthF) != kValueFunction || subclassID(sampleF) != kValueFunction)
+                return rewritten;
+            e.before = call;
+            void *zero = api.constantIntGet(e.i32, 0, false), *yes = api.constantIntGet(e.i1, 1, false), *no = api.constantIntGet(e.i1, 0, false);
+            void *wArgs[2] = {texture, zero};
+            void *size = api.castCreate(kOpcodeUIToFP, cgCall(&e, widthF, wType, wArgs, 2), e.f32, &kNoName, call);
+            void *d[3], *a[3];
+            for (unsigned c = 0; c < 3; c++) {
+                d[c] = cgGet(&e, coord, api.constantIntGet(e.i32, c, false));
+                a[c] = cgCall(&e, fabsF, fType, &d[c], 1);
+            }
+            // Face selection: x on ties with y or z, then y on a tie with z.
+            void *isX = cgOp(&e, kOpcodeAndBits, cgCmp(&e, kPredicateOGE, a[0], a[1]), cgCmp(&e, kPredicateOGE, a[0], a[2]));
+            void *isY = cgSelect(&e, isX, no, cgCmp(&e, kPredicateOGE, a[1], a[2]));
+            void *major = cgSelect(&e, isX, a[0], cgSelect(&e, isY, a[1], a[2]));
+            void *p[3];
+            for (unsigned c = 0; c < 3; c++) p[c] = cgOp(&e, kOpcodeFDiv, d[c], major);
+            // On the face plane: sv, tv the coordinates along the face's s and t axes (s = sc / ma, t = tc / ma, maybe negated).
+            void *sv = cgSelect(&e, isX, p[2], p[0]), *tv = cgSelect(&e, isY, p[2], p[1]);
+            void *pm = cgSelect(&e, isX, p[0], cgSelect(&e, isY, p[1], p[2]));
+            void *sNeg = cgSelect(&e, isX, cgCmp(&e, kPredicateOGT, d[0], cgF(&e, 0)), cgSelect(&e, isY, no, cgCmp(&e, kPredicateOLT, d[2], cgF(&e, 0))));
+            void *tNeg = cgSelect(&e, isY, cgCmp(&e, kPredicateOLT, d[1], cgF(&e, 0)), yes);
+            void *negZero = cgF(&e, -0.0), *halfSize = cgOp(&e, kCubeFMul, size, cgF(&e, 0.5));
+            void *step = cgOp(&e, kOpcodeFDiv, cgF(&e, 2), size);
+            void *lo[2], *hi[2], *axis[2] = {sv, tv}, *neg[2] = {sNeg, tNeg};
+            for (unsigned c = 0; c < 2; c++) {
+                void *st = cgSelect(&e, neg[c], cgOp(&e, kOpcodeFSub, negZero, axis[c]), axis[c]);
+                void *texels = cgOp(&e, kOpcodeFSub, cgOp(&e, kCubeFMul, cgOp(&e, kOpcodeFAdd, st, cgF(&e, 1)), halfSize), cgF(&e, 0.5));
+                void *first = cgCall(&e, floorF, fType, &texels, 1);
+                void *centre0 = cgOp(&e, kOpcodeFSub, cgOp(&e, kCubeFMul, cgOp(&e, kOpcodeFAdd, first, cgF(&e, 0.5)), step), cgF(&e, 1));
+                void *centre1 = cgOp(&e, kOpcodeFAdd, centre0, step);
+                lo[c] = cgSelect(&e, neg[c], cgOp(&e, kOpcodeFSub, negZero, centre0), centre0);
+                hi[c] = cgSelect(&e, neg[c], cgOp(&e, kOpcodeFSub, negZero, centre1), centre1);
+            }
+            void *inner = cgOp(&e, kCubeFMul, pm, cgOp(&e, kOpcodeFSub, cgF(&e, 1), cgOp(&e, kOpcodeFDiv, cgF(&e, 1), size)));
+            // Gather order: (u0, v1), (u1, v1), (u1, v0), (u0, v0).
+            void *corners[4][2] = {{lo[0], hi[1]}, {hi[0], hi[1]}, {hi[0], lo[1]}, {lo[0], lo[1]}}, *result = NULL;
+            for (unsigned k = 0; k < 4; k++) {
+                void *over[2], *clamped[2];
+                for (unsigned c = 0; c < 2; c++) {
+                    void *v = corners[k][c], *above = cgCmp(&e, kPredicateOGT, v, cgF(&e, 1)), *below = cgCmp(&e, kPredicateOLT, v, cgF(&e, -1));
+                    over[c] = cgOp(&e, kOpcodeOrBits, above, below);
+                    clamped[c] = cgSelect(&e, above, cgF(&e, 1), cgSelect(&e, below, cgF(&e, -1), v));
+                }
+                void *m = cgSelect(&e, cgOp(&e, kOpcodeOrBits, over[0], over[1]), inner, pm);
+                void *qx = cgSelect(&e, isX, m, clamped[0]);
+                void *qy = cgSelect(&e, isX, clamped[1], cgSelect(&e, isY, m, clamped[1]));
+                void *qz = cgSelect(&e, isX, clamped[0], cgSelect(&e, isY, clamped[1], m));
+                void *q = cgSet(&e, cgSet(&e, cgSet(&e, coord, qx, 0), qy, 1), qz, 2);
+                void *sArgs[8] = {texture, sampler, q, layer, yes, cgF(&e, 0), cgF(&e, 0), zero};
+                if (!array) memmove(sArgs + 3, sArgs + 4, 4 * sizeof sArgs[0]);
+                void *sample = cgCall(&e, sampleF, sType, sArgs, 7 + array);
+                unsigned first = 0;
+                void *texel = api.extractValueCreate(sample, (ArrayRef){(void **)&first, 1}, &kNoName, call);
+                result = cgSet(&e, result ? result : texel, cgGet(&e, texel, component), k);
+            }
+            // The gather's texels (extractvalue 0, the vector) come from the samples now; the call itself is left to dead
+            // code elimination, or to whatever reads its residency byte.
+            void *after;
+            for (void *u = firstUse(call); u; u = after) {
+                after = nextUse(u);
+                void *user = api.getUser(u);
+                if (subclassID(user) == kValueInstruction + kOpcodeExtractValue && typeOf(user) == typeOf(result))
+                    api.replaceAllUsesWith(user, result);
+            }
+            rewritten++;
+        }
+    }
+    return rewritten;
 }
 
 // A cube array index below 0 reads the wrong face: the hardware clamps the slice, 8 * index + face, so -1 reads the first
@@ -1529,6 +1674,8 @@ static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *
         if (ldexps && logging()) fprintf(stderr, "[texatomic] %u half ldexp call(s) computed as float\n", ldexps);
         unsigned gathers = shiftIntegerGatherCoords(module);
         if (gathers && logging()) fprintf(stderr, "[texatomic] %u integer gather(s): coordinates shifted half a texel\n", gathers);
+        unsigned cubeGathers = cubeIntegerGathers(module);
+        if (cubeGathers && logging()) fprintf(stderr, "[texatomic] %u integer cube gather(s): 4 samples each\n", cubeGathers);
         unsigned cubeArrays = clampCubeArrayIndices(module);
         if (cubeArrays && logging()) fprintf(stderr, "[texatomic] %u cube array index(es) clamped\n", cubeArrays);
         unsigned bools = loadThreadgroupBoolsAsBytes(module);
