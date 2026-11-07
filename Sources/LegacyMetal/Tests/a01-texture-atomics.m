@@ -3,7 +3,9 @@
 // compile, but the drivers have no texture-atomic instructions behind them: the atomics do nothing (the texels stay 0).
 // Blender assumes texture atomics on every macOS 14+ Mac, so EEVEE's shadow maps stay empty (no shadows). The adapters
 // lower texture atomics to the GPUs' image atomic instructions. 64x64 threads add 1 into 4 texels (1024 each) and
-// record the old values they got back (every value 0..1023 exactly once per texel).
+// record the old values they got back (every value 0..1023 exactly once per texel). A kernel without atomics whose
+// constants look like the AMD adapter's tags (0x7A71AD9B, 0x7A700001) must build and compute too: the adapter took
+// them for tagged atomics, found none to rewrite and failed the pipeline (found by differential fuzzing).
 // Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD; run with Intel for the Intel adapter).
 #import "repro.h"
 
@@ -11,7 +13,8 @@ static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n
     "kernel void k(texture2d<uint, access::read_write> t [[texture(0)]], device uint *old [[buffer(0)]], uint2 g [[thread_position_in_grid]]) {\n"
     "  uint i = g.y * 64u + g.x;\n"
     "  old[i] = t.atomic_fetch_add(uint2(i & 1u, (i >> 1) & 1u), 1u).x;\n"
-    "}\n";
+    "}\n"
+    "kernel void lookalike(device uint *o [[buffer(0)]], uint i [[thread_position_in_grid]]) { o[i] = (i * 0x7A71AD9Bu) ^ 0x7A700001u; }\n";
 
 int main(int argc, char **argv) {
     @autoreleasepool {
@@ -52,6 +55,20 @@ int main(int argc, char **argv) {
         if (sums[0] != 1024 || sums[1] != 1024 || sums[2] != 1024 || sums[3] != 1024 || dupes)
             return FAIL(bug, "%s: texel sums %u %u %u %u (want 1024 each), %d returned old values wrong or repeated", dev.name.UTF8String,
                         sums[0], sums[1], sums[2], sums[3], dupes);
+        id<MTLComputePipelineState> lookalike = [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"lookalike"] error:&err];
+        if (!lookalike)
+            return FAIL(bug, "%s: a kernel with constants like the adapter's tags (0x7A71AD9B) doesn't build: %s", dev.name.UTF8String,
+                        err.localizedDescription.UTF8String);
+        id<MTLBuffer> values = [dev newBufferWithLength:64 * 4 options:MTLResourceStorageModeShared];
+        cb = [[dev newCommandQueue] commandBuffer];
+        e = [cb computeCommandEncoder];
+        [e setComputePipelineState:lookalike]; [e setBuffer:values offset:0 atIndex:0];
+        [e dispatchThreads:MTLSizeMake(64, 1, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
+        [e endEncoding];
+        reproRun(cb);
+        for (uint32_t i = 0; i < 64; i++)
+            if (((uint32_t *)values.contents)[i] != ((i * 0x7A71AD9Bu) ^ 0x7A700001u))
+                return FAIL(bug, "%s: tag-like constants: thread %u computed %08x", dev.name.UTF8String, i, ((uint32_t *)values.contents)[i]);
         return PASS(bug, "%s: 4096 texture atomic adds: sums 1024 each, returned values unique", dev.name.UTF8String);
     }
 }

@@ -2013,6 +2013,7 @@ static int hookedSCCompileShader(void *sc, void *src, void *out) {
     if (atomics || ldsBase || gathers || fmasks || loops) {
         Text edited = {0}, based = {0};
         int n = atomics ? rewriteIL(il.buf, &edited) : 0;
+        if (atomics && n == 0) atomics = false;  // "0x7A70" / "0x7A71" in an unrelated constant (0x7A71AD9B): no tags
         int k = ldsBase && (!atomics || n > 0) ? dropThreadgroupBase(atomics ? edited.buf : il.buf, &based) : 0;
         const char *text = k > 0 ? based.buf : atomics && n > 0 ? edited.buf : gathers || fmasks || loops ? il.buf : NULL;
         void *binary = NULL;
