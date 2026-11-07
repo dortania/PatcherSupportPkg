@@ -57,6 +57,10 @@
 // Thirteenth job: rotates as shifts (rotatesAsShifts): SC folds a constant rotate by a multiple of 8 the wrong way.
 // AMD_ROTATE_FIX=0 turns it off.
 //
+// Sixteenth job: 8- and 16-bit divisions, remainders, right shifts and comparisons done in 32 bits
+// (narrowUnsignedConstants): libAMDIL902 neither clears nor extends the upper bits of narrow values. AMD_NARROW_CONSTANT_FIX=0
+// turns it off.
+//
 // Fifteenth job: single-bit tests as bit-field extracts (singleBitTests): libAMDIL902 drops the `& 1` of `(x & 1) != 0`
 // once the comparison is or'ed with another one. AMD_BIT_TEST_FIX=0 turns it off.
 //
@@ -1350,6 +1354,91 @@ static unsigned singleBitTestsAsExtracts(void *module, void *function, void *i32
     return rewritten;
 }
 
+// The front end narrows 32-bit integer code to i8 / i16 when the values fit (`136u / (c[1] | 1u)` with c a uchar array
+// becomes `udiv i8 -120, %c`). libAMDIL902 keeps such values in 32-bit registers without clearing or extending their
+// upper bits: it widens a narrow constant by sign extension (the IL divides 0xFFFFFF88 by the zero-extended divisor),
+// and a narrow value computed by 32-bit operations and truncated (`uchar(~x)`, kept in a register once job 11 has made
+// a uchar array registers) goes into the division as it is. Operations whose result depends on those upper bits come
+// out wrong (found by differential fuzzing). Each udiv / urem / sdiv / srem / lshr / ashr and each comparison on scalar
+// i8 / i16 is done in i32 instead: constants zero- or sign-extended as the operation needs, other operands through
+// air.extract_bits (zero-extending, or sign-extending for the signed operations; the optimizer can't see through it and
+// narrow back), the result truncated. AMD_NARROW_CONSTANT_FIX=0 turns this off.
+enum { kOpcodeUDiv = 17, kOpcodeSDiv = 18, kOpcodeURem = 20, kOpcodeSRem = 21, kOpcodeTrunc = 36, kPredicateUGT = 34,
+       kPredicateULE = 37, kPredicateSGT = 38, kPredicateSLE = 41 };
+static unsigned narrowUnsignedConstants(void *module) {
+    const char *setting = getenv("AMD_NARROW_CONSTANT_FIX");
+    if ((setting && !strcmp(setting, "0")) || !api.binaryCreate || !api.castCreate || !api.functionTypeGet || !api.getOrInsertFunction) return 0;
+    enum { kMax = 512 };
+    static const unsigned kBinary[] = {kOpcodeUDiv, kOpcodeSDiv, kOpcodeURem, kOpcodeSRem, kOpcodeLShr, kOpcodeAShr};
+    void *found[kMax];
+    unsigned count = 0, rewritten = 0;
+    void *i32 = NULL, *extract[2] = {NULL, NULL}, *extractType = NULL;  // [0] unsigned, [1] signed
+    char *functions = (char *)module + kModuleFunctions;
+    for (char *fn = nextNode(functions); fn != functions; fn = nextNode(fn)) {
+        char *function = fn - kFunctionNode, *blocks = function + kFunctionBlocks;
+        if (*(void **)(function + kFunctionParent) != module) return 0;  // layout mismatch: leave the module alone
+        if (nextNode(blocks) == blocks) continue;
+        if (!i32) i32 = api.getInt32Ty(api.getContext(function));
+        for (char *bn = nextNode(blocks); bn != blocks; bn = nextNode(bn)) {
+            char *block = bn - kBlockNode, *insts = block + kBlockInstructions;
+            if (*(void **)(block + kBlockParent) != function) return 0;
+            for (char *in = nextNode(insts); in != insts; in = nextNode(in)) {
+                char *inst = in - kInstructionNode;
+                if (*(void **)(inst + kInstructionParent) != block) return 0;
+                bool candidate = isInstruction(inst, kOpcodeICmp);
+                for (size_t k = 0; k < sizeof kBinary / sizeof *kBinary && !candidate; k++) candidate = isInstruction(inst, kBinary[k]);
+                if (!candidate || hungOffUses(inst) || numOperands(inst) != 2 || count == kMax) continue;
+                void *type = typeOf(operand(inst, 0));
+                if (typeID(type) != kTypeInteger) continue;
+                unsigned width = *(uint32_t *)((char *)type + 8) >> 8;  // IntegerType bit width: Type SubclassData
+                if (width == 8 || width == 16) found[count++] = inst;
+            }
+        }
+    }
+    for (unsigned c = 0; c < count; c++) {
+        void *inst = found[c], *type = typeOf(operand(inst, 0)), *wide[2];
+        unsigned width = *(uint32_t *)((char *)type + 8) >> 8, predicate = 0, opcode = 0;
+        bool compare = isInstruction(inst, kOpcodeICmp), isSigned;
+        if (compare) {
+            predicate = *(uint16_t *)((char *)inst + 0x12) & kOpcodeICmpPredicateMask;
+            isSigned = predicate >= kPredicateSGT && predicate <= kPredicateSLE;
+        } else {
+            for (size_t k = 0; k < sizeof kBinary / sizeof *kBinary; k++)
+                if (isInstruction(inst, kBinary[k])) opcode = kBinary[k];
+            isSigned = opcode == kOpcodeSDiv || opcode == kOpcodeSRem || opcode == kOpcodeAShr;
+        }
+        for (int k = 0; k < 2; k++) {
+            bool extendSigned = isSigned && !(opcode == kOpcodeAShr && k == 1);  // a shift amount is unsigned
+            uint64_t value;
+            void *v = operand(inst, k);
+            if (constantIntValue(v, &value)) {
+                value &= (1ull << width) - 1;
+                if (extendSigned && (value >> (width - 1)) & 1) value |= ~((1ull << width) - 1);
+                wide[k] = api.constantIntGet(i32, value & 0xffffffffu, false);
+                continue;
+            }
+            int s = extendSigned ? 1 : 0;
+            if (!extract[s]) {
+                if (!extractType) {
+                    void *params[3] = {i32, i32, i32};
+                    extractType = api.functionTypeGet(i32, params, 3, false);
+                }
+                const char *name = s ? "air.extract_bits.s.i32" : "air.extract_bits.u.i32";
+                extract[s] = api.getOrInsertFunction(module, name, strlen(name), extractType);
+                if (!extract[s] || subclassID(extract[s]) != kValueFunction) return rewritten;  // a bitcast: another declaration
+            }
+            void *args[3] = {api.castCreate(kOpcodeZExt, v, i32, &kNoName, inst), api.constantIntGet(i32, 0, false), api.constantIntGet(i32, width, false)};
+            wide[k] = createCall(extract[s], extractType, args, 3, inst);
+        }
+        void *result = compare ? api.cmpCreate(kOpcodeICmp, predicate, wide[0], wide[1], &kNoName, inst)
+                               : api.castCreate(kOpcodeTrunc, api.binaryCreate(opcode, wide[0], wide[1], &kNoName, inst), type, &kNoName, inst);
+        api.replaceAllUsesWith(inst, result);
+        api.eraseFromParent(inst);
+        rewritten++;
+    }
+    return rewritten;
+}
+
 static unsigned singleBitTests(void *module) {
     const char *setting = getenv("AMD_BIT_TEST_FIX");
     if ((setting && !strcmp(setting, "0")) || !api.functionTypeGet || !api.getOrInsertFunction) return 0;
@@ -1433,6 +1522,8 @@ static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *
         if (samplers && logging()) fprintf(stderr, "[texatomic] %u constexpr sampler(s) rewritten in the one-word form\n", samplers);
         unsigned unpacks = exactUnpackNorm(module);
         if (unpacks && logging()) fprintf(stderr, "[texatomic] %u unpack call(s) computed exactly\n", unpacks);
+        unsigned narrow = narrowUnsignedConstants(module);
+        if (narrow && logging()) fprintf(stderr, "[texatomic] %u narrow division(s), shift(s) or comparison(s) done in 32 bits\n", narrow);
         unsigned bitTests = singleBitTests(module);
         if (bitTests && logging()) fprintf(stderr, "[texatomic] %u single-bit test(s) done as bit-field extracts\n", bitTests);
         unsigned saturating = plainSaturatingAddSub(module);
