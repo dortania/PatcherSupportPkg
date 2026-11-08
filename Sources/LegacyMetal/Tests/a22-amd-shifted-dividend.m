@@ -2,22 +2,24 @@
 // `(int)uint(x >> k) / c` with x a ulong (or long) and 0 < k < 32 comes out as the unsigned division, for constant
 // divisors of either sign, and `%` likewise (found by fuzzing with 64-bit integers: (int)uint(min(a, b) >> 31) / 65535).
 // The adapter builds such dividends from the 32-bit halves, which divide right.
-// Checked: k = 31, 16 and 1, / 65535, / -3, % 7, a long shifted right, a select between two cuts, against the CPU on
-// 256 threads.
+// Checked: k = 31, 16 and 1, / 65535, / -3, % 7, a long shifted right, a select between two cuts, a long remainder
+// and a quotient of non-negative longs, against the CPU on 256 threads.
 // Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
 #import "repro.h"
 
-enum { kThreads = 256, kOut = 7 };
+enum { kThreads = 256, kOut = 9 };
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"
     "kernel void k(device const uint *in [[buffer(0)]], device int *out [[buffer(1)]], uint t [[thread_position_in_grid]]) {\n"
     "  ulong x = (ulong(in[4 * t]) << 32) | ulong(in[4 * t + 1]), y = (ulong(in[4 * t + 2]) << 32) | ulong(in[4 * t + 3]);\n"
-    "  out[7 * t] = (int)uint(min(x, y) >> 31) / 65535;\n"
-    "  out[7 * t + 1] = (int)uint(x >> 16) / 65535;\n"
-    "  out[7 * t + 2] = (int)uint(x >> 1) / -3;\n"
-    "  out[7 * t + 3] = (int)uint(y >> 31) % 7;\n"
-    "  out[7 * t + 4] = (int)uint(long(x) >> 20) / 1000;\n"
-    "  out[7 * t + 5] = (int)uint(x * y >> 9) / 12345;\n"
-    "  out[7 * t + 6] = (int)uint((long)x >= (long)y ? x >> 7 : y >> 11) / 111;\n"
+    "  out[9 * t] = (int)uint(min(x, y) >> 31) / 65535;\n"
+    "  out[9 * t + 1] = (int)uint(x >> 16) / 65535;\n"
+    "  out[9 * t + 2] = (int)uint(x >> 1) / -3;\n"
+    "  out[9 * t + 3] = (int)uint(y >> 31) % 7;\n"
+    "  out[9 * t + 4] = (int)uint(long(x) >> 20) / 1000;\n"
+    "  out[9 * t + 5] = (int)uint(x * y >> 9) / 12345;\n"
+    "  out[9 * t + 6] = (int)uint((long)x >= (long)y ? x >> 7 : y >> 11) / 111;\n"
+    "  out[9 * t + 7] = (int)uint((long)x % (long)((y & 0x7ffffffffffffffful) | 1ul)) / 1234567;\n"
+    "  out[9 * t + 8] = (int)uint((long)(x >> 8) / (long)((y >> 40) | 1ul)) % 777;\n"
     "}\n";
 
 int main(int argc, char **argv) {
@@ -53,6 +55,8 @@ int main(int argc, char **argv) {
                 (int32_t)(uint32_t)((int64_t)x >> 20) / 1000,
                 (int32_t)(uint32_t)((x * y) >> 9) / 12345,
                 (int32_t)(uint32_t)((int64_t)x >= (int64_t)y ? x >> 7 : y >> 11) / 111,
+                (int32_t)(uint32_t)((int64_t)x % (int64_t)((y & 0x7fffffffffffffffull) | 1)) / 1234567,
+                (int32_t)(uint32_t)((int64_t)(x >> 8) / (int64_t)((y >> 40) | 1)) % 777,
             };
             for (int w = 0; w < kOut; w++)
                 if (got[kOut * t + w] != want[w]) { if (first < 0) first = kOut * t + w; wrong++; }

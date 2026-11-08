@@ -1992,8 +1992,10 @@ static unsigned wideBitBranches(void *module) {
 // negative dividends, and / -3 is as wrong): found by fuzzing with 64-bit integers. Built from the halves,
 // `(uint(x) >> k) | (uint(x >> 32) << (32 - k))`, the same value divides right (anything between the cut and the
 // division, an xor or a select, does too). So such dividends are built that way, also when a 64-bit select picks
-// between such cuts (`(int)uint(c ? x >> 7 : y >> 11) / 111`, each arm cut on its own then). AMD_SHIFTED_DIVIDEND_FIX=0
-// turns this off. Test a22.
+// between such cuts (`(int)uint(c ? x >> 7 : y >> 11) / 111`, each arm cut on its own then). Other 64-bit values cut and
+// divided go wrong the same way when their top bits are known zeros (`(int)uint(x % y) / c` with y < 2^63:
+// libAMDIL902 seems to take the known-zero top bits of the 64-bit value for bit 31 of the cut); their low half goes
+// through two 16-bit extract_bits. AMD_SHIFTED_DIVIDEND_FIX=0 turns this off. Test a22.
 static bool cutShift(void *v, uint64_t *k) {  // lshr/ashr i64 by a constant 1..31
     return (isInstruction(v, kOpcodeLShr) || isInstruction(v, kOpcodeAShr)) && !hungOffUses(v) && numOperands(v) == 2 &&
            intBits(typeOf(v)) == 64 && constantIntValue(operand(v, 1), k) && *k > 0 && *k < 32;
@@ -2035,12 +2037,37 @@ static unsigned shiftedDividends(void *module) {
                 // the cut shift itself, or a select between values one of which is a cut shift (`(c ? x >> 7 : y >> 11)`)
                 bool select = isInstruction(src, kOpcodeSelect) && !hungOffUses(src) && numOperands(src) == 3 && api.userNew && api.selectInit &&
                               (cutShift(operand(src, 1), &k) || cutShift(operand(src, 2), &k));
-                if (cutShift(src, &k) || select) found[count++] = inst;
+                // or any other 64-bit instruction cut to 32 bits (`(int)uint(x % y) / c`: the known-zero top bits of the
+                // remainder are taken for bit 31 just the same), not a mere extension. Any divisor: one that is a call here
+                // (a rotate of constants) can still fold to a constant in libAMDIL902.
+                bool other = subclassID(src) >= kValueInstruction && intBits(typeOf(src)) == 64 && !isInstruction(src, kOpcodeZExt) &&
+                             !isInstruction(src, kOpcodeSExtWide) && api.functionTypeGet && api.getOrInsertFunction;
+                if (cutShift(src, &k) || select || other) found[count++] = inst;
             }
         }
     }
+    void *extract = NULL, *extractType = NULL;
     for (unsigned c = 0; c < count; c++) {
         void *inst = found[c], *cut = operand(inst, 0), *src = operand(cut, 0), *i32 = typeOf(inst), *value;
+        uint64_t k;
+        bool selectOfCuts = isInstruction(src, kOpcodeSelect) && (cutShift(operand(src, 1), &k) || cutShift(operand(src, 2), &k));
+        if (!cutShift(src, &k) && !selectOfCuts) {  // the low half through two 16-bit extract_bits, which the DAG can't see into
+            if (!extract) {
+                void *params[3] = {i32, i32, i32};
+                extractType = api.functionTypeGet(i32, params, 3, false);
+                extract = api.getOrInsertFunction(module, "air.extract_bits.u.i32", strlen("air.extract_bits.u.i32"), extractType);
+                if (!extract || subclassID(extract) != kValueFunction) return rewritten;  // a bitcast: another declaration
+            }
+            void *low = api.castCreate(kOpcodeTrunc, src, i32, &kNoName, inst);
+            void *lo[3] = {low, api.constantIntGet(i32, 0, false), api.constantIntGet(i32, 16, false)};
+            void *hi[3] = {low, api.constantIntGet(i32, 16, false), api.constantIntGet(i32, 16, false)};
+            value = api.binaryCreate(kOpcodeOrBits, createCall(extract, extractType, lo, 3, inst),
+                                     api.binaryCreate(kOpcodeShl, createCall(extract, extractType, hi, 3, inst), api.constantIntGet(i32, 16, false), &kNoName, inst),
+                                     &kNoName, inst);
+            api.replaceUsesOfWith(inst, cut, value);
+            rewritten++;
+            continue;
+        }
         if (isInstruction(src, kOpcodeSelect)) {
             char *select = api.userNew(96, 3);
             api.selectInit(select, operand(src, 0), cutFromHalves(operand(src, 1), i32, inst), cutFromHalves(operand(src, 2), i32, inst), &kNoName, inst);
