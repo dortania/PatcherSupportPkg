@@ -12,7 +12,7 @@ exports:
                    _LLVMDisposeMessage, _LLVMBuildCall, _LLVMCreateBuilderInContext, _LLVMPositionBuilderBefore,
                    _LLVMDisposeBuilder, _LLVMReplaceAllUsesWith, _LLVMInstructionEraseFromParent, _LLVMAddFunction,
                    _LLVMFunctionType, _LLVMGetModuleContext, _LLVMTypeOf, _LLVMInt32TypeInContext, _LLVMConstInt,
-                   _LLVMBuildBitCast, _LLVMBuildExtractElement, _LLVMBuildInsertElement, _LLVMGetUndef,
+                   _LLVMBuildBitCast, _LLVMBuildExtractElement, _LLVMBuildInsertElement, _LLVMGetUndef, _LLVMIsAInsertElementInst, _LLVMConstZExt, _LLVMConstSExt,
                    _LLVMVectorType, _LLVMPointerType, _LLVMGetElementType, _LLVMGetTypeKind, _LLVMBuildLoad,
                    _LLVMBuildStore, _LLVMBuildICmp, _LLVMGetParam, _LLVMCountParams, _LLVMGetReturnType,
                    _LLVMGetIntrinsicID, _LLVMPrintTypeToString, _LLVMPrintValueToString, _LLVMGetTypeByName,

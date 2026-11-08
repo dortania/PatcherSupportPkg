@@ -1170,6 +1170,31 @@ enum { kTypeKindHalf = 1, kTypeKindFloat = 2, kTypeKindInteger = 8, kTypeKindVec
        kOpcodeSIToFP = 36, kRealOLT = 4 };
 
 static unsigned lanes(LLVMTypeRef type) { return LLVMGetTypeKind(type) == kTypeKindVector ? LLVMGetVectorSize(type) : 0; }
+
+extern "C" {
+LLVMValueRef LLVMIsAInsertElementInst(LLVMValueRef);
+LLVMValueRef LLVMConstZExt(LLVMValueRef, LLVMTypeRef);
+LLVMValueRef LLVMConstSExt(LLVMValueRef, LLVMTypeRef);
+}
+
+// Extends a narrow integer (vector) value to i32 lanes for the widening rewrites below. A vector put together from a
+// constant with insertelement is extended lane by lane, the constant folded here: the back end sign-extends the constant
+// lanes of a zext <N x i8> of such a vector (zext (insertelement <undef, i8 -100, 0, 0>, x, 0) gave lane 1 0xffffff9c,
+// not 156), so min(uchar4(x, 157, ...), uchar4(y, 156, ...)) still kept 157 after i22's widening (i35).
+// INTEL_NARROW_CONSTANT_LANES_FIX=0 extends the whole vector instead.
+static LLVMValueRef extendLanes(LLVMBuilderRef b, LLVMValueRef v, LLVMTypeRef wide, bool sign) {
+    static const bool off = disabled("INTEL_NARROW_CONSTANT_LANES_FIX");
+    if (off) return sign ? LLVMBuildSExt(b, v, wide, "") : LLVMBuildZExt(b, v, wide, "");
+    if (LLVMIsAConstant(v)) return sign ? LLVMConstSExt(v, wide) : LLVMConstZExt(v, wide);
+    if (lanes(LLVMTypeOf(v)) && LLVMIsAInsertElementInst(v)) {
+        LLVMValueRef base = extendLanes(b, LLVMGetOperand(v, 0), wide, sign);
+        LLVMValueRef element = LLVMGetOperand(v, 1);
+        LLVMTypeRef i32 = LLVMGetElementType(wide);
+        element = sign ? LLVMBuildSExt(b, element, i32, "") : LLVMBuildZExt(b, element, i32, "");
+        return LLVMBuildInsertElement(b, base, element, LLVMGetOperand(v, 2), "");
+    }
+    return sign ? LLVMBuildSExt(b, v, wide, "") : LLVMBuildZExt(b, v, wide, "");
+}
 static LLVMTypeRef scalarOf(LLVMTypeRef type) { return lanes(type) ? LLVMGetElementType(type) : type; }
 static LLVMTypeRef shaped(LLVMTypeRef scalar, unsigned n) { return n ? LLVMVectorType(scalar, n) : scalar; }
 static LLVMValueRef splat(LLVMValueRef scalar, unsigned n) {
@@ -1762,8 +1787,8 @@ static unsigned widenNarrowDivisions(LLVMModuleRef module) {
         if (!b) b = LLVMCreateBuilderInContext(context);
         LLVMPositionBuilderBefore(b, division);
         LLVMValueRef x = LLVMGetOperand(division, 0), y = LLVMGetOperand(division, 1);
-        x = sign ? LLVMBuildSExt(b, x, wide, "") : LLVMBuildZExt(b, x, wide, "");
-        y = sign ? LLVMBuildSExt(b, y, wide, "") : LLVMBuildZExt(b, y, wide, "");
+        x = extendLanes(b, x, wide, sign);
+        y = extendLanes(b, y, wide, sign);
         LLVMValueRef r = opcode == kOpcodeUDiv ? LLVMBuildUDiv(b, x, y, "") : opcode == kOpcodeURem ? LLVMBuildURem(b, x, y, "")
                        : opcode == kOpcodeSDiv ? LLVMBuildSDiv(b, x, y, "") : LLVMBuildSRem(b, x, y, "");
         LLVMValueRef result = LLVMBuildTrunc(b, r, type, "");
@@ -2083,7 +2108,7 @@ static unsigned widenNarrowMinMax(LLVMModuleRef module) {
             std::vector<LLVMTypeRef> params;
             for (int k = 0; k < operands; k++) {
                 LLVMValueRef v = LLVMGetOperand(call, k);
-                args.push_back(sign ? LLVMBuildSExt(b, v, wide, "") : LLVMBuildZExt(b, v, wide, ""));
+                args.push_back(extendLanes(b, v, wide, sign));
                 params.push_back(wide);
             }
             char wideName[64];
