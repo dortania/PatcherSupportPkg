@@ -2404,7 +2404,10 @@ static unsigned foldConstantCalls(LLVMModuleRef module) {
 // ---- saturating add / subtract of constants --------------------------------------------------------------------------
 // The back end folds addsat with two constant operands as a plain add: addsat(95u, 4294967295u) came out 94 instead of
 // 0xffffffff (mslfuzz2; with a variable operand it's right). Such calls (air.add_sat / air.sub_sat, unsigned or signed,
-// 8 to 32 bits) are folded here, exactly. INTEL_CONST_SAT_FIX=0 turns it off.
+// 8 to 32 bits) are folded here, exactly. An add_sat with a zero operand, or a sub_sat of zero, is its other operand,
+// and goes too, for any type: iCBE turns UADD_sat(0, x & 255) into something that reads another byte, so in
+// `v + addsat(0u, (uint)c)` with a uchar c the sum got the wrong byte (110 of 256 threads; mslfuzz2 plain seed 812).
+// INTEL_CONST_SAT_FIX=0 turns it off.
 extern "C" {
 long long LLVMConstIntGetSExtValue(LLVMValueRef);
 }
@@ -2422,6 +2425,13 @@ static unsigned foldConstantSaturation(LLVMModuleRef module) {
             if (!LLVMIsACallInst(call) || LLVMGetNumOperands(call) != 3 || LLVMGetOperand(call, 2) != f) continue;
             LLVMValueRef x = LLVMGetOperand(call, 0), y = LLVMGetOperand(call, 1);
             LLVMTypeRef type = LLVMTypeOf(call);
+            bool zeroX = LLVMIsAConstant(x) && LLVMIsNull(x), zeroY = LLVMIsAConstant(y) && LLVMIsNull(y);
+            if (zeroY || (add && zeroX)) {  // x + 0, 0 + y, x - 0
+                LLVMReplaceAllUsesWith(call, zeroY ? x : y);
+                LLVMInstructionEraseFromParent(call);
+                fixed++;
+                continue;
+            }
             if (!LLVMIsAConstantInt(x) || !LLVMIsAConstantInt(y) || LLVMGetTypeKind(type) != kTypeKindInteger) continue;
             unsigned bits = LLVMGetIntTypeWidth(type);
             if (bits > 32) continue;
