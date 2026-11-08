@@ -1582,6 +1582,7 @@ static unsigned rotatesAsShifts(void *module) {
 // with this job off), so the phi's ands go through extract_bits too. 8- and 16-bit single-bit ands (the front end makes
 // `(x ^ y) & 1` of shorts, from `(short2 ...) & 3` with bit 1 known zero) meet the same bug: the loop exit tested `(x ^ y)
 // & 0xffff` (seed 1932, stock files too), so they go through extract_bits of the zero-extended value, truncated back.
+// The constant mask may be either operand: constantMinMax folds `min(1u, c) & y` to `1 & y` in place (seed 2286).
 // AMD_BIT_TEST_FIX=0 turns this off. Tests a15, a25, a31.
 enum { kValueConstantInt = 18, kOpcodeICmpPredicateMask = 0x3f };
 static bool containsCounter(void *v, int depth);  // below, with the opcodes it needs
@@ -1640,7 +1641,8 @@ static unsigned singleBitTestsAsExtracts(void *module, void *function, void *i32
                 rewritten++;
                 continue;
             }
-            bool constantMask = constantIntValue(operand(masked, 1), &mask);
+            unsigned maskOperand = constantIntValue(operand(masked, 1), &mask) ? 1 : constantIntValue(operand(masked, 0), &mask) ? 0 : 2;
+            bool constantMask = maskOperand != 2;
             if ((!constantMask || !mask || (mask & (mask - 1))) && containsCounter(masked, 0)) {
                 // a loop counter in the and: the whole value through extract_bits, so no single bit of it is taken
                 // for a boolean once the loop is unrolled and the counter is a constant
@@ -1687,7 +1689,7 @@ static unsigned singleBitTestsAsExtracts(void *module, void *function, void *i32
                 extract = api.getOrInsertFunction(module, "air.extract_bits.u.i32", strlen("air.extract_bits.u.i32"), extractType);
                 if (!extract || subclassID(extract) != kValueFunction) return rewritten;  // a bitcast: another declaration
             }
-            void *args[3] = {operand(masked, 0), api.constantIntGet(i32, (uint64_t)__builtin_ctzll(mask), false), api.constantIntGet(i32, 1, false)};
+            void *args[3] = {operand(masked, 1 - maskOperand), api.constantIntGet(i32, (uint64_t)__builtin_ctzll(mask), false), api.constantIntGet(i32, 1, false)};
             api.replaceUsesOfWith(inst, masked, createCall(extract, extractType, args, 3, inst));
             rewritten++;
         }
@@ -1827,11 +1829,12 @@ static void *anyOperand(void *user, unsigned i) {  // fixed or hung-off (phi) op
 static void *narrowSingleBit(void *masked, void *i32, void *extract, void *extractType, void *before) {
     void *type = typeOf(masked);
     uint64_t m;
-    if (typeID(type) != kTypeInteger || (intBits(type) != 8 && intBits(type) != 16) || !constantIntValue(operand(masked, 1), &m) ||
-        !m || (m & (m - 1)) || (m >> intBits(type)))
+    unsigned k = constantIntValue(operand(masked, 1), &m) ? 1 : constantIntValue(operand(masked, 0), &m) ? 0 : 2;
+    if (typeID(type) != kTypeInteger || (intBits(type) != 8 && intBits(type) != 16) || k == 2 || !m || (m & (m - 1)) ||
+        (m >> intBits(type)))
         return NULL;
     if (!extract) return masked;
-    void *args[3] = {api.castCreate(kOpcodeZExt, operand(masked, 0), i32, &kNoName, before),
+    void *args[3] = {api.castCreate(kOpcodeZExt, operand(masked, 1 - k), i32, &kNoName, before),
                      api.constantIntGet(i32, (uint64_t)__builtin_ctzll(m), false), api.constantIntGet(i32, 1, false)};
     return api.castCreate(kOpcodeTrunc, createCall(extract, extractType, args, 3, before), type, &kNoName, before);
 }

@@ -14,6 +14,9 @@
 //             ((uint(s.x) ^ uint(s.y) * 257) & 3) == 0) break; }  Bit 1 of s is known zero, so the front end tests
 //             (s.x ^ s.y) & 1 on 16 bits, and the exit tested the whole 16 bits (seed 1932): the fix takes 8- and
 //             16-bit single-bit ands through extract_bits too
+//   maskfirst: if ((min(150u, K) > b) != bool(min(1u, 104u) & (c / 1522195843u))) ..  The min/max fix folds min(1u, 104u)
+//             to 1 in place, leaving `1 & y` with the constant first, which the bit-test fix didn't look at: y = 2 took
+//             the wrong branch (seed 2286). The mask is now found in either operand
 // 256 threads each, checked against the same code on the CPU. Stock OCLP: FAIL. Fixed: PASS.
 // Argument: GPU name substring (default: AMD).
 #import "repro.h"
@@ -43,6 +46,11 @@ static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n
     "                          short2(1857, -32256) >= short2(short(d), short((v & 255u) * (v & 255u))));\n"
     "        if (((uint(s.x) ^ uint(s.y) * 257u) & 3u) == 0u) break; }\n"
     "    out[t * 2u] = v; out[t * 2u + 1u] = n;\n"
+    "}\n"
+    "kernel void maskfirst(device const uint *in [[buffer(0)]], device uint *out [[buffer(1)]], uint t [[thread_position_in_grid]]) {\n"
+    "    uint a = in[t * 4u], b = in[t * 4u + 1u], c = in[t * 4u + 2u], r;\n"
+    "    if ((min(150u, 2153091561u) > b) != bool(min(1u, 104u) & (c / 1522195843u))) r = a; else r = b + 1u;\n"
+    "    out[t * 2u] = r; out[t * 2u + 1u] = 0u;\n"
     "}\n";
 
 static void reference(int kernel, const uint32_t *in, uint32_t t, uint32_t out[2]) {
@@ -71,6 +79,10 @@ static void reference(int kernel, const uint32_t *in, uint32_t t, uint32_t out[2
         }
         out[0] = v;
         out[1] = n;
+    } else if (kernel == 4) {
+        uint32_t a = in[t * 4], b = in[t * 4 + 1], c = in[t * 4 + 2];
+        out[0] = ((150u > b) != (bool)(1u & (c / 1522195843u))) ? a : b + 1;
+        out[1] = 0;
     } else {
         uint32_t p0 = in[t * 4], p1 = in[t * 4 + 1] + 1, v = in[t * 4] + t, n = 0;
         while (n < 8) {
@@ -99,9 +111,9 @@ int main(int argc, char **argv) {
             words[i] = i % 7 == 0 ? (x & 0xff) : x;
         }
         id<MTLCommandQueue> queue = [dev newCommandQueue];
-        static const char *const kernels[] = {"bittest", "loopexit", "bitphi", "bitshort"};
+        static const char *const kernels[] = {"bittest", "loopexit", "bitphi", "bitshort", "maskfirst"};
         char report[300] = "";
-        for (int k = 0; k < 4; k++) {
+        for (int k = 0; k < 5; k++) {
             id<MTLComputePipelineState> ps = [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@(kernels[k])] error:&err];
             if (!ps) return FAIL(bug, "%s: %s: %s", dev.name.UTF8String, kernels[k], err.localizedDescription.UTF8String);
             id<MTLBuffer> out = [dev newBufferWithLength:T * 8 options:MTLResourceStorageModeShared];
