@@ -2133,6 +2133,60 @@ static unsigned zextShiftHalves(void *module) {
     return rewritten;
 }
 
+// `uint(bool(~b & uint(bool(a)))) | (a & 0xffff)` stops the compile ("Compiler encountered an internal error", a null
+// pointer read in libAMDIL902's ILTargetLowering::AnalyzeBFICombine): the IR is or (and (zext (a != 0)), ~b),
+// (and a, 0xffff), and the bit-field-insert combine reads the operands of an operand that has none (found by fuzzing
+// with narrow vectors; it needs the ~ and a on both sides). As `select (a != 0), (~b & 1), 0`, which is one v_cndmask,
+// the or compiles. So an and of a zero-extended bool with a ~ that an or uses is built as that select.
+// AMD_BOOL_AND_NOT_FIX=0 turns this off. Test a26.
+enum { kOpcodeXorNot = 28 };
+static unsigned boolAndNotSelects(void *module) {
+    const char *setting = getenv("AMD_BOOL_AND_NOT_FIX");
+    if ((setting && !strcmp(setting, "0")) || !api.binaryCreate || !api.userNew || !api.selectInit) return 0;
+    enum { kMax = 256 };
+    void *found[kMax];
+    unsigned count = 0, rewritten = 0;
+    char *functions = (char *)module + kModuleFunctions;
+    for (char *fn = nextNode(functions); fn != functions; fn = nextNode(fn)) {
+        char *function = fn - kFunctionNode, *blocks = function + kFunctionBlocks;
+        if (*(void **)(function + kFunctionParent) != module) return 0;  // layout mismatch: leave the module alone
+        for (char *bn = nextNode(blocks); bn != blocks; bn = nextNode(bn)) {
+            char *block = bn - kBlockNode, *insts = block + kBlockInstructions;
+            if (*(void **)(block + kBlockParent) != function) return 0;
+            for (char *in = nextNode(insts); in != insts; in = nextNode(in)) {
+                char *inst = in - kInstructionNode;
+                if (*(void **)(inst + kInstructionParent) != block) return 0;
+                if (!isInstruction(inst, kOpcodeAnd) || hungOffUses(inst) || numOperands(inst) != 2 || typeID(typeOf(inst)) != kTypeInteger ||
+                    count == kMax)
+                    continue;
+                bool shape = false;
+                for (unsigned k = 0; k < 2 && !shape; k++) {
+                    void *ext = operand(inst, k), *other = operand(inst, 1 - k);
+                    uint64_t ones;
+                    shape = isInstruction(ext, kOpcodeZExt) && !hungOffUses(ext) && numOperands(ext) == 1 && intBits(typeOf(operand(ext, 0))) == 1 &&
+                            isInstruction(other, kOpcodeXorNot) && !hungOffUses(other) && numOperands(other) == 2 &&
+                            constantIntValue(operand(other, 1), &ones) && ((ones + 1) & ((intBits(typeOf(inst)) == 64 ? 0 : (1ull << intBits(typeOf(inst)))) - 1)) == 0;
+                }
+                bool orUser = false;
+                for (void *use = firstUse(inst); use && shape && !orUser; use = nextUse(use)) orUser = isInstruction(api.getUser(use), kOpcodeOrBits);
+                if (shape && orUser) found[count++] = inst;
+            }
+        }
+    }
+    for (unsigned c = 0; c < count; c++) {
+        void *inst = found[c], *type = typeOf(inst);
+        unsigned k = isInstruction(operand(inst, 0), kOpcodeZExt) && intBits(typeOf(operand(operand(inst, 0), 0))) == 1 ? 0 : 1;
+        void *condition = operand(operand(inst, k), 0);
+        void *bit = api.binaryCreate(kOpcodeAnd, operand(inst, 1 - k), api.constantIntGet(type, 1, false), &kNoName, inst);
+        char *select = api.userNew(96, 3);
+        api.selectInit(select, condition, bit, api.constantIntGet(type, 0, false), &kNoName, inst);
+        api.replaceAllUsesWith(inst, select);
+        api.eraseFromParent(inst);
+        rewritten++;
+    }
+    return rewritten;
+}
+
 static unsigned singleBitTests(void *module) {
     const char *setting = getenv("AMD_BIT_TEST_FIX");
     if ((setting && !strcmp(setting, "0")) || !api.functionTypeGet || !api.getOrInsertFunction) return 0;
@@ -2220,6 +2274,8 @@ static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *
         if (unpacks && logging()) fprintf(stderr, "[texatomic] %u unpack call(s) computed exactly\n", unpacks);
         unsigned floats = floatAtomicsAsInteger(module);
         if (floats && logging()) fprintf(stderr, "[texatomic] %u float atomic(s) done on the integer bits\n", floats);
+        unsigned andNots = boolAndNotSelects(module);
+        if (andNots && logging()) fprintf(stderr, "[texatomic] %u and(s) of a bool with a not built as selects\n", andNots);
         unsigned zextShifts = zextShiftHalves(module);
         if (zextShifts && logging()) fprintf(stderr, "[texatomic] %u zext shift(s) built from halves\n", zextShifts);
         unsigned constants = constantMinMax(module);
