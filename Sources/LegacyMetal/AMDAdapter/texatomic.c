@@ -1952,6 +1952,59 @@ static unsigned wideBitBranches(void *module) {
     return rewritten;
 }
 
+// A signed division or remainder whose dividend is 32 bits cut from the middle of a 64-bit value, `(int)uint(x >> k) / c`
+// with 0 < k < 32, comes out as the unsigned one (`(int)uint(x >> 31) / 65535` gives uint(x >> 31) / 65535 for
+// negative dividends, and / -3 is as wrong): found by fuzzing with 64-bit integers. Built from the halves,
+// `(uint(x) >> k) | (uint(x >> 32) << (32 - k))`, the same value divides right (anything between the cut and the
+// division, an xor or a select, does too). So such dividends are built that way. AMD_SHIFTED_DIVIDEND_FIX=0 turns this
+// off. Test a22.
+static unsigned shiftedDividends(void *module) {
+    const char *setting = getenv("AMD_SHIFTED_DIVIDEND_FIX");
+    if ((setting && !strcmp(setting, "0")) || !api.binaryCreate || !api.castCreate || !api.replaceUsesOfWith) return 0;
+    enum { kMax = 512 };
+    void *found[kMax];
+    unsigned count = 0, rewritten = 0;
+    char *functions = (char *)module + kModuleFunctions;
+    for (char *fn = nextNode(functions); fn != functions; fn = nextNode(fn)) {
+        char *function = fn - kFunctionNode, *blocks = function + kFunctionBlocks;
+        if (*(void **)(function + kFunctionParent) != module) return 0;  // layout mismatch: leave the module alone
+        for (char *bn = nextNode(blocks); bn != blocks; bn = nextNode(bn)) {
+            char *block = bn - kBlockNode, *insts = block + kBlockInstructions;
+            if (*(void **)(block + kBlockParent) != function) return 0;
+            for (char *in = nextNode(insts); in != insts; in = nextNode(in)) {
+                char *inst = in - kInstructionNode;
+                if (*(void **)(inst + kInstructionParent) != block) return 0;
+                if ((!isInstruction(inst, kOpcodeSDiv) && !isInstruction(inst, kOpcodeSRem)) || hungOffUses(inst) || numOperands(inst) != 2 ||
+                    count == kMax)
+                    continue;
+                void *cut = operand(inst, 0), *type = typeOf(inst), *shift;
+                uint64_t k;
+                if (typeID(type) != kTypeInteger || intBits(type) != 32 || !isInstruction(cut, kOpcodeTrunc) || hungOffUses(cut) ||
+                    numOperands(cut) != 1)
+                    continue;
+                shift = operand(cut, 0);
+                if ((!isInstruction(shift, kOpcodeLShr) && !isInstruction(shift, kOpcodeAShr)) || hungOffUses(shift) || numOperands(shift) != 2 ||
+                    intBits(typeOf(shift)) != 64 || !constantIntValue(operand(shift, 1), &k) || k == 0 || k >= 32)
+                    continue;
+                found[count++] = inst;
+            }
+        }
+    }
+    for (unsigned c = 0; c < count; c++) {
+        void *inst = found[c], *cut = operand(inst, 0), *shift = operand(cut, 0), *x = operand(shift, 0);
+        void *i32 = typeOf(inst), *i64 = typeOf(x);
+        uint64_t k;
+        constantIntValue(operand(shift, 1), &k);
+        void *lo = api.castCreate(kOpcodeTrunc, x, i32, &kNoName, inst);
+        void *hi = api.castCreate(kOpcodeTrunc, api.binaryCreate(kOpcodeLShr, x, api.constantIntGet(i64, 32, false), &kNoName, inst), i32, &kNoName, inst);
+        void *value = api.binaryCreate(kOpcodeOrBits, api.binaryCreate(kOpcodeLShr, lo, api.constantIntGet(i32, k, false), &kNoName, inst),
+                                       api.binaryCreate(kOpcodeShl, hi, api.constantIntGet(i32, 32 - k, false), &kNoName, inst), &kNoName, inst);
+        api.replaceUsesOfWith(inst, cut, value);
+        rewritten++;
+    }
+    return rewritten;
+}
+
 static unsigned singleBitTests(void *module) {
     const char *setting = getenv("AMD_BIT_TEST_FIX");
     if ((setting && !strcmp(setting, "0")) || !api.functionTypeGet || !api.getOrInsertFunction) return 0;
@@ -2043,6 +2096,8 @@ static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *
         if (wide && logging()) fprintf(stderr, "[texatomic] %u 64-bit comparison(s) done on the 32-bit halves\n", wide);
         unsigned wideBranches = wideBitBranches(module);
         if (wideBranches && logging()) fprintf(stderr, "[texatomic] %u branch(es) on bits of a 64-bit value tested through extract_bits\n", wideBranches);
+        unsigned dividends = shiftedDividends(module);
+        if (dividends && logging()) fprintf(stderr, "[texatomic] %u signed division(s) of a cut 64-bit value: dividend built from the halves\n", dividends);
         unsigned lanes = bitcastLaneExtracts(module);
         if (lanes && logging()) fprintf(stderr, "[texatomic] %u vector bitcast(s) to narrower lanes built lane by lane\n", lanes);
         unsigned narrow = narrowUnsignedConstants(module);
