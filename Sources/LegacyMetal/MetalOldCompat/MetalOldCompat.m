@@ -62,6 +62,11 @@
 //      the 12.x Intel driver (level 0's size): the view's render-target surface state gets the level as its min LOD too
 //  40. depth comparisons (sample_compare, gather_compare) through a sampler argument in compute kernels on the 12.x
 //      Intel driver, which always returned 0: the compute path drops the sampler's compare function; it is copied in
+//  41. Photos' portrait editing (CIDepthBlurEffect, the portrait / SDOF filters) crashing in CoreImageOld.dylib, the
+//      14.0 beta 3 Core Image the 3802 payloads install, on every legacy GPU: +[CIKernel / CIColorKernel
+//      SDOFV2MetalKernelNamed:] and SDOFV3MetalKernelNamed: pass a static NSData that the library's once-block stores
+//      without retaining, so once an autorelease pool drains it is freed and the next portrait kernel crashes in
+//      -[CIKernelLibrary initWithData:error:]; NSData returns those metallibs from a cache that keeps them alive
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -2516,6 +2521,43 @@ static void guardWebGPUImage(const struct mach_header *mh, intptr_t slide) {
     }
 }
 
+// ---- 41. CoreImageOld's portrait kernel library data ------------------------------------------------------------------
+// CoreImageOld.dylib (OCLP's 14.0 beta 3 Core Image for the 3802 stack) loads the Metal kernels of its portrait / SDOF
+// filters through +[CIKernel SDOFV2MetalKernelNamed:] (and SDOFV3, and the same pair on CIColorKernel). Each reads a
+// static NSData that a once-block fills with [NSData dataWithContentsOfURL:] of CoreImage.framework's
+// CIPortraitBlur[Stitchable]V2/V3.metallib and stores without retaining it (non-ARC code). The first portrait filter
+// uses it while it is still alive; once an autorelease pool drains it is freed, and the next one passes a dangling
+// pointer to -[CIKernelLibrary initWithData:error:], which crashes in objc_retain: CIDepthBlurEffect, Photos' portrait
+// editing, on the Iris Pro and the R9 M370X alike. +[NSData dataWithContentsOfURL:] returns those four files from a
+// cache that keeps them alive, so the static stays valid. (MetalOld lists no functions in Sequoia's metallibs; it finds
+// them by name, but CIKernelLibrary builds its table from functionNames, so the portrait kernels still come back nil
+// and CIDepthBlurEffect returns its input without the blur instead of crashing.) Installed only where
+// CoreImageOld.dylib exists. MTLSHIM_SDOF_LIBRARY=0 turns it off.
+static IMP origDataWithContentsOfURL;
+static id keptPortraitLibrary(id self, SEL _cmd, NSURL *url) {
+    NSString *file = url.isFileURL ? url.lastPathComponent : nil;
+    if (self != [NSData class] || ![file hasPrefix:@"CIPortraitBlur"] || ![file.pathExtension isEqualToString:@"metallib"])
+        return ((id (*)(id, SEL, NSURL *))origDataWithContentsOfURL)(self, _cmd, url);
+    static NSMutableDictionary<NSString *, NSData *> *kept;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ kept = [NSMutableDictionary dictionary]; });
+    @synchronized(kept) {
+        NSData *data = kept[url.path];
+        if (!data) {
+            data = ((id (*)(id, SEL, NSURL *))origDataWithContentsOfURL)(self, _cmd, url);
+            if (data) kept[url.path] = data;
+            if (data && getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] %s kept alive for CoreImageOld (item 41)\n", file.UTF8String);
+        }
+        return data;
+    }
+}
+static void keepPortraitLibraries(void) {
+    const char *setting = getenv("MTLSHIM_SDOF_LIBRARY");
+    if ((setting && !strcmp(setting, "0")) || access("/System/Library/Frameworks/CoreImage.framework/Versions/A/CoreImageOld.dylib", F_OK)) return;
+    Method m = class_getClassMethod([NSData class], @selector(dataWithContentsOfURL:));
+    if (m) origDataWithContentsOfURL = method_setImplementation(m, (IMP)keptPortraitLibrary);
+}
+
 static void installWebKitRouting(void) {
     Method supportsFamily = class_getInstanceMethod(objc_getClass("_MTLDevice"), @selector(supportsFamily:));
     if (supportsFamily) realSupportsFamily = (BOOL (*)(id, SEL, NSInteger))method_getImplementation(supportsFamily);
@@ -2542,7 +2584,9 @@ __attribute__((constructor)) static void init(void) {
     patchDeviceBase();
     installAIR27Retargeting();
     installWebKitRouting();
+    keepPortraitLibraries();
 #else
+    (void)keepPortraitLibraries;
     (void)installWebKitRouting;
     (void)patchDeviceBase;
     (void)installAIR27Retargeting;

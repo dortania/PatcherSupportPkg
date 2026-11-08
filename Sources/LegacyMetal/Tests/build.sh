@@ -5,8 +5,10 @@ cd "$(dirname "$0")"
 mkdir -p build
 for src in [a-z][0-9]*.m; do
     name=${src%.m}
+    extra=
+    grep -q '<CoreImage/CoreImage.h>' "$src" && extra="-framework CoreImage -framework CoreGraphics"  # s53 only: the others stay without it
     clang -arch x86_64 -mmacosx-version-min=12.0 -fobjc-arc -O1 -Wall -Wno-unguarded-availability-new \
-        -framework Foundation -framework Metal -o "build/$name" "$src"
+        -framework Foundation -framework Metal $extra -o "build/$name" "$src"
 done
 [ -f tools/localcc.dylib ] || clang++ -std=c++17 -fblocks -dynamiclib tools/localcc.cpp -o tools/localcc.dylib  # c04 and verify.sh
 cp -R data build/
