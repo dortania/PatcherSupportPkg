@@ -1562,7 +1562,9 @@ static unsigned rotatesAsShifts(void *module) {
 // in an or with another boolean), but its branches test the whole register: `odd(x) || c` branches on `x | c`, so code
 // guarded by "x even and not c" runs only for x == 0 (found by differential fuzzing, in loops and branches; 9 of the 16
 // random kernels the AMD compiler still got wrong). Its optimizer turns a shift back into the and, but doesn't look into
-// air.extract_bits (the IL's ubit_extract), so the comparison stays a comparison. AMD_BIT_TEST_FIX=0 turns this off.
+// air.extract_bits (the IL's ubit_extract), so the comparison stays a comparison. In `((x & 1) & y) != 0` with y not a
+// constant (the front end's form of `((x * x) << s) & 3`), the x & 1 goes through extract_bits instead (a loop exit came
+// out wrong for x = 2 mod 4). AMD_BIT_TEST_FIX=0 turns this off. Tests a15, a25.
 enum { kValueConstantInt = 18, kOpcodeICmpPredicateMask = 0x3f };
 static bool constantIntValue(void *v, uint64_t *value) {
     if (subclassID(v) != kValueConstantInt || typeID(typeOf(v)) != kTypeInteger) return false;
@@ -1583,9 +1585,31 @@ static unsigned singleBitTestsAsExtracts(void *module, void *function, void *i32
             uint64_t zero, mask;
             void *masked = operand(inst, 0);
             if ((predicate != kPredicateEQ && predicate != kPredicateNE) || !constantIntValue(operand(inst, 1), &zero) || zero ||
-                !isInstruction(masked, kOpcodeAnd) || hungOffUses(masked) || numOperands(masked) != 2 || typeOf(masked) != i32 ||
-                !constantIntValue(operand(masked, 1), &mask) || !mask || (mask & (mask - 1)) || mask > 0xffffffffu)
+                !isInstruction(masked, kOpcodeAnd) || hungOffUses(masked) || numOperands(masked) != 2 || typeOf(masked) != i32)
                 continue;
+            if (!constantIntValue(operand(masked, 1), &mask)) {
+                // `((x & 1) & y) != 0` with y not a constant (the front end makes `((x * x) << s) & 3` that): the bit of
+                // x & 1 goes through extract_bits too, so the `& 1` can't be dropped (a loop exit came out wrong).
+                for (unsigned k = 0; k < 2; k++) {
+                    void *bit = operand(masked, k);
+                    uint64_t one;
+                    if (!isInstruction(bit, kOpcodeAnd) || hungOffUses(bit) || numOperands(bit) != 2 || typeOf(bit) != i32 ||
+                        !constantIntValue(operand(bit, 1), &one) || one != 1)
+                        continue;
+                    if (!extract) {
+                        void *params[3] = {i32, i32, i32};
+                        extractType = api.functionTypeGet(i32, params, 3, false);
+                        extract = api.getOrInsertFunction(module, "air.extract_bits.u.i32", strlen("air.extract_bits.u.i32"), extractType);
+                        if (!extract || subclassID(extract) != kValueFunction) return rewritten;  // a bitcast: another declaration
+                    }
+                    void *args[3] = {operand(bit, 0), api.constantIntGet(i32, 0, false), api.constantIntGet(i32, 1, false)};
+                    api.replaceUsesOfWith(masked, bit, createCall(extract, extractType, args, 3, masked));
+                    rewritten++;
+                    break;
+                }
+                continue;
+            }
+            if (!mask || (mask & (mask - 1)) || mask > 0xffffffffu) continue;
             if (!extract) {
                 void *params[3] = {i32, i32, i32};
                 extractType = api.functionTypeGet(i32, params, 3, false);
