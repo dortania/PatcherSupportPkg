@@ -571,6 +571,173 @@ static unsigned redundantNarrowMasks(std::string &s) {
     return n;
 }
 
+// ---- loop-carried copies before a loop's exit ------------------------------------------------------------------------
+// The back end ends a loop body with the copies that carry values into the next iteration (MOV rNext, value) and then
+// BREAK_CND. A register that took the previous value at the top of the body (MOV rOld, rNext) and is read after the
+// loop then gets the new value from iCBE, as if the copy had been propagated past the redefinition: with i07's private
+// array rewrite, `p[...] = pc[addsat(0x7fffffff, v4 ^ t) & 7]; v4 = 0;` in a loop that the store is sunk out of read
+// with v4 = 0 also in threads that left in the first iteration (mslfuzz2 plain seed 565). Copying with IADD or OR
+// instead of MOV changed nothing. Copies whose register isn't read outside the loop move after the BREAK_CND, where
+// they do the same for the next iteration and nothing on the way out. INTEL_LOOP_EXIT_COPY_FIX=0 turns it off.
+static unsigned loopExitCopies(std::string &s) {
+    if (disabled("INTEL_LOOP_EXIT_COPY_FIX") || s.find("\tBREAK_CND") == std::string::npos) return 0;
+    std::vector<std::string> lines;
+    for (size_t pos = 0; pos <= s.size();) {
+        size_t eol = s.find('\n', pos);
+        if (eol == std::string::npos) eol = s.size();
+        lines.push_back(s.substr(pos, eol - pos));
+        pos = eol + 1;
+    }
+    // registers each line mentions, and the register a line only sets (MOV rN.x, <operand>)
+    std::vector<std::set<unsigned>> mentions(lines.size());
+    std::vector<int> moveTarget(lines.size(), -1);
+    std::vector<std::string> moveSource(lines.size());
+    for (size_t i = 0; i < lines.size(); i++) {
+        const std::string &l = lines[i];
+        for (size_t k = 0; k + 1 < l.size(); k++)
+            if (l[k] == 'r' && isdigit((unsigned char)l[k + 1]) && (k == 0 || !isalnum((unsigned char)l[k - 1])))
+                mentions[i].insert((unsigned)strtoul(l.c_str() + k + 1, nullptr, 10));
+        unsigned d;
+        char source[64];
+        int at = 0;
+        if (sscanf(l.c_str(), "\tMOV r%u.x, %63[^;];%n", &d, source, &at) == 2 && at == (int)l.size())
+            moveTarget[i] = (int)d, moveSource[i] = source;
+    }
+    auto readOutside = [&](unsigned r, size_t top, size_t end) {  // outside lines [top, end], other than MOV r.x, <not r>
+        for (size_t i = 0; i < lines.size(); i++) {
+            if ((i >= top && i <= end) || !mentions[i].count(r)) continue;
+            bool onlySets = moveTarget[i] == (int)r &&
+                            !(moveSource[i][0] == 'r' && strtoul(moveSource[i].c_str() + 1, nullptr, 10) == r);
+            if (!onlySets) return true;
+        }
+        return false;
+    };
+    std::vector<size_t> loops;
+    std::vector<std::pair<size_t, std::vector<size_t>>> moves;  // BREAK_CND line, the copies to put after it
+    for (size_t i = 0; i < lines.size(); i++) {
+        if (lines[i] == "\tLOOP;") { loops.push_back(i); continue; }
+        if (lines[i] != "\tENDLOOP;" || loops.empty()) continue;
+        size_t top = loops.back();
+        loops.pop_back();
+        size_t b = i;
+        while (b > top + 1 && lines[b - 1].empty()) b--;
+        unsigned condition;
+        char kind;
+        if (b <= top + 1 || sscanf(lines[--b].c_str(), "\tBREAK_CND.%c r%u.x;", &kind, &condition) != 2) continue;
+        std::vector<size_t> block;  // the MOVs right before the BREAK_CND, in order
+        for (size_t k = b; k > top + 1 && (moveTarget[k - 1] >= 0 || lines[k - 1].empty()); k--)
+            if (moveTarget[k - 1] >= 0) block.insert(block.begin(), k - 1);
+        std::vector<size_t> moved;
+        std::set<unsigned> staying;  // registers written by the copies that stay
+        for (size_t c = block.size(); c-- > 0;) {  // from the last copy back, so later copies are already decided
+            unsigned d = (unsigned)moveTarget[block[c]];
+            bool ok = d != condition && !readOutside(d, top, i);
+            for (size_t later = c + 1; ok && later < block.size(); later++) {
+                bool laterMoved = std::find(moved.begin(), moved.end(), block[later]) != moved.end();
+                if (!laterMoved && mentions[block[later]].count(d)) ok = false;  // a copy that stays reads or writes it
+            }
+            for (unsigned r : mentions[block[c]])
+                if (r != d && staying.count(r)) ok = false;  // its source is overwritten by a copy that stays
+            if (ok) moved.insert(moved.begin(), block[c]);
+            else staying.insert(d);
+        }
+        if (!moved.empty()) moves.push_back({b, moved});
+    }
+    if (moves.empty()) return 0;
+    unsigned n = 0;
+    std::vector<bool> drop(lines.size(), false);
+    std::map<size_t, std::string> after;
+    for (auto &m : moves)
+        for (size_t c : m.second) drop[c] = true, after[m.first] += '\n' + lines[c], n++;
+    std::string out;
+    for (size_t i = 0; i < lines.size(); i++) {
+        if (drop[i]) continue;
+        if (!out.empty() || i) out += '\n';
+        out += lines[i];
+        if (after.count(i)) out += after[i];
+    }
+    s = out;
+    return n;
+}
+
+// ---- right shifts of narrow values ----------------------------------------------------------------------------------
+// iCBE gives SHR / SAR of a value it knows is narrow, a constant below 65536 or an AND with such a mask (a uchar or
+// ushort cast), a result register as narrow as that value: a byte for 1 or x & 255, a word for 300 or x & 65535. It can
+// then merge that register with another copy of the same variable and drop its high bits: v0 = (uint)(x / y), replaced
+// by (uchar)1 >> s in a loop, came out as the quotient's low byte in all 256 threads, also where the loop never ran
+// (mslfuzz2 LONG=1 seed 6; the 64-bit division's loops only set up the merge), and a vector lane lost its high bits
+// the same way (VEC=1 seed 526). Constants from 65536 up, SHL, AND and UMIN were right. Such a shift is done on the
+// value with bit 31 set, and the shifted bit 31 is XORed away, so every register involved is 32 bits wide (the shift
+// count is masked to 5 bits on both). INTEL_NARROW_SHIFT_FIX=0 turns it off.
+static unsigned narrowShifts(std::string &s) {
+    if (disabled("INTEL_NARROW_SHIFT_FIX") || (s.find("\tSHR ") == std::string::npos && s.find("\tSAR ") == std::string::npos)) return 0;
+    size_t temps = s.find("\tDCL_TEMPS r0..r");
+    if (temps == std::string::npos) return 0;
+    unsigned last = (unsigned)strtoul(s.c_str() + temps + 16, nullptr, 10);
+    std::vector<std::string> lines;
+    for (size_t pos = 0; pos <= s.size();) {
+        size_t eol = s.find('\n', pos);
+        if (eol == std::string::npos) eol = s.size();
+        lines.push_back(s.substr(pos, eol - pos));
+        pos = eol + 1;
+    }
+    // registers with a single definition, which is MOV rN.x, <immediate> or AND rN.x, <source>, <immediate>
+    auto immediate = [](const char *text, long &value) {
+        char *end;
+        value = strtol(text, &end, 0);
+        return end != text && *end == 0;
+    };
+    std::map<unsigned, long> bound;  // register -> the immediate (the value, or the mask)
+    std::map<unsigned, int> definitions;
+    for (const std::string &l : lines) {
+        unsigned d;
+        char source[64], mask[32];
+        int at = 0;
+        long value;
+        if (sscanf(l.c_str(), "\t%*[A-Za-z_0-9.] r%u", &d) != 1) continue;
+        definitions[d]++;
+        if (sscanf(l.c_str(), "\tMOV r%u.x, %31[-0-9A-Fa-fx];%n", &d, mask, &at) == 2 && at == (int)l.size() && immediate(mask, value))
+            bound[d] = value;
+        else if (sscanf(l.c_str(), "\tAND r%u.x, %63[^,], %31[-0-9A-Fa-fx];%n", &d, source, mask, &at) == 3 && at == (int)l.size() &&
+                 immediate(mask, value))
+            bound[d] = value;
+    }
+    auto small = [&](const std::string &operand) {
+        long value;
+        unsigned r;
+        int at = 0;
+        if (sscanf(operand.c_str(), "r%u.x%n", &r, &at) == 1 && at == (int)operand.size())
+            return definitions[r] == 1 && bound.count(r) && bound[r] >= 0 && bound[r] < 65536;
+        return immediate(operand.c_str(), value) && value >= 0 && value < 65536;
+    };
+    unsigned n = 0;
+    for (std::string &l : lines) {
+        unsigned d;
+        char op[4], source[64], count[64];
+        int at = 0;
+        if (sscanf(l.c_str(), "\t%3[A-Z] r%u.x, %63[^,], %63[^;];%n", op, &d, source, count, &at) != 4 || at != (int)l.size() ||
+            (strcmp(op, "SHR") && strcmp(op, "SAR")) || !small(source))
+            continue;
+        unsigned high = ++last, shifted = ++last, bit = ++last, bitShifted = ++last;
+        char setHigh[96], buffer[384];
+        long value;
+        if (source[0] == 'r') snprintf(setHigh, sizeof setHigh, "\tOR r%u.x, %s, -2147483648;", high, source);
+        else immediate(source, value), snprintf(setHigh, sizeof setHigh, "\tMOV r%u.x, %d;", high, (int32_t)((uint32_t)value | 0x80000000u));
+        snprintf(buffer, sizeof buffer,
+                 "%s\n\tSHR r%u.x, r%u.x, %s;\n\tMOV r%u.x, -2147483648;\n\tSHR r%u.x, r%u.x, %s;\n\tXOR r%u.x, r%u.x, r%u.x;",
+                 setHigh, shifted, high, count, bit, bitShifted, bit, count, d, shifted, bitShifted);
+        l = buffer;
+        n++;
+    }
+    if (!n) return 0;
+    std::string out;
+    for (size_t i = 0; i < lines.size(); i++) { out += lines[i]; if (i + 1 < lines.size()) out += '\n'; }
+    size_t numberAt = out.find("\tDCL_TEMPS r0..r") + 16, numberEnd = out.find_first_not_of("0123456789", numberAt);
+    out.replace(numberAt, numberEnd - numberAt, std::to_string(last));
+    s = out;
+    return n;
+}
+
 // ---- narrow negations ----------------------------------------------------------------------------------------------
 // The back end writes the negation of a char lane as BADD rD, rZ, -rX with rZ = MOV 0, and the sign extension that
 // follows as BTOI rD. iCBE folds the two into the negation of the sign-extended lane, -(sext x) instead of
@@ -750,6 +917,8 @@ extern "C" void intelatomicsFixIGIL(std::string *text) {
     if (unsigned n = narrowUnsignedDivides(s); n && logging()) fprintf(stderr, "[inteltex] %u UBDIV / USDIV done as UDIV of masked copies\n", n);
     if (unsigned n = redundantNarrowMasks(s); n && logging()) fprintf(stderr, "[inteltex] %u AND 0xFFFF after a narrower AND made a MOV\n", n);
     if (unsigned n = narrowNegations(s); n && logging()) fprintf(stderr, "[inteltex] %u BADD / SADD negation(s) done as XOR and add\n", n);
+    if (unsigned n = narrowShifts(s); n && logging()) fprintf(stderr, "[inteltex] %u SHR / SAR of a narrow value done on 32 bits\n", n);
+    if (unsigned n = loopExitCopies(s); n && logging()) fprintf(stderr, "[inteltex] %u loop-carried copies moved after the loop's BREAK_CND\n", n);
     if (unsigned n = sampleLodOperands(s); n && logging()) fprintf(stderr, "[inteltex] %u explicit-LOD sample(s) given the register holding the LOD\n", n);
     if (s.find("IMM_ATOMIC_") == std::string::npos) return;
     std::vector<std::string> lines;
