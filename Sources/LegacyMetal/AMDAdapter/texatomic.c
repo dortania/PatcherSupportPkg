@@ -1903,7 +1903,7 @@ static unsigned wideCompares(void *module) {
 // value goes through extract_bits (`extract_bits(x, 0, w)` for `x & (2^w - 1)`, else as two 16-bit halves), which the
 // combiner doesn't look into. Code without 64-bit integers is left alone. AMD_WIDE_BRANCH_FIX=0 turns this off.
 // Test a21.
-enum { kOpcodeBr = 2, kOpcodeSwitch = 3, kOpcodeInsertElement = 60 };
+enum { kOpcodeBr = 2, kOpcodeSwitch = 3, kOpcodeSExtWide = 38, kOpcodeInsertElement = 60 };
 static bool fromWide(void *v, void *block, int depth) {  // a 64-bit instruction or argument (not a constant) feeds v
     void *type = typeOf(v);
     unsigned char id = subclassID(v);
@@ -1935,9 +1935,20 @@ static unsigned wideBitBranches(void *module) {
             if (last == insts || count == kMax) continue;
             char *term = last - kInstructionNode;
             if (*(void **)(term + kInstructionParent) != block) return 0;
+            // A bool from such a test that a select chooses on or that is extended (sext gives the select -1 / 0 of
+            // `x - (y & mask) != 0`) meets the same i64 setcc in the DAG: select patterns don't take it either.
+            for (char *in = nextNode(insts); in != insts && count < kMax; in = nextNode(in)) {
+                char *inst = in - kInstructionNode;
+                bool ext = (isInstruction(inst, kOpcodeSExtWide) || isInstruction(inst, kOpcodeZExt)) && !hungOffUses(inst) && numOperands(inst) == 1;
+                bool select = isInstruction(inst, kOpcodeSelect) && !hungOffUses(inst) && numOperands(inst) == 3;
+                if (!ext && !select) continue;
+                void *cond = operand(inst, 0), *type = typeOf(cond);
+                if (typeID(type) != kTypeInteger || intBits(type) != 1 || subclassID(cond) < kValueInstruction || !fromWide(cond, block, 0)) continue;
+                found[count++] = inst;
+            }
             bool branch = isInstruction(term, kOpcodeBr) && !hungOffUses(term) && numOperands(term) == 3;
             bool sw = isInstruction(term, kOpcodeSwitch) && hungOffUses(term);
-            if (!branch && !sw) continue;
+            if ((!branch && !sw) || count == kMax) continue;
             void *cond = anyOperand(term, 0), *type = typeOf(cond);
             if (sw && (typeID(type) != kTypeInteger || intBits(type) != 32)) continue;  // i64 switches: not seen, not handled
             if (subclassID(cond) < kValueInstruction || !fromWide(cond, block, 0)) continue;
@@ -1952,7 +1963,7 @@ static unsigned wideBitBranches(void *module) {
     if (!extract || subclassID(extract) != kValueFunction) return 0;  // a bitcast: another declaration
     for (unsigned c = 0; c < count; c++) {
         void *term = found[c], *cond = anyOperand(term, 0), *replacement;
-        if (isInstruction(term, kOpcodeBr)) {
+        if (!isInstruction(term, kOpcodeSwitch)) {  // a branch, select or extension: the bool through extract_bits
             void *args[3] = {api.castCreate(kOpcodeZExt, cond, i32, &kNoName, term), api.constantIntGet(i32, 0, false),
                              api.constantIntGet(i32, 1, false)};
             replacement = api.cmpCreate(kOpcodeICmp, kPredicateNE, createCall(extract, extractType, args, 3, term),

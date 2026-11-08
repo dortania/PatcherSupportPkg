@@ -3,9 +3,10 @@
 // `uint(x >> k) & 3`) into a compare of the 64-bit `and` with 0, whose result is i64 here, and no brcond pattern takes
 // it: "LLVM ERROR: Cannot select: brcond (i64 setcc ...)" (found by fuzzing with 64-bit integers; which branches reach
 // that combine depends on the code around them). The adapter tests such conditions through extract_bits, which the
-// combiner doesn't look into.
-// Checked: the fuzzed form (a ?: on bit 16 of a ulong remainder, then a ulong division using its result) and a switch on
-// bits of a ulong min (two kernels), against the CPU on 256 threads.
+// combiner doesn't look into. A bool of high-half bits of a 64-bit product that is sign-extended or selected on meets
+// the same i64 setcc, there in a select, which no select pattern takes either (k3).
+// Checked: the fuzzed form (a ?: on bit 16 of a ulong remainder, then a ulong division using its result), a switch on
+// bits of a ulong min and `d - bool(uint(x * y >> 32) & 229)` (three kernels), against the CPU on 256 threads.
 // Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
 #import "repro.h"
 
@@ -32,6 +33,11 @@ static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n
     "  default: u *= 3u; break;\n"
     "  }\n"
     "  out[2 * t + 1] = u;\n"
+    "}\n"
+    "kernel void k3(device const uint *in [[buffer(0)]], device uint *out [[buffer(1)]], uint t [[thread_position_in_grid]]) {\n"
+    "  uint a = in[4 * t], b = in[4 * t + 1], c = in[4 * t + 2], d = in[4 * t + 3];\n"
+    "  ulong x = (ulong(a) << 32) | b, y = (ulong(c) << 32) | d;\n"
+    "  out[t] = d + (uint)(-(int)(((uint)((x * y) >> 32) & 229u) != 0u));\n"
     "}\n";
 
 static uint32_t insertBits(uint32_t base, uint32_t insert, uint32_t offset, uint32_t bits) {
@@ -51,10 +57,13 @@ int main(int argc, char **argv) {
         if (!ps) return FAIL(bug, "%s: pipeline: %s", dev.name.UTF8String, err.localizedDescription.UTF8String);
         id<MTLComputePipelineState> ps2 = [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"k2"] error:&err];
         if (!ps2) return FAIL(bug, "%s: pipeline k2: %s", dev.name.UTF8String, err.localizedDescription.UTF8String);
+        id<MTLComputePipelineState> ps3 = [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"k3"] error:&err];
+        if (!ps3) return FAIL(bug, "%s: pipeline k3: %s", dev.name.UTF8String, err.localizedDescription.UTF8String);
         uint32_t input[kThreads * 4], s = 0x9e3779b9u;
         for (int i = 0; i < kThreads * 4; i++) { s ^= s << 13; s ^= s >> 17; s ^= s << 5; input[i] = s; }
         id<MTLBuffer> in = [dev newBufferWithBytes:input length:sizeof input options:MTLResourceStorageModeShared];
         id<MTLBuffer> out = [dev newBufferWithLength:kThreads * 8 options:MTLResourceStorageModeShared];
+        id<MTLBuffer> out3 = [dev newBufferWithLength:kThreads * 4 options:MTLResourceStorageModeShared];
         id<MTLCommandQueue> q = [dev newCommandQueue];
         id<MTLCommandBuffer> cb = [q commandBuffer];
         id<MTLComputeCommandEncoder> e = [cb computeCommandEncoder];
@@ -62,9 +71,11 @@ int main(int argc, char **argv) {
         [e dispatchThreads:MTLSizeMake(kThreads, 1, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
         [e setComputePipelineState:ps2];
         [e dispatchThreads:MTLSizeMake(kThreads, 1, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
+        [e setComputePipelineState:ps3]; [e setBuffer:out3 offset:0 atIndex:1];
+        [e dispatchThreads:MTLSizeMake(kThreads, 1, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
         [e endEncoding];
         reproRun(cb);
-        const uint32_t *got = out.contents;
+        const uint32_t *got = out.contents, *got3 = out3.contents;
         for (int t = 0; t < kThreads; t++) {
             uint32_t a = input[4 * t], b = input[4 * t + 1], c = input[4 * t + 2], d = input[4 * t + 3];
             uint32_t v = b * 11 + t, m = (v ^ t) > d ? (v ^ t) : d;
@@ -81,7 +92,9 @@ int main(int argc, char **argv) {
             }
             if (got[2 * t] != v || got[2 * t + 1] != u)
                 return FAIL(bug, "%s: thread %d: %08x %08x, want %08x %08x", dev.name.UTF8String, t, got[2 * t], got[2 * t + 1], v, u);
+            uint32_t s3 = d + (uint32_t)(-(int32_t)((((uint32_t)((w * x) >> 32)) & 229) != 0));
+            if (got3[t] != s3) return FAIL(bug, "%s: k3 thread %d: %08x, want %08x", dev.name.UTF8String, t, got3[t], s3);
         }
-        return PASS(bug, "%s: branches and a switch on bits of 64-bit values", dev.name.UTF8String);
+        return PASS(bug, "%s: branches, a switch and a sign-extended bool on bits of 64-bit values", dev.name.UTF8String);
     }
 }
