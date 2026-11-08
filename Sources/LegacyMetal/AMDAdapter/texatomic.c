@@ -1564,8 +1564,12 @@ static unsigned rotatesAsShifts(void *module) {
 // random kernels the AMD compiler still got wrong). Its optimizer turns a shift back into the and, but doesn't look into
 // air.extract_bits (the IL's ubit_extract), so the comparison stays a comparison. In `((x & 1) & y) != 0` with y not a
 // constant (the front end's form of `((x * x) << s) & 3`), the x & 1 goes through extract_bits instead (a loop exit came
-// out wrong for x = 2 mod 4). AMD_BIT_TEST_FIX=0 turns this off. Tests a15, a25.
+// out wrong for x = 2 mod 4). A mask built from a loop counter becomes a single bit only when libAMDIL902 unrolls the loop
+// (`for (i < 3) { while (...) { v ^= ...; if ((i & v & 3) == 0) break; } }` never left the inner loop for i = 1), so
+// such ands, `== 0` / `!= 0`, go through extract_bits as two 16-bit halves. AMD_BIT_TEST_FIX=0 turns this off.
+// Tests a15, a25, a31.
 enum { kValueConstantInt = 18, kOpcodeICmpPredicateMask = 0x3f };
+static bool containsCounter(void *v, int depth);  // below, with the opcodes it needs
 static bool constantIntValue(void *v, uint64_t *value) {
     if (subclassID(v) != kValueConstantInt || typeID(typeOf(v)) != kTypeInteger) return false;
     if (*(uint32_t *)((char *)v + 0x20) > 64) return false;  // APInt BitWidth @0x20, VAL @0x18 (inline up to 64 bits)
@@ -1587,7 +1591,25 @@ static unsigned singleBitTestsAsExtracts(void *module, void *function, void *i32
             if ((predicate != kPredicateEQ && predicate != kPredicateNE) || !constantIntValue(operand(inst, 1), &zero) || zero ||
                 !isInstruction(masked, kOpcodeAnd) || hungOffUses(masked) || numOperands(masked) != 2 || typeOf(masked) != i32)
                 continue;
-            if (!constantIntValue(operand(masked, 1), &mask)) {
+            bool constantMask = constantIntValue(operand(masked, 1), &mask);
+            if ((!constantMask || !mask || (mask & (mask - 1))) && containsCounter(masked, 0)) {
+                // a loop counter in the and: the whole value through extract_bits, so no single bit of it is taken
+                // for a boolean once the loop is unrolled and the counter is a constant
+                if (!extract) {
+                    void *params[3] = {i32, i32, i32};
+                    extractType = api.functionTypeGet(i32, params, 3, false);
+                    extract = api.getOrInsertFunction(module, "air.extract_bits.u.i32", strlen("air.extract_bits.u.i32"), extractType);
+                    if (!extract || subclassID(extract) != kValueFunction) return rewritten;  // a bitcast: another declaration
+                }
+                void *lo[3] = {masked, api.constantIntGet(i32, 0, false), api.constantIntGet(i32, 16, false)};
+                void *hi[3] = {masked, api.constantIntGet(i32, 16, false), api.constantIntGet(i32, 16, false)};
+                void *whole = api.binaryCreate(kOpcodeOrBits, createCall(extract, extractType, lo, 3, inst),
+                                               createCall(extract, extractType, hi, 3, inst), &kNoName, inst);
+                api.replaceUsesOfWith(inst, masked, whole);
+                rewritten++;
+                continue;
+            }
+            if (!constantMask) {
                 // `((x & 1) & y) != 0` with y not a constant (the front end makes `((x * x) << s) & 3` that): the bit of
                 // x & 1 goes through extract_bits too, so the `& 1` can't be dropped (a loop exit came out wrong).
                 for (unsigned k = 0; k < 2; k++) {
@@ -2149,8 +2171,8 @@ static unsigned shiftedDividends(void *module) {
 // its DAG, where the and with the now constant 1 is taken for a 0 / -1 boolean (as singleBitTests describes), and the
 // combiner's add -> sub fold for such booleans applies. With a plain `& 1u` the IR optimizer simplifies it first and
 // the result is right (found by fuzzing). So these calls are folded here: integer min, max and clamp, signed or not,
-// whose arguments are all constants, become the constant, and unsigned min(x, 1), min(x, 0) and max(x, 0) become
-// x != 0, 0 and x (`y % (min(x, 1u) | 1u)` crashed the compile). abs, abs_diff, min3, mul_hi, rotate, sub_sat, clz,
+// whose arguments are all constants, become the constant, unsigned min(x, 0) and max(x, 0) become 0 and x, and
+// `min(x, 1u) | odd` becomes the odd constant (`y % (min(x, 1u) | 1u)` crashed the compile). abs, abs_diff, min3, mul_hi, rotate, sub_sat, clz,
 // extract_bits and reverse_bits fold early enough already. A loop counter makes such constant calls only when
 // libAMDIL902 unrolls the loop (`for (i < 3) a += uint(bool(x & min(i, 145u)))` came out as a minus the bools), so 32-bit
 // calls whose arguments are all constants or loop values (phis, and arithmetic on them and constants) become a
@@ -2167,6 +2189,48 @@ static bool unrollsToConstant(void *v, int depth) {  // a constant, or what can 
         return unrollsToConstant(operand(v, 0), depth + 1) && unrollsToConstant(operand(v, 1), depth + 1);
     if ((opcode == kOpcodeTrunc || opcode == kOpcodeZExt || opcode == kOpcodeSExtWide) && numOperands(v) == 1)
         return unrollsToConstant(operand(v, 0), depth + 1);
+    return false;
+}
+static bool isCounter(void *phi) {  // a loop's induction variable: phi [a constant], [phi op a constant]
+    if (!isInstruction(phi, kOpcodePHI) || numOperands(phi) != 2) return false;
+    uint64_t c;
+    for (unsigned i = 0; i < 2; i++) {
+        void *start = anyOperand(phi, i), *step = anyOperand(phi, 1 - i);
+        unsigned char id = subclassID(step);
+        if (!constantIntValue(start, &c) || id < kValueInstruction || hungOffUses(step) || numOperands(step) != 2) continue;
+        unsigned opcode = id - kValueInstruction;
+        if (opcode < kOpcodeAdd || opcode > kWideXor) continue;
+        if ((operand(step, 0) == phi && constantIntValue(operand(step, 1), &c)) || (operand(step, 1) == phi && constantIntValue(operand(step, 0), &c)))
+            return true;
+    }
+    return false;
+}
+static bool containsCounter(void *v, int depth) {  // a loop counter somewhere in v's arithmetic (singleBitTests)
+    if (isCounter(v)) return true;
+    if (isInstruction(v, kOpcodePHI) && depth < 4) {
+        // a merge of values (the front end makes `c ? 4u : i % m` branches when the remainder could trap), not a
+        // loop-carried value: none of its incoming values is the phi itself or uses it directly
+        unsigned n = numOperands(v);
+        for (unsigned i = 0; i < n; i++) {
+            void *x = anyOperand(v, i);
+            if (x == v) return false;
+            if (subclassID(x) >= kValueInstruction && !hungOffUses(x))
+                for (unsigned j = 0; j < numOperands(x); j++) if (operand(x, j) == v) return false;
+        }
+        for (unsigned i = 0; i < n; i++) if (containsCounter(anyOperand(v, i), depth + 1)) return true;
+        return false;
+    }
+    unsigned char id = subclassID(v);
+    if (depth >= 4 || id < kValueInstruction || hungOffUses(v)) return false;
+    unsigned opcode = id - kValueInstruction;
+    if (opcode >= kOpcodeAdd && opcode <= kWideXor && numOperands(v) == 2)
+        return containsCounter(operand(v, 0), depth + 1) || containsCounter(operand(v, 1), depth + 1);
+    if ((opcode == kOpcodeTrunc || opcode == kOpcodeZExt || opcode == kOpcodeSExtWide) && numOperands(v) == 1)
+        return containsCounter(operand(v, 0), depth + 1);
+    // selects and their compares: `(i <= v ? 4u : i % m) & 3` is a 0 / 1 value under a select once i is a constant
+    if ((opcode == kOpcodeSelect && numOperands(v) == 3) || (opcode == kOpcodeICmp && numOperands(v) == 2)) {
+        for (unsigned i = 0; i < numOperands(v); i++) if (containsCounter(operand(v, i), depth + 1)) return true;
+    }
     return false;
 }
 static void *minMaxSelect(bool max, bool sign, void *a, void *b, void *before) {  // min(a, b) or max(a, b) as icmp + select
@@ -2215,9 +2279,22 @@ static unsigned constantMinMax(void *module) {
                             c &= mask;
                             if (o == 0 && c == 0) value = api.constantIntGet(type, 0, false);
                             else if (o == 1 && c == 0) value = x;
-                            else if (o == 0 && c == 1 && api.cmpCreate && api.castCreate)
-                                value = api.castCreate(kOpcodeZExt, api.cmpCreate(kOpcodeICmp, kPredicateNE, x, api.constantIntGet(type, 0, false), &kNoName, call),
-                                                       type, &kNoName, call);
+                            else if (o == 0 && c == 1) {
+                                // Only `min(x, 1u) | odd` (the crashing divisor) is folded: that or is the constant. Made
+                                // x != 0 everywhere, min(x, 1) left 0 / 1 values that a15's bug misreads (`((c ? min(1u, x) : y)
+                                // & 3) == 0` never left its loop: seed 518); the call itself compiles right.
+                                bool orFolded = false;
+                                for (void *u = firstUse(call); u;) {
+                                    void *user = api.getUser(u);
+                                    u = nextUse(u);
+                                    uint64_t k;
+                                    if (!isInstruction(user, kOpcodeOrBits) || hungOffUses(user) || numOperands(user) != 2) continue;
+                                    void *other = operand(user, 0) == call ? operand(user, 1) : operand(user, 0);
+                                    if (constantIntValue(other, &k) && (k & 1)) { api.replaceAllUsesWith(user, other); orFolded = true; }
+                                }
+                                if (orFolded) folded++;
+                                continue;
+                            }
                         }
                         // clamp(x, c, c) is c, signed or not. Left as the call, its DAG folds it through the known bits of x
                         // (`clamp(y | 1u, 1u, 1u)`, the 1 and'ed with x and added as a bool, was a minus the bool: a30).
