@@ -2062,6 +2062,53 @@ static unsigned constantMinMax(void *module) {
     return folded;
 }
 
+// A 32-bit value zero-extended and shifted left into both halves, `ulong(y) << k` with 0 < k < 32, can lose the bits
+// that move into the high half: with y = rhadd(b, a) or hadd(b, a), `(ulong(min(c, a)) << 32 | rhadd(b, a))`
+// multiplied by a constant and shifted (the front end makes that `(ulong(min) << 45 | ulong(rhadd) << 13) * ...`)
+// comes out with a high half of min << 13 alone, without rhadd >> 19 (found by fuzzing with 64-bit integers; plain
+// values and max() come out right, so libAMDIL902 seems to take the top bits of those results as known zeros). Built
+// from the halves, `ulong(y << k) | ulong(y >> (32 - k)) << 32`, which is what the hardware runs anyway, the value is
+// right. So every such shift is built that way. AMD_ZEXT_SHIFT_FIX=0 turns this off. Test a24.
+static unsigned zextShiftHalves(void *module) {
+    const char *setting = getenv("AMD_ZEXT_SHIFT_FIX");
+    if ((setting && !strcmp(setting, "0")) || !api.binaryCreate || !api.castCreate) return 0;
+    enum { kMax = 1024 };
+    void *found[kMax];
+    unsigned count = 0, rewritten = 0;
+    char *functions = (char *)module + kModuleFunctions;
+    for (char *fn = nextNode(functions); fn != functions; fn = nextNode(fn)) {
+        char *function = fn - kFunctionNode, *blocks = function + kFunctionBlocks;
+        if (*(void **)(function + kFunctionParent) != module) return 0;  // layout mismatch: leave the module alone
+        for (char *bn = nextNode(blocks); bn != blocks; bn = nextNode(bn)) {
+            char *block = bn - kBlockNode, *insts = block + kBlockInstructions;
+            if (*(void **)(block + kBlockParent) != function) return 0;
+            for (char *in = nextNode(insts); in != insts; in = nextNode(in)) {
+                char *inst = in - kInstructionNode;
+                if (*(void **)(inst + kInstructionParent) != block) return 0;
+                if (!isInstruction(inst, kOpcodeShl) || hungOffUses(inst) || numOperands(inst) != 2 || count == kMax) continue;
+                void *type = typeOf(inst), *ext = operand(inst, 0);
+                uint64_t k;
+                if (typeID(type) != kTypeInteger || intBits(type) != 64 || !isInstruction(ext, kOpcodeZExt) || hungOffUses(ext) ||
+                    numOperands(ext) != 1 || intBits(typeOf(operand(ext, 0))) != 32 || !constantIntValue(operand(inst, 1), &k) || k == 0 || k >= 32)
+                    continue;
+                found[count++] = inst;
+            }
+        }
+    }
+    for (unsigned c = 0; c < count; c++) {
+        void *inst = found[c], *y = operand(operand(inst, 0), 0), *i32 = typeOf(y), *i64 = typeOf(inst);
+        uint64_t k;
+        constantIntValue(operand(inst, 1), &k);
+        void *low = api.castCreate(kOpcodeZExt, api.binaryCreate(kOpcodeShl, y, api.constantIntGet(i32, k, false), &kNoName, inst), i64, &kNoName, inst);
+        void *carry = api.castCreate(kOpcodeZExt, api.binaryCreate(kOpcodeLShr, y, api.constantIntGet(i32, 32 - k, false), &kNoName, inst), i64, &kNoName, inst);
+        void *value = api.binaryCreate(kOpcodeOrBits, low, api.binaryCreate(kOpcodeShl, carry, api.constantIntGet(i64, 32, false), &kNoName, inst), &kNoName, inst);
+        api.replaceAllUsesWith(inst, value);
+        api.eraseFromParent(inst);
+        rewritten++;
+    }
+    return rewritten;
+}
+
 static unsigned singleBitTests(void *module) {
     const char *setting = getenv("AMD_BIT_TEST_FIX");
     if ((setting && !strcmp(setting, "0")) || !api.functionTypeGet || !api.getOrInsertFunction) return 0;
@@ -2149,6 +2196,8 @@ static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *
         if (unpacks && logging()) fprintf(stderr, "[texatomic] %u unpack call(s) computed exactly\n", unpacks);
         unsigned floats = floatAtomicsAsInteger(module);
         if (floats && logging()) fprintf(stderr, "[texatomic] %u float atomic(s) done on the integer bits\n", floats);
+        unsigned zextShifts = zextShiftHalves(module);
+        if (zextShifts && logging()) fprintf(stderr, "[texatomic] %u zext shift(s) built from halves\n", zextShifts);
         unsigned constants = constantMinMax(module);
         if (constants && logging()) fprintf(stderr, "[texatomic] %u min/max/clamp call(s) with constant arguments folded\n", constants);
         unsigned wide = wideCompares(module);
