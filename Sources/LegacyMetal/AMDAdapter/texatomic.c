@@ -2172,12 +2172,13 @@ static unsigned shiftedDividends(void *module) {
 // combiner's add -> sub fold for such booleans applies. With a plain `& 1u` the IR optimizer simplifies it first and
 // the result is right (found by fuzzing). So these calls are folded here: integer min, max and clamp, signed or not,
 // whose arguments are all constants, become the constant, unsigned min(x, 0) and max(x, 0) become 0 and x, and
-// `min(x, 1u) | odd` becomes the odd constant (`y % (min(x, 1u) | 1u)` crashed the compile). abs, abs_diff, min3, mul_hi, rotate, sub_sat, clz,
-// extract_bits and reverse_bits fold early enough already. A loop counter makes such constant calls only when
-// libAMDIL902 unrolls the loop (`for (i < 3) a += uint(bool(x & min(i, 145u)))` came out as a minus the bools), so 32-bit
-// calls whose arguments are all constants or loop values (phis, and arithmetic on them and constants) become a
-// compare and a select, which its IR optimizer folds after unrolling (the same loop with `i < 145u ? i : 145u` is right).
-// clamp(x, c, c) becomes c, whatever x is (its DAG folded `clamp(y | 1u, 1u, 1u)` through the known bits of y | 1).
+// `min(x, 1u) | odd` becomes the odd constant (`y % (min(x, 1u) | 1u)` crashed the compile). abs, abs_diff, min3,
+// mul_hi, rotate, sub_sat, clz, extract_bits and reverse_bits fold early enough already. A loop counter makes such
+// constant calls only when libAMDIL902 unrolls the loop (`for (i < 3) a += uint(bool(x & min(i, 145u)))` came out as a
+// minus the bools), so 32-bit calls whose arguments are all constants or loop values (phis, and arithmetic on them and
+// constants) become a compare and a select, which its IR optimizer folds after unrolling (the same loop with
+// `i < 145u ? i : 145u` is right). clamp(x, c, c) becomes c, whatever x is (its DAG folded `clamp(y | 1u, 1u, 1u)`
+// through the known bits of y | 1).
 // AMD_CONSTANT_MINMAX_FIX=0 turns this off. Tests a23, a28, a30.
 static bool unrollsToConstant(void *v, int depth) {  // a constant, or what can become one when a loop is unrolled
     uint64_t c;
@@ -2495,6 +2496,47 @@ static unsigned twoWordSamplerStates(void *module) {
     return fixed;
 }
 
+// The high half of a 64-bit product whose operand has an unsigned average in its low half comes out too low:
+// `mulhi((ulong(a + b) << 32) | rhadd(a, b), (ulong(popcount(86u)) << 32) | k)` was 2 short for most inputs (found by
+// fuzzing with 64-bit integers, seed 1488, stock files too; there a switch selector built from it took the wrong case).
+// The operands are right, and a literal 4 for popcount(86u) hides it, so it shows when the other factor folds to a
+// constant late; libAMDIL902 seems to drop carries out of the average, as with a24's top bits of hadd / rhadd. Unsigned
+// 32-bit hadd / rhadd that are zero-extended to 64 bits are built from bitwise arithmetic instead, which can't
+// overflow: hadd(a, b) = (a & b) + ((a ^ b) >> 1), rhadd(a, b) = (a | b) - ((a ^ b) >> 1). Signed, vector and plain
+// 32-bit averages are left alone. AMD_AVERAGE_FIX=0 turns this off. Test a32.
+static unsigned plainUnsignedAverages(void *module) {
+    const char *setting = getenv("AMD_AVERAGE_FIX");
+    if ((setting && !strcmp(setting, "0")) || !api.binaryCreate) return 0;
+    unsigned rewritten = 0;
+    for (unsigned rounded = 0; rounded < 2; rounded++) {
+        const char *name = rounded ? "air.rhadd.u.i32" : "air.hadd.u.i32";
+        void *function = api.getFunction(module, name, strlen(name));
+        if (!function) continue;
+        for (void *use = firstUse(function); use;) {
+            void *call = api.getUser(use);
+            use = nextUse(use);
+            if (!isCall(call, function, 3)) continue;
+            void *a = operand(call, 0), *b = operand(call, 1), *type = typeOf(a);
+            if (typeOf(b) != type || typeOf(call) != type || typeID(type) != kTypeInteger || intBits(type) != 32) continue;
+            bool widened = false;
+            for (void *u = firstUse(call); u; u = nextUse(u)) {
+                void *user = api.getUser(u);
+                if (isInstruction(user, kOpcodeZExt) && typeID(typeOf(user)) == kTypeInteger && intBits(typeOf(user)) == 64)
+                    widened = true;
+            }
+            if (!widened) continue;
+            void *different = api.binaryCreate(kOpcodeXorNot, a, b, &kNoName, call);
+            void *half = api.binaryCreate(kOpcodeLShr, different, api.constantIntGet(type, 1, false), &kNoName, call);
+            void *common = api.binaryCreate(rounded ? kOpcodeOrBits : kOpcodeAndBits, a, b, &kNoName, call);
+            void *value = api.binaryCreate(rounded ? kOpcodeSub : kOpcodeAdd, common, half, &kNoName, call);
+            api.replaceAllUsesWith(call, value);
+            api.eraseFromParent(call);
+            rewritten++;
+        }
+    }
+    return rewritten;
+}
+
 static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *c, void *d, void *e) {
     if (module && resolveAPI()) {
         static bool optionsParsed;  // TEXATOMIC_LLVM_ARGS="-print-after-all ...": libAMDIL902's LLVM options (diagnostics)
@@ -2529,6 +2571,8 @@ static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *
         if (floats && logging()) fprintf(stderr, "[texatomic] %u float atomic(s) done on the integer bits\n", floats);
         unsigned andNots = boolAndNotSelects(module);
         if (andNots && logging()) fprintf(stderr, "[texatomic] %u and(s) of a bool with a not built as selects\n", andNots);
+        unsigned averages = plainUnsignedAverages(module);
+        if (averages && logging()) fprintf(stderr, "[texatomic] %u unsigned average(s) built with bitwise arithmetic\n", averages);
         unsigned zextShifts = zextShiftHalves(module);
         if (zextShifts && logging()) fprintf(stderr, "[texatomic] %u zext shift(s) built from halves\n", zextShifts);
         unsigned constants = constantMinMax(module);
