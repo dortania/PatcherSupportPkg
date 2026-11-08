@@ -3367,7 +3367,11 @@ static bool step(LLVMBuilderRef b, LLVMValueRef f, LLVMValueRef yes, LLVMValueRe
 // copy of the buffer, as Tint writes `output.a = *bufferView<array<i32, 32>>(&A, 0)`) and a cast views: the back end
 // lowers the copy to loads and reuses an earlier load of a word past a store to it (bufferView mixed_types_aliasing
 // with constant offsets: the store through the view never reached the copied-out array, 96 cases); such roots' casts
-// count as punned, and their copies are made volatile too. INTEL_TYPE_PUN_FIX=0 turns it off.
+// count as punned, and their copies are made volatile too. A cast that only feeds such a copy (its i8 * operand) is
+// no view: a buffer copied whole into a private variable and read from there (WebGPU CTS memory_layout read_layout,
+// function and private address spaces) has no other access to keep in order, and a volatile copy into private memory
+// lost the array's mat2x2<f16> values (the zero-initialization stores came after it). INTEL_TYPE_PUN_FIX=0 turns it
+// off.
 static bool sharedPointer(LLVMValueRef v) {
     LLVMTypeRef t = LLVMTypeOf(v);
     if (LLVMGetTypeKind(t) != kTypeKindPointer) return false;
@@ -3378,6 +3382,18 @@ static LLVMValueRef pointerRoot(LLVMValueRef p) {
     for (int depth = 0; depth < 16 && p && (LLVMIsAGetElementPtrInst(p) || LLVMIsABitCastInst(p)); depth++) p = LLVMGetOperand(p, 0);
     return p;
 }
+static bool copyCall(LLVMValueRef inst) {  // llvm.memcpy / llvm.memmove
+    if (!LLVMIsACallInst(inst)) return false;
+    const char *name = LLVMGetValueName(LLVMGetCalledValue(inst));
+    return name && (!strncmp(name, "llvm.memcpy.", 12) || !strncmp(name, "llvm.memmove.", 13));
+}
+static bool onlyCopied(LLVMValueRef cast) {  // a cast that is nothing but a memcpy / memmove operand: not a view
+    LLVMUseRef u = LLVMGetFirstUse(cast);
+    if (!u) return false;
+    for (; u; u = LLVMGetNextUse(u))
+        if (!copyCall(LLVMGetUser(u))) return false;
+    return true;
+}
 static unsigned volatilizePunnedAccesses(LLVMModuleRef module) {
     if (disabled("INTEL_TYPE_PUN_FIX")) return 0;
     unsigned marked = 0;
@@ -3387,7 +3403,7 @@ static unsigned volatilizePunnedAccesses(LLVMModuleRef module) {
         std::map<LLVMValueRef, std::vector<LLVMValueRef>> castsOf;
         for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
             for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst))
-                if (LLVMIsABitCastInst(inst) && sharedPointer(inst) && sharedPointer(LLVMGetOperand(inst, 0)))
+                if (LLVMIsABitCastInst(inst) && sharedPointer(inst) && sharedPointer(LLVMGetOperand(inst, 0)) && !onlyCopied(inst))
                     castsOf[pointerRoot(LLVMGetOperand(inst, 0))].push_back(inst);
         // memcpy / memmove calls and the shared roots they copy to or from
         std::map<LLVMValueRef, std::vector<LLVMValueRef>> copiesOf;
