@@ -9,6 +9,8 @@ the libAMDIL902 patches, and fixes for the 12.5 AMD Metal driver (`AMDBronzeComp
 `build.sh` also writes Tahoe's compiler for this stack into `13.6-25` and `13.2.1-25`: the `14.2 Beta 1` compiler under the
 `Versions/31001` paths (`tools/make_tahoe_compiler.py`).
 
+What each fix does, the bug behind it and its test: [FIXES.md](FIXES.md). New fixes get their entry there.
+
 ## Build
 
     ./build.sh
