@@ -1576,10 +1576,15 @@ static unsigned rotatesAsShifts(void *module) {
 // constant (the front end's form of `((x * x) << s) & 3`), the x & 1 goes through extract_bits instead (a loop exit came
 // out wrong for x = 2 mod 4). A mask built from a loop counter becomes a single bit only when libAMDIL902 unrolls the loop
 // (`for (i < 3) { while (...) { v ^= ...; if ((i & v & 3) == 0) break; } }` never left the inner loop for i = 1), so
-// such ands, `== 0` / `!= 0`, go through extract_bits as two 16-bit halves. AMD_BIT_TEST_FIX=0 turns this off.
+// such ands, `== 0` / `!= 0`, go through extract_bits as two 16-bit halves. The front end also tests a phi of such ands
+// when it moves a test out of an if (`phi [x & 1], [y & 1] != 0`); once the other tests of x & 1 are extracts, the phi is
+// the and's only user and libAMDIL902 drops the `& 1` inside it (found by fuzzing, seed 2245: right with stock files and
+// with this job off), so the phi's ands go through extract_bits too. AMD_BIT_TEST_FIX=0 turns this off.
 // Tests a15, a25, a31.
 enum { kValueConstantInt = 18, kOpcodeICmpPredicateMask = 0x3f };
 static bool containsCounter(void *v, int depth);  // below, with the opcodes it needs
+static bool singleBitPhi(void *v, void *i32, unsigned *bit);
+static void *anyOperand(void *user, unsigned i);
 static bool constantIntValue(void *v, uint64_t *value) {
     if (subclassID(v) != kValueConstantInt || typeID(typeOf(v)) != kTypeInteger) return false;
     if (*(uint32_t *)((char *)v + 0x20) > 64) return false;  // APInt BitWidth @0x20, VAL @0x18 (inline up to 64 bits)
@@ -1598,6 +1603,25 @@ static unsigned singleBitTestsAsExtracts(void *module, void *function, void *i32
             unsigned predicate = *(uint16_t *)(inst + 0x12) & kOpcodeICmpPredicateMask;
             uint64_t zero, mask;
             void *masked = operand(inst, 0);
+            unsigned bit;
+            if ((predicate == kPredicateEQ || predicate == kPredicateNE) && constantIntValue(operand(inst, 1), &zero) && !zero &&
+                singleBitPhi(masked, i32, &bit)) {
+                if (!extract) {
+                    void *params[3] = {i32, i32, i32};
+                    extractType = api.functionTypeGet(i32, params, 3, false);
+                    extract = api.getOrInsertFunction(module, "air.extract_bits.u.i32", strlen("air.extract_bits.u.i32"), extractType);
+                    if (!extract || subclassID(extract) != kValueFunction) return rewritten;  // a bitcast: another declaration
+                }
+                for (unsigned i = 0; i < numOperands(masked); i++) {
+                    void *x = anyOperand(masked, i);
+                    if (!isInstruction(x, kOpcodeAnd)) continue;  // the same and on two edges: replaced already
+                    void *after = (char *)nextNode((char *)x + kInstructionNode) - kInstructionNode;
+                    void *args[3] = {operand(x, 0), api.constantIntGet(i32, bit, false), api.constantIntGet(i32, 1, false)};
+                    api.replaceUsesOfWith(masked, x, createCall(extract, extractType, args, 3, after));
+                }
+                rewritten++;
+                continue;
+            }
             if ((predicate != kPredicateEQ && predicate != kPredicateNE) || !constantIntValue(operand(inst, 1), &zero) || zero ||
                 !isInstruction(masked, kOpcodeAnd) || hungOffUses(masked) || numOperands(masked) != 2 || typeOf(masked) != i32)
                 continue;
@@ -1782,6 +1806,29 @@ static void *anyOperand(void *user, unsigned i) {  // fixed or hung-off (phi) op
     if (!hungOffUses(user)) return operand(user, i);
     char *uses = *(char **)((char *)user - sizeof(void *));
     return *(void **)(uses + i * kUseSize);
+}
+static bool singleBitPhi(void *v, void *i32, unsigned *bit) {  // singleBitTests: phi [x & 2^k], [y & 2^k], ...
+    if (!isInstruction(v, kOpcodePHI) || typeOf(v) != i32 || !numOperands(v)) return false;
+    unsigned k = 64;
+    for (unsigned i = 0; i < numOperands(v); i++) {
+        void *x = anyOperand(v, i);
+        uint64_t m;
+        if (!isInstruction(x, kOpcodeAnd) || hungOffUses(x) || numOperands(x) != 2 || !constantIntValue(operand(x, 1), &m) ||
+            !m || (m & (m - 1)) || m > 0xffffffffu || (k != 64 && k != (unsigned)__builtin_ctzll(m)))
+            return false;
+        k = (unsigned)__builtin_ctzll(m);
+    }
+    if (k)  // extract_bits gives 0 / 1, not 0 / 2^k: then only comparisons with 0 may use the phi
+        for (void *use = firstUse(v); use; use = nextUse(use)) {
+            void *user = api.getUser(use);
+            uint64_t zero;
+            unsigned predicate = isInstruction(user, kOpcodeICmp) ? *(uint16_t *)((char *)user + 0x12) & kOpcodeICmpPredicateMask : 0;
+            if ((predicate != kPredicateEQ && predicate != kPredicateNE) || operand(user, 0) != v ||
+                !constantIntValue(operand(user, 1), &zero) || zero)
+                return false;
+        }
+    *bit = k;
+    return true;
 }
 static bool exactNarrow(void *v, void **stack, int depth) {
     if (depth >= 12) return false;
