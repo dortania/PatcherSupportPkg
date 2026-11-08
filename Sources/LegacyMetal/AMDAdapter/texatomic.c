@@ -2058,7 +2058,8 @@ static unsigned shiftedDividends(void *module) {
 // its DAG, where the and with the now constant 1 is taken for a 0 / -1 boolean (as singleBitTests describes), and the
 // combiner's add -> sub fold for such booleans applies. With a plain `& 1u` the IR optimizer simplifies it first and
 // the result is right (found by fuzzing). So these calls are folded here: integer min, max and clamp, signed or not,
-// whose arguments are all constants, become the constant. abs, abs_diff, min3, mul_hi, rotate, sub_sat, clz,
+// whose arguments are all constants, become the constant, and unsigned min(x, 1), min(x, 0) and max(x, 0) become
+// x != 0, 0 and x (`y % (min(x, 1u) | 1u)` crashed the compile). abs, abs_diff, min3, mul_hi, rotate, sub_sat, clz,
 // extract_bits and reverse_bits fold early enough already. AMD_CONSTANT_MINMAX_FIX=0 turns this off. Test a23.
 static unsigned constantMinMax(void *module) {
     const char *setting = getenv("AMD_CONSTANT_MINMAX_FIX");
@@ -2087,7 +2088,28 @@ static unsigned constantMinMax(void *module) {
                         v[a] &= mask;
                         sv[a] = bits == 64 ? (int64_t)v[a] : (int64_t)(v[a] << (64 - bits)) >> (64 - bits);  // sign-extended
                     }
-                    if (!constant) continue;
+                    if (!constant) {
+                        // One constant: unsigned min(x, 1) is the bool x != 0, min(x, 0) is 0, max(x, 0) is x. As the
+                        // bool, libAMDIL902's IR optimizer folds what follows (`y % (min(x, 1u) | 1u)` is y % 1); left as
+                        // the call, its DAG finds the divisor a power of two late and its bit-field-extract combine
+                        // (AnalyzeBFECombine) reads a null operand: "Compiler encountered an internal error".
+                        if (sign || o == 2) continue;
+                        uint64_t c;
+                        unsigned which = constantIntValue(operand(call, 1), &c) ? 1 : constantIntValue(operand(call, 0), &c) ? 0 : 2;
+                        if (which == 2) continue;
+                        void *x = operand(call, 1 - which), *type = typeOf(call), *value = NULL;
+                        c &= mask;
+                        if (o == 0 && c == 0) value = api.constantIntGet(type, 0, false);
+                        else if (o == 1 && c == 0) value = x;
+                        else if (o == 0 && c == 1 && api.cmpCreate && api.castCreate)
+                            value = api.castCreate(kOpcodeZExt, api.cmpCreate(kOpcodeICmp, kPredicateNE, x, api.constantIntGet(type, 0, false), &kNoName, call),
+                                                   type, &kNoName, call);
+                        if (!value) continue;
+                        api.replaceAllUsesWith(call, value);
+                        api.eraseFromParent(call);
+                        folded++;
+                        continue;
+                    }
                     uint64_t r;
                     if (sign) {
                         int64_t x = sv[0];

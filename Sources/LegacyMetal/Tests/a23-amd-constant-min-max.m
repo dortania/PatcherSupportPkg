@@ -2,19 +2,21 @@
 // air.min / air.max / air.clamp with constant arguments stay calls through libAMDIL902's IR optimizer and fold only in
 // its DAG, where the and with the now constant 1 is taken for a 0 / -1 boolean and `z + bool` becomes `z - bool`
 // (found by fuzzing: z + uint(bool(x & min(1u, 145u)))). The adapter folds such calls to constants first.
-// Checked: unsigned and signed min, max, clamp, and a mask of 2, against the CPU on 256 threads.
+// Also `y % (min(x, 1u) | 1u)`, a power-of-two divisor the DAG finds late, which crashed its bit-field-extract combine.
+// Checked: unsigned and signed min, max, clamp, a mask of 2, and the min(x, 1u) divisor, against the CPU on 256 threads.
 // Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
 #import "repro.h"
 
-enum { kThreads = 256, kOut = 5 };
+enum { kThreads = 256, kOut = 6 };
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"
     "kernel void k(device const uint *in [[buffer(0)]], device uint *out [[buffer(1)]], uint t [[thread_position_in_grid]]) {\n"
     "  uint x = in[4 * t], z = in[4 * t + 1] * 11u + t;\n"
-    "  out[5 * t] = z + uint(bool(x & min(1u, 145u)));\n"
-    "  out[5 * t + 1] = z + uint(bool(x & max(1u, 0u)));\n"
-    "  out[5 * t + 2] = z + uint(bool(x & uint(min(1, 145))));\n"
-    "  out[5 * t + 3] = z + uint(bool(x & clamp(1u, 0u, 5u)));\n"
-    "  out[5 * t + 4] = z + uint(bool(x & min(2u, 145u)));\n"
+    "  out[6 * t] = z + uint(bool(x & min(1u, 145u)));\n"
+    "  out[6 * t + 1] = z + uint(bool(x & max(1u, 0u)));\n"
+    "  out[6 * t + 2] = z + uint(bool(x & uint(min(1, 145))));\n"
+    "  out[6 * t + 3] = z + uint(bool(x & clamp(1u, 0u, 5u)));\n"
+    "  out[6 * t + 4] = z + uint(bool(x & min(2u, 145u)));\n"
+    "  out[6 * t + 5] = z + (z >> (z & 31u)) % (min(x, 1u) | 1u);\n"
     "}\n";
 
 int main(int argc, char **argv) {
@@ -42,7 +44,7 @@ int main(int argc, char **argv) {
         int wrong = 0, first = -1;
         for (int t = 0; t < kThreads; t++) {
             uint32_t x = input[4 * t], z = input[4 * t + 1] * 11 + t;
-            uint32_t want[kOut] = {z + ((x & 1) != 0), z + ((x & 1) != 0), z + ((x & 1) != 0), z + ((x & 1) != 0), z + ((x & 2) != 0)};
+            uint32_t want[kOut] = {z + ((x & 1) != 0), z + ((x & 1) != 0), z + ((x & 1) != 0), z + ((x & 1) != 0), z + ((x & 2) != 0), z};
             for (int w = 0; w < kOut; w++)
                 if (got[kOut * t + w] != want[w]) { if (first < 0) first = kOut * t + w; wrong++; }
         }
