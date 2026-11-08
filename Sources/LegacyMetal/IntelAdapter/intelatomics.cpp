@@ -666,11 +666,16 @@ static unsigned loopExitCopies(std::string &s) {
 // then merge that register with another copy of the same variable and drop its high bits: v0 = (uint)(x / y), replaced
 // by (uchar)1 >> s in a loop, came out as the quotient's low byte in all 256 threads, also where the loop never ran
 // (mslfuzz2 LONG=1 seed 6; the 64-bit division's loops only set up the merge), and a vector lane lost its high bits
-// the same way (VEC=1 seed 526). Constants from 65536 up, SHL, AND and UMIN were right. Such a shift is done on the
-// value with bit 31 set, and the shifted bit 31 is XORed away, so every register involved is 32 bits wide (the shift
-// count is masked to 5 bits on both). INTEL_NARROW_SHIFT_FIX=0 turns it off.
+// the same way (VEC=1 seed 526). Constants from 65536 up, SHL, and AND / UMIN with a constant in a register were right.
+// Such a shift is done on the value with bit 31 set, and the shifted bit 31 is XORed away, so every register involved is
+// 32 bits wide (the shift count is masked to 5 bits on both). An AND with an immediate mask below 65536 is narrow too:
+// (ushort)(x >> s), merged with a 64-bit quotient in the other arm of a select, kept the quotient's low 16 bits (LONG=1
+// seed 314). Where such an AND's result is copied into a register that two or more MOVs set (the back end's phi
+// copies), it becomes (x | bit 31) & (mask | bit 31), XOR bit 31. INTEL_NARROW_SHIFT_FIX=0 turns both off.
 static unsigned narrowShifts(std::string &s) {
-    if (disabled("INTEL_NARROW_SHIFT_FIX") || (s.find("\tSHR ") == std::string::npos && s.find("\tSAR ") == std::string::npos)) return 0;
+    if (disabled("INTEL_NARROW_SHIFT_FIX") ||
+        (s.find("\tSHR ") == std::string::npos && s.find("\tSAR ") == std::string::npos && s.find("\tAND ") == std::string::npos))
+        return 0;
     size_t temps = s.find("\tDCL_TEMPS r0..r");
     if (temps == std::string::npos) return 0;
     unsigned last = (unsigned)strtoul(s.c_str() + temps + 16, nullptr, 10);
@@ -702,6 +707,19 @@ static unsigned narrowShifts(std::string &s) {
                  immediate(mask, value))
             bound[d] = value;
     }
+    // merge registers: set by two or more MOVs (the back end's phi copies), and the registers copied into one
+    std::map<unsigned, int> moves;
+    std::vector<std::pair<unsigned, unsigned>> copies;  // (destination, source register) of MOV rD.x, rS.x
+    for (const std::string &l : lines) {
+        unsigned d, r;
+        char source[64];
+        int at = 0, at2 = 0;
+        if (sscanf(l.c_str(), "\tMOV r%u.x, %63[^;];%n", &d, source, &at) != 2 || at != (int)l.size()) continue;
+        moves[d]++;
+        if (sscanf(source, "r%u.x%n", &r, &at2) == 1 && at2 == (int)strlen(source)) copies.push_back({d, r});
+    }
+    std::set<unsigned> intoMerge;
+    for (auto &c : copies) if (moves[c.first] >= 2) intoMerge.insert(c.second);
     auto small = [&](const std::string &operand) {
         long value;
         unsigned r;
@@ -715,9 +733,22 @@ static unsigned narrowShifts(std::string &s) {
         unsigned d;
         char op[4], source[64], count[64];
         int at = 0;
-        if (sscanf(l.c_str(), "\t%3[A-Z] r%u.x, %63[^,], %63[^;];%n", op, &d, source, count, &at) != 4 || at != (int)l.size() ||
-            (strcmp(op, "SHR") && strcmp(op, "SAR")) || !small(source))
+        if (sscanf(l.c_str(), "\t%3[A-Z] r%u.x, %63[^,], %63[^;];%n", op, &d, source, count, &at) != 4 || at != (int)l.size())
             continue;
+        long mask;
+        char self[16];
+        snprintf(self, sizeof self, "r%u.x", d);
+        if (!strcmp(op, "AND") && intoMerge.count(d) && strcmp(source, self) && immediate(count, mask) && mask >= 0 && mask < 65536) {
+            // x & mask, copied into a merge register: (x | bit 31) & (mask | bit 31), then bit 31 XORed away
+            unsigned high = ++last, masked = ++last;
+            char buffer[256];
+            snprintf(buffer, sizeof buffer, "\tOR r%u.x, %s, -2147483648;\n\tAND r%u.x, r%u.x, %d;\n\tXOR r%u.x, r%u.x, -2147483648;", high,
+                     source, masked, high, (int32_t)((uint32_t)mask | 0x80000000u), d, masked);
+            l = buffer;
+            n++;
+            continue;
+        }
+        if ((strcmp(op, "SHR") && strcmp(op, "SAR")) || !small(source)) continue;
         unsigned high = ++last, shifted = ++last, bit = ++last, bitShifted = ++last;
         char setHigh[96], buffer[384];
         long value;
@@ -2076,7 +2107,9 @@ static unsigned signedPowerOfTwoDivisions(LLVMModuleRef module) {
         for (unsigned lane = 0; lane < (n ? n : 1); lane++) {
             LLVMValueRef index = LLVMConstInt(i32, lane, false);
             LLVMValueRef x = n ? LLVMBuildExtractElement(b, dividend, index, "") : dividend;
-            LLVMValueRef c = n ? LLVMGetElementAsConstant(divisor, lane) : divisor;
+            LLVMValueRef c = n ? (LLVMIsAConstantDataSequential(divisor) ? LLVMGetElementAsConstant(divisor, lane)
+                                                                          : LLVMBuildExtractElement(b, divisor, index, ""))
+                               : divisor;
             int k;
             bool negative;
             LLVMValueRef q;
@@ -2219,15 +2252,19 @@ static unsigned exact64BitMultiplies(LLVMModuleRef module) {
 // quotient, w[q & 3], read the index from a register the loop hadn't written yet: with a constant dividend
 // (0x200000002 / d) the lane picked was the dividend's low word, & 3, whatever q was; q itself, and a select on q & 3,
 // were right (the MacBookPro11,5 session's 64-bit fuzzing, LONG=1 seed 6). An extractelement or insertelement whose
-// index comes (through casts, masks and arithmetic) from a 64-bit div / rem becomes selects on the index.
+// index comes (through casts, masks and arithmetic) from a 64-bit div / rem becomes selects on the index. So does one
+// from a 64-bit shift of a constant by a variable, w[(uint)(4151055293ul >> s) & 3]: the stock back end crashes in its
+// DAG legalizer on that index (mslfuzz2 LONG=1 seed 378; a variable shifted, or a select on the index, compiles).
 // INTEL_WIDE_DIV_INDEX_FIX=0 turns it off.
 static bool fromWideDivision(LLVMValueRef v, int depth = 0) {
     if (depth > 6 || !LLVMIsAInstruction(v)) return false;
     int opcode = LLVMGetInstructionOpcode(v);
-    if (opcode == 14 || opcode == 15 || opcode == 17 || opcode == 18) {  // udiv, sdiv, urem, srem
-        LLVMTypeRef type = LLVMTypeOf(v);
-        return LLVMGetTypeKind(type) == kTypeKindInteger && LLVMGetIntTypeWidth(type) == 64;
-    }
+    LLVMTypeRef type = LLVMTypeOf(v);
+    bool wide = LLVMGetTypeKind(type) == kTypeKindInteger && LLVMGetIntTypeWidth(type) == 64;
+    if (opcode == 14 || opcode == 15 || opcode == 17 || opcode == 18) return wide;  // udiv, sdiv, urem, srem
+    if ((opcode == 20 || opcode == 21 || opcode == 22) && wide && LLVMIsAConstant(LLVMGetOperand(v, 0)) &&
+        !LLVMIsAConstant(LLVMGetOperand(v, 1)))  // shl, lshr, ashr of a constant by a variable
+        return true;
     bool passes = (opcode >= 8 && opcode <= 25 && opcode != 9 && opcode != 11 && opcode != 13 && opcode != 16 && opcode != 19) ||
                   opcode == 30 || opcode == 31 || opcode == 32 || opcode == 46;  // integer arithmetic, trunc / zext / sext, select
     if (!passes) return false;
@@ -2443,11 +2480,20 @@ unsigned long long LLVMConstIntGetZExtValue(LLVMValueRef);
 int LLVMGetICmpPredicate(LLVMValueRef);
 }
 
-// The constant lanes of an integer scalar or vector, or false if they can't all be read.
+// The constant lanes of an integer scalar or vector, or false if they can't all be read. Only a ConstantDataVector can
+// be read lane by lane: a vector argument or instruction, or a constant vector with an undef lane, isn't one (reading it
+// crashed the compiler on VEC=1 seed 734), and zeroinitializer is a ConstantAggregateZero.
 static bool constantLanes(LLVMValueRef v, std::vector<LLVMValueRef> &out) {
     out.clear();
     unsigned n = lanes(LLVMTypeOf(v));
     if (!n) { if (!LLVMIsAConstantInt(v)) return false; out.push_back(v); return true; }
+    if (LLVMIsAConstantAggregateZero(v)) {
+        LLVMTypeRef element = LLVMGetElementType(LLVMTypeOf(v));
+        if (LLVMGetTypeKind(element) != kTypeKindInteger) return false;
+        out.assign(n, LLVMConstNull(element));
+        return true;
+    }
+    if (!LLVMIsAConstantDataSequential(v)) return false;
     for (unsigned k = 0; k < n; k++) {
         LLVMValueRef e = LLVMGetElementAsConstant(v, k);
         if (!e || !LLVMIsAConstantInt(e)) return false;
@@ -2475,6 +2521,32 @@ static LLVMValueRef foldBitCount(LLVMValueRef x, int which) {
 }
 
 // A shift amount that is in range in every lane (LLVM folds larger ones to undef, the GPU masks them).
+// A bitcast between integer scalars and vectors of constants, folded to its lanes. LLVMConstBitCast leaves an integer
+// cast to a vector as a constant expression (bitcast (<1 x i32> <i32 194> to <2 x i16>)), which can't be read lane by
+// lane, so `as_type<short2>(min(194u, 253u))` stayed unfolded after i36 folded the min. nullptr if a lane isn't a whole
+// number of bytes.
+static LLVMValueRef foldBitCastConstant(LLVMValueRef a, LLVMTypeRef type) {
+    std::vector<LLVMValueRef> in;
+    if (!constantLanes(a, in) || in.empty()) return nullptr;
+    unsigned from = LLVMGetIntTypeWidth(LLVMTypeOf(in[0]));
+    LLVMTypeRef element = lanes(type) ? LLVMGetElementType(type) : type;
+    if (LLVMGetTypeKind(element) != kTypeKindInteger) return nullptr;
+    unsigned to = LLVMGetIntTypeWidth(element), count = lanes(type) ? lanes(type) : 1;
+    if (from % 8 || to % 8 || from > 64 || to > 64 || from * in.size() != to * count) return nullptr;
+    std::vector<uint8_t> bytes;  // little-endian, lane 0 first
+    for (LLVMValueRef e : in) {
+        uint64_t v = LLVMConstIntGetZExtValue(e);
+        for (unsigned k = 0; k < from / 8; k++) bytes.push_back((uint8_t)(v >> (8 * k)));
+    }
+    std::vector<LLVMValueRef> out;
+    for (unsigned lane = 0; lane < count; lane++) {
+        uint64_t v = 0;
+        for (unsigned k = 0; k < to / 8; k++) v |= (uint64_t)bytes[lane * (to / 8) + k] << (8 * k);
+        out.push_back(LLVMConstInt(element, v, false));
+    }
+    return lanes(type) ? LLVMConstVector(out.data(), count) : out[0];
+}
+
 static bool shiftInRange(LLVMValueRef amount) {
     std::vector<LLVMValueRef> in;
     if (!constantLanes(amount, in)) return false;
@@ -2544,7 +2616,10 @@ static LLVMValueRef foldInstruction(LLVMValueRef inst) {
     case kTrunc: return LLVMConstTrunc(a, type);
     case kZExt: return LLVMConstZExt(a, type);
     case kSExt: return LLVMConstSExt(a, type);
-    case kBitCast: return LLVMGetTypeKind(element) == kTypeKindInteger ? LLVMConstBitCast(a, type) : nullptr;
+    case kBitCast:
+        if (LLVMGetTypeKind(element) != kTypeKindInteger) return nullptr;
+        if (LLVMValueRef folded = foldBitCastConstant(a, type)) return folded;
+        return LLVMConstBitCast(a, type);
     case kICmp: return LLVMConstICmp(LLVMGetICmpPredicate(inst), a, c);
     case kSelect: return LLVMConstSelect(a, c, LLVMGetOperand(inst, 2));
     case kExtract: return LLVMConstExtractElement(a, c);
@@ -2573,6 +2648,9 @@ static unsigned foldConstantCalls(LLVMModuleRef module) {
         for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u)) calls.push_back(LLVMGetUser(u));
         for (LLVMValueRef call : calls) {
             unsigned args = op == 10 ? 4 : op == 2 || op == 9 ? 3 : op <= 1 || op == 8 ? 2 : 1;
+            // clz / ctz carry a second operand, the i1 "zero is undefined" flag (air.clz.i32(i32 x, i1 false)), which
+            // the fold ignores: it gives the width for 0, which is what false asks for
+            if ((op == 5 || op == 6) && LLVMIsACallInst(call) && LLVMGetNumOperands(call) == 3) args = 2;
             if (!LLVMIsACallInst(call) || LLVMGetNumOperands(call) != args + 1 || LLVMGetOperand(call, args) != f) continue;
             LLVMTypeRef type = LLVMTypeOf(call);
             LLVMTypeRef element = lanes(type) ? LLVMGetElementType(type) : type;
@@ -2772,11 +2850,12 @@ static unsigned fixSamplerStateWords(LLVMModuleRef module) {
         LLVMValueRef global = parts[1] ? LLVMIsAGlobalVariable(parts[1]) : nullptr;
         LLVMValueRef words = global ? LLVMGetInitializer(global) : nullptr;
         LLVMTypeRef type = words ? LLVMTypeOf(words) : nullptr;
+        bool zero = words && LLVMIsAConstantAggregateZero(words);  // a state with every field 0 is a zeroinitializer
         if (!type || LLVMGetTypeKind(type) != kArrayKind || LLVMGetArrayLength(type) != 2 || LLVMGetElementType(type) != i64 ||
-            !LLVMIsAConstantDataArray(words))
+            !(zero || LLVMIsAConstantDataArray(words)))
             continue;
-        uint64_t first = LLVMConstIntGetZExtValue(LLVMGetElementAsConstant(words, 0));
-        uint64_t second = LLVMConstIntGetZExtValue(LLVMGetElementAsConstant(words, 1));
+        uint64_t first = zero ? 0 : LLVMConstIntGetZExtValue(LLVMGetElementAsConstant(words, 0));
+        uint64_t second = zero ? 0 : LLVMConstIntGetZExtValue(LLVMGetElementAsConstant(words, 1));
         if (second && logging()) fprintf(stderr, "[inteltex] sampler state: second word 0x%llx not representable, dropped\n", (unsigned long long)second);
         std::string name = LLVMGetValueName(global);
         LLVMValueRef word = LLVMAddGlobalInAddressSpace(module, i64, (name + ".word").c_str(), LLVMGetPointerAddressSpace(LLVMTypeOf(global)));
