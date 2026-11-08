@@ -4,19 +4,21 @@
 # tools/localcc.dylib, and builds every pipeline whose source is embedded in a test here: once with the stock plugin
 # and once with the payload's plugin + IntelTextureAtomics.dylib. The Haswell driver can't decode Ivy Bridge binaries, so
 # tools/ivbcompile stubs its pipeline creation: reaching it means the compiler finished, and nothing runs on the GPU.
-# Prints one line per pipeline (stock | fixed | pipeline) and a summary. Needs ../build.sh run first.
+# Prints one line per pipeline (stock | fixed | pipeline) and a summary. Needs ../build.sh run first. The fixed copies sit
+# in a folder named like the driver bundle: the adapter tells Ivy Bridge's plugin by that name in its path, and leaves
+# the Haswell-only iCBE hook (i14) off for it.
 set -u
 cd "$(dirname "$0")"
 B=$(cd .. && pwd)/build UB=$(cd ../../.. && pwd)/Universal-Binaries/11.7.10/System/Library/Extensions
 [ -f "$B/MetalOldCompat.dylib" ] || { echo "run ../build.sh first" >&2; exit 2; }
 [ -f tools/localcc.dylib ] || clang++ -std=c++17 -fblocks -dynamiclib tools/localcc.cpp -o tools/localcc.dylib
 clang -fobjc-arc -framework Metal -framework Foundation tools/ivbcompile.m -o build/ivbcompile
-W=$(mktemp -d); mkdir "$W/stock" "$W/fixed" "$W/src"
-for d in stock fixed; do
+W=$(mktemp -d); F=AppleIntelHD4000GraphicsMTLDriver; mkdir "$W/stock" "$W/$F" "$W/src"
+for d in stock $F; do
     cp "$UB/AppleIntelGraphicsShared.bundle/Contents/MacOS/libIGIL-Metal.dylib" "$UB/AppleIntelHD4000GraphicsGLDriver.bundle/Contents/MacOS/iCBE.dylib" "$W/$d/"
 done
 git show "$(git merge-base HEAD origin/HEAD):Universal-Binaries/11.7.10/System/Library/Extensions/AppleIntelHD4000GraphicsMTLDriver.bundle/Contents/MacOS/libMTLIntelCompilerPlugin.dylib" > "$W/stock/libMTLIntelCompilerPlugin.dylib"
-cp "$UB/AppleIntelHD4000GraphicsMTLDriver.bundle/Contents/MacOS/libMTLIntelCompilerPlugin.dylib" "$UB/AppleIntelHD4000GraphicsMTLDriver.bundle/Contents/MacOS/IntelTextureAtomics.dylib" "$W/fixed/"
+cp "$UB/AppleIntelHD4000GraphicsMTLDriver.bundle/Contents/MacOS/libMTLIntelCompilerPlugin.dylib" "$UB/AppleIntelHD4000GraphicsMTLDriver.bundle/Contents/MacOS/IntelTextureAtomics.dylib" "$W/$F/"
 python3 -I - "$W/src" > "$W/jobs" <<'PY'
 import glob, os, re, sys
 out = sys.argv[1]
@@ -42,7 +44,7 @@ run() {  # <dir> <job...>
     echo "${r:-CRASHED}"
 }
 while read -r file mode a b; do
-    printf "%-16s | %-16s | %s %s %s %s\n" "$(run stock "$file" $mode $a ${b:-})" "$(run fixed "$file" $mode $a ${b:-})" "$(basename "$file")" $mode $a ${b:-}
+    printf "%-16s | %-16s | %s %s %s %s\n" "$(run stock "$file" $mode $a ${b:-})" "$(run $F "$file" $mode $a ${b:-})" "$(basename "$file")" $mode $a ${b:-}
 done < "$W/jobs" | tee "$W/results"
 echo; awk -F' [|] ' '{print $1 " -> " $2}' "$W/results" | sed 's/ *->/ ->/; s/  *$//' | sort | uniq -c
 rm -rf "$W"
