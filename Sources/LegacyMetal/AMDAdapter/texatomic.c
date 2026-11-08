@@ -1631,15 +1631,36 @@ static unsigned singleBitTestsAsExtracts(void *module, void *function, void *i32
 // (found by differential fuzzing with narrow vectors; the bytes of lane 0 come out right). So each such bitcast of an
 // integer vector to one with narrower integer lanes becomes a vector built lane by lane: the wide lane extracted,
 // shifted and truncated, which store right (the shifts then go through narrowUnsignedConstants).
-// AMD_BITCAST_LANE_FIX=0 turns this off. Test: a18.
+// libAMDIL902's DAG combiner makes the same bitcast out of a plain `trunc (extractelement v, k)` with k >= 1 (a single-use
+// lane of a ushort2 from a call such as max, cut to a byte): once type legalization has changed anything in the block (a
+// uchar2 comparison there is enough), it folds the pair into `extractelement (bitcast v to <4 x i8>), 2k`, whose byte comes
+// out of the wrong bits of lane k (bits 16-23 for byte 2), so a stored byte reads 0 (found by differential fuzzing with
+// narrow vectors, seed 1868). So lanes of wide lane 1 and up, here and in such truncations, go through air.extract_bits,
+// which the combiner doesn't look into. AMD_BITCAST_LANE_FIX=0 turns this off. Tests: a18, a29.
 enum { kOpcodeExtractElement = 59, kLaneOpTrunc = 36 };
 static unsigned intBits(void *type) { return *(uint32_t *)((char *)type + 8) >> 8; }  // IntegerType width: Type SubclassData
+// `trunc (extractelement v, k)` to a narrower integer (not a bool), k a constant >= 1, v a vector of integers up to 32 bits.
+static bool laneTrunc(void *cut) {
+    void *lane = operand(cut, 0), *narrow = typeOf(cut);
+    uint64_t k;
+    if (!isInstruction(lane, kOpcodeExtractElement) || hungOffUses(lane) || numOperands(lane) != 2) return false;
+    void *vector = typeOf(operand(lane, 0)), *wide = typeOf(lane);
+    if (typeID(vector) != kTypeVector || typeID(wide) != kTypeInteger || typeID(narrow) != kTypeInteger) return false;
+    if (!constantIntValue(operand(lane, 1), &k) || k == 0) return false;
+    return intBits(wide) <= 32 && intBits(narrow) > 1 && intBits(narrow) < intBits(wide);
+}
+// bits [offset, offset + count) of an integer lane up to 32 bits, as an i32 the DAG combiner can't see through.
+static void *laneBits(void *extract, void *extractType, void *lane, unsigned offset, unsigned count, void *i32, void *before) {
+    void *wide = intBits(typeOf(lane)) < 32 ? api.castCreate(kOpcodeZExt, lane, i32, &kNoName, before) : lane;
+    void *args[3] = {wide, api.constantIntGet(i32, offset, false), api.constantIntGet(i32, count, false)};
+    return createCall(extract, extractType, args, 3, before);
+}
 static unsigned bitcastLaneExtracts(void *module) {
     const char *setting = getenv("AMD_BITCAST_LANE_FIX");
     if ((setting && !strcmp(setting, "0")) || !api.binaryCreate || !api.castCreate || !api.undefGet) return 0;
     enum { kMax = 512 };
-    void *found[kMax];
-    unsigned count = 0, rewritten = 0;
+    void *found[kMax], *truncs[kMax];
+    unsigned count = 0, numTruncs = 0, rewritten = 0;
     char *functions = (char *)module + kModuleFunctions;
     for (char *fn = nextNode(functions); fn != functions; fn = nextNode(fn)) {
         char *function = fn - kFunctionNode, *blocks = function + kFunctionBlocks;
@@ -1650,6 +1671,11 @@ static unsigned bitcastLaneExtracts(void *module) {
             for (char *in = nextNode(insts); in != insts; in = nextNode(in)) {
                 char *inst = in - kInstructionNode;
                 if (*(void **)(inst + kInstructionParent) != block) return 0;
+                if (isInstruction(inst, kLaneOpTrunc) && !hungOffUses(inst) && numOperands(inst) == 1 && numTruncs < kMax &&
+                    laneTrunc(inst)) {
+                    truncs[numTruncs++] = inst;
+                    continue;
+                }
                 if (!isInstruction(inst, kOpcodeBitCast) || hungOffUses(inst) || numOperands(inst) != 1 || count == kMax) continue;
                 void *to = typeOf(inst), *from = typeOf(operand(inst, 0));
                 if (typeID(to) != kTypeVector || typeID(from) != kTypeVector) continue;
@@ -1661,22 +1687,39 @@ static unsigned bitcastLaneExtracts(void *module) {
             }
         }
     }
+    if (!count && !numTruncs) return 0;
+    void *i32 = api.getInt32Ty(api.getContext(count ? found[0] : truncs[0]));
+    void *params[3] = {i32, i32, i32};
+    void *extractType = api.functionTypeGet(i32, params, 3, false);
+    void *extract = api.getOrInsertFunction(module, "air.extract_bits.u.i32", strlen("air.extract_bits.u.i32"), extractType);
+    if (extract && subclassID(extract) != kValueFunction) extract = NULL;  // a bitcast: another declaration
     for (unsigned c = 0; c < count; c++) {
         void *cast = found[c], *source = operand(cast, 0), *to = typeOf(cast), *narrow = elementType(to);
-        void *wide = elementType(typeOf(source)), *i32 = api.getInt32Ty(api.getContext(cast));
+        void *wide = elementType(typeOf(source));
         unsigned narrowBits = intBits(narrow), ratio = intBits(wide) / narrowBits, lanes = (unsigned)arrayLength(to);
         void *vector = api.undefGet(to);
         for (unsigned k = 0; k < lanes; k++) {
             char *lane = api.userNew(96, 2);
             api.extractElement(lane, source, api.constantIntGet(i32, k / ratio, false), &kNoName, cast);
             void *value = lane;
-            if (k % ratio) value = api.binaryCreate(kOpcodeLShr, value, api.constantIntGet(wide, (k % ratio) * narrowBits, false), &kNoName, cast);
+            if (k / ratio && extract) {
+                value = laneBits(extract, extractType, lane, (k % ratio) * narrowBits, narrowBits, i32, cast);
+            } else if (k % ratio) {
+                value = api.binaryCreate(kOpcodeLShr, value, api.constantIntGet(wide, (k % ratio) * narrowBits, false), &kNoName, cast);
+            }
             value = api.castCreate(kLaneOpTrunc, value, narrow, &kNoName, cast);
             char *merged = api.userNew(96, 3);
             api.insertElement(merged, vector, value, api.constantIntGet(i32, k, false), &kNoName, cast);
             vector = merged;
         }
         api.replaceAllUsesWith(cast, vector);
+        rewritten++;
+    }
+    for (unsigned c = 0; c < numTruncs && extract; c++) {
+        void *cut = truncs[c], *lane = operand(cut, 0), *narrow = typeOf(cut);
+        void *bits = laneBits(extract, extractType, lane, 0, intBits(narrow), i32, cut);
+        api.replaceAllUsesWith(cut, api.castCreate(kLaneOpTrunc, bits, narrow, &kNoName, cut));
+        api.eraseFromParent(cut);
         rewritten++;
     }
     return rewritten;
