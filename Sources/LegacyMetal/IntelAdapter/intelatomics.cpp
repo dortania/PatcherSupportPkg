@@ -45,6 +45,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <set>
 #include <map>
 #include <functional>
 #include <algorithm>
@@ -2195,6 +2196,164 @@ static unsigned signedDivisionNegations(LLVMModuleRef module) {
     return fixed;
 }
 
+// ---- integer functions of constants -----------------------------------------------------------------------------------
+// The front end leaves calls like max(0, 0x04030201) or popcount(0xF0u) for the back end, and iCBE folds them itself;
+// what it builds from the folded value can then be wrong: the uchar lanes of as_type<uchar4>(max(0, 0x04030201)) all
+// read as byte 0 when multiplied (uint(v.z) * 7 gave 7, not 21; the MacBookPro11,5 session's narrow-vector fuzzing, VEC
+// seed 213, where it was an index into a private array). Such calls are folded here, and so is every instruction that
+// then has only constant operands, so the back end gets the finished constants. INTEL_CONSTANT_CALL_FIX=0 turns it off.
+extern "C" {
+LLVMValueRef LLVMConstICmp(int, LLVMValueRef, LLVMValueRef);
+LLVMValueRef LLVMConstSelect(LLVMValueRef, LLVMValueRef, LLVMValueRef);
+LLVMValueRef LLVMConstSub(LLVMValueRef, LLVMValueRef);
+LLVMValueRef LLVMConstAdd(LLVMValueRef, LLVMValueRef);
+LLVMValueRef LLVMConstMul(LLVMValueRef, LLVMValueRef);
+LLVMValueRef LLVMConstAnd(LLVMValueRef, LLVMValueRef);
+LLVMValueRef LLVMConstOr(LLVMValueRef, LLVMValueRef);
+LLVMValueRef LLVMConstXor(LLVMValueRef, LLVMValueRef);
+LLVMValueRef LLVMConstShl(LLVMValueRef, LLVMValueRef);
+LLVMValueRef LLVMConstLShr(LLVMValueRef, LLVMValueRef);
+LLVMValueRef LLVMConstAShr(LLVMValueRef, LLVMValueRef);
+LLVMValueRef LLVMConstTrunc(LLVMValueRef, LLVMTypeRef);
+LLVMValueRef LLVMConstBitCast(LLVMValueRef, LLVMTypeRef);
+LLVMValueRef LLVMConstExtractElement(LLVMValueRef, LLVMValueRef);
+LLVMValueRef LLVMConstInsertElement(LLVMValueRef, LLVMValueRef, LLVMValueRef);
+LLVMValueRef LLVMConstVector(LLVMValueRef *, unsigned);
+LLVMValueRef LLVMGetElementAsConstant(LLVMValueRef, unsigned);
+LLVMValueRef LLVMIsAConstantInt(LLVMValueRef);
+unsigned long long LLVMConstIntGetZExtValue(LLVMValueRef);
+int LLVMGetICmpPredicate(LLVMValueRef);
+}
+
+// The constant lanes of an integer scalar or vector, or false if they can't all be read.
+static bool constantLanes(LLVMValueRef v, std::vector<LLVMValueRef> &out) {
+    out.clear();
+    unsigned n = lanes(LLVMTypeOf(v));
+    if (!n) { if (!LLVMIsAConstantInt(v)) return false; out.push_back(v); return true; }
+    for (unsigned k = 0; k < n; k++) {
+        LLVMValueRef e = LLVMGetElementAsConstant(v, k);
+        if (!e || !LLVMIsAConstantInt(e)) return false;
+        out.push_back(e);
+    }
+    return true;
+}
+
+// popcount / clz / ctz of a constant, lane by lane; nullptr if a lane isn't a plain integer of 64 bits or fewer.
+static LLVMValueRef foldBitCount(LLVMValueRef x, int which) {
+    std::vector<LLVMValueRef> in;
+    if (!constantLanes(x, in)) return nullptr;
+    std::vector<LLVMValueRef> out;
+    for (LLVMValueRef e : in) {
+        LLVMTypeRef type = LLVMTypeOf(e);
+        unsigned bits = LLVMGetIntTypeWidth(type);
+        if (bits > 64) return nullptr;
+        unsigned long long v = LLVMConstIntGetZExtValue(e), r = 0;
+        if (which == 0) { for (unsigned k = 0; k < bits; k++) r += (v >> k) & 1; }
+        else if (which == 1) { r = bits; for (int k = (int)bits - 1; k >= 0; k--) if ((v >> k) & 1) { r = bits - 1 - k; break; } }
+        else { r = bits; for (unsigned k = 0; k < bits; k++) if ((v >> k) & 1) { r = k; break; } }
+        out.push_back(LLVMConstInt(type, r, false));
+    }
+    return lanes(LLVMTypeOf(x)) ? LLVMConstVector(out.data(), (unsigned)out.size()) : out[0];
+}
+
+// A shift amount that is in range in every lane (LLVM folds larger ones to undef, the GPU masks them).
+static bool shiftInRange(LLVMValueRef amount) {
+    std::vector<LLVMValueRef> in;
+    if (!constantLanes(amount, in)) return false;
+    for (LLVMValueRef e : in) if (LLVMConstIntGetZExtValue(e) >= LLVMGetIntTypeWidth(LLVMTypeOf(e))) return false;
+    return true;
+}
+
+// The folded value of an instruction whose operands are all constants, or nullptr.
+static LLVMValueRef foldInstruction(LLVMValueRef inst) {
+    enum { kAdd = 8, kSub = 10, kMul = 12, kShl = 20, kLShr = 21, kAShr = 22, kAnd = 23, kOr = 24, kXor = 25, kTrunc = 30,
+           kZExt = 31, kSExt = 32, kBitCast = 41, kICmp = 42, kSelect = 46, kExtract = 50, kInsert = 51 };
+    int opcode = LLVMGetInstructionOpcode(inst);
+    unsigned n = LLVMGetNumOperands(inst);
+    if (opcode == 45 /* call */) return nullptr;
+    for (unsigned k = 0; k < n; k++) if (!LLVMIsAConstant(LLVMGetOperand(inst, k))) return nullptr;
+    LLVMValueRef a = n > 0 ? LLVMGetOperand(inst, 0) : nullptr, c = n > 1 ? LLVMGetOperand(inst, 1) : nullptr;
+    LLVMTypeRef type = LLVMTypeOf(inst);
+    LLVMTypeRef element = lanes(type) ? LLVMGetElementType(type) : type;
+    switch (opcode) {
+    case kAdd: case kSub: case kMul: case kAnd: case kOr: case kXor:
+        if (LLVMGetTypeKind(element) != kTypeKindInteger) return nullptr;
+        return opcode == kAdd ? LLVMConstAdd(a, c) : opcode == kSub ? LLVMConstSub(a, c) : opcode == kMul ? LLVMConstMul(a, c)
+             : opcode == kAnd ? LLVMConstAnd(a, c) : opcode == kOr ? LLVMConstOr(a, c) : LLVMConstXor(a, c);
+    case kShl: case kLShr: case kAShr:
+        if (LLVMGetTypeKind(element) != kTypeKindInteger || !shiftInRange(c)) return nullptr;
+        return opcode == kShl ? LLVMConstShl(a, c) : opcode == kLShr ? LLVMConstLShr(a, c) : LLVMConstAShr(a, c);
+    case kTrunc: return LLVMConstTrunc(a, type);
+    case kZExt: return LLVMConstZExt(a, type);
+    case kSExt: return LLVMConstSExt(a, type);
+    case kBitCast: return LLVMGetTypeKind(element) == kTypeKindInteger ? LLVMConstBitCast(a, type) : nullptr;
+    case kICmp: return LLVMConstICmp(LLVMGetICmpPredicate(inst), a, c);
+    case kSelect: return LLVMConstSelect(a, c, LLVMGetOperand(inst, 2));
+    case kExtract: return LLVMConstExtractElement(a, c);
+    case kInsert: return LLVMConstInsertElement(a, c, LLVMGetOperand(inst, 2));
+    default: return nullptr;
+    }
+}
+
+static unsigned foldConstantCalls(LLVMModuleRef module) {
+    if (disabled("INTEL_CONSTANT_CALL_FIX")) return 0;
+    enum { kULT = 36, kSLT = 40, kUGT = 34, kSGT = 38 };
+    std::vector<LLVMValueRef> work;
+    unsigned folded = 0;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
+        const char *name = LLVMGetValueName(f);
+        int op = !strncmp(name, "air.min.", 8) ? 0 : !strncmp(name, "air.max.", 8) ? 1 : !strncmp(name, "air.clamp.", 10) ? 2
+               : !strncmp(name, "air.abs.", 8) ? 3 : !strncmp(name, "air.popcount.", 13) ? 4 : !strncmp(name, "air.clz.", 8) ? 5
+               : !strncmp(name, "air.ctz.", 8) ? 6 : -1;
+        if (op < 0) continue;
+        size_t at = op == 2 ? 10 : op == 4 ? 13 : 8;
+        char kind = name[at];  // u / s for min, max, clamp and abs; the type follows directly for the bit counts
+        if (op <= 3 && ((kind != 'u' && kind != 's') || name[at + 1] != '.')) continue;
+        bool sign = kind == 's';
+        std::vector<LLVMValueRef> calls;
+        for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u)) calls.push_back(LLVMGetUser(u));
+        for (LLVMValueRef call : calls) {
+            unsigned args = op == 2 ? 3 : op <= 1 ? 2 : 1;
+            if (!LLVMIsACallInst(call) || LLVMGetNumOperands(call) != args + 1 || LLVMGetOperand(call, args) != f) continue;
+            LLVMTypeRef type = LLVMTypeOf(call);
+            LLVMTypeRef element = lanes(type) ? LLVMGetElementType(type) : type;
+            if (LLVMGetTypeKind(element) != kTypeKindInteger) continue;
+            bool constant = true;
+            for (unsigned k = 0; k < args; k++) constant = constant && LLVMIsAConstant(LLVMGetOperand(call, k));
+            if (!constant) continue;
+            LLVMValueRef x = LLVMGetOperand(call, 0), r = nullptr;
+            if (op <= 2) {
+                LLVMValueRef y = LLVMGetOperand(call, 1);
+                auto mn = [&](LLVMValueRef p, LLVMValueRef q) { return LLVMConstSelect(LLVMConstICmp(sign ? kSLT : kULT, p, q), p, q); };
+                auto mx = [&](LLVMValueRef p, LLVMValueRef q) { return LLVMConstSelect(LLVMConstICmp(sign ? kSGT : kUGT, p, q), p, q); };
+                r = op == 0 ? mn(x, y) : op == 1 ? mx(x, y) : mn(mx(x, y), LLVMGetOperand(call, 2));
+            } else if (op == 3) {
+                r = sign ? LLVMConstSelect(LLVMConstICmp(kSLT, x, LLVMConstNull(type)), LLVMConstSub(LLVMConstNull(type), x), x) : x;
+            } else {
+                r = foldBitCount(x, op - 4);
+            }
+            if (!r) continue;
+            for (LLVMUseRef u = LLVMGetFirstUse(call); u; u = LLVMGetNextUse(u)) work.push_back(LLVMGetUser(u));
+            LLVMReplaceAllUsesWith(call, r);
+            LLVMInstructionEraseFromParent(call);
+            folded++;
+        }
+    }
+    std::set<LLVMValueRef> erased;  // an instruction can be queued once per folded operand
+    while (!work.empty()) {  // instructions that may now have only constant operands
+        LLVMValueRef inst = work.back();
+        work.pop_back();
+        if (erased.count(inst) || !LLVMIsAInstruction(inst)) continue;
+        LLVMValueRef r = foldInstruction(inst);
+        if (!r) continue;
+        for (LLVMUseRef u = LLVMGetFirstUse(inst); u; u = LLVMGetNextUse(u)) work.push_back(LLVMGetUser(u));
+        LLVMReplaceAllUsesWith(inst, r);
+        LLVMInstructionEraseFromParent(inst);
+        erased.insert(inst);
+    }
+    return folded;
+}
+
 // ---- saturating add / subtract of constants --------------------------------------------------------------------------
 // The back end folds addsat with two constant operands as a plain add: addsat(95u, 4294967295u) came out 94 instead of
 // 0xffffffff (mslfuzz2; with a variable operand it's right). Such calls (air.add_sat / air.sub_sat, unsigned or signed,
@@ -3363,6 +3522,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] %u vector lane(s) picked by a 64-bit quotient done with selects\n", n);
         n = signedPowerOfTwoDivisions(module);  // after the two division rewrites above
         if (n && logging()) fprintf(stderr, "[inteltex] %u signed division(s) by a power of two done with shifts\n", n);
+        n = foldConstantCalls(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u integer function call(s) of constants folded\n", n);
         n = widenNarrowMinMax(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u 8/16-bit min / max / clamp call(s) done on 32-bit lanes\n", n);
         n = foldConstantSaturation(module);
