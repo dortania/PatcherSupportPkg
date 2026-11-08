@@ -2009,11 +2009,41 @@ static void *cutFromHalves(void *v, void *i32, void *before) {  // the low 32 bi
     return api.binaryCreate(kOpcodeOrBits, api.binaryCreate(kOpcodeLShr, lo, api.constantIntGet(i32, k, false), &kNoName, before),
                             api.binaryCreate(kOpcodeShl, hi, api.constantIntGet(i32, 32 - k, false), &kNoName, before), &kNoName, before);
 }
+static bool dividendCut(void *cut) {  // a 32-bit cut of a 64-bit value that divides wrong as a signed dividend
+    if (!isInstruction(cut, kOpcodeTrunc) || hungOffUses(cut) || numOperands(cut) != 1 || typeID(typeOf(cut)) != kTypeInteger ||
+        intBits(typeOf(cut)) != 32)
+        return false;
+    void *src = operand(cut, 0);
+    uint64_t k;
+    // the cut shift itself, or a select between values one of which is a cut shift (`(c ? x >> 7 : y >> 11)`)
+    bool select = isInstruction(src, kOpcodeSelect) && !hungOffUses(src) && numOperands(src) == 3 && api.userNew && api.selectInit &&
+                  (cutShift(operand(src, 1), &k) || cutShift(operand(src, 2), &k));
+    // or any other 64-bit instruction cut to 32 bits (`(int)uint(x % y) / c`: the known-zero top bits of the
+    // remainder are taken for bit 31 just the same), not a mere extension. Any divisor: one that is a call here
+    // (a rotate of constants) can still fold to a constant in libAMDIL902.
+    bool other = subclassID(src) >= kValueInstruction && intBits(typeOf(src)) == 64 && !isInstruction(src, kOpcodeZExt) &&
+                 !isInstruction(src, kOpcodeSExtWide) && api.functionTypeGet && api.getOrInsertFunction;
+    return cutShift(src, &k) || select || other;
+}
+// A loop variable that starts as such a cut and is divided in the loop (`uint v = uint(x >> 10); for (...) v ^= p[v % 257];`)
+// reaches the division through a phi here; libAMDIL902 unrolls the loop and the first division is wrong (found by
+// fuzzing, seed 1663). So the cuts coming into such phis are built the same way, right where they are cut. Test a27.
+static void addPhiCuts(void *phi, void **users, void **cuts, unsigned *count, unsigned max, int depth) {
+    for (unsigned i = 0; i < numOperands(phi) && *count < max; i++) {
+        void *v = anyOperand(phi, i);
+        if (dividendCut(v)) {
+            bool seen = false;
+            for (unsigned c = 0; c < *count; c++) seen |= users[c] == phi && cuts[c] == v;
+            if (!seen) { users[*count] = phi; cuts[(*count)++] = v; }
+        } else if (isInstruction(v, kOpcodePHI) && v != phi && depth < 2)
+            addPhiCuts(v, users, cuts, count, max, depth + 1);
+    }
+}
 static unsigned shiftedDividends(void *module) {
     const char *setting = getenv("AMD_SHIFTED_DIVIDEND_FIX");
     if ((setting && !strcmp(setting, "0")) || !api.binaryCreate || !api.castCreate || !api.replaceUsesOfWith) return 0;
     enum { kMax = 512 };
-    void *found[kMax];
+    void *found[kMax], *cuts[kMax];  // the division (or phi) and the cut it takes
     unsigned count = 0, rewritten = 0;
     char *functions = (char *)module + kModuleFunctions;
     for (char *fn = nextNode(functions); fn != functions; fn = nextNode(fn)) {
@@ -2028,27 +2058,18 @@ static unsigned shiftedDividends(void *module) {
                 if ((!isInstruction(inst, kOpcodeSDiv) && !isInstruction(inst, kOpcodeSRem)) || hungOffUses(inst) || numOperands(inst) != 2 ||
                     count == kMax)
                     continue;
-                void *cut = operand(inst, 0), *type = typeOf(inst), *src;
-                uint64_t k;
-                if (typeID(type) != kTypeInteger || intBits(type) != 32 || !isInstruction(cut, kOpcodeTrunc) || hungOffUses(cut) ||
-                    numOperands(cut) != 1)
-                    continue;
-                src = operand(cut, 0);
-                // the cut shift itself, or a select between values one of which is a cut shift (`(c ? x >> 7 : y >> 11)`)
-                bool select = isInstruction(src, kOpcodeSelect) && !hungOffUses(src) && numOperands(src) == 3 && api.userNew && api.selectInit &&
-                              (cutShift(operand(src, 1), &k) || cutShift(operand(src, 2), &k));
-                // or any other 64-bit instruction cut to 32 bits (`(int)uint(x % y) / c`: the known-zero top bits of the
-                // remainder are taken for bit 31 just the same), not a mere extension. Any divisor: one that is a call here
-                // (a rotate of constants) can still fold to a constant in libAMDIL902.
-                bool other = subclassID(src) >= kValueInstruction && intBits(typeOf(src)) == 64 && !isInstruction(src, kOpcodeZExt) &&
-                             !isInstruction(src, kOpcodeSExtWide) && api.functionTypeGet && api.getOrInsertFunction;
-                if (cutShift(src, &k) || select || other) found[count++] = inst;
+                void *dividend = operand(inst, 0), *type = typeOf(inst);
+                if (typeID(type) != kTypeInteger || intBits(type) != 32) continue;
+                if (dividendCut(dividend)) { found[count] = inst; cuts[count++] = dividend; }
+                else if (isInstruction(dividend, kOpcodePHI)) addPhiCuts(dividend, found, cuts, &count, kMax, 0);
             }
         }
     }
     void *extract = NULL, *extractType = NULL;
     for (unsigned c = 0; c < count; c++) {
-        void *inst = found[c], *cut = operand(inst, 0), *src = operand(cut, 0), *i32 = typeOf(inst), *value;
+        // into a phi: built where the value is cut, which dominates wherever the cut did
+        void *user = found[c], *cut = cuts[c], *src = operand(cut, 0), *i32 = typeOf(cut), *value;
+        void *inst = isInstruction(user, kOpcodePHI) ? cut : user;  // the insertion point
         uint64_t k;
         bool selectOfCuts = isInstruction(src, kOpcodeSelect) && (cutShift(operand(src, 1), &k) || cutShift(operand(src, 2), &k));
         if (!cutShift(src, &k) && !selectOfCuts) {  // the low half through two 16-bit extract_bits, which the DAG can't see into
@@ -2064,7 +2085,7 @@ static unsigned shiftedDividends(void *module) {
             value = api.binaryCreate(kOpcodeOrBits, createCall(extract, extractType, lo, 3, inst),
                                      api.binaryCreate(kOpcodeShl, createCall(extract, extractType, hi, 3, inst), api.constantIntGet(i32, 16, false), &kNoName, inst),
                                      &kNoName, inst);
-            api.replaceUsesOfWith(inst, cut, value);
+            api.replaceUsesOfWith(user, cut, value);
             rewritten++;
             continue;
         }
@@ -2074,7 +2095,7 @@ static unsigned shiftedDividends(void *module) {
             value = select;
         } else
             value = cutFromHalves(src, i32, inst);
-        api.replaceUsesOfWith(inst, cut, value);
+        api.replaceUsesOfWith(user, cut, value);
         rewritten++;
     }
     return rewritten;
