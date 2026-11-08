@@ -571,6 +571,52 @@ static unsigned redundantNarrowMasks(std::string &s) {
     return n;
 }
 
+// ---- narrow negations ----------------------------------------------------------------------------------------------
+// The back end writes the negation of a char lane as BADD rD, rZ, -rX with rZ = MOV 0, and the sign extension that
+// follows as BTOI rD. iCBE folds the two into the negation of the sign-extended lane, -(sext x) instead of
+// sext(-x), which differs for x = 0x80 only: -(char)-128 came out +128 instead of -128 (the MacBookPro11,5 session's
+// narrow-vector fuzzing, seeds 70 and 110). Scalar chars and zero extensions were right. Swapping the operands doesn't help, and
+// a 32-bit IADD loses the sign extension (iCBE then takes BTOI for a no-op), so the negation becomes XOR 0xFF (0xFFFF
+// for SADD) and an add of 1 of the same width, in two new registers. INTEL_NARROW_NEGATE_FIX=0 turns it off.
+static unsigned narrowNegations(std::string &s) {
+    if (disabled("INTEL_NARROW_NEGATE_FIX") || (s.find("\tBADD ") == std::string::npos && s.find("\tSADD ") == std::string::npos)) return 0;
+    size_t temps = s.find("\tDCL_TEMPS r0..r");
+    if (temps == std::string::npos) return 0;
+    unsigned last = (unsigned)strtoul(s.c_str() + temps + 16, nullptr, 10);
+    unsigned n = 0;
+    std::string out;
+    out.reserve(s.size() + 256);
+    for (size_t pos = 0; pos < s.size();) {
+        size_t eol = s.find('\n', pos);
+        if (eol == std::string::npos) eol = s.size();
+        std::string line = s.substr(pos, eol - pos);
+        char width, cd, cz, cx;
+        unsigned d, z, x;
+        int at = 0;
+        if (sscanf(line.c_str(), "\t%cADD r%u.%c, r%u.%c, -r%u.%c;%n", &width, &d, &cd, &z, &cz, &x, &cx, &at) == 7 && at &&
+            (width == 'B' || width == 'S')) {
+            char zero[48];
+            snprintf(zero, sizeof zero, "\tMOV r%u.%c, 0;\n", z, cz);
+            if (s.rfind(zero, pos) != std::string::npos) {
+                unsigned flipped = ++last, one = ++last;
+                char buffer[256];
+                snprintf(buffer, sizeof buffer, "\tXOR r%u.x, r%u.%c, %s;\n\tMOV r%u.x, 1;\n\t%cADD r%u.%c, r%u.x, r%u.x;", flipped, x, cx,
+                         width == 'B' ? "0xFF" : "0xFFFF", one, width, d, cd, flipped, one);
+                line = buffer;
+                n++;
+            }
+        }
+        out += line;
+        if (eol < s.size()) out += '\n';
+        pos = eol + 1;
+    }
+    if (!n) return 0;
+    size_t numberAt = out.find("\tDCL_TEMPS r0..r") + 16, numberEnd = out.find_first_not_of("0123456789", numberAt);
+    out.replace(numberAt, numberEnd - numberAt, std::to_string(last));
+    s = out;
+    return n;
+}
+
 // ---- narrow unsigned divides ---------------------------------------------------------------------------------------
 // The back end writes division of 8- and 16-bit unsigned lanes as UBDIV / USDIV. iCBE drops the AND 0xFF / 0xFFFF that
 // zero-extends such an operand (it takes the divide to read only the low byte or word) while the divide uses the whole
@@ -703,6 +749,7 @@ extern "C" void intelatomicsFixIGIL(std::string *text) {
     if (unsigned n = narrowMasksThroughCopies(s); n && logging()) fprintf(stderr, "[inteltex] %u AND 0xFFFF / 0xFF over a narrower AND made shifts\n", n);
     if (unsigned n = narrowUnsignedDivides(s); n && logging()) fprintf(stderr, "[inteltex] %u UBDIV / USDIV done as UDIV of masked copies\n", n);
     if (unsigned n = redundantNarrowMasks(s); n && logging()) fprintf(stderr, "[inteltex] %u AND 0xFFFF after a narrower AND made a MOV\n", n);
+    if (unsigned n = narrowNegations(s); n && logging()) fprintf(stderr, "[inteltex] %u BADD / SADD negation(s) done as XOR and add\n", n);
     if (unsigned n = sampleLodOperands(s); n && logging()) fprintf(stderr, "[inteltex] %u explicit-LOD sample(s) given the register holding the LOD\n", n);
     if (s.find("IMM_ATOMIC_") == std::string::npos) return;
     std::vector<std::string> lines;
