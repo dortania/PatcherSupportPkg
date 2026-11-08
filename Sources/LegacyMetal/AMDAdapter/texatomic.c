@@ -2005,6 +2005,63 @@ static unsigned shiftedDividends(void *module) {
     return rewritten;
 }
 
+// `x & min(1u, 145u)` tested as a bool and added (`z + uint(bool(x & min(1u, 145u)))`) comes out as z minus the bool:
+// air.min / air.max / air.clamp with constant arguments stay calls through libAMDIL902's IR optimizer and only fold in
+// its DAG, where the and with the now constant 1 is taken for a 0 / -1 boolean (as singleBitTests describes), and the
+// combiner's add -> sub fold for such booleans applies. With a plain `& 1u` the IR optimizer simplifies it first and
+// the result is right (found by fuzzing). So these calls are folded here: integer min, max and clamp, signed or not,
+// whose arguments are all constants, become the constant. abs, abs_diff, min3, mul_hi, rotate, sub_sat, clz,
+// extract_bits and reverse_bits fold early enough already. AMD_CONSTANT_MINMAX_FIX=0 turns this off. Test a23.
+static unsigned constantMinMax(void *module) {
+    const char *setting = getenv("AMD_CONSTANT_MINMAX_FIX");
+    if ((setting && !strcmp(setting, "0")) || !api.getFunction) return 0;
+    static const char *const kOps[] = {"min", "max", "clamp"};
+    static const unsigned kBits[] = {8, 16, 32, 64};
+    unsigned folded = 0;
+    for (unsigned o = 0; o < 3; o++)
+        for (unsigned sign = 0; sign < 2; sign++)
+            for (unsigned b = 0; b < 4; b++) {
+                char name[32];
+                snprintf(name, sizeof name, "air.%s.%c.i%u", kOps[o], sign ? 's' : 'u', kBits[b]);
+                void *function = api.getFunction(module, name, strlen(name));
+                if (!function) continue;
+                unsigned args = o == 2 ? 3 : 2, bits = kBits[b];
+                uint64_t mask = bits == 64 ? ~0ull : (1ull << bits) - 1;
+                for (void *use = firstUse(function); use;) {
+                    void *call = api.getUser(use);
+                    use = nextUse(use);
+                    if (!isCall(call, function, args + 1)) continue;
+                    uint64_t v[3];
+                    int64_t sv[3];
+                    bool constant = true;
+                    for (unsigned a = 0; a < args && constant; a++) {
+                        constant = constantIntValue(operand(call, a), &v[a]);
+                        v[a] &= mask;
+                        sv[a] = bits == 64 ? (int64_t)v[a] : (int64_t)(v[a] << (64 - bits)) >> (64 - bits);  // sign-extended
+                    }
+                    if (!constant) continue;
+                    uint64_t r;
+                    if (sign) {
+                        int64_t x = sv[0];
+                        if (o == 0) x = sv[1] < x ? sv[1] : x;
+                        else if (o == 1) x = sv[1] > x ? sv[1] : x;
+                        else { x = x > sv[1] ? x : sv[1]; x = x < sv[2] ? x : sv[2]; }  // clamp(x, lo, hi) = min(max(x, lo), hi)
+                        r = (uint64_t)x & mask;
+                    } else {
+                        uint64_t x = v[0];
+                        if (o == 0) x = v[1] < x ? v[1] : x;
+                        else if (o == 1) x = v[1] > x ? v[1] : x;
+                        else { x = x > v[1] ? x : v[1]; x = x < v[2] ? x : v[2]; }
+                        r = x;
+                    }
+                    api.replaceAllUsesWith(call, api.constantIntGet(typeOf(call), r, false));
+                    api.eraseFromParent(call);
+                    folded++;
+                }
+            }
+    return folded;
+}
+
 static unsigned singleBitTests(void *module) {
     const char *setting = getenv("AMD_BIT_TEST_FIX");
     if ((setting && !strcmp(setting, "0")) || !api.functionTypeGet || !api.getOrInsertFunction) return 0;
@@ -2092,6 +2149,8 @@ static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *
         if (unpacks && logging()) fprintf(stderr, "[texatomic] %u unpack call(s) computed exactly\n", unpacks);
         unsigned floats = floatAtomicsAsInteger(module);
         if (floats && logging()) fprintf(stderr, "[texatomic] %u float atomic(s) done on the integer bits\n", floats);
+        unsigned constants = constantMinMax(module);
+        if (constants && logging()) fprintf(stderr, "[texatomic] %u min/max/clamp call(s) with constant arguments folded\n", constants);
         unsigned wide = wideCompares(module);
         if (wide && logging()) fprintf(stderr, "[texatomic] %u 64-bit comparison(s) done on the 32-bit halves\n", wide);
         unsigned wideBranches = wideBitBranches(module);
