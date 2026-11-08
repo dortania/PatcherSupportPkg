@@ -2108,7 +2108,29 @@ static unsigned shiftedDividends(void *module) {
 // the result is right (found by fuzzing). So these calls are folded here: integer min, max and clamp, signed or not,
 // whose arguments are all constants, become the constant, and unsigned min(x, 1), min(x, 0) and max(x, 0) become
 // x != 0, 0 and x (`y % (min(x, 1u) | 1u)` crashed the compile). abs, abs_diff, min3, mul_hi, rotate, sub_sat, clz,
-// extract_bits and reverse_bits fold early enough already. AMD_CONSTANT_MINMAX_FIX=0 turns this off. Test a23.
+// extract_bits and reverse_bits fold early enough already. A loop counter makes such constant calls only when
+// libAMDIL902 unrolls the loop (`for (i < 3) a += uint(bool(x & min(i, 145u)))` came out as a minus the bools), so 32-bit
+// calls whose arguments are all constants or loop values (phis, and arithmetic on them and constants) become a
+// compare and a select, which its IR optimizer folds after unrolling (the same loop with `i < 145u ? i : 145u` is right).
+// AMD_CONSTANT_MINMAX_FIX=0 turns this off. Tests a23, a28.
+static bool unrollsToConstant(void *v, int depth) {  // a constant, or what can become one when a loop is unrolled
+    uint64_t c;
+    if (constantIntValue(v, &c) || isInstruction(v, kOpcodePHI)) return true;
+    unsigned char id = subclassID(v);
+    if (depth >= 4 || id < kValueInstruction || hungOffUses(v)) return false;
+    unsigned opcode = id - kValueInstruction;
+    if (opcode >= kOpcodeAdd && opcode <= kWideXor && numOperands(v) == 2)  // the binary operators
+        return unrollsToConstant(operand(v, 0), depth + 1) && unrollsToConstant(operand(v, 1), depth + 1);
+    if ((opcode == kOpcodeTrunc || opcode == kOpcodeZExt || opcode == kOpcodeSExtWide) && numOperands(v) == 1)
+        return unrollsToConstant(operand(v, 0), depth + 1);
+    return false;
+}
+static void *minMaxSelect(bool max, bool sign, void *a, void *b, void *before) {  // min(a, b) or max(a, b) as icmp + select
+    unsigned predicate = max ? (sign ? kPredicateSGT : kPredicateUGT) : (sign ? kPredicateSLT : kPredicateULT);
+    char *select = api.userNew(96, 3);
+    api.selectInit(select, api.cmpCreate(kOpcodeICmp, predicate, a, b, &kNoName, before), a, b, &kNoName, before);
+    return select;
+}
 static unsigned constantMinMax(void *module) {
     const char *setting = getenv("AMD_CONSTANT_MINMAX_FIX");
     if ((setting && !strcmp(setting, "0")) || !api.getFunction) return 0;
@@ -2141,17 +2163,26 @@ static unsigned constantMinMax(void *module) {
                         // bool, libAMDIL902's IR optimizer folds what follows (`y % (min(x, 1u) | 1u)` is y % 1); left as
                         // the call, its DAG finds the divisor a power of two late and its bit-field-extract combine
                         // (AnalyzeBFECombine) reads a null operand: "Compiler encountered an internal error".
-                        if (sign || o == 2) continue;
+                        void *type = typeOf(call), *value = NULL;
                         uint64_t c;
                         unsigned which = constantIntValue(operand(call, 1), &c) ? 1 : constantIntValue(operand(call, 0), &c) ? 0 : 2;
-                        if (which == 2) continue;
-                        void *x = operand(call, 1 - which), *type = typeOf(call), *value = NULL;
-                        c &= mask;
-                        if (o == 0 && c == 0) value = api.constantIntGet(type, 0, false);
-                        else if (o == 1 && c == 0) value = x;
-                        else if (o == 0 && c == 1 && api.cmpCreate && api.castCreate)
-                            value = api.castCreate(kOpcodeZExt, api.cmpCreate(kOpcodeICmp, kPredicateNE, x, api.constantIntGet(type, 0, false), &kNoName, call),
-                                                   type, &kNoName, call);
+                        if (!sign && o != 2 && which != 2) {
+                            void *x = operand(call, 1 - which);
+                            c &= mask;
+                            if (o == 0 && c == 0) value = api.constantIntGet(type, 0, false);
+                            else if (o == 1 && c == 0) value = x;
+                            else if (o == 0 && c == 1 && api.cmpCreate && api.castCreate)
+                                value = api.castCreate(kOpcodeZExt, api.cmpCreate(kOpcodeICmp, kPredicateNE, x, api.constantIntGet(type, 0, false), &kNoName, call),
+                                                       type, &kNoName, call);
+                        }
+                        // loop values against constants: a compare and a select, which fold once the loop is unrolled
+                        bool loop = !value && bits == 32 && api.cmpCreate && api.userNew && api.selectInit;
+                        for (unsigned a = 0; a < args && loop; a++) loop = unrollsToConstant(operand(call, a), 0);
+                        if (loop) {
+                            void *x = operand(call, 0), *y = operand(call, 1);
+                            value = o == 2 ? minMaxSelect(false, sign, minMaxSelect(true, sign, x, y, call), operand(call, 2), call)
+                                           : minMaxSelect(o == 1, sign, x, y, call);
+                        }
                         if (!value) continue;
                         api.replaceAllUsesWith(call, value);
                         api.eraseFromParent(call);
