@@ -1869,6 +1869,89 @@ static unsigned wideCompares(void *module) {
     return rewritten;
 }
 
+// A branch on one bit of a 64-bit value (`(x >> 16) & 1 ? a : b` with x a ulong, or a switch on `uint(x >> 16) & 3`,
+// which the switch lowering splits on bit 0) stops compilation with "LLVM ERROR: Cannot select: brcond (i64 setcc ...)":
+// libAMDIL902's DAG combiner turns `brcond (trunc (srl (and x, 2^k), k))` into a compare of the 64-bit `and` with 0,
+// whose result type is i64 on this target, and its brcond patterns only take a 32-bit condition (found by fuzzing
+// with 64-bit integers; wideCompares splits the i64 comparisons in the IR, these the combiner makes itself). The DAG
+// is built per block, so only conditions worked out in the branch's own block from a 64-bit instruction or argument
+// need it: a conditional branch's condition is tested through `extract_bits(zext c, 0, 1) != 0`, and a 32-bit switch
+// value goes through extract_bits (`extract_bits(x, 0, w)` for `x & (2^w - 1)`, else as two 16-bit halves), which the
+// combiner doesn't look into. Code without 64-bit integers is left alone. AMD_WIDE_BRANCH_FIX=0 turns this off.
+// Test a21.
+enum { kOpcodeBr = 2, kOpcodeSwitch = 3, kOpcodeInsertElement = 60 };
+static bool fromWide(void *v, void *block, int depth) {  // a 64-bit instruction or argument (not a constant) feeds v
+    void *type = typeOf(v);
+    unsigned char id = subclassID(v);
+    if (typeID(type) == kTypeInteger && intBits(type) == 64) return id >= kValueInstruction || id == kValueArgument;
+    if (depth >= 8 || id < kValueInstruction || *(void **)((char *)v + kInstructionParent) != block) return false;
+    if (isInstruction(v, kOpcodePHI) || isInstruction(v, kOpcodeCall) || isInstruction(v, kOpcodeLoad) || hungOffUses(v)) return false;
+    unsigned n = numOperands(v);
+    if (isInstruction(v, kOpcodeExtractElement) || isInstruction(v, kOpcodeInsertElement)) n--;  // not the lane index
+    for (unsigned i = 0; i < n; i++)
+        if (fromWide(operand(v, i), block, depth + 1)) return true;
+    return false;
+}
+static unsigned wideBitBranches(void *module) {
+    const char *setting = getenv("AMD_WIDE_BRANCH_FIX");
+    if ((setting && !strcmp(setting, "0")) || !api.binaryCreate || !api.castCreate || !api.cmpCreate || !api.functionTypeGet ||
+        !api.getOrInsertFunction || !api.replaceUsesOfWith)
+        return 0;
+    enum { kMax = 512 };
+    void *found[kMax];
+    unsigned count = 0, rewritten = 0;
+    char *functions = (char *)module + kModuleFunctions;
+    for (char *fn = nextNode(functions); fn != functions; fn = nextNode(fn)) {
+        char *function = fn - kFunctionNode, *blocks = function + kFunctionBlocks;
+        if (*(void **)(function + kFunctionParent) != module) return 0;  // layout mismatch: leave the module alone
+        for (char *bn = nextNode(blocks); bn != blocks; bn = nextNode(bn)) {
+            char *block = bn - kBlockNode, *insts = block + kBlockInstructions;
+            if (*(void **)(block + kBlockParent) != function) return 0;
+            char *last = prevNode(insts);  // the sentinel's Prev: the block's last instruction
+            if (last == insts || count == kMax) continue;
+            char *term = last - kInstructionNode;
+            if (*(void **)(term + kInstructionParent) != block) return 0;
+            bool branch = isInstruction(term, kOpcodeBr) && !hungOffUses(term) && numOperands(term) == 3;
+            bool sw = isInstruction(term, kOpcodeSwitch) && hungOffUses(term);
+            if (!branch && !sw) continue;
+            void *cond = anyOperand(term, 0), *type = typeOf(cond);
+            if (sw && (typeID(type) != kTypeInteger || intBits(type) != 32)) continue;  // i64 switches: not seen, not handled
+            if (subclassID(cond) < kValueInstruction || !fromWide(cond, block, 0)) continue;
+            found[count++] = term;
+        }
+    }
+    if (!count) return 0;
+    void *i32 = api.getInt32Ty(api.getContext(found[0]));
+    void *params[3] = {i32, i32, i32};
+    void *extractType = api.functionTypeGet(i32, params, 3, false);
+    void *extract = api.getOrInsertFunction(module, "air.extract_bits.u.i32", strlen("air.extract_bits.u.i32"), extractType);
+    if (!extract || subclassID(extract) != kValueFunction) return 0;  // a bitcast: another declaration
+    for (unsigned c = 0; c < count; c++) {
+        void *term = found[c], *cond = anyOperand(term, 0), *replacement;
+        if (isInstruction(term, kOpcodeBr)) {
+            void *args[3] = {api.castCreate(kOpcodeZExt, cond, i32, &kNoName, term), api.constantIntGet(i32, 0, false),
+                             api.constantIntGet(i32, 1, false)};
+            replacement = api.cmpCreate(kOpcodeICmp, kPredicateNE, createCall(extract, extractType, args, 3, term),
+                                        api.constantIntGet(i32, 0, false), &kNoName, term);
+        } else {
+            uint64_t mask = 0;
+            if (isInstruction(cond, kOpcodeAnd) && !hungOffUses(cond) && numOperands(cond) == 2 && constantIntValue(operand(cond, 1), &mask) &&
+                mask && mask < 0xffffffffu && !(mask & (mask + 1))) {
+                void *args[3] = {operand(cond, 0), api.constantIntGet(i32, 0, false), api.constantIntGet(i32, (uint64_t)__builtin_popcountll(mask), false)};
+                replacement = createCall(extract, extractType, args, 3, term);
+            } else {  // the whole value, as two 16-bit halves
+                void *lo[3] = {cond, api.constantIntGet(i32, 0, false), api.constantIntGet(i32, 16, false)};
+                void *hi[3] = {cond, api.constantIntGet(i32, 16, false), api.constantIntGet(i32, 16, false)};
+                void *high = api.binaryCreate(kOpcodeShl, createCall(extract, extractType, hi, 3, term), api.constantIntGet(i32, 16, false), &kNoName, term);
+                replacement = api.binaryCreate(kOpcodeOrBits, createCall(extract, extractType, lo, 3, term), high, &kNoName, term);
+            }
+        }
+        api.replaceUsesOfWith(term, cond, replacement);
+        rewritten++;
+    }
+    return rewritten;
+}
+
 static unsigned singleBitTests(void *module) {
     const char *setting = getenv("AMD_BIT_TEST_FIX");
     if ((setting && !strcmp(setting, "0")) || !api.functionTypeGet || !api.getOrInsertFunction) return 0;
@@ -1958,6 +2041,8 @@ static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *
         if (floats && logging()) fprintf(stderr, "[texatomic] %u float atomic(s) done on the integer bits\n", floats);
         unsigned wide = wideCompares(module);
         if (wide && logging()) fprintf(stderr, "[texatomic] %u 64-bit comparison(s) done on the 32-bit halves\n", wide);
+        unsigned wideBranches = wideBitBranches(module);
+        if (wideBranches && logging()) fprintf(stderr, "[texatomic] %u branch(es) on bits of a 64-bit value tested through extract_bits\n", wideBranches);
         unsigned lanes = bitcastLaneExtracts(module);
         if (lanes && logging()) fprintf(stderr, "[texatomic] %u vector bitcast(s) to narrower lanes built lane by lane\n", lanes);
         unsigned narrow = narrowUnsignedConstants(module);
