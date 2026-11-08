@@ -2155,7 +2155,8 @@ static unsigned shiftedDividends(void *module) {
 // libAMDIL902 unrolls the loop (`for (i < 3) a += uint(bool(x & min(i, 145u)))` came out as a minus the bools), so 32-bit
 // calls whose arguments are all constants or loop values (phis, and arithmetic on them and constants) become a
 // compare and a select, which its IR optimizer folds after unrolling (the same loop with `i < 145u ? i : 145u` is right).
-// AMD_CONSTANT_MINMAX_FIX=0 turns this off. Tests a23, a28.
+// clamp(x, c, c) becomes c, whatever x is (its DAG folded `clamp(y | 1u, 1u, 1u)` through the known bits of y | 1).
+// AMD_CONSTANT_MINMAX_FIX=0 turns this off. Tests a23, a28, a30.
 static bool unrollsToConstant(void *v, int depth) {  // a constant, or what can become one when a loop is unrolled
     uint64_t c;
     if (constantIntValue(v, &c) || isInstruction(v, kOpcodePHI)) return true;
@@ -2218,6 +2219,13 @@ static unsigned constantMinMax(void *module) {
                                 value = api.castCreate(kOpcodeZExt, api.cmpCreate(kOpcodeICmp, kPredicateNE, x, api.constantIntGet(type, 0, false), &kNoName, call),
                                                        type, &kNoName, call);
                         }
+                        // clamp(x, c, c) is c, signed or not. Left as the call, its DAG folds it through the known bits of x
+                        // (`clamp(y | 1u, 1u, 1u)`, the 1 and'ed with x and added as a bool, was a minus the bool: a30).
+                        // lo > hi is undefined in MSL and stays as it is.
+                        uint64_t lo, hi;
+                        if (!value && o == 2 && constantIntValue(operand(call, 1), &lo) && constantIntValue(operand(call, 2), &hi) &&
+                            (lo & mask) == (hi & mask))
+                            value = operand(call, 2);
                         // loop values against constants: a compare and a select, which fold once the loop is unrolled
                         bool loop = !value && bits == 32 && api.cmpCreate && api.userNew && api.selectInit;
                         for (unsigned a = 0; a < args && loop; a++) loop = unrollsToConstant(operand(call, a), 0);
