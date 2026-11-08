@@ -2247,8 +2247,10 @@ static unsigned signedDivisionNegations(LLVMModuleRef module) {
 // The front end leaves calls like max(0, 0x04030201) or popcount(0xF0u) for the back end, and iCBE folds them itself;
 // what it builds from the folded value can then be wrong: the uchar lanes of as_type<uchar4>(max(0, 0x04030201)) all
 // read as byte 0 when multiplied (uint(v.z) * 7 gave 7, not 21; the MacBookPro11,5 session's narrow-vector fuzzing, VEC
-// seed 213, where it was an index into a private array). Such calls are folded here, and so is every instruction that
-// then has only constant operands, so the back end gets the finished constants. INTEL_CONSTANT_CALL_FIX=0 turns it off.
+// seed 213, where it was an index into a private array). Such calls (min, max, clamp, abs, popcount, clz, ctz, and
+// reverse_bits, rotate, extract_bits and insert_bits: (uchar)reverse_bits(60u), 0 in fact, made a later signed divide
+// wrong in 54 of 256 threads, mslfuzz2 plain seed 849) are folded here, and so is every instruction that then has only
+// constant operands, so the back end gets the finished constants. INTEL_CONSTANT_CALL_FIX=0 turns it off.
 extern "C" {
 LLVMValueRef LLVMConstICmp(int, LLVMValueRef, LLVMValueRef);
 LLVMValueRef LLVMConstSelect(LLVMValueRef, LLVMValueRef, LLVMValueRef);
@@ -2311,6 +2313,46 @@ static bool shiftInRange(LLVMValueRef amount) {
     return true;
 }
 
+// reverse_bits / rotate / extract_bits / insert_bits of constants, lane by lane (scalar offset and bit-count operands apply
+// to every lane); nullptr where a lane isn't a plain integer of 64 bits or fewer, or a bit field reaches past the lane
+// (undefined in MSL: left to the back end).
+static LLVMValueRef foldBitField(int which, bool sign, LLVMValueRef *args, unsigned count) {  // 0 reverse, 1 rotate, 2 extract, 3 insert
+    std::vector<std::vector<LLVMValueRef>> in(count);
+    unsigned n = 0;
+    for (unsigned k = 0; k < count; k++) {
+        if (!constantLanes(args[k], in[k])) return nullptr;
+        if (in[k].size() > n) n = (unsigned)in[k].size();
+    }
+    std::vector<LLVMValueRef> out;
+    for (unsigned i = 0; i < n; i++) {
+        auto lane = [&](unsigned k) { return in[k].size() == 1 ? in[k][0] : in[k][i]; };
+        LLVMTypeRef type = LLVMTypeOf(lane(0));
+        unsigned w = LLVMGetIntTypeWidth(type);
+        if (w > 64) return nullptr;
+        unsigned long long mask = w == 64 ? ~0ull : (1ull << w) - 1, v = LLVMConstIntGetZExtValue(lane(0)) & mask, r = 0;
+        if (which == 0) {
+            for (unsigned k = 0; k < w; k++) if ((v >> k) & 1) r |= 1ull << (w - 1 - k);
+        } else if (which == 1) {
+            unsigned s = (unsigned)(LLVMConstIntGetZExtValue(lane(1)) % w);
+            r = s ? ((v << s) | (v >> (w - s))) & mask : v;
+        } else {
+            unsigned long long base = v, offset = LLVMConstIntGetZExtValue(lane(which == 2 ? 1 : 2)),
+                               bits = LLVMConstIntGetZExtValue(lane(which == 2 ? 2 : 3));
+            if (offset + bits > w) return nullptr;
+            unsigned long long field = bits == 64 ? ~0ull : (1ull << bits) - 1;
+            if (which == 2) {
+                r = bits ? (base >> offset) & field : 0;
+                if (sign && bits && bits < w && ((r >> (bits - 1)) & 1)) r |= ~field & mask;
+            } else {
+                unsigned long long insert = LLVMConstIntGetZExtValue(lane(1)) & mask, m = (field << offset) & mask;
+                r = bits ? ((base & ~m) | ((insert << offset) & m)) & mask : base;
+            }
+        }
+        out.push_back(LLVMConstInt(type, r, false));
+    }
+    return lanes(LLVMTypeOf(args[0])) ? LLVMConstVector(out.data(), (unsigned)out.size()) : out[0];
+}
+
 // The folded value of an instruction whose operands are all constants, or nullptr.
 static LLVMValueRef foldInstruction(LLVMValueRef inst) {
     enum { kAdd = 8, kSub = 10, kMul = 12, kShl = 20, kLShr = 21, kAShr = 22, kAnd = 23, kOr = 24, kXor = 25, kTrunc = 30,
@@ -2351,16 +2393,17 @@ static unsigned foldConstantCalls(LLVMModuleRef module) {
         const char *name = LLVMGetValueName(f);
         int op = !strncmp(name, "air.min.", 8) ? 0 : !strncmp(name, "air.max.", 8) ? 1 : !strncmp(name, "air.clamp.", 10) ? 2
                : !strncmp(name, "air.abs.", 8) ? 3 : !strncmp(name, "air.popcount.", 13) ? 4 : !strncmp(name, "air.clz.", 8) ? 5
-               : !strncmp(name, "air.ctz.", 8) ? 6 : -1;
+               : !strncmp(name, "air.ctz.", 8) ? 6 : !strncmp(name, "air.reverse_bits.", 17) ? 7 : !strncmp(name, "air.rotate.", 11) ? 8
+               : !strncmp(name, "air.extract_bits.", 17) ? 9 : !strncmp(name, "air.insert_bits.", 16) ? 10 : -1;
         if (op < 0) continue;
-        size_t at = op == 2 ? 10 : op == 4 ? 13 : 8;
-        char kind = name[at];  // u / s for min, max, clamp and abs; the type follows directly for the bit counts
-        if (op <= 3 && ((kind != 'u' && kind != 's') || name[at + 1] != '.')) continue;
+        size_t at = op == 2 ? 10 : op == 4 ? 13 : op == 7 || op == 9 ? 17 : op == 8 ? 11 : op == 10 ? 16 : 8;
+        char kind = name[at];  // u / s for min, max, clamp, abs and the bit fields; the type follows directly otherwise
+        if ((op <= 3 || op >= 9) && ((kind != 'u' && kind != 's') || name[at + 1] != '.')) continue;
         bool sign = kind == 's';
         std::vector<LLVMValueRef> calls;
         for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u)) calls.push_back(LLVMGetUser(u));
         for (LLVMValueRef call : calls) {
-            unsigned args = op == 2 ? 3 : op <= 1 ? 2 : 1;
+            unsigned args = op == 10 ? 4 : op == 2 || op == 9 ? 3 : op <= 1 || op == 8 ? 2 : 1;
             if (!LLVMIsACallInst(call) || LLVMGetNumOperands(call) != args + 1 || LLVMGetOperand(call, args) != f) continue;
             LLVMTypeRef type = LLVMTypeOf(call);
             LLVMTypeRef element = lanes(type) ? LLVMGetElementType(type) : type;
@@ -2376,8 +2419,12 @@ static unsigned foldConstantCalls(LLVMModuleRef module) {
                 r = op == 0 ? mn(x, y) : op == 1 ? mx(x, y) : mn(mx(x, y), LLVMGetOperand(call, 2));
             } else if (op == 3) {
                 r = sign ? LLVMConstSelect(LLVMConstICmp(kSLT, x, LLVMConstNull(type)), LLVMConstSub(LLVMConstNull(type), x), x) : x;
-            } else {
+            } else if (op <= 6) {
                 r = foldBitCount(x, op - 4);
+            } else {
+                LLVMValueRef operands[4];
+                for (unsigned k = 0; k < args; k++) operands[k] = LLVMGetOperand(call, k);
+                r = foldBitField(op - 7, sign, operands, args);
             }
             if (!r) continue;
             for (LLVMUseRef u = LLVMGetFirstUse(call); u; u = LLVMGetNextUse(u)) work.push_back(LLVMGetUser(u));
