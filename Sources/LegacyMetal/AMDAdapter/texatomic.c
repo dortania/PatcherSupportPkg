@@ -1991,8 +1991,22 @@ static unsigned wideBitBranches(void *module) {
 // with 0 < k < 32, comes out as the unsigned one (`(int)uint(x >> 31) / 65535` gives uint(x >> 31) / 65535 for
 // negative dividends, and / -3 is as wrong): found by fuzzing with 64-bit integers. Built from the halves,
 // `(uint(x) >> k) | (uint(x >> 32) << (32 - k))`, the same value divides right (anything between the cut and the
-// division, an xor or a select, does too). So such dividends are built that way. AMD_SHIFTED_DIVIDEND_FIX=0 turns this
-// off. Test a22.
+// division, an xor or a select, does too). So such dividends are built that way, also when a 64-bit select picks
+// between such cuts (`(int)uint(c ? x >> 7 : y >> 11) / 111`, each arm cut on its own then). AMD_SHIFTED_DIVIDEND_FIX=0
+// turns this off. Test a22.
+static bool cutShift(void *v, uint64_t *k) {  // lshr/ashr i64 by a constant 1..31
+    return (isInstruction(v, kOpcodeLShr) || isInstruction(v, kOpcodeAShr)) && !hungOffUses(v) && numOperands(v) == 2 &&
+           intBits(typeOf(v)) == 64 && constantIntValue(operand(v, 1), k) && *k > 0 && *k < 32;
+}
+static void *cutFromHalves(void *v, void *i32, void *before) {  // the low 32 bits of v, a cut shift built from the halves
+    uint64_t k;
+    if (!cutShift(v, &k)) return api.castCreate(kOpcodeTrunc, v, i32, &kNoName, before);
+    void *x = operand(v, 0), *i64 = typeOf(x);
+    void *lo = api.castCreate(kOpcodeTrunc, x, i32, &kNoName, before);
+    void *hi = api.castCreate(kOpcodeTrunc, api.binaryCreate(kOpcodeLShr, x, api.constantIntGet(i64, 32, false), &kNoName, before), i32, &kNoName, before);
+    return api.binaryCreate(kOpcodeOrBits, api.binaryCreate(kOpcodeLShr, lo, api.constantIntGet(i32, k, false), &kNoName, before),
+                            api.binaryCreate(kOpcodeShl, hi, api.constantIntGet(i32, 32 - k, false), &kNoName, before), &kNoName, before);
+}
 static unsigned shiftedDividends(void *module) {
     const char *setting = getenv("AMD_SHIFTED_DIVIDEND_FIX");
     if ((setting && !strcmp(setting, "0")) || !api.binaryCreate || !api.castCreate || !api.replaceUsesOfWith) return 0;
@@ -2012,28 +2026,27 @@ static unsigned shiftedDividends(void *module) {
                 if ((!isInstruction(inst, kOpcodeSDiv) && !isInstruction(inst, kOpcodeSRem)) || hungOffUses(inst) || numOperands(inst) != 2 ||
                     count == kMax)
                     continue;
-                void *cut = operand(inst, 0), *type = typeOf(inst), *shift;
+                void *cut = operand(inst, 0), *type = typeOf(inst), *src;
                 uint64_t k;
                 if (typeID(type) != kTypeInteger || intBits(type) != 32 || !isInstruction(cut, kOpcodeTrunc) || hungOffUses(cut) ||
                     numOperands(cut) != 1)
                     continue;
-                shift = operand(cut, 0);
-                if ((!isInstruction(shift, kOpcodeLShr) && !isInstruction(shift, kOpcodeAShr)) || hungOffUses(shift) || numOperands(shift) != 2 ||
-                    intBits(typeOf(shift)) != 64 || !constantIntValue(operand(shift, 1), &k) || k == 0 || k >= 32)
-                    continue;
-                found[count++] = inst;
+                src = operand(cut, 0);
+                // the cut shift itself, or a select between values one of which is a cut shift (`(c ? x >> 7 : y >> 11)`)
+                bool select = isInstruction(src, kOpcodeSelect) && !hungOffUses(src) && numOperands(src) == 3 && api.userNew && api.selectInit &&
+                              (cutShift(operand(src, 1), &k) || cutShift(operand(src, 2), &k));
+                if (cutShift(src, &k) || select) found[count++] = inst;
             }
         }
     }
     for (unsigned c = 0; c < count; c++) {
-        void *inst = found[c], *cut = operand(inst, 0), *shift = operand(cut, 0), *x = operand(shift, 0);
-        void *i32 = typeOf(inst), *i64 = typeOf(x);
-        uint64_t k;
-        constantIntValue(operand(shift, 1), &k);
-        void *lo = api.castCreate(kOpcodeTrunc, x, i32, &kNoName, inst);
-        void *hi = api.castCreate(kOpcodeTrunc, api.binaryCreate(kOpcodeLShr, x, api.constantIntGet(i64, 32, false), &kNoName, inst), i32, &kNoName, inst);
-        void *value = api.binaryCreate(kOpcodeOrBits, api.binaryCreate(kOpcodeLShr, lo, api.constantIntGet(i32, k, false), &kNoName, inst),
-                                       api.binaryCreate(kOpcodeShl, hi, api.constantIntGet(i32, 32 - k, false), &kNoName, inst), &kNoName, inst);
+        void *inst = found[c], *cut = operand(inst, 0), *src = operand(cut, 0), *i32 = typeOf(inst), *value;
+        if (isInstruction(src, kOpcodeSelect)) {
+            char *select = api.userNew(96, 3);
+            api.selectInit(select, operand(src, 0), cutFromHalves(operand(src, 1), i32, inst), cutFromHalves(operand(src, 2), i32, inst), &kNoName, inst);
+            value = select;
+        } else
+            value = cutFromHalves(src, i32, inst);
         api.replaceUsesOfWith(inst, cut, value);
         rewritten++;
     }
