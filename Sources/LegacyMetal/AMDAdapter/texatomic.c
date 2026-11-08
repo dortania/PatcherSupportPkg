@@ -215,6 +215,11 @@ static struct {
     void *(*splitBasicBlock)(void *block, void *instructionNode, const Twine *name);
     void (*branchInit)(void *self, void *destination, void *insertBefore);
     void (*condBranchInit)(void *self, void *ifTrue, void *ifFalse, void *condition, void *insertBefore);
+    void *(*mdStringGet)(void *context, const char *string, size_t length);  // loop metadata (rolledOuterLoops)
+    void *(*mdTupleGet)(void *context, void **operands, size_t count);
+    void *(*mdTupleGetDistinct)(void *context, void **operands, size_t count);
+    void (*mdReplaceOperandWith)(void *node, unsigned index, void *metadata);
+    void (*setMetadataNamed)(void *instruction, const char *kind, size_t length, void *node);
     void (*allocaInit)(void *self, void *type, unsigned addressSpace, const Twine *name, void *insertBefore);
 } api;
 
@@ -309,6 +314,11 @@ static bool resolveAPI(void) {
         RESOLVE(splitBasicBlock, "__ZN4llvm10BasicBlock15splitBasicBlockENS_14ilist_iteratorINS_12ilist_detail12node_optionsINS_11InstructionELb0ELb0EvEELb0ELb0EEERKNS_5TwineE");
         RESOLVE(branchInit, "__ZN4llvm10BranchInstC2EPNS_10BasicBlockEPNS_11InstructionE");
         RESOLVE(condBranchInit, "__ZN4llvm10BranchInstC2EPNS_10BasicBlockES2_PNS_5ValueEPNS_11InstructionE");
+        RESOLVE(mdStringGet, "__ZN4llvm8MDString3getERNS_11LLVMContextENS_9StringRefE");
+        RESOLVE(mdTupleGet, "__ZN4llvm7MDTuple3getERNS_11LLVMContextENS_8ArrayRefIPNS_8MetadataEEE");
+        RESOLVE(mdTupleGetDistinct, "__ZN4llvm7MDTuple11getDistinctERNS_11LLVMContextENS_8ArrayRefIPNS_8MetadataEEE");
+        RESOLVE(mdReplaceOperandWith, "__ZN4llvm6MDNode18replaceOperandWithEjPNS_8MetadataE");
+        RESOLVE(setMetadataNamed, "__ZN4llvm11Instruction11setMetadataENS_9StringRefEPNS_6MDNodeE");
         RESOLVE(allocaInit, "__ZN4llvm10AllocaInstC2EPNS_4TypeEjRKNS_5TwineEPNS_11InstructionE");
         RESOLVE(extractValueCreate, "__ZN4llvm16ExtractValueInst6CreateEPNS_5ValueENS_8ArrayRefIjEERKNS_5TwineEPNS_11InstructionE");
 #undef RESOLVE
@@ -2234,6 +2244,96 @@ static bool containsCounter(void *v, int depth) {  // a loop counter somewhere i
     }
     return false;
 }
+// An inner loop whose lanes leave it at different times, inside an outer loop that libAMDIL902 unrolls fully: the lanes
+// that had left the inner loop still took the values of its later passes. `for (i0 < 4) { n = 0; while (n < 8) { n++;
+// v = (i0 & 1) ? extract_bits(x, (y * v) & 15, w) : z; if ((int(i0) / d & 3) == 0) break; } }` gave a wrong v in every
+// lane of a wave that held one lane with d = 1 (found by fuzzing with loop counters in expressions, seed 2398, stock
+// files too); with the outer loop left rolled (#pragma nounroll) the same code is right. So an outer loop that holds a
+// loop with an exit that isn't a fixed trip count (a break, or a latch test on anything but a counter and a constant)
+// gets llvm.loop.unroll.disable on its back edge. Loops are found by back edges in block order, which the front end
+// keeps for structured code. AMD_DIVERGENT_LOOP_FIX=0 turns this off. Test a33.
+static bool counterCompare(void *condition) {  // `counter (or counter op constant) <cmp> constant`: a fixed trip count
+    if (!isInstruction(condition, kOpcodeICmp) || hungOffUses(condition) || numOperands(condition) != 2) return false;
+    uint64_t c;
+    for (unsigned i = 0; i < 2; i++) {
+        void *v = operand(condition, i);
+        if (!constantIntValue(operand(condition, 1 - i), &c)) continue;
+        if (isCounter(v)) return true;
+        if (subclassID(v) >= kValueInstruction && !hungOffUses(v) && numOperands(v) == 2)
+            for (unsigned j = 0; j < 2; j++)
+                if (isCounter(operand(v, j)) && constantIntValue(operand(v, 1 - j), &c)) return true;
+    }
+    return false;
+}
+static unsigned rolledOuterLoops(void *module) {
+    const char *setting = getenv("AMD_DIVERGENT_LOOP_FIX");
+    if ((setting && !strcmp(setting, "0")) || !api.mdStringGet || !api.mdTupleGet || !api.mdTupleGetDistinct ||
+        !api.mdReplaceOperandWith || !api.setMetadataNamed || !api.getContext)
+        return 0;
+    unsigned marked = 0;
+    char *functions = (char *)module + kModuleFunctions;
+    for (char *fn = nextNode(functions); fn != functions; fn = nextNode(fn)) {
+        char *function = fn - kFunctionNode, *blocks = function + kFunctionBlocks;
+        if (*(void **)(function + kFunctionParent) != module) return marked;  // layout mismatch: leave the module alone
+        unsigned count = 0;
+        for (char *bn = nextNode(blocks); bn != blocks; bn = nextNode(bn)) count++;
+        if (count < 3) continue;
+        void **block = calloc(count, sizeof *block), **last = calloc(count, sizeof *last);  // per call: compiles run in parallel
+        struct Loop { unsigned header, latch; void *branch; bool fixed, divergent, mark; } *loops = calloc(count, sizeof *loops);
+        unsigned n = 0, nloops = 0;
+        if (!block || !last || !loops) { free(block); free(last); free(loops); return marked; }
+        for (char *bn = nextNode(blocks); bn != blocks; bn = nextNode(bn)) {
+            char *b = bn - kBlockNode, *insts = b + kBlockInstructions;
+            block[n] = b;
+            last[n] = nextNode(insts) != insts ? (char *)prevNode(insts) - kInstructionNode : NULL;
+            n++;
+        }
+        #define INDEX(value) ({ unsigned _k = n; for (unsigned _j = 0; _j < n; _j++) if (block[_j] == (value)) { _k = _j; break; } _k; })
+        for (unsigned b = 0; b < n && nloops < count; b++) {  // back edges: a branch to this block or an earlier one
+            void *term = last[b];
+            if (!term || !isInstruction(term, kOpcodeBr) || hungOffUses(term)) continue;
+            unsigned ops = numOperands(term);
+            for (unsigned o = ops == 3 ? 1 : 0; o < ops; o++) {
+                unsigned h = INDEX(operand(term, o));
+                if (h <= b) {
+                    loops[nloops++] = (struct Loop){h, b, term, ops == 3 && counterCompare(operand(term, 0)), false, false};
+                    break;
+                }
+            }
+        }
+        for (unsigned l = 0; l < nloops; l++) {  // a loop is divergent unless its only exit is a fixed-count latch test
+            struct Loop *m = &loops[l];
+            m->divergent = !m->fixed;
+            for (unsigned b = m->header; b < m->latch && !m->divergent; b++) {
+                void *term = last[b];
+                if (!term || !isInstruction(term, kOpcodeBr) || hungOffUses(term)) continue;
+                for (unsigned o = numOperands(term) == 3 ? 1 : 0; o < numOperands(term); o++) {
+                    unsigned s = INDEX(operand(term, o));
+                    if (s < m->header || s > m->latch) m->divergent = true;  // a break out of the loop
+                }
+            }
+        }
+        for (unsigned l = 0; l < nloops; l++)
+            for (unsigned k = 0; k < nloops; k++)
+                if (k != l && loops[k].header > loops[l].header && loops[k].latch < loops[l].latch && loops[k].divergent)
+                    loops[l].mark = true;
+        #undef INDEX
+        void *context = api.getContext(function);
+        for (unsigned l = 0; l < nloops; l++) {
+            if (!loops[l].mark) continue;
+            void *disable = api.mdStringGet(context, "llvm.loop.unroll.disable", strlen("llvm.loop.unroll.disable"));
+            void *hint = api.mdTupleGet(context, &disable, 1);
+            void *operands[2] = {NULL, hint};
+            void *id = api.mdTupleGetDistinct(context, operands, 2);  // a loop ID names itself first
+            if (!id) continue;
+            api.mdReplaceOperandWith(id, 0, id);
+            api.setMetadataNamed(loops[l].branch, "llvm.loop", strlen("llvm.loop"), id);
+            marked++;
+        }
+        free(block); free(last); free(loops);
+    }
+    return marked;
+}
 static void *minMaxSelect(bool max, bool sign, void *a, void *b, void *before) {  // min(a, b) or max(a, b) as icmp + select
     unsigned predicate = max ? (sign ? kPredicateSGT : kPredicateUGT) : (sign ? kPredicateSLT : kPredicateULT);
     char *select = api.userNew(96, 3);
@@ -2571,6 +2671,8 @@ static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *
         if (floats && logging()) fprintf(stderr, "[texatomic] %u float atomic(s) done on the integer bits\n", floats);
         unsigned andNots = boolAndNotSelects(module);
         if (andNots && logging()) fprintf(stderr, "[texatomic] %u and(s) of a bool with a not built as selects\n", andNots);
+        unsigned rolled = rolledOuterLoops(module);
+        if (rolled && logging()) fprintf(stderr, "[texatomic] %u outer loop(s) around divergent loops kept rolled\n", rolled);
         unsigned averages = plainUnsignedAverages(module);
         if (averages && logging()) fprintf(stderr, "[texatomic] %u unsigned average(s) built with bitwise arithmetic\n", averages);
         unsigned zextShifts = zextShiftHalves(module);
