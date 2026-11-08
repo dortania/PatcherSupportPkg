@@ -1579,11 +1579,14 @@ static unsigned rotatesAsShifts(void *module) {
 // such ands, `== 0` / `!= 0`, go through extract_bits as two 16-bit halves. The front end also tests a phi of such ands
 // when it moves a test out of an if (`phi [x & 1], [y & 1] != 0`); once the other tests of x & 1 are extracts, the phi is
 // the and's only user and libAMDIL902 drops the `& 1` inside it (found by fuzzing, seed 2245: right with stock files and
-// with this job off), so the phi's ands go through extract_bits too. AMD_BIT_TEST_FIX=0 turns this off.
-// Tests a15, a25, a31.
+// with this job off), so the phi's ands go through extract_bits too. 8- and 16-bit single-bit ands (the front end makes
+// `(x ^ y) & 1` of shorts, from `(short2 ...) & 3` with bit 1 known zero) meet the same bug: the loop exit tested `(x ^ y)
+// & 0xffff` (seed 1932, stock files too), so they go through extract_bits of the zero-extended value, truncated back.
+// AMD_BIT_TEST_FIX=0 turns this off. Tests a15, a25, a31.
 enum { kValueConstantInt = 18, kOpcodeICmpPredicateMask = 0x3f };
 static bool containsCounter(void *v, int depth);  // below, with the opcodes it needs
 static bool singleBitPhi(void *v, void *i32, unsigned *bit);
+static void *narrowSingleBit(void *masked, void *i32, void *extract, void *extractType, void *before);
 static void *anyOperand(void *user, unsigned i);
 static bool constantIntValue(void *v, uint64_t *value) {
     if (subclassID(v) != kValueConstantInt || typeID(typeOf(v)) != kTypeInteger) return false;
@@ -1623,8 +1626,20 @@ static unsigned singleBitTestsAsExtracts(void *module, void *function, void *i32
                 continue;
             }
             if ((predicate != kPredicateEQ && predicate != kPredicateNE) || !constantIntValue(operand(inst, 1), &zero) || zero ||
-                !isInstruction(masked, kOpcodeAnd) || hungOffUses(masked) || numOperands(masked) != 2 || typeOf(masked) != i32)
+                !isInstruction(masked, kOpcodeAnd) || hungOffUses(masked) || numOperands(masked) != 2)
                 continue;
+            if (typeOf(masked) != i32) {  // `(x & 2^k) != 0` on 8 or 16 bits
+                if (!narrowSingleBit(masked, i32, NULL, NULL, NULL)) continue;
+                if (!extract) {
+                    void *params[3] = {i32, i32, i32};
+                    extractType = api.functionTypeGet(i32, params, 3, false);
+                    extract = api.getOrInsertFunction(module, "air.extract_bits.u.i32", strlen("air.extract_bits.u.i32"), extractType);
+                    if (!extract || subclassID(extract) != kValueFunction) return rewritten;  // a bitcast: another declaration
+                }
+                api.replaceUsesOfWith(inst, masked, narrowSingleBit(masked, i32, extract, extractType, inst));
+                rewritten++;
+                continue;
+            }
             bool constantMask = constantIntValue(operand(masked, 1), &mask);
             if ((!constantMask || !mask || (mask & (mask - 1))) && containsCounter(masked, 0)) {
                 // a loop counter in the and: the whole value through extract_bits, so no single bit of it is taken
@@ -1806,6 +1821,19 @@ static void *anyOperand(void *user, unsigned i) {  // fixed or hung-off (phi) op
     if (!hungOffUses(user)) return operand(user, i);
     char *uses = *(char **)((char *)user - sizeof(void *));
     return *(void **)(uses + i * kUseSize);
+}
+// singleBitTests: for `x & 2^k` on 8 or 16 bits, trunc(extract_bits(zext x, k, 1)) before `before`; with no extract
+// function, only whether the and is one
+static void *narrowSingleBit(void *masked, void *i32, void *extract, void *extractType, void *before) {
+    void *type = typeOf(masked);
+    uint64_t m;
+    if (typeID(type) != kTypeInteger || (intBits(type) != 8 && intBits(type) != 16) || !constantIntValue(operand(masked, 1), &m) ||
+        !m || (m & (m - 1)) || (m >> intBits(type)))
+        return NULL;
+    if (!extract) return masked;
+    void *args[3] = {api.castCreate(kOpcodeZExt, operand(masked, 0), i32, &kNoName, before),
+                     api.constantIntGet(i32, (uint64_t)__builtin_ctzll(m), false), api.constantIntGet(i32, 1, false)};
+    return api.castCreate(kOpcodeTrunc, createCall(extract, extractType, args, 3, before), type, &kNoName, before);
 }
 static bool singleBitPhi(void *v, void *i32, unsigned *bit) {  // singleBitTests: phi [x & 2^k], [y & 2^k], ...
     if (!isInstruction(v, kOpcodePHI) || typeOf(v) != i32 || !numOperands(v)) return false;

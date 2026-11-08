@@ -10,6 +10,10 @@
 //             tests a phi of the two a & 1 values after the if; once bittest's fix had made the first test an extract,
 //             that phi was the and's only user and libAMDIL902 dropped its & 1 (right with stock files: a regression
 //             of the fix, seed 2245), so the fix takes the phi's ands through extract_bits too
+//   bitshort: while (n < 8) { n++; v = ...; s = select(short2(1, 1), short2(..) & short2(-12131, -9348), ..); if
+//             ((uint(s.x) ^ uint(s.y) * 257) & 3) == 0) break; }  Bit 1 of s is known zero, so the front end tests
+//             (s.x ^ s.y) & 1 on 16 bits, and the exit tested the whole 16 bits (seed 1932): the fix takes 8- and
+//             16-bit single-bit ands through extract_bits too
 // 256 threads each, checked against the same code on the CPU. Stock OCLP: FAIL. Fixed: PASS.
 // Argument: GPU name substring (default: AMD).
 #import "repro.h"
@@ -31,6 +35,14 @@ static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n
     "    uint e = in[t * 4u + 1u] * 11u + t, r = (a & 1u) != 0u ? 0u : b;\n"
     "    if (r < d) a ^= in[b & 1023u];\n"
     "    out[t * 2u] = r ^ a; out[t * 2u + 1u] = b + ((((a & 1u) != 0u ? d : 1u) & 1u) != 0u ? max(c, e) : e >> 3u);\n"
+    "}\n"
+    "kernel void bitshort(device const uint *in [[buffer(0)]], device uint *out [[buffer(1)]], uint t [[thread_position_in_grid]]) {\n"
+    "    uint a = in[t * 4u], b = in[t * 4u + 1u], c = in[t * 4u + 2u], d = in[t * 4u + 3u], v = 0u, n = 0u;\n"
+    "    while (n < 8u) { n++; v = n ^ ((b & 255u) >> (n & 7u));\n"
+    "        short2 s = select(short2(1, 1), short2(short(c - a), short(~a)) & short2(-12131, -9348),\n"
+    "                          short2(1857, -32256) >= short2(short(d), short((v & 255u) * (v & 255u))));\n"
+    "        if (((uint(s.x) ^ uint(s.y) * 257u) & 3u) == 0u) break; }\n"
+    "    out[t * 2u] = v; out[t * 2u + 1u] = n;\n"
     "}\n";
 
 static void reference(int kernel, const uint32_t *in, uint32_t t, uint32_t out[2]) {
@@ -48,6 +60,17 @@ static void reference(int kernel, const uint32_t *in, uint32_t t, uint32_t out[2
         if (r < d) a ^= in[b & 1023];
         out[0] = r ^ a;
         out[1] = b + ((((a & 1) ? d : 1) & 1) ? (c > e ? c : e) : e >> 3);
+    } else if (kernel == 3) {
+        uint32_t a = in[t * 4], b = in[t * 4 + 1], c = in[t * 4 + 2], d = in[t * 4 + 3], v = 0, n = 0;
+        while (n < 8) {
+            n++;
+            v = n ^ ((b & 255) >> (n & 7));
+            int16_t sx = (int16_t)d <= 1857 ? (int16_t)((int16_t)(c - a) & (int16_t)-12131) : 1;
+            int16_t sy = (int16_t)((v & 255) * (v & 255)) <= -32256 ? (int16_t)((int16_t)~a & (int16_t)-9348) : 1;
+            if ((((uint32_t)(int32_t)sx ^ (uint32_t)(int32_t)sy * 257) & 3) == 0) break;
+        }
+        out[0] = v;
+        out[1] = n;
     } else {
         uint32_t p0 = in[t * 4], p1 = in[t * 4 + 1] + 1, v = in[t * 4] + t, n = 0;
         while (n < 8) {
@@ -76,9 +99,9 @@ int main(int argc, char **argv) {
             words[i] = i % 7 == 0 ? (x & 0xff) : x;
         }
         id<MTLCommandQueue> queue = [dev newCommandQueue];
-        static const char *const kernels[] = {"bittest", "loopexit", "bitphi"};
+        static const char *const kernels[] = {"bittest", "loopexit", "bitphi", "bitshort"};
         char report[300] = "";
-        for (int k = 0; k < 3; k++) {
+        for (int k = 0; k < 4; k++) {
             id<MTLComputePipelineState> ps = [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@(kernels[k])] error:&err];
             if (!ps) return FAIL(bug, "%s: %s: %s", dev.name.UTF8String, kernels[k], err.localizedDescription.UTF8String);
             id<MTLBuffer> out = [dev newBufferWithLength:T * 8 options:MTLResourceStorageModeShared];
@@ -103,6 +126,6 @@ int main(int argc, char **argv) {
             }
         }
         if (report[0]) return FAIL(bug, "%s: %s", dev.name.UTF8String, report);
-        return PASS(bug, "%s: bit tests or'ed with other conditions, of phis, and loops with two exits branch right", dev.name.UTF8String);
+        return PASS(bug, "%s: bit tests or'ed with other conditions, of phis and of shorts, and loops with two exits branch right", dev.name.UTF8String);
     }
 }
