@@ -1965,6 +1965,99 @@ static unsigned lowerIntegerGradients(LLVMModuleRef module) {
     return fixed;
 }
 
+// ---- green gathers from R32G32 textures ---------------------------------------------------------------------------
+// Haswell's gather4 returns red for the green component of R32G32 formats (rg32float, rg32uint, rg32sint): a hardware
+// erratum that Mesa works around with a separate surface state for gathers, which this driver doesn't have, and the
+// shader can't tell an R32G32 texture from any other (WebGPU CTS textureGather rg32float: 252 cases, 216 of them 2D and
+// 2D array). A green gather from a 2D texture or 2D array is also done as a red one, and where the two agree in all four
+// texels (the erratum, or a texture whose red equals its green there) the green values come from four level-0 samples
+// at the footprint's texel centers instead, through the same sampler (its address modes; at a texel center a linear
+// filter returns that texel), in gather order: (u0, v1), (u1, v1), (u1, v0), (u0, v0), u0 = floor(u * width - 0.5) plus
+// the offset. Cube gathers keep the erratum. INTEL_GATHER_GREEN_FIX=0 turns it off.
+extern "C" {
+LLVMValueRef LLVMBuildFSub(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildAnd(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildAdd(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildZExt(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
+}
+static unsigned greenGathers(LLVMModuleRef module) {
+    if (disabled("INTEL_GATHER_GREEN_FIX") || ivyBridgePlugin || runtimeNamesBound(module)) return 0;
+    enum { kIntEQ = 32, kRealOGT = 2 };
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context), f32 = LLVMFloatTypeInContext(context), i1 = LLVMInt1TypeInContext(context);
+    std::vector<LLVMValueRef> gathers;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
+        const char *name = LLVMGetValueName(f);
+        if (!strncmp(name, "air.gather_texture_2d.", 22) || !strncmp(name, "air.gather_texture_2d_array.", 28)) gathers.push_back(f);
+    }
+    LLVMBuilderRef b = nullptr;
+    unsigned fixed = 0;
+    for (LLVMValueRef f : gathers) {
+        std::string name = LLVMGetValueName(f);
+        bool array = !name.compare(0, 28, "air.gather_texture_2d_array.");
+        // tex, sampler, coord, [i32 layer,] i1, offset, i32 component, i32; a sample: ..., offset, i1 level, float, i32
+        unsigned offsetIndex = array ? 5 : 4, count = offsetIndex + 3;
+        std::string sampleName = "air.sample" + name.substr(strlen("air.gather"));
+        std::vector<LLVMValueRef> calls;
+        for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u)) calls.push_back(LLVMGetUser(u));
+        for (LLVMValueRef call : calls) {
+            if (!LLVMIsACallInst(call) || LLVMGetNumOperands(call) != (int)count + 1 || LLVMGetOperand(call, count) != f) continue;
+            LLVMValueRef component = LLVMGetOperand(call, offsetIndex + 1), coord = LLVMGetOperand(call, 2);
+            LLVMTypeRef result = LLVMTypeOf(call);
+            if (!LLVMIsAConstantInt(component) || LLVMConstIntGetZExtValue(component) != 1 || lanes(result) != 4 ||
+                lanes(LLVMTypeOf(coord)) != 2 || lanes(LLVMTypeOf(LLVMGetOperand(call, offsetIndex))) != 2)
+                continue;
+            std::vector<LLVMTypeRef> params;
+            for (unsigned i = 0; i <= offsetIndex; i++) params.push_back(LLVMTypeOf(LLVMGetOperand(call, i)));
+            params.push_back(i1), params.push_back(f32), params.push_back(i32);
+            LLVMValueRef sample = LLVMGetNamedFunction(module, sampleName.c_str());
+            if (!sample) sample = LLVMAddFunction(module, sampleName.c_str(), LLVMFunctionType(result, params.data(), (unsigned)params.size(), 0));
+            if (!b) b = LLVMCreateBuilderInContext(context);
+            LLVMPositionBuilderBefore(b, call);
+            std::vector<LLVMValueRef> args(count);
+            for (unsigned i = 0; i < count; i++) args[i] = LLVMGetOperand(call, i);
+            LLVMValueRef green = LLVMBuildCall(b, f, args.data(), count, "");
+            args[offsetIndex + 1] = LLVMConstInt(i32, 0, false);
+            LLVMValueRef red = LLVMBuildCall(b, f, args.data(), count, "");
+            LLVMTypeRef words = LLVMVectorType(i32, 4);
+            LLVMValueRef same = LLVMBuildICmp(b, kIntEQ, LLVMBuildBitCast(b, green, words, ""), LLVMBuildBitCast(b, red, words, ""), "");
+            LLVMValueRef all = LLVMBuildExtractElement(b, same, LLVMConstInt(i32, 0, false), "");
+            for (unsigned k = 1; k < 4; k++) all = LLVMBuildAnd(b, all, LLVMBuildExtractElement(b, same, LLVMConstInt(i32, k, false), ""), "");
+            // the footprint's first texel, floor(coord * size - 0.5) + offset, and the texel centers around it
+            const char *type = array ? "texture_2d_array" : "texture_2d";
+            LLVMValueRef texture = args[0], offset = args[offsetIndex], centers[2][2];
+            for (unsigned d = 0; d < 2; d++) {
+                LLVMValueRef index = LLVMConstInt(i32, d, false);
+                LLVMValueRef size = textureSize(b, module, texture, type, d, LLVMConstInt(i32, 0, false));
+                LLVMValueRef p = LLVMBuildFSub(b, LLVMBuildFMul(b, LLVMBuildExtractElement(b, coord, index, ""), size, ""), LLVMConstReal(f32, 0.5), "");
+                LLVMValueRef t = LLVMBuildFPToSI(b, p, i32, "");  // toward zero: one less where that was above p
+                t = LLVMBuildSub(b, t, LLVMBuildZExt(b, LLVMBuildFCmp(b, kRealOGT, LLVMBuildSIToFP(b, t, f32, ""), p, ""), i32, ""), "");
+                t = LLVMBuildAdd(b, t, LLVMBuildExtractElement(b, offset, index, ""), "");
+                LLVMValueRef first = LLVMBuildSIToFP(b, t, f32, "");
+                for (unsigned k = 0; k < 2; k++)
+                    centers[d][k] = LLVMBuildFDiv(b, LLVMBuildFAdd(b, first, LLVMConstReal(f32, k + 0.5), ""), size, "");
+            }
+            static const unsigned kOrder[4][2] = {{0, 1}, {1, 1}, {1, 0}, {0, 0}};  // (u, v) of the gather's x, y, z, w
+            LLVMValueRef emulated = LLVMGetUndef(result);
+            std::vector<LLVMValueRef> sampleArgs(args.begin(), args.begin() + offsetIndex + 1);
+            sampleArgs[offsetIndex] = LLVMConstNull(LLVMTypeOf(offset));
+            sampleArgs.push_back(LLVMConstInt(i1, 1, false)), sampleArgs.push_back(LLVMConstReal(f32, 0)), sampleArgs.push_back(args[count - 1]);
+            for (unsigned k = 0; k < 4; k++) {
+                LLVMValueRef at = LLVMBuildInsertElement(b, LLVMGetUndef(LLVMTypeOf(coord)), centers[0][kOrder[k][0]], LLVMConstInt(i32, 0, false), "");
+                sampleArgs[2] = LLVMBuildInsertElement(b, at, centers[1][kOrder[k][1]], LLVMConstInt(i32, 1, false), "");
+                LLVMValueRef texel = LLVMBuildCall(b, sample, sampleArgs.data(), (unsigned)sampleArgs.size(), "");
+                emulated = LLVMBuildInsertElement(b, emulated, LLVMBuildExtractElement(b, texel, LLVMConstInt(i32, 1, false), ""),
+                                                  LLVMConstInt(i32, k, false), "");
+            }
+            LLVMReplaceAllUsesWith(call, LLVMBuildSelect(b, all, emulated, green, ""));
+            LLVMInstructionEraseFromParent(call);
+            fixed++;
+        }
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
 // Texel offsets on integer textures: into the coordinates.
 static unsigned foldIntegerSampleOffsets(LLVMModuleRef module) {
     bool integers = !disabled("INTEL_INTEGER_OFFSET_FIX"), kernelGathers = !disabled("INTEL_KERNEL_GATHER_OFFSET_FIX");
@@ -4196,6 +4289,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] %u 64-bit multiply / mulhi / madhi call(s) built from 32-bit limbs\n", n);
         n = linearCubeGathers(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u cube gather(s) given a linear constexpr sampler (seamless at face edges)\n", n);
+        n = greenGathers(module);  // before foldIntegerSampleOffsets, which then fixes the offsets of both gathers
+        if (n && logging()) fprintf(stderr, "[inteltex] %u green gather(s) checked against a red one, sampled where the two agree\n", n);
         n = foldIntegerSampleOffsets(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u integer texture sample(s): texel offset moved into the coordinates\n", n);
         n = fixSamplerStateWords(module);
