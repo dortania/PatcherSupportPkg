@@ -37,5 +37,5 @@ exports:
                    _LLVMIsAGlobalVariable, _LLVMIsAConstantDataArray, _LLVMGetElementAsConstant, _LLVMConstBitCast,
                    _LLVMDeleteGlobal, _LLVMSetValueName, '__ZN4llvm15ValueAsMetadata3getEPNS_5ValueE',
                    _LLVMBuildFSub, _LLVMBuildFMul, _LLVMGetMDKindIDInContext, _LLVMGetMetadata, _LLVMSetMetadata,
-                   _LLVMGetFirstGlobal, _LLVMGetNextGlobal, _LLVMIsAStoreInst, _LLVMInt8TypeInContext, _LLVMInt1TypeInContext, _LLVMSetVolatile, _LLVMGetAlignment, _LLVMBuildBitCast, _LLVMBuildOr, _LLVMPointerType, _LLVMBuildAnd, _LLVMBuildGEP, _LLVMStructGetTypeAtIndex ]
+                   _LLVMGetFirstGlobal, _LLVMGetNextGlobal, _LLVMIsAStoreInst, _LLVMInt8TypeInContext, _LLVMInt1TypeInContext, _LLVMSetVolatile, _LLVMGetAlignment, _LLVMBuildBitCast, _LLVMBuildOr, _LLVMBuildXor, _LLVMPointerType, _LLVMBuildAnd, _LLVMBuildGEP, _LLVMStructGetTypeAtIndex ]
 ...

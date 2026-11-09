@@ -826,14 +826,47 @@ static unsigned narrowShifts(std::string &s) {
         return (!l.compare(0, 6, "\tUADD ") || !l.compare(0, 6, "\tIADD ") || !l.compare(0, 6, "\tUSUB ") || !l.compare(0, 6, "\tISUB ")) &&
                l.find("_sat.") != std::string::npos;
     };
+    // Such a register can also reach the operation through copies, the AND's lane moved into a vector and back out:
+    // AND r56.x, r54.x, 255; MOV_SWZ r96, r89.x, r56.x, ...; MOV r97.x, r96.y; IDIV ..., r97.x, ... divided a negative
+    // byte for bytes 128-255 (VEC=1 seed 2387, i52). Single-definition MOV and MOV_SWZ copies are followed, lane by lane,
+    // to the register that computed the value.
+    std::map<unsigned, const std::string *> definition;  // registers defined once
+    for (const std::string &l : lines) {
+        unsigned d;
+        if (sscanf(l.c_str(), "\t%*[A-Za-z_0-9.] r%u", &d) == 1 && definitions[d] == 1) definition[d] = &l;
+    }
+    auto origin = [&](unsigned r, char lane) {
+        for (int depth = 0; depth < 16 && definition.count(r); depth++) {
+            const std::string &l = *definition[r];
+            unsigned d, src[4];
+            char c[4];
+            int at = 0;
+            if (sscanf(l.c_str(), "\tMOV r%u.x, r%u.%c;%n", &d, &src[0], &c[0], &at) == 3 && at == (int)l.size() && lane == 'x')
+                r = src[0], lane = c[0];
+            else if (sscanf(l.c_str(), "\tMOV r%u, r%u;%n", &d, &src[0], &at) == 2 && at == (int)l.size())
+                r = src[0];
+            else if (sscanf(l.c_str(), "\tMOV_SWZ r%u, r%u.%c, r%u.%c, r%u.%c, r%u.%c;%n", &d, &src[0], &c[0], &src[1], &c[1], &src[2],
+                            &c[2], &src[3], &c[3], &at) == 9 && at == (int)l.size() && lane >= 'w' && lane <= 'z') {
+                int k = lane == 'w' ? 3 : lane - 'x';
+                r = src[k], lane = c[k];
+            } else
+                break;
+        }
+        return r;
+    };
     for (const std::string &l : lines) {
         int skip = !l.compare(0, 6, "\tIDIV ") ? 2 : (!l.compare(0, 6, "\tIMAX ") || !l.compare(0, 6, "\tIMIN ") || !l.compare(0, 6, "\tUMAX ") ||
                                                        !l.compare(0, 6, "\tUMIN ") || !l.compare(0, 5, "\tICMP") || saturating(l)) ? 1 : 0;
         if (!skip) continue;
         int seen = 0;
         for (size_t k = 0; k + 1 < l.size(); k++)
-            if (l[k] == 'r' && isdigit((unsigned char)l[k + 1]) && (k == 0 || !isalnum((unsigned char)l[k - 1])))
-                if (seen++ >= skip) intoMerge.insert((unsigned)strtoul(l.c_str() + k + 1, nullptr, 10));
+            if (l[k] == 'r' && isdigit((unsigned char)l[k + 1]) && (k == 0 || !isalnum((unsigned char)l[k - 1]))) {
+                if (seen++ < skip) continue;
+                char *end;
+                unsigned r = (unsigned)strtoul(l.c_str() + k + 1, &end, 10);
+                intoMerge.insert(r);
+                if (*end == '.' && end[1]) intoMerge.insert(origin(r, end[1]));
+            }
     }
     auto small = [&](const std::string &operand) {
         long value;
@@ -1582,11 +1615,29 @@ LLVMValueRef LLVMConstSExt(LLVMValueRef, LLVMTypeRef);
 // constant with insertelement is extended lane by lane, the constant folded here: the back end sign-extends the constant
 // lanes of a zext <N x i8> of such a vector (zext (insertelement <undef, i8 -100, 0, 0>, x, 0) gave lane 1 0xffffff9c,
 // not 156), so min(uchar4(x, 157, ...), uchar4(y, 156, ...)) still kept 157 after i22's widening (i35).
+// The same through bitwise operations with a constant operand, which commute with either extension: the constant
+// uchar2(199, 32) ORed into a vector reached the back end as MOV r, -57 and came out of max(uchar2, uchar2) as
+// 0xffffffc7, so the max always picked it over bytes 200-255 (mslfuzz2 VEC=1 seed 2464, i51).
 // INTEL_NARROW_CONSTANT_LANES_FIX=0 extends the whole vector instead.
+extern "C" {
+LLVMValueRef LLVMIsABinaryOperator(LLVMValueRef);
+LLVMValueRef LLVMBuildAnd(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildOr(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildXor(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+}
 static LLVMValueRef extendLanes(LLVMBuilderRef b, LLVMValueRef v, LLVMTypeRef wide, bool sign) {
     static const bool off = disabled("INTEL_NARROW_CONSTANT_LANES_FIX");
     if (off) return sign ? LLVMBuildSExt(b, v, wide, "") : LLVMBuildZExt(b, v, wide, "");
     if (LLVMIsAConstant(v)) return sign ? LLVMConstSExt(v, wide) : LLVMConstZExt(v, wide);
+    // (zero extension only, and only where the constant has a lane with its sign bit set: sign-extending it is what the
+    // back end does anyway, and changing the shape of other code brought back i47's misread)
+    enum { kOpcodeAnd = 23, kOpcodeOr = 24, kOpcodeXor = 25 };
+    int op = !sign && lanes(LLVMTypeOf(v)) && LLVMIsABinaryOperator(v) ? LLVMGetInstructionOpcode(v) : 0;
+    auto signedLanes = [&](LLVMValueRef c) { return LLVMIsAConstant(c) && LLVMConstZExt(c, wide) != LLVMConstSExt(c, wide); };
+    if ((op == kOpcodeAnd || op == kOpcodeOr || op == kOpcodeXor) && (signedLanes(LLVMGetOperand(v, 0)) || signedLanes(LLVMGetOperand(v, 1)))) {
+        LLVMValueRef x = extendLanes(b, LLVMGetOperand(v, 0), wide, sign), y = extendLanes(b, LLVMGetOperand(v, 1), wide, sign);
+        return op == kOpcodeAnd ? LLVMBuildAnd(b, x, y, "") : op == kOpcodeOr ? LLVMBuildOr(b, x, y, "") : LLVMBuildXor(b, x, y, "");
+    }
     if (lanes(LLVMTypeOf(v)) && LLVMIsAInsertElementInst(v)) {
         LLVMValueRef base = extendLanes(b, LLVMGetOperand(v, 0), wide, sign);
         LLVMValueRef element = LLVMGetOperand(v, 1);
@@ -3903,7 +3954,10 @@ static void moveBody(LLVMBuilderRef b, LLVMBasicBlockRef from, LLVMValueRef befo
 }
 
 // Rewrites the phis of `bb` that have an entry from `from`: it becomes the entry from `to`, or, where `to` has one too,
-// both become one entry from `to` with the value merge(phi, value from `to`, value from `from`).
+// both become one entry from `to` with the value merge(phi, value from `to`, value from `from`). A switch that goes to
+// `bb` from several cases gives its phis an entry per case, and those stay one per case: `from`'s switch, moved into
+// `to`, still has them (mslfuzz2 VEC=1 seed 2642: switch cases 0 and 1 to the same block, and the merged phi with one
+// entry failed the verifier, which aborted the compiler; i53).
 template <typename Merge>
 static void retargetPhis(LLVMBuilderRef b, LLVMBasicBlockRef bb, LLVMBasicBlockRef from, LLVMBasicBlockRef to, Merge merge) {
     std::vector<LLVMValueRef> phis;
@@ -3912,16 +3966,18 @@ static void retargetPhis(LLVMBuilderRef b, LLVMBasicBlockRef bb, LLVMBasicBlockR
         std::vector<LLVMValueRef> values;
         std::vector<LLVMBasicBlockRef> blocks;
         LLVMValueRef fromValue = nullptr, toValue = nullptr;
-        unsigned n = LLVMCountIncoming(phi);
+        unsigned n = LLVMCountIncoming(phi), fromEntries = 0;
         for (unsigned i = 0; i < n; i++) {
             LLVMBasicBlockRef in = LLVMGetIncomingBlock(phi, i);
-            if (in == from) fromValue = LLVMGetIncomingValue(phi, i);
+            if (in == from) fromValue = LLVMGetIncomingValue(phi, i), fromEntries++;
             else if (in == to) toValue = LLVMGetIncomingValue(phi, i);
             else values.push_back(LLVMGetIncomingValue(phi, i)), blocks.push_back(in);
         }
         if (!fromValue) continue;  // nothing comes from `from`
-        values.push_back(toValue ? merge(phi, toValue, fromValue) : fromValue);
-        blocks.push_back(to);
+        for (unsigned k = 0; k < (toValue ? 1 : fromEntries); k++) {
+            values.push_back(toValue ? merge(phi, toValue, fromValue) : fromValue);
+            blocks.push_back(to);
+        }
         LLVMPositionBuilderBefore(b, phi);
         LLVMValueRef replacement = LLVMBuildPhi(b, LLVMTypeOf(phi), "");
         LLVMAddIncoming(replacement, values.data(), blocks.data(), (unsigned)values.size());
