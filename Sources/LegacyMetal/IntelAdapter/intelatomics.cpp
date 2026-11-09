@@ -571,6 +571,58 @@ static unsigned redundantNarrowMasks(std::string &s) {
     return n;
 }
 
+// ---- negations feeding a signed divide, in the IGIL text ------------------------------------------------------------
+// i26's bug again, from a negation the IR doesn't show: the front end wrote (short)(-(int)v) % d as (v * -65536) >> 16,
+// and the back end, knowing v was 0 or 1, made that IADD r, 0, -v; iCBE folds that into the IDIV as a source modifier
+// and drops it, so the remainder came out as v % d in every thread (mslfuzz2 VEC=1 seed 917). An IDIV operand set by
+// IADD rA, rZero, -rX becomes XOR rT, rX, -1 and IADD rA, rT, 1, which iCBE leaves alone. INTEL_SIGNED_DIV_NEG_FIX=0
+// turns it off with i26.
+static unsigned negatedDivideOperands(std::string &s) {
+    if (disabled("INTEL_SIGNED_DIV_NEG_FIX") || s.find("\tIDIV ") == std::string::npos) return 0;
+    size_t temps = s.find("\tDCL_TEMPS r0..r");
+    if (temps == std::string::npos) return 0;
+    unsigned last = (unsigned)strtoul(s.c_str() + temps + 16, nullptr, 10);
+    std::vector<std::string> lines;
+    for (size_t pos = 0; pos <= s.size();) {
+        size_t eol = s.find('\n', pos);
+        if (eol == std::string::npos) eol = s.size();
+        lines.push_back(s.substr(pos, eol - pos));
+        pos = eol + 1;
+    }
+    std::map<unsigned, int> definitions;
+    std::set<unsigned> zeros;  // registers whose only definition is MOV rN.x, 0
+    std::set<unsigned> divided;  // registers read as an IDIV operand (IDIV rQ.x, rR.x, rA.x, rB.x)
+    for (const std::string &l : lines) {
+        unsigned d, q, r, a, b;
+        int at = 0;
+        if (sscanf(l.c_str(), "\tIDIV r%u.x, r%u.x, r%u.x, r%u.x;%n", &q, &r, &a, &b, &at) == 4 && at == (int)l.size())
+            divided.insert(a), divided.insert(b);
+        if (sscanf(l.c_str(), "\t%*[A-Za-z_0-9.] r%u", &d) != 1) continue;
+        definitions[d]++;
+        at = 0;
+        if (sscanf(l.c_str(), "\tMOV r%u.x, 0;%n", &d, &at) == 1 && at == (int)l.size()) zeros.insert(d);
+    }
+    unsigned n = 0;
+    for (std::string &l : lines) {
+        unsigned d, z, x;
+        int at = 0;
+        if (sscanf(l.c_str(), "\tIADD r%u.x, r%u.x, -r%u.x;%n", &d, &z, &x, &at) != 3 || at != (int)l.size()) continue;
+        if (!divided.count(d) || definitions[d] != 1 || !zeros.count(z) || definitions[z] != 1) continue;
+        unsigned flipped = ++last;
+        char buffer[160];
+        snprintf(buffer, sizeof buffer, "\tXOR r%u.x, r%u.x, -1;\n\tIADD r%u.x, r%u.x, 1;", flipped, x, d, flipped);
+        l = buffer;
+        n++;
+    }
+    if (!n) return 0;
+    std::string out;
+    for (size_t i = 0; i < lines.size(); i++) { out += lines[i]; if (i + 1 < lines.size()) out += '\n'; }
+    size_t numberAt = out.find("\tDCL_TEMPS r0..r") + 16, numberEnd = out.find_first_not_of("0123456789", numberAt);
+    out.replace(numberAt, numberEnd - numberAt, std::to_string(last));
+    s = out;
+    return n;
+}
+
 // ---- loop-carried copies before a loop's exit ------------------------------------------------------------------------
 // The back end ends a loop body with the copies that carry values into the next iteration (MOV rNext, value) and then
 // BREAK_CND. A register that took the previous value at the top of the body (MOV rOld, rNext) and is read after the
@@ -863,8 +915,10 @@ static unsigned narrowUnsignedDivides(std::string &s) {
 // The same iCBE fold as above, when the narrower AND reaches the 16-bit one through MOVs, including the copy into a
 // shared case of a switch (AND r45, r388, 255; MOV r420, r45; CALL 9 ... MOV r46, r420; AND r389, r46, 65535): a uchar
 // read from a private array came out with bits 8-15 (mslfuzz2 seed 330). There the register is also set from a 32-bit
-// value on another path, so the AND can't go; it becomes SHL 16 / SHR 16 into a new register, which iCBE leaves alone.
-// INTEL_NARROW_MASK_FIX=0 turns it off with the above.
+// value on another path, so the AND can't go. It used to become SHL 16 / SHR 16 into a new register, but where the
+// source is itself a narrow AND (AND 0xFF over x & 3), iCBE keeps that source in a byte register and the SHL 24 lost it,
+// so the result was always 0 (VEC=1 seed 1111). It becomes i40's 32-bit form instead: (x | bit 31) & (mask | bit 31),
+// then bit 31 XORed away. INTEL_NARROW_MASK_FIX=0 turns it off with the above.
 static unsigned narrowMasksThroughCopies(std::string &s) {
     if (disabled("INTEL_NARROW_MASK_FIX")) return 0;
     size_t temps = s.find("\tDCL_TEMPS r0..r");
@@ -906,9 +960,10 @@ static unsigned narrowMasksThroughCopies(std::string &s) {
         if (sscanf(lines[i].c_str(), "\tAND r%u.x, r%u.x, %31[0-9A-Fx];%n", &c, &b, imm, &at) == 3 && at) {
             unsigned long outer = strtoul(imm, nullptr, 0);
             if ((outer == 0xFFFF || outer == 0xFF) && narrower(b, outer, 0)) {
-                unsigned t = ++last, shift = outer == 0xFFFF ? 16 : 24;
-                char buffer[160];
-                snprintf(buffer, sizeof buffer, "\tSHL r%u.x, r%u.x, %u;\n\tSHR r%u.x, r%u.x, %u;", t, b, shift, c, t, shift);
+                unsigned high = ++last, masked = ++last;
+                char buffer[200];
+                snprintf(buffer, sizeof buffer, "\tOR r%u.x, r%u.x, -2147483648;\n\tAND r%u.x, r%u.x, %d;\n\tXOR r%u.x, r%u.x, -2147483648;", high, b,
+                         masked, high, (int32_t)((uint32_t)outer | 0x80000000u), c, masked);
                 lines[i] = buffer;
                 n++;
             }
@@ -944,13 +999,20 @@ extern "C" void intelatomicsFixIGIL(std::string *text) {
     }
     if (declareBaseVertex(s) && logging()) fprintf(stderr, "[inteltex] vertex shader reads VERTEXID: BASE_VERTEX_ID declared\n");
     if (unsigned n = fineGradients(s); n && logging()) fprintf(stderr, "[inteltex] %u derivative(s) made fine\n", n);
-    if (unsigned n = narrowMasksThroughCopies(s); n && logging()) fprintf(stderr, "[inteltex] %u AND 0xFFFF / 0xFF over a narrower AND made shifts\n", n);
+    if (unsigned n = narrowMasksThroughCopies(s); n && logging()) fprintf(stderr, "[inteltex] %u AND 0xFFFF / 0xFF over a narrower AND done on 32 bits\n", n);
     if (unsigned n = narrowUnsignedDivides(s); n && logging()) fprintf(stderr, "[inteltex] %u UBDIV / USDIV done as UDIV of masked copies\n", n);
     if (unsigned n = redundantNarrowMasks(s); n && logging()) fprintf(stderr, "[inteltex] %u AND 0xFFFF after a narrower AND made a MOV\n", n);
     if (unsigned n = narrowNegations(s); n && logging()) fprintf(stderr, "[inteltex] %u BADD / SADD negation(s) done as XOR and add\n", n);
     if (unsigned n = narrowShifts(s); n && logging()) fprintf(stderr, "[inteltex] %u SHR / SAR of a narrow value done on 32 bits\n", n);
     if (unsigned n = loopExitCopies(s); n && logging()) fprintf(stderr, "[inteltex] %u loop-carried copies moved after the loop's BREAK_CND\n", n);
+    if (unsigned n = negatedDivideOperands(s); n && logging()) fprintf(stderr, "[inteltex] %u negation(s) feeding an IDIV done as XOR and add\n", n);
     if (unsigned n = sampleLodOperands(s); n && logging()) fprintf(stderr, "[inteltex] %u explicit-LOD sample(s) given the register holding the LOD\n", n);
+    if (getenv("INTELTEX_DUMP")) {  // debugging: the IGIL text after the fixes above
+        static int serial;
+        char path[1024];
+        snprintf(path, sizeof path, "%s/igil-after-%d.txt", getenv("INTELTEX_DUMP"), serial++);
+        if (FILE *f = fopen(path, "w")) { fwrite(s.data(), 1, s.size(), f); fclose(f); }
+    }
     if (s.find("IMM_ATOMIC_") == std::string::npos) return;
     std::vector<std::string> lines;
     for (size_t pos = 0; pos <= s.size();) {
@@ -3173,7 +3235,9 @@ static unsigned foldNumSamples(LLVMModuleRef module) {
 // a select chain; a store: for each element, store select(i == k, value, old)), so only constant offsets remain. Out of
 // range indices read the last element and store nothing. Only loads and stores of numbers and vectors of them: arrays of
 // textures or samplers are left alone (the back end can't pick a handle with a select), and so are arrays that something
-// other than loads and stores reaches (onlyDirectAccesses below). INTEL_PRIVATE_ARRAY_FIX=0 turns it off.
+// other than loads and stores reaches (onlyDirectAccesses below). An array is rewritten whole or not at all: one
+// variable-index access left as the front end wrote it next to rewritten ones is the mix this works around (mslfuzz2
+// VEC=1 seed 1469, i44). INTEL_PRIVATE_ARRAY_FIX=0 turns it off.
 extern "C" {
 LLVMValueRef LLVMBuildGEP(LLVMBuilderRef, LLVMValueRef, LLVMValueRef *, unsigned, const char *);
 LLVMValueRef LLVMIsAGetElementPtrInst(LLVMValueRef);
@@ -3229,15 +3293,14 @@ static unsigned selectPrivateArrayIndices(LLVMModuleRef module) {
         for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
             for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst))
                 if (LLVMIsAGetElementPtrInst(inst) && allocaBase(LLVMGetOperand(inst, 0))) geps.push_back(inst);
-    LLVMBuilderRef b = nullptr;
-    unsigned fixed = 0;
-    for (LLVMValueRef gep : geps) {
+    // the GEPs with one variable index (not the first) into an array of 2..16 elements; dynamic = that operand
+    auto arrayStep = [&](LLVMValueRef gep, int &dynamic) -> LLVMTypeRef {
         int n = LLVMGetNumOperands(gep);  // pointer, indices
-        int dynamic = -1;
         bool usable = true;
+        dynamic = -1;
         for (int i = 1; i < n && usable; i++)
             if (!LLVMIsAConstantInt(LLVMGetOperand(gep, i))) usable = dynamic < 0, dynamic = i;
-        if (!usable || dynamic < 2) continue;  // exactly one variable index, and not the first (pointer-step) one
+        if (!usable || dynamic < 2) return nullptr;  // exactly one variable index, and not the first (pointer-step) one
         // the type the variable index steps through: walk the pointee type with the indices before it
         LLVMTypeRef t = LLVMGetElementType(LLVMTypeOf(LLVMGetOperand(gep, 0)));
         for (int i = 2; i < dynamic && t; i++) {
@@ -3245,22 +3308,91 @@ static unsigned selectPrivateArrayIndices(LLVMModuleRef module) {
             else if (LLVMGetTypeKind(t) == kStructKind) t = LLVMStructGetTypeAtIndex(t, (unsigned)LLVMConstIntGetZExtValue(LLVMGetOperand(gep, i)));
             else t = nullptr;
         }
-        if (!t || LLVMGetTypeKind(t) != kArrayKind || LLVMGetArrayLength(t) < 2 || LLVMGetArrayLength(t) > kMaxElements) continue;
+        if (!t || LLVMGetTypeKind(t) != kArrayKind || LLVMGetArrayLength(t) < 2 || LLVMGetArrayLength(t) > kMaxElements) return nullptr;
+        return t;
+    };
+    auto bitsOf = [](LLVMTypeRef type) -> unsigned {  // plain integer / floating-point scalars and vectors; 0 otherwise
+        unsigned count = lanes(type) ? lanes(type) : 1;
+        LLVMTypeRef e = lanes(type) ? LLVMGetElementType(type) : type;
+        int kind = LLVMGetTypeKind(e);
+        unsigned bits = kind == kTypeKindInteger ? LLVMGetIntTypeWidth(e) : kind == 1 ? 16 : kind == 2 ? 32 : kind == 3 ? 64 : 0;
+        return bits * count;
+    };
+    auto plainValue = [&](LLVMTypeRef value) {  // plain data only: texture and sampler handles picked by a select break the back end (a05)
+        int kind = LLVMGetTypeKind(scalarOf(value));
+        return kind == kTypeKindInteger || kind == 1 /* half */ || kind == 2 /* float */ || kind == 3 /* double */;
+    };
+    LLVMBuilderRef b = nullptr;
+    // A load or store through a bitcast of the element's address to a type of the same size (the front end stores
+    // `p[i] = x` as <2 x i16> when x was a ushort2 view) becomes one of the element's own type plus a bitcast of the
+    // value, so that the GEP below has only plain loads and stores (mslfuzz2 VEC=1 seed 1469).
+    for (LLVMValueRef gep : geps) {
+        int dynamic;
+        LLVMTypeRef t = arrayStep(gep, dynamic);
+        if (!t) continue;
+        LLVMTypeRef element = LLVMGetElementType(t);
+        unsigned elementBits = plainValue(element) ? bitsOf(element) : 0;
+        if (!elementBits) continue;
+        std::vector<LLVMValueRef> casts;
+        for (LLVMUseRef u = LLVMGetFirstUse(gep); u; u = LLVMGetNextUse(u))
+            if (LLVMIsABitCastInst(LLVMGetUser(u))) casts.push_back(LLVMGetUser(u));
+        for (LLVMValueRef cast : casts) {
+            std::vector<LLVMValueRef> accesses;
+            bool same = true;
+            for (LLVMUseRef u = LLVMGetFirstUse(cast); u && same; u = LLVMGetNextUse(u)) {
+                LLVMValueRef user = LLVMGetUser(u);
+                bool load = LLVMIsALoadInst(user), store = !load && LLVMIsAStoreInst(user) && LLVMGetOperand(user, 1) == cast;
+                LLVMTypeRef value = load ? LLVMTypeOf(user) : store ? LLVMTypeOf(LLVMGetOperand(user, 0)) : nullptr;
+                same = value && plainValue(value) && bitsOf(value) == elementBits;
+                if (same) accesses.push_back(user);
+            }
+            if (!same || accesses.empty()) continue;
+            if (!b) b = LLVMCreateBuilderInContext(LLVMGetModuleContext(module));
+            for (LLVMValueRef access : accesses) {
+                LLVMPositionBuilderBefore(b, access);
+                if (LLVMIsALoadInst(access)) {
+                    LLVMValueRef whole = LLVMBuildLoad(b, gep, "");
+                    LLVMReplaceAllUsesWith(access, LLVMBuildBitCast(b, whole, LLVMTypeOf(access), ""));
+                } else {
+                    LLVMBuildStore(b, LLVMBuildBitCast(b, LLVMGetOperand(access, 0), element, ""), gep);
+                }
+                LLVMInstructionEraseFromParent(access);
+            }
+            if (!LLVMGetFirstUse(cast)) LLVMInstructionEraseFromParent(cast);
+        }
+    }
+    // An array is rewritten whole or not at all: one variable-index access left as the front end wrote it next to
+    // rewritten ones is exactly the mix of element slots and byte addresses this works around.
+    auto rewritable = [&](LLVMValueRef gep, std::vector<LLVMValueRef> *out) {
+        bool usable = true;
+        for (LLVMUseRef u = LLVMGetFirstUse(gep); u && usable; u = LLVMGetNextUse(u)) {
+            LLVMValueRef user = LLVMGetUser(u);
+            bool load = LLVMIsALoadInst(user), store = !load && LLVMIsAStoreInst(user) && LLVMGetOperand(user, 1) == gep && LLVMGetOperand(user, 0) != gep;
+            LLVMTypeRef value = load ? LLVMTypeOf(user) : store ? LLVMTypeOf(LLVMGetOperand(user, 0)) : nullptr;
+            if (value && plainValue(value)) { if (out) out->push_back(user); }
+            else usable = false;
+        }
+        return usable;
+    };
+    std::set<LLVMValueRef> partial;  // allocas with a variable-index access that can't be rewritten
+    for (LLVMValueRef gep : geps) {
+        int dynamic;
+        if (!arrayStep(gep, dynamic)) continue;
+        if (!rewritable(gep, nullptr)) partial.insert(allocaBase(LLVMGetOperand(gep, 0)));
+    }
+    unsigned fixed = 0;
+    for (LLVMValueRef gep : geps) {
+        int n = LLVMGetNumOperands(gep), dynamic;
+        LLVMTypeRef t = arrayStep(gep, dynamic);
+        if (!t) continue;
         LLVMValueRef base = allocaBase(LLVMGetOperand(gep, 0));
+        if (partial.count(base)) continue;
         auto known = direct.find(base);
         if (known == direct.end()) known = direct.emplace(base, onlyDirectAccesses(base)).first;
         if (!known->second) continue;  // stays in memory: left as the front end wrote it
         unsigned length = LLVMGetArrayLength(t);
         std::vector<LLVMValueRef> users;
-        for (LLVMUseRef u = LLVMGetFirstUse(gep); u && usable; u = LLVMGetNextUse(u)) {
-            LLVMValueRef user = LLVMGetUser(u);
-            bool load = LLVMIsALoadInst(user), store = !load && LLVMIsAStoreInst(user) && LLVMGetOperand(user, 1) == gep && LLVMGetOperand(user, 0) != gep;
-            // plain data only: texture and sampler handles picked by a select break the back end (a05)
-            LLVMTypeRef value = load ? LLVMTypeOf(user) : store ? LLVMTypeOf(LLVMGetOperand(user, 0)) : nullptr;
-            int kind = value ? LLVMGetTypeKind(scalarOf(value)) : -1;
-            if (value && (kind == kTypeKindInteger || kind == 1 /* half */ || kind == 2 /* float */ || kind == 3 /* double */)) users.push_back(user);
-            else usable = false;
-        }
+        bool usable = rewritable(gep, &users);
         if (!usable || users.empty()) continue;
         if (!b) b = LLVMCreateBuilderInContext(LLVMGetModuleContext(module));
         LLVMValueRef index = LLVMGetOperand(gep, dynamic);
