@@ -7,25 +7,27 @@
 // loop exit (form 6: made x != 0, min(x, 1u) gave a 0 / 1 value that a15's bug misread: seed 518; the stock compiler
 // and the call are right there), and forms 7 and 8: `(1u >> ((x << 1) & 6u))` modulo `(min(uint(bool(z & 86u)), mulhi(z,
 // x)) | 1u) & 0x7fffffffu`, which the front end makes `(min & 0x7ffffffe) | 1` (crashed the same combine: seed 4629), and
-// the same with min(1u, ..), against the CPU on 256 threads.
+// the same with min(1u, ..), and form 9: the min's 0 / 1 argument a bool divided, `uint(int(bool(..)) / int(d))`, which
+// the front end makes a udiv (seed 3734), against the CPU on 256 threads.
 // Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
 #import "repro.h"
 
-enum { kThreads = 256, kOut = 9 };
+enum { kThreads = 256, kOut = 10 };
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"
     "kernel void k(device const uint *in [[buffer(0)]], device uint *out [[buffer(1)]], uint t [[thread_position_in_grid]]) {\n"
     "  uint x = in[4 * t], z = in[4 * t + 1] * 11u + t;\n"
-    "  out[9 * t] = z + uint(bool(x & min(1u, 145u)));\n"
-    "  out[9 * t + 1] = z + uint(bool(x & max(1u, 0u)));\n"
-    "  out[9 * t + 2] = z + uint(bool(x & uint(min(1, 145))));\n"
-    "  out[9 * t + 3] = z + uint(bool(x & clamp(1u, 0u, 5u)));\n"
-    "  out[9 * t + 4] = z + uint(bool(x & min(2u, 145u)));\n"
-    "  out[9 * t + 5] = z + (z >> (z & 31u)) % (min(x, 1u) | 1u);\n"
+    "  out[10 * t] = z + uint(bool(x & min(1u, 145u)));\n"
+    "  out[10 * t + 1] = z + uint(bool(x & max(1u, 0u)));\n"
+    "  out[10 * t + 2] = z + uint(bool(x & uint(min(1, 145))));\n"
+    "  out[10 * t + 3] = z + uint(bool(x & clamp(1u, 0u, 5u)));\n"
+    "  out[10 * t + 4] = z + uint(bool(x & min(2u, 145u)));\n"
+    "  out[10 * t + 5] = z + (z >> (z & 31u)) % (min(x, 1u) | 1u);\n"
     "  uint v3 = in[4 * t + 3] * 7u + t, v4 = in[4 * t] * 9u + t, n = 0;\n"
     "  while (n < 8) { n++; if ((((uchar)(in[4 * t]) == (uchar)(((uint)((int)((char)(v3 ^ t)))) ^ 164u) ? min(1u, z ^ t) : 32u) & 3u) == 0u) break; }\n"
-    "  out[9 * t + 6] = v4 + n;\n"
-    "  out[9 * t + 7] = (1u >> ((x << 1) & 6u)) % ((min(uint(bool(z & 86u)), mulhi(z, x)) | 1u) & 0x7fffffffu);\n"
-    "  out[9 * t + 8] = (1u >> ((z << 1) & 6u)) % ((min(1u, mulhi(z, x)) | 1u) & 0x7fffffffu);\n"
+    "  out[10 * t + 6] = v4 + n;\n"
+    "  out[10 * t + 7] = (1u >> ((x << 1) & 6u)) % ((min(uint(bool(z & 86u)), mulhi(z, x)) | 1u) & 0x7fffffffu);\n"
+    "  out[10 * t + 8] = (1u >> ((z << 1) & 6u)) % ((min(1u, mulhi(z, x)) | 1u) & 0x7fffffffu);\n"
+    "  out[10 * t + 9] = (uint(ushort(z)) >> (z & 7u)) % (min(uint(int(bool(x & 2142431536u)) / int((z | 1u) & 0x7fffffffu)), mulhi(z, x)) | 1u);\n"
     "}\n";
 
 int main(int argc, char **argv) {
@@ -56,7 +58,7 @@ int main(int argc, char **argv) {
             uint32_t v3 = input[4 * t + 3] * 7 + t, v4 = input[4 * t] * 9 + t, zt = z ^ (uint32_t)t;
             uint32_t m = (uint8_t)x == (uint8_t)((v3 ^ (uint32_t)t) ^ 164) ? (zt < 1 ? zt : 1) : 32;  // the loop's exit doesn't change
             uint32_t want[kOut] = {z + ((x & 1) != 0), z + ((x & 1) != 0), z + ((x & 1) != 0), z + ((x & 1) != 0), z + ((x & 2) != 0), z,
-                                   v4 + ((m & 3) == 0 ? 1 : 8), 0, 0};
+                                   v4 + ((m & 3) == 0 ? 1 : 8), 0, 0, 0};
             for (int w = 0; w < kOut; w++)
                 if (got[kOut * t + w] != want[w]) { if (first < 0) first = kOut * t + w; wrong++; }
         }

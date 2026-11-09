@@ -2519,12 +2519,19 @@ static void *minMaxSelect(bool max, bool sign, void *a, void *b, void *before) {
     api.selectInit(select, api.cmpCreate(kOpcodeICmp, predicate, a, b, &kNoName, before), a, b, &kNoName, before);
     return select;
 }
-static bool zeroOrOne(void *v) {  // constantMinMax: a zero-extended bool or `x & 1`
+static bool zeroOrOne(void *v, int depth) {  // constantMinMax: a zero-extended bool, `x & 1`, or 0 / 1 values divided etc.
     uint64_t c;
     if (isInstruction(v, kOpcodeZExt) && !hungOffUses(v) && numOperands(v) == 1)
         return typeID(typeOf(operand(v, 0))) == kTypeInteger && intBits(typeOf(operand(v, 0))) == 1;
-    return isInstruction(v, kOpcodeAnd) && !hungOffUses(v) && numOperands(v) == 2 &&
-           ((constantIntValue(operand(v, 1), &c) && c == 1) || (constantIntValue(operand(v, 0), &c) && c == 1));
+    if (hungOffUses(v) || numOperands(v) != 2 || depth >= 3) return false;
+    if (isInstruction(v, kOpcodeAnd))
+        return (constantIntValue(operand(v, 1), &c) && c == 1) || (constantIntValue(operand(v, 0), &c) && c == 1) ||
+               zeroOrOne(operand(v, 0), depth + 1) || zeroOrOne(operand(v, 1), depth + 1);
+    // an unsigned division, remainder or right shift of a 0 / 1 value is 0 or 1 too (`uint(int(bool(..)) / int(d | 1))`,
+    // which the front end makes a udiv: seed 3734)
+    if (isInstruction(v, kOpcodeUDiv) || isInstruction(v, kOpcodeURem) || isInstruction(v, kOpcodeLShr))
+        return zeroOrOne(operand(v, 0), depth + 1);
+    return false;
 }
 static unsigned foldMinOrOdd(void *call) {  // `min(..) | odd` -> odd and `min(..) & even` -> 0, for a min that is 0 or 1
     unsigned n = 0;
@@ -2576,7 +2583,7 @@ static unsigned constantMinMax(void *module) {
                         // (AnalyzeBFECombine) reads a null operand: "Compiler encountered an internal error".
                         void *type = typeOf(call), *value = NULL;
                         uint64_t c;
-                        if (!sign && o == 0 && (zeroOrOne(operand(call, 0)) || zeroOrOne(operand(call, 1))) && foldMinOrOdd(call)) {
+                        if (!sign && o == 0 && (zeroOrOne(operand(call, 0), 0) || zeroOrOne(operand(call, 1), 0)) && foldMinOrOdd(call)) {
                             folded++;  // min(bool, y) | odd: see above
                             continue;
                         }
