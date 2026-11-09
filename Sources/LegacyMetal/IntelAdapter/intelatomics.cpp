@@ -597,12 +597,17 @@ static unsigned signExtensions(std::string &s) {
         unsigned d, src;
         char op[8];
         int at = 0;
-        if (sscanf(l.c_str(), "\t%7[A-Z] r%u.x, r%u.x;%n", op, &d, &src, &at) != 3 || at != (int)l.size()) continue;
+        // scalar (r.x) and whole-vector (r) forms: a vector STOI of AND results lost the sign the same way when the max
+        // that read its lanes wrote them back (VEC=1 seed 4647, i57)
+        bool scalar = sscanf(l.c_str(), "\t%7[A-Z] r%u.x, r%u.x;%n", op, &d, &src, &at) == 3 && at == (int)l.size();
+        bool vector = !scalar && sscanf(l.c_str(), "\t%7[A-Z] r%u, r%u;%n", op, &d, &src, (at = 0, &at)) == 3 && at == (int)l.size();
+        if (!scalar && !vector) continue;
         unsigned shift = !strcmp(op, "STOI") ? 16 : !strcmp(op, "BTOI") ? 24 : 0;
         if (!shift) continue;
         unsigned up = ++last;
+        const char *c = scalar ? ".x" : "";
         char buffer[160];
-        snprintf(buffer, sizeof buffer, "\tSHL r%u.x, r%u.x, %u;\n\tSAR r%u.x, r%u.x, %u;", up, src, shift, d, up, shift);
+        snprintf(buffer, sizeof buffer, "\tSHL r%u%s, r%u%s, %u;\n\tSAR r%u%s, r%u%s, %u;", up, c, src, c, shift, d, c, up, c, shift);
         l = buffer;
         n++;
     }
@@ -860,7 +865,9 @@ static unsigned narrowShifts(std::string &s) {
         return r;
     };
     for (const std::string &l : lines) {
-        int skip = !l.compare(0, 6, "\tIDIV ") ? 2 : (!l.compare(0, 6, "\tIMAX ") || !l.compare(0, 6, "\tIMIN ") || !l.compare(0, 6, "\tUMAX ") ||
+        // UDIV too: the AND 255 of (ushort)(uchar)x / 1, divided by 1 and masked with 0xFFFF in a vector, lost its 255 as
+        // i29's does (VEC=1 seed 4614, i55; the stock compiler too)
+        int skip = (!l.compare(0, 6, "\tIDIV ") || !l.compare(0, 6, "\tUDIV ")) ? 2 : (!l.compare(0, 6, "\tIMAX ") || !l.compare(0, 6, "\tIMIN ") || !l.compare(0, 6, "\tUMAX ") ||
                                                        !l.compare(0, 6, "\tUMIN ") || !l.compare(0, 5, "\tICMP") || saturating(l)) ? 1 : 0;
         if (!skip) continue;
         int seen = 0;
@@ -2930,8 +2937,40 @@ static LLVMValueRef foldInstruction(LLVMValueRef inst) {
     }
 }
 
+// hadd / rhadd and the saturating add / subtract of scalar constants, exactly (bits <= 32), or nullptr
+extern "C" long long LLVMConstIntGetSExtValue(LLVMValueRef);
+static LLVMValueRef foldHalvingOrSaturating(int op, bool sign, LLVMValueRef x, LLVMValueRef y) {
+    LLVMTypeRef type = LLVMTypeOf(x);
+    if (lanes(type) || !LLVMIsAConstantInt(x) || !LLVMIsAConstantInt(y)) return nullptr;
+    unsigned bits = LLVMGetIntTypeWidth(type);
+    if (bits > 32) return nullptr;
+    long long a = sign ? LLVMConstIntGetSExtValue(x) : (long long)LLVMConstIntGetZExtValue(x);
+    long long b = sign ? LLVMConstIntGetSExtValue(y) : (long long)LLVMConstIntGetZExtValue(y);
+    long long lo = sign ? -(1ll << (bits - 1)) : 0, hi = sign ? (1ll << (bits - 1)) - 1 : (1ll << bits) - 1, r;
+    switch (op) {
+    case 11: r = (a + b) >> 1; break;      // hadd: no overflow, rounded down (an arithmetic shift for signed)
+    case 12: r = (a + b + 1) >> 1; break;  // rhadd
+    case 13: r = std::min(std::max(a + b, lo), hi); break;  // add_sat
+    default: r = std::min(std::max(a - b, lo), hi); break;  // sub_sat
+    }
+    return LLVMConstInt(type, (unsigned long long)r & ((1ull << bits) - 1), false);
+}
+
+static unsigned foldConstantCallsOnce(LLVMModuleRef module);
+// Folds until nothing changes: a folded call can make another's operands constant (addsat(~1u, hadd(65536u, 36u)): the
+// back end folded that addsat as a plain add once hadd's result was known, so extract_bits(x, 0, addsat(...) & 15) took
+// 0 bits; mslfuzz2 VEC=1 seed 4630, i56; the stock compiler too).
 static unsigned foldConstantCalls(LLVMModuleRef module) {
     if (disabled("INTEL_CONSTANT_CALL_FIX")) return 0;
+    unsigned total = 0;
+    for (int pass = 0; pass < 8; pass++) {
+        unsigned n = foldConstantCallsOnce(module);
+        total += n;
+        if (!n) break;
+    }
+    return total;
+}
+static unsigned foldConstantCallsOnce(LLVMModuleRef module) {
     enum { kULT = 36, kSLT = 40, kUGT = 34, kSGT = 38 };
     std::vector<LLVMValueRef> work;
     unsigned folded = 0;
@@ -2940,16 +2979,19 @@ static unsigned foldConstantCalls(LLVMModuleRef module) {
         int op = !strncmp(name, "air.min.", 8) ? 0 : !strncmp(name, "air.max.", 8) ? 1 : !strncmp(name, "air.clamp.", 10) ? 2
                : !strncmp(name, "air.abs.", 8) ? 3 : !strncmp(name, "air.popcount.", 13) ? 4 : !strncmp(name, "air.clz.", 8) ? 5
                : !strncmp(name, "air.ctz.", 8) ? 6 : !strncmp(name, "air.reverse_bits.", 17) ? 7 : !strncmp(name, "air.rotate.", 11) ? 8
-               : !strncmp(name, "air.extract_bits.", 17) ? 9 : !strncmp(name, "air.insert_bits.", 16) ? 10 : -1;
+               : !strncmp(name, "air.extract_bits.", 17) ? 9 : !strncmp(name, "air.insert_bits.", 16) ? 10
+               : !strncmp(name, "air.hadd.", 9) ? 11 : !strncmp(name, "air.rhadd.", 10) ? 12 : !strncmp(name, "air.add_sat.", 12) ? 13
+               : !strncmp(name, "air.sub_sat.", 12) ? 14 : -1;
         if (op < 0) continue;
-        size_t at = op == 2 ? 10 : op == 4 ? 13 : op == 7 || op == 9 ? 17 : op == 8 ? 11 : op == 10 ? 16 : 8;
+        size_t at = op == 2 ? 10 : op == 4 ? 13 : op == 7 || op == 9 ? 17 : op == 8 ? 11 : op == 10 ? 16 : op == 11 ? 9 : op == 12 ? 10
+                  : op >= 13 ? 12 : 8;
         char kind = name[at];  // u / s for min, max, clamp, abs and the bit fields; the type follows directly otherwise
         if ((op <= 3 || op >= 9) && ((kind != 'u' && kind != 's') || name[at + 1] != '.')) continue;
         bool sign = kind == 's';
         std::vector<LLVMValueRef> calls;
         for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u)) calls.push_back(LLVMGetUser(u));
         for (LLVMValueRef call : calls) {
-            unsigned args = op == 10 ? 4 : op == 2 || op == 9 ? 3 : op <= 1 || op == 8 ? 2 : 1;
+            unsigned args = op == 10 ? 4 : op == 2 || op == 9 ? 3 : op <= 1 || op == 8 || op >= 11 ? 2 : 1;
             // clz / ctz carry a second operand, the i1 "zero is undefined" flag (air.clz.i32(i32 x, i1 false)), which
             // the fold ignores: it gives the width for 0, which is what false asks for
             if ((op == 5 || op == 6) && LLVMIsACallInst(call) && LLVMGetNumOperands(call) == 3) args = 2;
@@ -2970,6 +3012,8 @@ static unsigned foldConstantCalls(LLVMModuleRef module) {
                 r = sign ? LLVMConstSelect(LLVMConstICmp(kSLT, x, LLVMConstNull(type)), LLVMConstSub(LLVMConstNull(type), x), x) : x;
             } else if (op <= 6) {
                 r = foldBitCount(x, op - 4);
+            } else if (op >= 11) {
+                r = foldHalvingOrSaturating(op, sign, x, LLVMGetOperand(call, 1));
             } else {
                 LLVMValueRef operands[4];
                 for (unsigned k = 0; k < args; k++) operands[k] = LLVMGetOperand(call, k);
