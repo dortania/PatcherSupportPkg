@@ -4,7 +4,9 @@
 //   clamp to [0, 1] (v_max_f32 x, x clamp): 0 for x >= 0x80000000, 0x3f800000 for other large x
 //   rotate(x, n) with both known and n a multiple of 8: rotate(37u, 24u) gives 0x2500, rotate(37u, 8u) 0x25000000
 // Scalar and vector forms, 256 threads, checked against the same code on the CPU; the general forms (operands at run
-// time) are in there too and are right either way.
+// time) are in there too and are right either way. Word 7 also has `x % (ulong(rotate(~0u, 1u << 31)) << 32 | 1)`: the
+// fix made every rotate shifts, this one folded to a constant, and libAMDIL902's optimizer turned the remainder into an
+// i64 compare that stopped the compile (seed 5463, stock files compile it); rotates that can't meet the bug stay calls.
 // Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
 #import "repro.h"
 
@@ -21,7 +23,7 @@ static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n
     "    ushort2 s = addsat(ushort2(ushort(a), ushort(a >> 16u)), ushort2(ushort(zero)));\n"
     "    out[t * 8u + 5u] = uint(s.x) | (uint(s.y) << 16u);\n"
     "    out[t * 8u + 6u] = subsat(b, 0u) ^ rotate(a, b);\n"
-    "    out[t * 8u + 7u] = subsat(a, b) + addsat(a, b);\n"
+    "    out[t * 8u + 7u] = (subsat(a, b) + addsat(a, b)) ^ (uint(((ulong(max(a, b)) << 32) | ulong(b)) % ((ulong(rotate(4294967295u, 2147483648u)) << 32) | 1ul)) >> 5);\n"
     "}\n";
 
 static uint32_t rotl(uint32_t x, uint32_t n) { n &= 31; return n ? (x << n) | (x >> (32 - n)) : x; }
@@ -37,7 +39,8 @@ static void reference(uint32_t a, uint32_t b, uint32_t out[8]) {
     out[4] = r[0] ^ (r[1] << 1) ^ (r[2] << 2) ^ (r[3] << 3);
     out[5] = a;
     out[6] = b ^ rotl(a, b);
-    out[7] = subsat(a, b) + addsat(a, b);
+    uint64_t num = ((uint64_t)(a > b ? a : b) << 32) | b, den = ((uint64_t)rotl(0xffffffffu, 0x80000000u) << 32) | 1;
+    out[7] = (subsat(a, b) + addsat(a, b)) ^ ((uint32_t)(num % den) >> 5);
 }
 
 int main(int argc, char **argv) {
@@ -67,7 +70,7 @@ int main(int argc, char **argv) {
         [ce endEncoding];
         if (!reproRun(cb)) return FAIL(bug, "%s: command buffer failed", dev.name.UTF8String);
         static const char *const names[8] = {"subsat(a, mulhi(b, 1u))", "addsat(a, 0u)", "rotate(37u, 24u)", "rotate(0x12345678u, 8u)",
-                                             "rotate(uint4 constants)", "addsat(ushort2, 0)", "subsat(b, 0u) ^ rotate(a, b)", "subsat(a, b) + addsat(a, b)"};
+                                             "rotate(uint4 constants)", "addsat(ushort2, 0)", "subsat(b, 0u) ^ rotate(a, b)", "subsat(a, b) + addsat(a, b), x % (rotate(~0u, ..) << 32 | 1)"};
         int wrong[8] = {0}, first[8];
         uint32_t got[8], want[8];
         for (uint32_t t = 0; t < T; t++) {

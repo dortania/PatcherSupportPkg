@@ -1526,9 +1526,13 @@ static unsigned plainSaturatingAddSub(void *module) {
 // operands it folds bitalign by a multiple of 8 the other way: rotate(37u, 24u) is 0x2500 and rotate(37u, 8u) 0x25000000
 // (found by differential fuzzing; other amounts, and either operand at run time, are right). Every air.rotate call
 // becomes (x << m) | (x >> ((width - m) & (width - 1))) with m = n & (width - 1): LLVM folds that itself when it can,
-// and otherwise the back end still selects a rotate. Scalars and vectors of 8 to 64 bits. AMD_ROTATE_FIX=0 turns this
-// off.
+// and otherwise the back end still selects a rotate. Scalars and vectors of 8 to 64 bits. Rotates that can't meet the
+// bug stay calls: of 0 or all ones, or by a constant that isn't a nonzero multiple of 8. Made shifts, those folded to
+// constants that libAMDIL902's own optimizer went on with: `x % (ulong(rotate(~0u, 1u << 31)) << 32 | 1)` became a
+// compare of x with 0xffffffff00000000, an i64 setcc that no select pattern takes (seed 5463; stock files compile it).
+// AMD_ROTATE_FIX=0 turns this off.
 enum { kOpcodeOr = 27 };
+static bool constantIntValue(void *v, uint64_t *value);
 static unsigned rotatesAsShifts(void *module) {
     const char *setting = getenv("AMD_ROTATE_FIX");
     if ((setting && !strcmp(setting, "0")) || !api.binaryCreate || !api.splat) return 0;
@@ -1547,6 +1551,9 @@ static unsigned rotatesAsShifts(void *module) {
                 if (!isCall(call, function, 3)) continue;
                 void *x = operand(call, 0), *n = operand(call, 1), *type = typeOf(x);
                 if (typeOf(n) != type || typeOf(call) != type) continue;
+                uint64_t cx, cn, all = kBits[t] == 64 ? ~0ull : (1ull << kBits[t]) - 1;
+                if (constantIntValue(x, &cx) && ((cx & all) == 0 || (cx & all) == all)) continue;  // the same whatever n is
+                if (constantIntValue(n, &cn) && ((cn & (kBits[t] - 1)) == 0 || (cn & (kBits[t] - 1)) % 8)) continue;
                 bool vector = typeID(type) == kTypeVector;
                 void *element = vector ? elementType(type) : type;
                 if (typeID(element) != kTypeInteger) continue;
