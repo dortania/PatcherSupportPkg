@@ -2155,7 +2155,10 @@ static unsigned wideBitBranches(void *module) {
 // between such cuts (`(int)uint(c ? x >> 7 : y >> 11) / 111`, each arm cut on its own then). Other 64-bit values cut and
 // divided go wrong the same way when their top bits are known zeros (`(int)uint(x % y) / c` with y < 2^63:
 // libAMDIL902 seems to take the known-zero top bits of the 64-bit value for bit 31 of the cut); their low half goes
-// through two 16-bit extract_bits. AMD_SHIFTED_DIVIDEND_FIX=0 turns this off. Test a22.
+// through two 16-bit extract_bits. The cut can reach the division through an unsigned division, remainder or right
+// shift, which keep its top bit known as they found it: `(int)(uint(x >> 14) / d) / 225` was the unsigned division for
+// negative quotients in 157 of 256 threads (seed 4769, stock files too), so cuts up to two such steps back are built
+// the same way, where those steps take them. AMD_SHIFTED_DIVIDEND_FIX=0 turns this off. Test a22.
 static bool cutShift(void *v, uint64_t *k) {  // lshr/ashr i64 by a constant 1..31
     return (isInstruction(v, kOpcodeLShr) || isInstruction(v, kOpcodeAShr)) && !hungOffUses(v) && numOperands(v) == 2 &&
            intBits(typeOf(v)) == 64 && constantIntValue(operand(v, 1), k) && *k > 0 && *k < 32;
@@ -2222,6 +2225,16 @@ static unsigned shiftedDividends(void *module) {
                 if (typeID(type) != kTypeInteger || intBits(type) != 32) continue;
                 if (dividendCut(dividend)) { found[count] = inst; cuts[count++] = dividend; }
                 else if (isInstruction(dividend, kOpcodePHI)) addPhiCuts(dividend, found, cuts, &count, kMax, 0);
+                else
+                    for (void *v = dividend; ; ) {  // through udiv / urem / lshr (first operand), up to two steps
+                        if ((!isInstruction(v, kOpcodeUDiv) && !isInstruction(v, kOpcodeURem) && !isInstruction(v, kOpcodeLShr)) ||
+                            hungOffUses(v) || numOperands(v) != 2 || count == kMax)
+                            break;
+                        void *a = operand(v, 0);
+                        if (dividendCut(a)) { found[count] = v; cuts[count++] = a; break; }
+                        if (v != dividend) break;
+                        v = a;
+                    }
             }
         }
     }
