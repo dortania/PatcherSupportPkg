@@ -4,7 +4,9 @@
 // constant by sign extension (0xFFFFFF88) before dividing the zero-extended operand (kernel k), and divides a uchar it
 // computed as ~x, kept in a register once the adapter has made a uchar array registers, with its upper bits set
 // (kernel garbage; kernel vectors: the same in a uchar4 lane). The quotient, remainder, shift or comparison comes out
-// wrong (found by
+// wrong. Kernel loadedvec (the fuzzed form as reduced, seed 675): a char4 loaded from the buffer, compared and also used
+// as an integer; the fix's zero extension of the load became an extending <4 x i32> load that the combiner left the
+// integer use on ("Cannot select: i32 = bitcast"), so such loaded vectors are widened lane by lane (found by
 // differential fuzzing). uchar and ushort values read from private arrays (what lets the front end narrow), each operation against 136 / 200 / 0x8001 / 0xF000,
 // 256 threads, checked against the same code on the CPU. Stock OCLP: FAIL. Fixed: PASS.
 // Argument: GPU name substring (default: AMD).
@@ -44,6 +46,44 @@ static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n
     "    out[t * 8u + 2u] = as_type<uint>(m / (c0 | uchar4(1)));\n"
     "    out[t * 8u + 3u] = uint(eq.x) | uint(eq.y) << 1u | uint(lt.z) << 2u | uint(lt.w) << 3u;\n"
     "    for (uint w = 4u; w < 8u; w++) out[t * 8u + w] = 0u;\n"
+    "}\n"
+    "static uint vf(char2 v) { return (uint(v.x) * 1u) ^ (uint(v.y) * 257u); }\n"
+    "static uint vf(char4 v) { return (uint(v.x) * 1u) ^ (uint(v.y) * 257u) ^ (uint(v.z) * 65599u) ^ (uint(v.w) * 16777619u); }\n"
+    "static uint vf(short2 v) { return (uint(v.x) * 1u) ^ (uint(v.y) * 257u); }\n"
+    "kernel void loadedvec(device const uint *in [[buffer(0)]], device uint *out [[buffer(1)]],\n"
+    "              uint t [[thread_position_in_grid]], uint l [[thread_position_in_threadgroup]]) {\n"
+    "    threadgroup uint tg[64];\n"
+    "    threadgroup uchar tc[64];\n"
+    "    threadgroup atomic_uint ta;\n"
+    "    if (l == 0) atomic_store_explicit(&ta, 0u, memory_order_relaxed);\n"
+    "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+    "    uint p[8];\n"
+    "    for (uint j = 0; j < 8u; j++) p[j] = in[(t * 4u + (j & 3u))] + j;\n"
+    "    uchar pc[8];\n"
+    "    for (uint j = 0; j < 8u; j++) pc[j] = uchar(in[(t * 4u + (j & 3u))] >> j);\n"
+    "    uint v0 = in[(t * 4u + 0u)] * 1u + t;\n"
+    "    uint v1 = in[(t * 4u + 1u)] * 3u + t;\n"
+    "    uint v2 = in[(t * 4u + 2u)] * 5u + t;\n"
+    "    uint v3 = in[(t * 4u + 3u)] * 7u + t;\n"
+    "    uint v4 = in[(t * 4u + 0u)] * 9u + t;\n"
+    "    uint v5 = in[(t * 4u + 1u)] * 11u + t;\n"
+    "    { tg[l] = vf((((short2((short)(1), (short)(1))).yx / short2((short)(1), (short)(1))))); threadgroup_barrier(mem_flags::mem_threadgroup); v2 += tg[(((uchar)(v1) <= (uchar)(1u) ? (uint)(pc[(v1) & 7u]) : (1u))) & 63u]; threadgroup_barrier(mem_flags::mem_threadgroup); }\n"
+    "    switch ((v1) & 3u) {\n"
+    "    case 0u: {\n"
+    "        { uint n1 = 0u; while (n1 < 8u) { n1++;\n"
+    "            v5 = vf((select(char4((char)(1), (char)(1), (char)(1), (char)(1)), (char4((char)(1), (char)(1), (char)(1), (char)(1)) % char4((char)(1), (char)(1), (char)(1), (char)(1))), char4((char)(1), (char)(1), (char)(1), (char)(1)) != as_type<char4>(in[(t * 4u + 0u)]))));\n"
+    "            if (((vf((select(char2((char)(1), (char)(1)), (char2((char)(1u), (char)(((uint)((ushort)((v2 ^ t))) * (uint)((ushort)(in[(t * 4u + 0u)])))))).yx, char2((char)(1), (char)(1)) != (char2((char)(1), (char)(1)) / ((char2((char)(1u), (char)(max(1u, (v5 ^ t))))) & char2((char)(v1), (char)(v1)) | char2((char)(1), (char)(1)))))))) & 3u) == 0u) break; } v1 += n1; }\n"
+    "        break; }\n"
+    "    }\n"
+    "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+    "    out[t * 8u + 0u] = v0;\n"
+    "    out[t * 8u + 1u] = v1;\n"
+    "    out[t * 8u + 2u] = v2;\n"
+    "    out[t * 8u + 3u] = v3;\n"
+    "    out[t * 8u + 4u] = v4;\n"
+    "    out[t * 8u + 5u] = v5;\n"
+    "    out[t * 8u + 6u] = p[0] ^ p[1] ^ p[2] ^ p[3] ^ p[4] ^ p[5] ^ p[6] ^ p[7] ^ (uint(pc[0]) | (uint(pc[1]) << 8u) | (uint(pc[2]) << 16u) | (uint(pc[3]) << 24u)) ^ (uint(pc[4]) * 3u + uint(pc[5]) * 5u + uint(pc[6]) * 7u + uint(pc[7]) * 11u);\n"
+    "    out[t * 8u + 7u] = atomic_load_explicit(&ta, memory_order_relaxed);\n"
     "}\n";
 
 static void vectorsReference(const uint32_t *in, uint32_t t, uint32_t out[8]) {
@@ -60,6 +100,28 @@ static void vectorsReference(const uint32_t *in, uint32_t t, uint32_t out[8]) {
     for (int k = 0; k < 2; k++) out[1] |= (uint32_t)(uint16_t)(0x8001 % (h0[k] | 1)) << (16 * k);
     for (int k = 0; k < 4; k++) out[2] |= (uint32_t)(uint8_t)(m[k] / (c0[k] | 1)) << (8 * k);
     out[3] = (c1[0] == 0x88) | (c1[1] == 0x88) << 1 | (c0[2] < 200) << 2 | (c0[3] < 200) << 3;
+}
+
+// loadedvec: the fuzzed kernel as reduced (seed 675). Its threadgroup step adds vf(short2(1, 1)) = 256 to v2, and its loop
+// always leaves after one pass (the break test is vf(char2(1, 1)) & 3 == 0), so only case 0 of the switch changes v5 and v1.
+static uint32_t vf4(const int8_t v[4]) { return (uint32_t)(int32_t)v[0] ^ (uint32_t)(int32_t)v[1] * 257u ^ (uint32_t)(int32_t)v[2] * 65599u ^ (uint32_t)(int32_t)v[3] * 16777619u; }
+static void loadedvecReference(const uint32_t *in, uint32_t t, uint32_t out[8]) {
+    uint32_t p[8];
+    uint8_t pc[8];
+    for (uint32_t j = 0; j < 8; j++) { p[j] = in[t * 4 + (j & 3)] + j; pc[j] = (uint8_t)(in[t * 4 + (j & 3)] >> j); }
+    uint32_t v0 = in[t * 4] + t, v1 = in[t * 4 + 1] * 3 + t, v2 = in[t * 4 + 2] * 5 + t, v3 = in[t * 4 + 3] * 7 + t;
+    uint32_t v4 = in[t * 4] * 9 + t, v5 = in[t * 4 + 1] * 11 + t;
+    v2 += 256;
+    if ((v1 & 3) == 0) {
+        int8_t lanes[4];
+        for (int k = 0; k < 4; k++) lanes[k] = (int8_t)(in[t * 4] >> (8 * k)) != 1 ? 0 : 1;
+        v5 = vf4(lanes);
+        v1 += 1;
+    }
+    out[0] = v0; out[1] = v1; out[2] = v2; out[3] = v3; out[4] = v4; out[5] = v5;
+    out[6] = p[0] ^ p[1] ^ p[2] ^ p[3] ^ p[4] ^ p[5] ^ p[6] ^ p[7] ^ ((uint32_t)pc[0] | (uint32_t)pc[1] << 8 | (uint32_t)pc[2] << 16 | (uint32_t)pc[3] << 24) ^
+             (pc[4] * 3u + pc[5] * 5u + pc[6] * 7u + pc[7] * 11u);
+    out[7] = 0;
 }
 
 static void garbageReference(const uint32_t *in, uint32_t t, uint32_t out[8]) {
@@ -103,14 +165,16 @@ int main(int argc, char **argv) {
         }
         words[4 + 2] = 0x88u << 6;  // thread 1: c[6] == 0x88
         id<MTLCommandQueue> queue = [dev newCommandQueue];
-        static const char *const names[3][8] = {{"136 / uchar", "200 % uchar", "136 % int(uchar)", "0x8001 / ushort", "0xF000 % ushort",
+        static const char *const names[4][8] = {{"136 / uchar", "200 % uchar", "136 % int(uchar)", "0x8001 / ushort", "0xF000 % ushort",
                                                  "200 >> n", "uchar / ushort compares", "0x8001 >> n"},
                                                 {"uchar / uchar", "uchar % uchar(~x)", "", "", "", "", "", ""},
                                                 {"uchar4(136) / uchar4", "ushort2(0x8001) % ushort2", "uchar4 with uchar(~x) / uchar4", "uchar4 compares",
-                                                 "", "", "", ""}};
+                                                 "", "", "", ""},
+                                                {"loadedvec v0", "loadedvec v1", "loadedvec v2", "loadedvec v3", "loadedvec v4",
+                                                 "loadedvec v5", "loadedvec arrays", "loadedvec atomic"}};
         char report[700] = "";
-        for (int k = 0; k < 3; k++) {
-            id<MTLComputePipelineState> ps = [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:k == 2 ? @"vectors" : k ? @"garbage" : @"k"]
+        for (int k = 0; k < 4; k++) {
+            id<MTLComputePipelineState> ps = [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:k == 3 ? @"loadedvec" : k == 2 ? @"vectors" : k ? @"garbage" : @"k"]
                                                                                  error:&err];
             if (!ps) return FAIL(bug, "%s: pipeline: %s", dev.name.UTF8String, err.localizedDescription.UTF8String);
             id<MTLBuffer> out = [dev newBufferWithLength:T * 32 options:MTLResourceStorageModeShared];
@@ -127,7 +191,7 @@ int main(int argc, char **argv) {
                 uint32_t got = 0, want = 0;
                 for (uint32_t t = 0; t < T; t++) {
                     uint32_t w[8];
-                    if (k == 2) vectorsReference(words, t, w); else if (k) garbageReference(words, t, w); else reference(words, t, w);
+                    if (k == 3) loadedvecReference(words, t, w); else if (k == 2) vectorsReference(words, t, w); else if (k) garbageReference(words, t, w); else reference(words, t, w);
                     uint32_t g = ((uint32_t *)out.contents)[t * 8 + i];
                     if (g != w[i] && wrong++ == 0) { first = (int)t; got = g; want = w[i]; }
                 }

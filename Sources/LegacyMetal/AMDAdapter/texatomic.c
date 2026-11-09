@@ -1990,6 +1990,36 @@ static unsigned narrowUnsignedConstants(void *module) {
                 wide[k] = api.constantIntGet(i32, value & 0xffffffffu, false);
                 continue;
             }
+            unsigned packedBits = lanes * width;
+            if (lanes > 1 && isInstruction(v, kOpcodeLoad) && nextUse(firstUse(v)) && (packedBits == 16 || packedBits == 32) &&
+                api.insertElement && api.undefGet && api.userNew && api.getInt16Ty) {
+                // A loaded narrow vector with other users (`v == uchar4(..)` beside `as_type<uint>(v)`): zero-extended,
+                // libAMDIL902's combiner made the load an extending <4 x i32> load and left the other user's bitcast
+                // on that, "Cannot select: i32 = bitcast" (seed 675). So the lanes come out of the vector's bits as an
+                // integer instead, one extract_bits each, and no extension of the load is left to fold.
+                int s1 = extendSigned ? 1 : 0;
+                if (!extract[s1][1]) {
+                    if (!extractType[1]) {
+                        void *params[3] = {i32, i32, i32};
+                        extractType[1] = api.functionTypeGet(i32, params, 3, false);
+                    }
+                    const char *name = s1 ? "air.extract_bits.s.i32" : "air.extract_bits.u.i32";
+                    extract[s1][1] = api.getOrInsertFunction(module, name, strlen(name), extractType[1]);
+                    if (!extract[s1][1] || subclassID(extract[s1][1]) != kValueFunction) return rewritten;
+                }
+                void *packed = api.castCreate(kOpcodeBitCast, v, packedBits == 32 ? i32 : api.getInt16Ty(api.getContext(inst)), &kNoName, inst);
+                if (packedBits == 16) packed = api.castCreate(kOpcodeZExt, packed, i32, &kNoName, inst);
+                void *vector = api.undefGet(wideType);
+                for (unsigned lane = 0; lane < lanes; lane++) {
+                    void *args[3] = {packed, api.constantIntGet(i32, lane * width, false), api.constantIntGet(i32, width, false)};
+                    void *element = createCall(extract[s1][1], extractType[1], args, 3, inst);
+                    void *next = api.userNew(96, 3);
+                    api.insertElement(next, vector, element, api.constantIntGet(i32, lane, false), &kNoName, inst);
+                    vector = next;
+                }
+                wide[k] = vector;
+                continue;
+            }
             int s = extendSigned ? 1 : 0;
             if (!extract[s][lanes]) {
                 if (!extractType[lanes]) {
