@@ -2322,7 +2322,10 @@ static unsigned shiftedDividends(void *module) {
 // minus the bools), so 32-bit calls whose arguments are all constants or loop values (phis, and arithmetic on them and
 // constants) become a compare and a select, which its IR optimizer folds after unrolling (the same loop with
 // `i < 145u ? i : 145u` is right). clamp(x, c, c) becomes c, whatever x is (its DAG folded `clamp(y | 1u, 1u, 1u)`
-// through the known bits of y | 1).
+// through the known bits of y | 1). `min(b, y) | odd` with b a bool (zero-extended i1, or `x & 1`) crashed the same
+// bit-field-extract combine as `min(x, 1u) | 1u` did (`z % (min(uint(bool(w & 86u)), mulhi(a, c)) | 1u)`, seed 4629,
+// stock files too): min is 0 or 1 there as well, so that or is folded to the odd constant too, and an and of such a min
+// with an even constant (the front end makes `(min | 1) & 0x7fffffff` into `(min & 0x7ffffffe) | 1`) to 0.
 // AMD_CONSTANT_MINMAX_FIX=0 turns this off. Tests a23, a28, a30.
 static bool unrollsToConstant(void *v, int depth) {  // a constant, or what can become one when a loop is unrolled
     uint64_t c;
@@ -2474,6 +2477,29 @@ static void *minMaxSelect(bool max, bool sign, void *a, void *b, void *before) {
     api.selectInit(select, api.cmpCreate(kOpcodeICmp, predicate, a, b, &kNoName, before), a, b, &kNoName, before);
     return select;
 }
+static bool zeroOrOne(void *v) {  // constantMinMax: a zero-extended bool or `x & 1`
+    uint64_t c;
+    if (isInstruction(v, kOpcodeZExt) && !hungOffUses(v) && numOperands(v) == 1)
+        return typeID(typeOf(operand(v, 0))) == kTypeInteger && intBits(typeOf(operand(v, 0))) == 1;
+    return isInstruction(v, kOpcodeAnd) && !hungOffUses(v) && numOperands(v) == 2 &&
+           ((constantIntValue(operand(v, 1), &c) && c == 1) || (constantIntValue(operand(v, 0), &c) && c == 1));
+}
+static unsigned foldMinOrOdd(void *call) {  // `min(..) | odd` -> odd and `min(..) & even` -> 0, for a min that is 0 or 1
+    unsigned n = 0;
+    for (void *u = firstUse(call); u;) {
+        void *user = api.getUser(u);
+        u = nextUse(u);
+        uint64_t k;
+        bool orBits = isInstruction(user, kOpcodeOrBits), andBits = isInstruction(user, kOpcodeAnd);
+        if ((!orBits && !andBits) || hungOffUses(user) || numOperands(user) != 2) continue;
+        void *other = operand(user, 0) == call ? operand(user, 1) : operand(user, 0);
+        if (!constantIntValue(other, &k)) continue;
+        // the front end writes `(min | 1) & 0x7fffffff` as `(min & 0x7ffffffe) | 1`: the and is 0 then
+        if (orBits && (k & 1)) { api.replaceAllUsesWith(user, other); n++; }
+        else if (andBits && !(k & 1)) { api.replaceAllUsesWith(user, api.constantIntGet(typeOf(user), 0, false)); n++; }
+    }
+    return n;
+}
 static unsigned constantMinMax(void *module) {
     const char *setting = getenv("AMD_CONSTANT_MINMAX_FIX");
     if ((setting && !strcmp(setting, "0")) || !api.getFunction) return 0;
@@ -2508,6 +2534,10 @@ static unsigned constantMinMax(void *module) {
                         // (AnalyzeBFECombine) reads a null operand: "Compiler encountered an internal error".
                         void *type = typeOf(call), *value = NULL;
                         uint64_t c;
+                        if (!sign && o == 0 && (zeroOrOne(operand(call, 0)) || zeroOrOne(operand(call, 1))) && foldMinOrOdd(call)) {
+                            folded++;  // min(bool, y) | odd: see above
+                            continue;
+                        }
                         unsigned which = constantIntValue(operand(call, 1), &c) ? 1 : constantIntValue(operand(call, 0), &c) ? 0 : 2;
                         if (!sign && o != 2 && which != 2) {
                             void *x = operand(call, 1 - which);
@@ -2518,16 +2548,7 @@ static unsigned constantMinMax(void *module) {
                                 // Only `min(x, 1u) | odd` (the crashing divisor) is folded: that or is the constant. Made
                                 // x != 0 everywhere, min(x, 1) left 0 / 1 values that a15's bug misreads (`((c ? min(1u, x) : y)
                                 // & 3) == 0` never left its loop: seed 518); the call itself compiles right.
-                                bool orFolded = false;
-                                for (void *u = firstUse(call); u;) {
-                                    void *user = api.getUser(u);
-                                    u = nextUse(u);
-                                    uint64_t k;
-                                    if (!isInstruction(user, kOpcodeOrBits) || hungOffUses(user) || numOperands(user) != 2) continue;
-                                    void *other = operand(user, 0) == call ? operand(user, 1) : operand(user, 0);
-                                    if (constantIntValue(other, &k) && (k & 1)) { api.replaceAllUsesWith(user, other); orFolded = true; }
-                                }
-                                if (orFolded) folded++;
+                                if (foldMinOrOdd(call)) folded++;
                                 continue;
                             }
                         }
