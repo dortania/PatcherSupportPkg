@@ -2468,10 +2468,13 @@ static bool containsCounter(void *v, int depth) {  // a loop counter somewhere i
 // that had left the inner loop still took the values of its later passes. `for (i0 < 4) { n = 0; while (n < 8) { n++;
 // v = (i0 & 1) ? extract_bits(x, (y * v) & 15, w) : z; if ((int(i0) / d & 3) == 0) break; } }` gave a wrong v in every
 // lane of a wave that held one lane with d = 1 (found by fuzzing with loop counters in expressions, seed 2398, stock
-// files too); with the outer loop left rolled (#pragma nounroll) the same code is right. So an outer loop that holds a
-// loop with an exit that isn't a fixed trip count (a break, or a latch test on anything but a counter and a constant)
-// gets llvm.loop.unroll.disable on its back edge. Loops are found by back edges in block order, which the front end
-// keeps for structured code. AMD_DIVERGENT_LOOP_FIX=0 turns this off. Test a33.
+// files too); with the outer loop left rolled (#pragma nounroll) the same code is right. So an outer loop with a fixed
+// trip count (the kind libAMDIL902 unrolls fully) that holds a loop with an exit that isn't a fixed trip count (a break,
+// or a latch test on anything but a counter and a constant) and depends on the outer loop's counter gets
+// llvm.loop.unroll.disable on its back edge. Without the last two conditions it kept loops rolled in half of Apple's MPS
+// kernels (inner loops up to a loaded bound), and Geekbench 7's Background Blur, Face Tracking and Super Resolution
+// failed their validation. Loops are found by back edges in block order, which the front end keeps for structured code.
+// AMD_DIVERGENT_LOOP_FIX=0 turns this off. Test a33.
 static bool counterCompare(void *condition) {  // `counter (or counter op constant) <cmp> constant`: a fixed trip count
     if (!isInstruction(condition, kOpcodeICmp) || hungOffUses(condition) || numOperands(condition) != 2) return false;
     uint64_t c;
@@ -2483,6 +2486,22 @@ static bool counterCompare(void *condition) {  // `counter (or counter op consta
             for (unsigned j = 0; j < 2; j++)
                 if (isCounter(operand(v, j)) && constantIntValue(operand(v, 1 - j), &c)) return true;
     }
+    return false;
+}
+static void *fixedCounter(void *condition) {  // the counter of a counterCompare test, or NULL
+    if (!counterCompare(condition)) return NULL;
+    for (unsigned i = 0; i < 2; i++) {
+        void *v = operand(condition, i);
+        if (isCounter(v)) return v;
+        if (subclassID(v) >= kValueInstruction && !hungOffUses(v) && numOperands(v) == 2)
+            for (unsigned j = 0; j < 2; j++) if (isCounter(operand(v, j))) return operand(v, j);
+    }
+    return NULL;
+}
+static bool usesValue(void *v, void *target, int depth) {  // target somewhere in v's arithmetic (not through phis)
+    if (v == target) return true;
+    if (depth >= 6 || subclassID(v) < kValueInstruction || hungOffUses(v) || isInstruction(v, kOpcodePHI)) return false;
+    for (unsigned i = 0; i < numOperands(v); i++) if (usesValue(operand(v, i), target, depth + 1)) return true;
     return false;
 }
 static unsigned rolledOuterLoops(void *module) {
@@ -2533,10 +2552,26 @@ static unsigned rolledOuterLoops(void *module) {
                 }
             }
         }
-        for (unsigned l = 0; l < nloops; l++)
-            for (unsigned k = 0; k < nloops; k++)
-                if (k != l && loops[k].header > loops[l].header && loops[k].latch < loops[l].latch && loops[k].divergent)
-                    loops[l].mark = true;
+        // Only an outer loop with a fixed trip count (the ones libAMDIL902 unrolls fully) around an inner loop whose exit
+        // depends on the outer loop's counter: Apple's MPS kernels (Geekbench 7's Background Blur, Face Tracking, Super
+        // Resolution) hold many loops around loops with exits on loaded bounds, and kept rolled they came out wrong.
+        for (unsigned l = 0; l < nloops; l++) {
+            void *counter = loops[l].fixed ? fixedCounter(operand(loops[l].branch, 0)) : NULL;
+            if (!counter) continue;
+            for (unsigned k = 0; k < nloops && !loops[l].mark; k++) {
+                if (k == l || loops[k].header <= loops[l].header || loops[k].latch >= loops[l].latch || !loops[k].divergent) continue;
+                for (unsigned b = loops[k].header; b <= loops[k].latch && !loops[l].mark; b++) {  // the inner loop's exits
+                    void *term = last[b];
+                    if (!term || !isInstruction(term, kOpcodeBr) || hungOffUses(term) || numOperands(term) != 3) continue;
+                    bool exits = b == loops[k].latch && !loops[k].fixed;
+                    for (unsigned o = 1; o < 3; o++) {
+                        unsigned s = INDEX(operand(term, o));
+                        if (s < loops[k].header || s > loops[k].latch) exits = true;
+                    }
+                    if (exits && usesValue(operand(term, 0), counter, 0)) loops[l].mark = true;
+                }
+            }
+        }
         #undef INDEX
         void *context = api.getContext(function);
         for (unsigned l = 0; l < nloops; l++) {
