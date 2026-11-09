@@ -2051,8 +2051,10 @@ static unsigned wideCompares(void *module) {
 // libAMDIL902's DAG combiner turns `brcond (trunc (srl (and x, 2^k), k))` into a compare of the 64-bit `and` with 0,
 // whose result type is i64 on this target, and its brcond patterns only take a 32-bit condition (found by fuzzing
 // with 64-bit integers; wideCompares splits the i64 comparisons in the IR, these the combiner makes itself). The DAG
-// is built per block, so only conditions worked out in the branch's own block from a 64-bit instruction or argument
-// need it: a conditional branch's condition is tested through `extract_bits(zext c, 0, 1) != 0`, and a 32-bit switch
+// is built per block, so conditions worked out from a 64-bit instruction or argument need it, in the branch's own block
+// or in one before it: a bool from wideCompares' 32-bit halves of `x != 0`, sign-extended after a loop, came back in the
+// later block as an i64 compare of x (which arrives there with its top half known zero) and stopped the compile (seed
+// 3227). A conditional branch's condition is tested through `extract_bits(zext c, 0, 1) != 0`, and a 32-bit switch
 // value goes through extract_bits (`extract_bits(x, 0, w)` for `x & (2^w - 1)`, else as two 16-bit halves), which the
 // combiner doesn't look into. Code without 64-bit integers is left alone. AMD_WIDE_BRANCH_FIX=0 turns this off.
 // Test a21.
@@ -2068,6 +2070,11 @@ static bool fromWide(void *v, void *block, int depth) {  // a 64-bit instruction
     for (unsigned i = 0; i < n; i++)
         if (fromWide(operand(v, i), block, depth + 1)) return true;
     return false;
+}
+static bool wideCondition(void *cond, void *block) {  // worked out from a 64-bit value, here or in an earlier block
+    if (subclassID(cond) < kValueInstruction) return false;
+    void *home = *(void **)((char *)cond + kInstructionParent);
+    return fromWide(cond, block, 0) || (home != block && fromWide(cond, home, 0));
 }
 static unsigned wideBitBranches(void *module) {
     const char *setting = getenv("AMD_WIDE_BRANCH_FIX");
@@ -2096,7 +2103,7 @@ static unsigned wideBitBranches(void *module) {
                 bool select = isInstruction(inst, kOpcodeSelect) && !hungOffUses(inst) && numOperands(inst) == 3;
                 if (!ext && !select) continue;
                 void *cond = operand(inst, 0), *type = typeOf(cond);
-                if (typeID(type) != kTypeInteger || intBits(type) != 1 || subclassID(cond) < kValueInstruction || !fromWide(cond, block, 0)) continue;
+                if (typeID(type) != kTypeInteger || intBits(type) != 1 || !wideCondition(cond, block)) continue;
                 found[count++] = inst;
             }
             bool branch = isInstruction(term, kOpcodeBr) && !hungOffUses(term) && numOperands(term) == 3;
@@ -2104,7 +2111,7 @@ static unsigned wideBitBranches(void *module) {
             if ((!branch && !sw) || count == kMax) continue;
             void *cond = anyOperand(term, 0), *type = typeOf(cond);
             if (sw && (typeID(type) != kTypeInteger || intBits(type) != 32)) continue;  // i64 switches: not seen, not handled
-            if (subclassID(cond) < kValueInstruction || !fromWide(cond, block, 0)) continue;
+            if (!wideCondition(cond, block)) continue;
             found[count++] = term;
         }
     }
