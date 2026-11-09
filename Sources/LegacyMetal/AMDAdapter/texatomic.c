@@ -2231,7 +2231,9 @@ static unsigned wideBitBranches(void *module) {
 // through two 16-bit extract_bits. The cut can reach the division through an unsigned division, remainder or right
 // shift, which keep its top bit known as they found it: `(int)(uint(x >> 14) / d) / 225` was the unsigned division for
 // negative quotients in 157 of 256 threads (seed 4769, stock files too), so cuts up to two such steps back are built
-// the same way, where those steps take them. AMD_SHIFTED_DIVIDEND_FIX=0 turns this off. Test a22.
+// the same way, where those steps take them. A cut of a 64-bit product goes through the extracts instead of the
+// halves: built from the halves, the product's high half came out wrong (seed 763). AMD_SHIFTED_DIVIDEND_FIX=0 turns
+// this off. Test a22.
 static bool cutShift(void *v, uint64_t *k) {  // lshr/ashr i64 by a constant 1..31
     return (isInstruction(v, kOpcodeLShr) || isInstruction(v, kOpcodeAShr)) && !hungOffUses(v) && numOperands(v) == 2 &&
            intBits(typeOf(v)) == 64 && constantIntValue(operand(v, 1), k) && *k > 0 && *k < 32;
@@ -2318,7 +2320,10 @@ static unsigned shiftedDividends(void *module) {
         void *inst = isInstruction(user, kOpcodePHI) ? cut : user;  // the insertion point
         uint64_t k;
         bool selectOfCuts = isInstruction(src, kOpcodeSelect) && (cutShift(operand(src, 1), &k) || cutShift(operand(src, 2), &k));
-        if (!cutShift(src, &k) && !selectOfCuts) {  // the low half through two 16-bit extract_bits, which the DAG can't see into
+        // a cut of a 64-bit product: built from its halves, libAMDIL902 took the product's high half wrong (seed 763,
+        // `(int)uint((x << 32) * y >> 24) / 51`), so that cut goes through the extracts instead, which divide right too
+        bool ofProduct = cutShift(src, &k) && isInstruction(operand(src, 0), kOpcodeMul2);
+        if ((!cutShift(src, &k) && !selectOfCuts) || ofProduct) {  // the low half through two 16-bit extract_bits, which the DAG can't see into
             if (!extract) {
                 void *params[3] = {i32, i32, i32};
                 extractType = api.functionTypeGet(i32, params, 3, false);
