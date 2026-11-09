@@ -641,15 +641,29 @@ static unsigned negatedDivideOperands(std::string &s) {
     std::map<unsigned, int> definitions;
     std::set<unsigned> zeros;  // registers whose only definition is MOV rN.x, 0
     std::set<unsigned> divided;  // registers read as an IDIV operand (IDIV rQ.x, rR.x, rA.x, rB.x)
+    std::multimap<unsigned, unsigned> copiedFrom;  // MOV rD.x, rS.x: D <- S
     for (const std::string &l : lines) {
         unsigned d, q, r, a, b;
         int at = 0;
         if (sscanf(l.c_str(), "\tIDIV r%u.x, r%u.x, r%u.x, r%u.x;%n", &q, &r, &a, &b, &at) == 4 && at == (int)l.size())
             divided.insert(a), divided.insert(b);
+        at = 0;
+        if (sscanf(l.c_str(), "\tMOV r%u.x, r%u.x;%n", &d, &q, &at) == 2 && at == (int)l.size()) copiedFrom.insert({d, q});
         if (sscanf(l.c_str(), "\t%*[A-Za-z_0-9.] r%u", &d) != 1) continue;
         definitions[d]++;
         at = 0;
         if (sscanf(l.c_str(), "\tMOV r%u.x, 0;%n", &d, &at) == 1 && at == (int)l.size()) zeros.insert(d);
+    }
+    // the negation can also reach the divide through copies, merges included: v2 = -(int)x in one case of a switch, the
+    // loop that divides it (IDIV r132, r133, r20, 65535) made a subroutine reading a copy of a copy (mslfuzz2 LONG=1
+    // seed 2592, i60; the stock compiler is wrong too)
+    std::vector<unsigned> work(divided.begin(), divided.end());
+    while (!work.empty()) {
+        unsigned r = work.back();
+        work.pop_back();
+        auto range = copiedFrom.equal_range(r);
+        for (auto it = range.first; it != range.second; ++it)
+            if (divided.insert(it->second).second) work.push_back(it->second);
     }
     unsigned n = 0;
     for (std::string &l : lines) {
@@ -2981,17 +2995,18 @@ static unsigned foldConstantCallsOnce(LLVMModuleRef module) {
                : !strncmp(name, "air.ctz.", 8) ? 6 : !strncmp(name, "air.reverse_bits.", 17) ? 7 : !strncmp(name, "air.rotate.", 11) ? 8
                : !strncmp(name, "air.extract_bits.", 17) ? 9 : !strncmp(name, "air.insert_bits.", 16) ? 10
                : !strncmp(name, "air.hadd.", 9) ? 11 : !strncmp(name, "air.rhadd.", 10) ? 12 : !strncmp(name, "air.add_sat.", 12) ? 13
-               : !strncmp(name, "air.sub_sat.", 12) ? 14 : -1;
+               : !strncmp(name, "air.sub_sat.", 12) ? 14 : !strncmp(name, "air.min3.", 9) ? 15 : !strncmp(name, "air.max3.", 9) ? 16
+               : !strncmp(name, "air.median3.", 12) ? 17 : -1;
         if (op < 0) continue;
         size_t at = op == 2 ? 10 : op == 4 ? 13 : op == 7 || op == 9 ? 17 : op == 8 ? 11 : op == 10 ? 16 : op == 11 ? 9 : op == 12 ? 10
-                  : op >= 13 ? 12 : 8;
+                  : op == 13 || op == 14 || op == 17 ? 12 : op == 15 || op == 16 ? 9 : 8;
         char kind = name[at];  // u / s for min, max, clamp, abs and the bit fields; the type follows directly otherwise
         if ((op <= 3 || op >= 9) && ((kind != 'u' && kind != 's') || name[at + 1] != '.')) continue;
         bool sign = kind == 's';
         std::vector<LLVMValueRef> calls;
         for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u)) calls.push_back(LLVMGetUser(u));
         for (LLVMValueRef call : calls) {
-            unsigned args = op == 10 ? 4 : op == 2 || op == 9 ? 3 : op <= 1 || op == 8 || op >= 11 ? 2 : 1;
+            unsigned args = op == 10 ? 4 : op == 2 || op == 9 || op >= 15 ? 3 : op <= 1 || op == 8 || op >= 11 ? 2 : 1;
             // clz / ctz carry a second operand, the i1 "zero is undefined" flag (air.clz.i32(i32 x, i1 false)), which
             // the fold ignores: it gives the width for 0, which is what false asks for
             if ((op == 5 || op == 6) && LLVMIsACallInst(call) && LLVMGetNumOperands(call) == 3) args = 2;
@@ -2999,15 +3014,33 @@ static unsigned foldConstantCallsOnce(LLVMModuleRef module) {
             LLVMTypeRef type = LLVMTypeOf(call);
             LLVMTypeRef element = lanes(type) ? LLVMGetElementType(type) : type;
             if (LLVMGetTypeKind(element) != kTypeKindInteger) continue;
+            // a bit field of 0 bits, whatever the other operands: extract_bits gives 0 and insert_bits its base (MSL), but
+            // the back end's lowering shifts by the width, which LLVM folds as poison: w[(uint)((long)(1u |
+            // extract_bits(v0, 0u, 0u)) >> s) & 3u] = 1u came out as w[1] in every thread (mslfuzz2 LONG=1 seed 2575, i59;
+            // the stock compiler too)
+            if (op == 9 || op == 10) {
+                LLVMValueRef bits = LLVMGetOperand(call, args - 1);
+                if (LLVMIsAConstant(bits) && LLVMIsNull(bits)) {
+                    LLVMValueRef r = op == 9 ? LLVMConstNull(type) : LLVMGetOperand(call, 0);
+                    for (LLVMUseRef u = LLVMGetFirstUse(call); u; u = LLVMGetNextUse(u)) work.push_back(LLVMGetUser(u));
+                    LLVMReplaceAllUsesWith(call, r);
+                    LLVMInstructionEraseFromParent(call);
+                    folded++;
+                    continue;
+                }
+            }
             bool constant = true;
             for (unsigned k = 0; k < args; k++) constant = constant && LLVMIsAConstant(LLVMGetOperand(call, k));
             if (!constant) continue;
             LLVMValueRef x = LLVMGetOperand(call, 0), r = nullptr;
-            if (op <= 2) {
+            if (op <= 2 || op >= 15) {  // min, max, clamp; min3, max3, median3 (min3(240u, 239u, 177u) read through as_type
+                                        // got every byte as byte 0, as in i36; mslfuzz2 VEC=1 seed 5854, i58)
                 LLVMValueRef y = LLVMGetOperand(call, 1);
                 auto mn = [&](LLVMValueRef p, LLVMValueRef q) { return LLVMConstSelect(LLVMConstICmp(sign ? kSLT : kULT, p, q), p, q); };
                 auto mx = [&](LLVMValueRef p, LLVMValueRef q) { return LLVMConstSelect(LLVMConstICmp(sign ? kSGT : kUGT, p, q), p, q); };
-                r = op == 0 ? mn(x, y) : op == 1 ? mx(x, y) : mn(mx(x, y), LLVMGetOperand(call, 2));
+                LLVMValueRef z = args == 3 ? LLVMGetOperand(call, 2) : nullptr;
+                r = op == 0 ? mn(x, y) : op == 1 ? mx(x, y) : op == 2 ? mn(mx(x, y), z) : op == 15 ? mn(mn(x, y), z)
+                  : op == 16 ? mx(mx(x, y), z) : mx(mn(x, y), mn(mx(x, y), z));
             } else if (op == 3) {
                 r = sign ? LLVMConstSelect(LLVMConstICmp(kSLT, x, LLVMConstNull(type)), LLVMConstSub(LLVMConstNull(type), x), x) : x;
             } else if (op <= 6) {
