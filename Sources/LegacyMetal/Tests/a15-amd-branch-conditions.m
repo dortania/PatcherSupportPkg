@@ -17,6 +17,9 @@
 //   maskfirst: if ((min(150u, K) > b) != bool(min(1u, 104u) & (c / 1522195843u))) ..  The min/max fix folds min(1u, 104u)
 //             to 1 in place, leaving `1 & y` with the constant first, which the bit-test fix didn't look at: y = 2 took
 //             the wrong branch (seed 2286). The mask is now found in either operand
+//   switchbit: for (i < 3) { s = short2(short(i), short(a)) & short2(5474, 29237); switch ((uint(s.x) ^ uint(s.y) * 257)
+//             & 3) .. }  Unrolled, only bit 0 of the switch value varies for i = 0 and 1, and the lowering's bit test
+//             took the wrong case (seed 4273, stock files too): switches on low bits go through extract_bits
 // 256 threads each, checked against the same code on the CPU. Stock OCLP: FAIL. Fixed: PASS.
 // Argument: GPU name substring (default: AMD).
 #import "repro.h"
@@ -51,6 +54,21 @@ static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n
     "    uint a = in[t * 4u], b = in[t * 4u + 1u], c = in[t * 4u + 2u], r;\n"
     "    if ((min(150u, 2153091561u) > b) != bool(min(1u, 104u) & (c / 1522195843u))) r = a; else r = b + 1u;\n"
     "    out[t * 2u] = r; out[t * 2u + 1u] = 0u;\n"
+    "}\n"
+    "kernel void switchbit(device const uint *in [[buffer(0)]], device uint *out [[buffer(1)]], uint t [[thread_position_in_grid]]) {\n"
+    "    uint v0 = in[t * 4u] + t, v1 = in[t * 4u + 1u] * 3u + t, v2 = in[t * 4u + 2u] * 5u + t, v3 = in[t * 4u + 3u] * 7u + t;\n"
+    "    uchar pc[8];\n"
+    "    for (uint j = 0u; j < 8u; j++) pc[j] = uchar(in[t * 4u + (j & 3u)] >> j);\n"
+    "    pc[v3 & 7u] = uchar(all(max(uchar3(37, 96, 1), uchar3(3, 1, 49)) >= uchar3(6, 215, 58)));\n"
+    "    for (uint i = 0u; i < 3u; i++) {\n"
+    "        short2 s = short2(short(i), short(v0)) & short2(5474, 29237);\n"
+    "        switch ((uint(s.x) ^ uint(s.y) * 257u) & 3u) {\n"
+    "        case 0u: v2 += i; break;\n"
+    "        case 1u: v1 += 132474u; break;\n"
+    "        }\n"
+    "    }\n"
+    "    out[t * 2u] = v1 ^ (v2 << 8);\n"
+    "    out[t * 2u + 1u] = uint(pc[0]) | (uint(pc[1]) << 8) | (uint(pc[2]) << 16) | (uint(pc[3]) << 24) ^ (uint(pc[4]) * 3u + uint(pc[5]) * 5u + uint(pc[6]) * 7u + uint(pc[7]) * 11u);\n"
     "}\n";
 
 static void reference(int kernel, const uint32_t *in, uint32_t t, uint32_t out[2]) {
@@ -83,6 +101,20 @@ static void reference(int kernel, const uint32_t *in, uint32_t t, uint32_t out[2
         uint32_t a = in[t * 4], b = in[t * 4 + 1], c = in[t * 4 + 2];
         out[0] = ((150u > b) != (bool)(1u & (c / 1522195843u))) ? a : b + 1;
         out[1] = 0;
+    } else if (kernel == 5) {
+        uint32_t v0 = in[t * 4] + t, v1 = in[t * 4 + 1] * 3 + t, v2 = in[t * 4 + 2] * 5 + t, v3 = in[t * 4 + 3] * 7 + t;
+        uint8_t pc[8];
+        for (uint32_t j = 0; j < 8; j++) pc[j] = (uint8_t)(in[t * 4 + (j & 3)] >> j);
+        pc[v3 & 7] = 0;  // all((37, 96, 49) >= (6, 215, 58)) is false
+        for (uint32_t i = 0; i < 3; i++) {
+            int16_t sx = (int16_t)((int16_t)i & 5474), sy = (int16_t)((int16_t)v0 & 29237);
+            switch (((uint32_t)(int32_t)sx ^ (uint32_t)(int32_t)sy * 257u) & 3u) {
+            case 0: v2 += i; break;
+            case 1: v1 += 132474u; break;
+            }
+        }
+        out[0] = v1 ^ (v2 << 8);
+        out[1] = (uint32_t)pc[0] | ((uint32_t)pc[1] << 8) | ((uint32_t)pc[2] << 16) | (((uint32_t)pc[3] << 24) ^ (pc[4] * 3u + pc[5] * 5u + pc[6] * 7u + pc[7] * 11u));
     } else {
         uint32_t p0 = in[t * 4], p1 = in[t * 4 + 1] + 1, v = in[t * 4] + t, n = 0;
         while (n < 8) {
@@ -111,9 +143,9 @@ int main(int argc, char **argv) {
             words[i] = i % 7 == 0 ? (x & 0xff) : x;
         }
         id<MTLCommandQueue> queue = [dev newCommandQueue];
-        static const char *const kernels[] = {"bittest", "loopexit", "bitphi", "bitshort", "maskfirst"};
+        static const char *const kernels[] = {"bittest", "loopexit", "bitphi", "bitshort", "maskfirst", "switchbit"};
         char report[300] = "";
-        for (int k = 0; k < 5; k++) {
+        for (int k = 0; k < 6; k++) {
             id<MTLComputePipelineState> ps = [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@(kernels[k])] error:&err];
             if (!ps) return FAIL(bug, "%s: %s: %s", dev.name.UTF8String, kernels[k], err.localizedDescription.UTF8String);
             id<MTLBuffer> out = [dev newBufferWithLength:T * 8 options:MTLResourceStorageModeShared];
@@ -138,6 +170,6 @@ int main(int argc, char **argv) {
             }
         }
         if (report[0]) return FAIL(bug, "%s: %s", dev.name.UTF8String, report);
-        return PASS(bug, "%s: bit tests or'ed with other conditions, of phis and of shorts, and loops with two exits branch right", dev.name.UTF8String);
+        return PASS(bug, "%s: bit tests or'ed with other conditions, of phis and of shorts, switches on low bits, and loops with two exits branch right", dev.name.UTF8String);
     }
 }

@@ -1583,11 +1583,15 @@ static unsigned rotatesAsShifts(void *module) {
 // `(x ^ y) & 1` of shorts, from `(short2 ...) & 3` with bit 1 known zero) meet the same bug: the loop exit tested `(x ^ y)
 // & 0xffff` (seed 1932, stock files too), so they go through extract_bits of the zero-extended value, truncated back.
 // The constant mask may be either operand: constantMinMax folds `min(1u, c) & y` to `1 & y` in place (seed 2286).
+// A switch on low bits, `switch (x & 3)` (or on the zext of an 8- or 16-bit one), meets it in the lowering's bit tests
+// once a loop is unrolled and one bit is all that varies: `for (i < 3) switch ((i & 2) | (y & 1))` took the wrong case
+// (seed 4273, stock files too), so such switch values are extract_bits(x, 0, w) instead.
 // AMD_BIT_TEST_FIX=0 turns this off. Tests a15, a25, a31.
 enum { kValueConstantInt = 18, kOpcodeICmpPredicateMask = 0x3f };
 static bool containsCounter(void *v, int depth);  // below, with the opcodes it needs
 static bool singleBitPhi(void *v, void *i32, unsigned *bit);
 static void *narrowSingleBit(void *masked, void *i32, void *extract, void *extractType, void *before);
+static bool maskedSwitch(void *term, void *i32, void **x, unsigned *bits);
 static void *anyOperand(void *user, unsigned i);
 static bool constantIntValue(void *v, uint64_t *value) {
     if (subclassID(v) != kValueConstantInt || typeID(typeOf(v)) != kTypeInteger) return false;
@@ -1691,6 +1695,22 @@ static unsigned singleBitTestsAsExtracts(void *module, void *function, void *i32
             }
             void *args[3] = {operand(masked, 1 - maskOperand), api.constantIntGet(i32, (uint64_t)__builtin_ctzll(mask), false), api.constantIntGet(i32, 1, false)};
             api.replaceUsesOfWith(inst, masked, createCall(extract, extractType, args, 3, inst));
+            rewritten++;
+        }
+        char *lastNode = prevNode(insts);  // the block's terminator: a switch on low bits of a value
+        void *x;
+        unsigned bits;
+        if (lastNode != insts && maskedSwitch(lastNode - kInstructionNode, i32, &x, &bits)) {
+            char *term = lastNode - kInstructionNode;
+            if (!extract) {
+                void *params[3] = {i32, i32, i32};
+                extractType = api.functionTypeGet(i32, params, 3, false);
+                extract = api.getOrInsertFunction(module, "air.extract_bits.u.i32", strlen("air.extract_bits.u.i32"), extractType);
+                if (!extract || subclassID(extract) != kValueFunction) return rewritten;  // a bitcast: another declaration
+            }
+            void *args[3] = {typeOf(x) == i32 ? x : api.castCreate(kOpcodeZExt, x, i32, &kNoName, term), api.constantIntGet(i32, 0, false),
+                             api.constantIntGet(i32, bits, false)};
+            api.replaceUsesOfWith(term, anyOperand(term, 0), createCall(extract, extractType, args, 3, term));
             rewritten++;
         }
     }
@@ -2059,6 +2079,22 @@ static unsigned wideCompares(void *module) {
 // combiner doesn't look into. Code without 64-bit integers is left alone. AMD_WIDE_BRANCH_FIX=0 turns this off.
 // Test a21.
 enum { kOpcodeBr = 2, kOpcodeSwitch = 3, kOpcodeSExtWide = 38, kOpcodeInsertElement = 60 };
+static bool maskedSwitch(void *term, void *i32, void **x, unsigned *bits) {  // singleBitTests: switch (x & (2^w - 1))
+    if (!isInstruction(term, kOpcodeSwitch) || !hungOffUses(term)) return false;
+    void *cond = anyOperand(term, 0), *a = cond;
+    if (typeOf(cond) != i32) return false;
+    if (isInstruction(a, kOpcodeZExt) && !hungOffUses(a) && numOperands(a) == 1) a = operand(a, 0);
+    if (!isInstruction(a, kOpcodeAnd) || hungOffUses(a) || numOperands(a) != 2) return false;
+    void *type = typeOf(a);
+    uint64_t m;
+    unsigned k = constantIntValue(operand(a, 1), &m) ? 1 : constantIntValue(operand(a, 0), &m) ? 0 : 2;
+    if (k == 2 || typeID(type) != kTypeInteger || (intBits(type) != 8 && intBits(type) != 16 && intBits(type) != 32) ||
+        !m || (m & (m + 1)) || m >= (1ull << (intBits(type) - 1)))
+        return false;
+    *x = operand(a, 1 - k);
+    *bits = (unsigned)__builtin_popcountll(m);
+    return true;
+}
 static bool fromWide(void *v, void *block, int depth) {  // a 64-bit instruction or argument (not a constant) feeds v
     void *type = typeOf(v);
     unsigned char id = subclassID(v);
