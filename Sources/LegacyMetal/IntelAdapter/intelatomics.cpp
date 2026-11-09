@@ -768,7 +768,7 @@ static unsigned loopExitCopies(std::string &s) {
 // (ushort)(x >> s), merged with a 64-bit quotient in the other arm of a select, kept the quotient's low 16 bits (LONG=1
 // seed 314). Where such an AND's result is copied into a register that two or more MOVs set (the back end's phi
 // copies), or read by a min / max or a signed operation (IMAX / IMIN / UMAX / UMIN / ICMP / IDIV; IMAX took it as a
-// signed narrow value, i46), it
+// signed narrow value, i46) or a 32-bit saturating add / subtract (UADD_sat read other SIMD lanes' bytes, i48), it
 // becomes (x | bit 31) & (mask | bit 31), XOR bit 31. INTEL_NARROW_SHIFT_FIX=0 turns both off.
 static unsigned narrowShifts(std::string &s) {
     if (disabled("INTEL_NARROW_SHIFT_FIX") ||
@@ -819,10 +819,16 @@ static unsigned narrowShifts(std::string &s) {
     std::set<unsigned> intoMerge;
     for (auto &c : copies) if (moves[c.first] >= 2) intoMerge.insert(c.second);
     // registers read by a min / max or a signed operation, which takes a narrow source as a signed narrow value:
-    // IMAX r, 0, (x AND 255) returned 0 for x & 255 >= 128 (mslfuzz2 VEC=1 seed 1889, i46)
+    // IMAX r, 0, (x AND 255) returned 0 for x & 255 >= 128 (mslfuzz2 VEC=1 seed 1889, i46); and by a 32-bit saturating
+    // add / subtract: UADD_sat of two such registers came out as other SIMD lanes' bytes (VEC=1 seed 1568, i48; the
+    // narrow saturating forms are their own opcodes, UBADD / USADD / BADD / SADD, and are left alone)
+    auto saturating = [](const std::string &l) {
+        return (!l.compare(0, 6, "\tUADD ") || !l.compare(0, 6, "\tIADD ") || !l.compare(0, 6, "\tUSUB ") || !l.compare(0, 6, "\tISUB ")) &&
+               l.find("_sat.") != std::string::npos;
+    };
     for (const std::string &l : lines) {
         int skip = !l.compare(0, 6, "\tIDIV ") ? 2 : (!l.compare(0, 6, "\tIMAX ") || !l.compare(0, 6, "\tIMIN ") || !l.compare(0, 6, "\tUMAX ") ||
-                                                       !l.compare(0, 6, "\tUMIN ") || !l.compare(0, 5, "\tICMP")) ? 1 : 0;
+                                                       !l.compare(0, 6, "\tUMIN ") || !l.compare(0, 5, "\tICMP") || saturating(l)) ? 1 : 0;
         if (!skip) continue;
         int seen = 0;
         for (size_t k = 0; k + 1 < l.size(); k++)
@@ -1201,14 +1207,16 @@ static void hookedPrintUAVOperand(void *self, void *stream, unsigned reg, void *
     }
 }
 
-// Inline hook: entry -> replacement; returns a trampoline that runs the relocated prologue and continues.
-static void *hookFunction(unsigned char *entry, void *replacement) {
-    if (memcmp(entry, kPrologue, sizeof kPrologue)) return nullptr;
+// Inline hook: entry -> replacement; returns a trampoline that runs the relocated prologue and continues. The prologue
+// (whole instructions, none RIP-relative, at least the 12 bytes the jump takes) is checked byte for byte.
+static void *hookFunction(unsigned char *entry, void *replacement, const unsigned char *prologue = kPrologue,
+                          size_t length = sizeof kPrologue) {
+    if (length < 12 || memcmp(entry, prologue, length)) return nullptr;
     unsigned char *stub = (unsigned char *)mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
     if (stub == MAP_FAILED) return nullptr;
     static const unsigned char jump[] = {0xff, 0xe0};  // jmp rax
-    unsigned char *p = emit(stub, entry, sizeof kPrologue);
-    p = emitMovRax(p, entry + sizeof kPrologue);
+    unsigned char *p = emit(stub, entry, length);
+    p = emitMovRax(p, entry + length);
     emit(p, jump, sizeof jump);
     if (mprotect(stub, 4096, PROT_READ | PROT_EXEC)) return nullptr;
     vm_address_t page = (vm_address_t)entry & ~(vm_address_t)(vm_page_size - 1);
@@ -1296,8 +1304,33 @@ static void installIntoPlugin(bool redirectImport) {
     }
 }
 
+// ---- IGILUniformAnalysis::getDependency (libIGIL-Metal) ---------------------------------------------------------------
+// The uniformity analysis keeps a value -> dependency map (0 uniform ... 4 varying) that it fills in layout order and
+// then by a worklist. Its getDependency(V) returns the entry, 0 for constants and arguments, and for an instruction
+// with no entry yet reads past the end of the map's buckets: garbage, or a crash when the map ends at a page. That
+// happens: calculate_dep(BinaryOperator) matches ashr (add (shl x, c), y), c and asks for y's dependency, two levels
+// below the instruction whose operands it checked, and a recomputed instruction asks for its operands' without
+// checking them. In mslfuzz2 LONG=1 seed 741, ashr (add %v3, %t), 31 (from select (icmp slt ..., 0), 15, 0) came
+// before %t, a truncated 64-bit product, had an entry, and the compiler service crashed (the stock compiler too).
+// An instruction with no entry yet counts as varying (4); the worklist recomputes its users once it gets one.
+// INTEL_UNIFORM_DEPENDENCY_FIX=0 turns it off.
+static const unsigned char kGetDependencyPrologue[13] = {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x53, 0x48, 0x83, 0xec, 0x18};
+static unsigned (*originalGetDependency)(void *self, const void *value);
+static bool (*uniformHasDependency)(void *self, const void *value);
+static std::atomic<unsigned> uniformMisses;
+static unsigned hookedGetDependency(void *self, const void *value) {
+    if (((const unsigned char *)value)[0x18] >= 0x18 && !uniformHasDependency(self, value)) return uniformMisses++, 4;  // an instruction
+    return originalGetDependency(self, value);
+}
+
 // The back-end hooks, once libIGIL-Metal is loaded (the plugin loads it on demand).
 static bool installIntoBackEnd(void *igil) {
+    unsigned char *dependency = (unsigned char *)dlsym(igil, "_ZN4llvm19IGILUniformAnalysis13getDependencyEPKNS_5ValueE");
+    uniformHasDependency = (bool (*)(void *, const void *))dlsym(igil, "_ZN4llvm19IGILUniformAnalysis13hasDependencyEPKNS_5ValueE");
+    if (dependency && uniformHasDependency && !disabled("INTEL_UNIFORM_DEPENDENCY_FIX"))
+        originalGetDependency = (unsigned (*)(void *, const void *))hookFunction(dependency, (void *)hookedGetDependency,
+                                                                                 kGetDependencyPrologue, sizeof kGetDependencyPrologue);
+    if (logging()) fprintf(stderr, "[inteltex] libIGIL-Metal: getDependency %s\n", originalGetDependency ? "hooked" : "NOT hooked");
     unsigned char *lower = (unsigned char *)dlsym(igil, "_ZNK4llvm18IGILTargetLowering16LowerImageAtomicEjNS_7SDValueERNS_12SelectionDAGE");
     unsigned char *print = (unsigned char *)dlsym(igil, "_ZN4llvm14IGILUAVSurface12PrintOperandERNS_11raw_ostreamEjPNS_16IGILRegisterInfoE");
     constantValue = (uint64_t(*)(const void *, const SDValue &, void *, bool &))dlsym(
@@ -4213,7 +4246,10 @@ static int hookedRun(void *self, LLVMModuleRef module) {
             if (FILE *f = fopen(path, "w")) { char *text = LLVMPrintModuleToString(module); fputs(text, f); LLVMDisposeMessage(text); fclose(f); }
         }
     }
-    return passManagerRun(self, module);
+    int result = passManagerRun(self, module);
+    if (unsigned n = uniformMisses.exchange(0); n && logging())
+        fprintf(stderr, "[inteltex] uniformity analysis: %u dependency read(s) of an instruction it had not reached\n", n);
+    return result;
 }
 
 __attribute__((constructor)) static void installFromConstructor() {
