@@ -119,6 +119,9 @@ LLVMValueRef LLVMGetFirstInstruction(LLVMBasicBlockRef);
 LLVMValueRef LLVMGetNextInstruction(LLVMValueRef);
 LLVMValueRef LLVMIsALoadInst(LLVMValueRef);
 LLVMValueRef LLVMIsAAllocaInst(LLVMValueRef);
+LLVMValueRef LLVMBuildAlloca(LLVMBuilderRef, LLVMTypeRef, const char *);
+LLVMTypeRef LLVMArrayType(LLVMTypeRef, unsigned);
+LLVMTypeRef LLVMGetAllocatedType(LLVMValueRef);
 LLVMValueRef LLVMIsAGetElementPtrInst(LLVMValueRef);
 LLVMValueRef LLVMIsABitCastInst(LLVMValueRef);
 LLVMValueRef LLVMIsAConstant(LLVMValueRef);
@@ -571,6 +574,47 @@ static unsigned redundantNarrowMasks(std::string &s) {
     return n;
 }
 
+// ---- sign extensions, in the IGIL text --------------------------------------------------------------------------------
+// iCBE keeps the result of STOI / BTOI (a short / char sign-extended to 32 bits) in a 16- / 8-bit register and extends it
+// where it is read, and a merge loses that: uint(short2(...).y) XORed into a vector lane, which a store at a variable
+// index then merged (MOV_CND) with a 32-bit value, read back zero-extended, 0x0000fe13 for 0xfffffe13 (mslfuzz2 VEC=1
+// seed 1865, i45). They become SHL 16 / SAR 16 (24 for bytes), which iCBE computes on 32 bits. INTEL_SIGN_EXTEND_FIX=0
+// turns it off.
+static unsigned signExtensions(std::string &s) {
+    if (disabled("INTEL_SIGN_EXTEND_FIX") || (s.find("\tSTOI ") == std::string::npos && s.find("\tBTOI ") == std::string::npos)) return 0;
+    size_t temps = s.find("\tDCL_TEMPS r0..r");
+    if (temps == std::string::npos) return 0;
+    unsigned last = (unsigned)strtoul(s.c_str() + temps + 16, nullptr, 10);
+    std::vector<std::string> lines;
+    for (size_t pos = 0; pos <= s.size();) {
+        size_t eol = s.find('\n', pos);
+        if (eol == std::string::npos) eol = s.size();
+        lines.push_back(s.substr(pos, eol - pos));
+        pos = eol + 1;
+    }
+    unsigned n = 0;
+    for (std::string &l : lines) {
+        unsigned d, src;
+        char op[8];
+        int at = 0;
+        if (sscanf(l.c_str(), "\t%7[A-Z] r%u.x, r%u.x;%n", op, &d, &src, &at) != 3 || at != (int)l.size()) continue;
+        unsigned shift = !strcmp(op, "STOI") ? 16 : !strcmp(op, "BTOI") ? 24 : 0;
+        if (!shift) continue;
+        unsigned up = ++last;
+        char buffer[160];
+        snprintf(buffer, sizeof buffer, "\tSHL r%u.x, r%u.x, %u;\n\tSAR r%u.x, r%u.x, %u;", up, src, shift, d, up, shift);
+        l = buffer;
+        n++;
+    }
+    if (!n) return 0;
+    std::string out;
+    for (size_t i = 0; i < lines.size(); i++) { out += lines[i]; if (i + 1 < lines.size()) out += '\n'; }
+    size_t numberAt = out.find("\tDCL_TEMPS r0..r") + 16, numberEnd = out.find_first_not_of("0123456789", numberAt);
+    out.replace(numberAt, numberEnd - numberAt, std::to_string(last));
+    s = out;
+    return n;
+}
+
 // ---- negations feeding a signed divide, in the IGIL text ------------------------------------------------------------
 // i26's bug again, from a negation the IR doesn't show: the front end wrote (short)(-(int)v) % d as (v * -65536) >> 16,
 // and the back end, knowing v was 0 or 1, made that IADD r, 0, -v; iCBE folds that into the IDIV as a source modifier
@@ -723,7 +767,9 @@ static unsigned loopExitCopies(std::string &s) {
 // 32 bits wide (the shift count is masked to 5 bits on both). An AND with an immediate mask below 65536 is narrow too:
 // (ushort)(x >> s), merged with a 64-bit quotient in the other arm of a select, kept the quotient's low 16 bits (LONG=1
 // seed 314). Where such an AND's result is copied into a register that two or more MOVs set (the back end's phi
-// copies), it becomes (x | bit 31) & (mask | bit 31), XOR bit 31. INTEL_NARROW_SHIFT_FIX=0 turns both off.
+// copies), or read by a min / max or a signed operation (IMAX / IMIN / UMAX / UMIN / ICMP / IDIV; IMAX took it as a
+// signed narrow value, i46), it
+// becomes (x | bit 31) & (mask | bit 31), XOR bit 31. INTEL_NARROW_SHIFT_FIX=0 turns both off.
 static unsigned narrowShifts(std::string &s) {
     if (disabled("INTEL_NARROW_SHIFT_FIX") ||
         (s.find("\tSHR ") == std::string::npos && s.find("\tSAR ") == std::string::npos && s.find("\tAND ") == std::string::npos))
@@ -772,6 +818,17 @@ static unsigned narrowShifts(std::string &s) {
     }
     std::set<unsigned> intoMerge;
     for (auto &c : copies) if (moves[c.first] >= 2) intoMerge.insert(c.second);
+    // registers read by a min / max or a signed operation, which takes a narrow source as a signed narrow value:
+    // IMAX r, 0, (x AND 255) returned 0 for x & 255 >= 128 (mslfuzz2 VEC=1 seed 1889, i46)
+    for (const std::string &l : lines) {
+        int skip = !l.compare(0, 6, "\tIDIV ") ? 2 : (!l.compare(0, 6, "\tIMAX ") || !l.compare(0, 6, "\tIMIN ") || !l.compare(0, 6, "\tUMAX ") ||
+                                                       !l.compare(0, 6, "\tUMIN ") || !l.compare(0, 5, "\tICMP")) ? 1 : 0;
+        if (!skip) continue;
+        int seen = 0;
+        for (size_t k = 0; k + 1 < l.size(); k++)
+            if (l[k] == 'r' && isdigit((unsigned char)l[k + 1]) && (k == 0 || !isalnum((unsigned char)l[k - 1])))
+                if (seen++ >= skip) intoMerge.insert((unsigned)strtoul(l.c_str() + k + 1, nullptr, 10));
+    }
     auto small = [&](const std::string &operand) {
         long value;
         unsigned r;
@@ -1006,6 +1063,7 @@ extern "C" void intelatomicsFixIGIL(std::string *text) {
     if (unsigned n = narrowShifts(s); n && logging()) fprintf(stderr, "[inteltex] %u SHR / SAR of a narrow value done on 32 bits\n", n);
     if (unsigned n = loopExitCopies(s); n && logging()) fprintf(stderr, "[inteltex] %u loop-carried copies moved after the loop's BREAK_CND\n", n);
     if (unsigned n = negatedDivideOperands(s); n && logging()) fprintf(stderr, "[inteltex] %u negation(s) feeding an IDIV done as XOR and add\n", n);
+    if (unsigned n = signExtensions(s); n && logging()) fprintf(stderr, "[inteltex] %u STOI / BTOI done as shift pairs\n", n);
     if (unsigned n = sampleLodOperands(s); n && logging()) fprintf(stderr, "[inteltex] %u explicit-LOD sample(s) given the register holding the LOD\n", n);
     if (getenv("INTELTEX_DUMP")) {  // debugging: the IGIL text after the fixes above
         static int serial;
@@ -3283,6 +3341,77 @@ static bool onlyDirectAccesses(LLVMValueRef pointer, int depth = 0) {
     return true;
 }
 
+// ---- private arrays of bytes and halfwords done on 32-bit words --------------------------------------------------
+// A private uchar / ushort array (uchar pc[8]) is stored with truncating stores and read with extending loads, and after
+// i07's and i35's rewrites the back end forwarded a stored 32-bit value to such a load without masking it, so a pc[i]
+// read in a narrow min / max or division kept the bits above its byte (mslfuzz2 VEC=1 seed 1497, i47). An array of 8-
+// or 16-bit integers that only GEPs into its elements reach, with only loads and stores of the element type behind
+// them, becomes an array of i32: stores zero-extend, loads truncate. Runs before i07, which then rewrites the 32-bit
+// array. INTEL_NARROW_PRIVATE_ARRAY_FIX=0 turns it off.
+static unsigned widenNarrowPrivateArrays(LLVMModuleRef module) {
+    if (disabled("INTEL_NARROW_PRIVATE_ARRAY_FIX") || runtimeNamesBound(module)) return 0;
+    enum { kArrayKind = 11 };
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    std::vector<LLVMValueRef> allocas;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst))
+                if (LLVMIsAAllocaInst(inst)) allocas.push_back(inst);
+    LLVMBuilderRef b = nullptr;
+    unsigned fixed = 0;
+    for (LLVMValueRef alloca : allocas) {
+        LLVMTypeRef array = LLVMGetAllocatedType(alloca);
+        if (LLVMGetTypeKind(array) != kArrayKind) continue;
+        LLVMTypeRef element = LLVMGetElementType(array);
+        if (LLVMGetTypeKind(element) != kTypeKindInteger) continue;
+        unsigned width = LLVMGetIntTypeWidth(element), length = LLVMGetArrayLength(array);
+        if ((width != 8 && width != 16) || length < 1 || length > 64) continue;
+        // every use: GEP alloca, 0, i (two indices, the first 0) whose users are loads / stores of the element type
+        std::vector<LLVMValueRef> geps;
+        bool plain = true;
+        for (LLVMUseRef u = LLVMGetFirstUse(alloca); u && plain; u = LLVMGetNextUse(u)) {
+            LLVMValueRef gep = LLVMGetUser(u);
+            if (!LLVMIsAGetElementPtrInst(gep) || LLVMGetOperand(gep, 0) != alloca || LLVMGetNumOperands(gep) != 3 ||
+                !LLVMIsAConstantInt(LLVMGetOperand(gep, 1)) || LLVMConstIntGetZExtValue(LLVMGetOperand(gep, 1)) != 0) { plain = false; break; }
+            for (LLVMUseRef v = LLVMGetFirstUse(gep); v && plain; v = LLVMGetNextUse(v)) {
+                LLVMValueRef user = LLVMGetUser(v);
+                if (LLVMIsALoadInst(user)) plain = LLVMTypeOf(user) == element;
+                else if (LLVMIsAStoreInst(user)) plain = LLVMGetOperand(user, 1) == gep && LLVMTypeOf(LLVMGetOperand(user, 0)) == element;
+                else plain = false;
+            }
+            geps.push_back(gep);
+        }
+        if (!plain || geps.empty()) continue;
+        if (!b) b = LLVMCreateBuilderInContext(context);
+        LLVMPositionBuilderBefore(b, alloca);
+        LLVMValueRef wide = LLVMBuildAlloca(b, LLVMArrayType(i32, length), "");
+        LLVMSetAlignment(wide, 4);
+        for (LLVMValueRef gep : geps) {
+            LLVMPositionBuilderBefore(b, gep);
+            LLVMValueRef indices[2] = {LLVMGetOperand(gep, 1), LLVMGetOperand(gep, 2)};
+            LLVMValueRef slot = LLVMBuildGEP(b, wide, indices, 2, "");
+            std::vector<LLVMValueRef> users;
+            for (LLVMUseRef v = LLVMGetFirstUse(gep); v; v = LLVMGetNextUse(v)) users.push_back(LLVMGetUser(v));
+            for (LLVMValueRef user : users) {
+                LLVMPositionBuilderBefore(b, user);
+                if (LLVMIsALoadInst(user)) {
+                    LLVMValueRef word = LLVMBuildLoad(b, slot, "");
+                    LLVMReplaceAllUsesWith(user, LLVMBuildTrunc(b, word, element, ""));
+                } else {
+                    LLVMBuildStore(b, LLVMBuildZExt(b, LLVMGetOperand(user, 0), i32, ""), slot);
+                }
+                LLVMInstructionEraseFromParent(user);
+            }
+            LLVMInstructionEraseFromParent(gep);
+        }
+        LLVMInstructionEraseFromParent(alloca);
+        fixed++;
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
 static unsigned selectPrivateArrayIndices(LLVMModuleRef module) {
     const char *setting = getenv("INTEL_PRIVATE_ARRAY_FIX");
     if (setting && !strcmp(setting, "0")) return 0;
@@ -4050,6 +4179,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] %u get_num_samples() call(s) replaced by the pipeline's sample count\n", n);
         n = splitPrivatePointerSelects(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u load(s)/store(s) through a select of private pointers split per pointer\n", n);
+        n = widenNarrowPrivateArrays(module);  // before selectPrivateArrayIndices, which then rewrites the i32 arrays
+        if (n && logging()) fprintf(stderr, "[inteltex] %u private array(s) of bytes / halfwords done on 32-bit words\n", n);
         n = selectPrivateArrayIndices(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u variable-index private array access(es) done at constant indices\n", n);
         n = volatilizePunnedAccesses(module);
