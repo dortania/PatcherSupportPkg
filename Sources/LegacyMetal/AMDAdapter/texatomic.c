@@ -1592,13 +1592,17 @@ static unsigned rotatesAsShifts(void *module) {
 // The constant mask may be either operand: constantMinMax folds `min(1u, c) & y` to `1 & y` in place (seed 2286).
 // A switch on low bits, `switch (x & 3)` (or on the zext of an 8- or 16-bit one), meets it in the lowering's bit tests
 // once a loop is unrolled and one bit is all that varies: `for (i < 3) switch ((i & 2) | (y & 1))` took the wrong case
-// (seed 4273, stock files too), so such switch values are extract_bits(x, 0, w) instead.
-// AMD_BIT_TEST_FIX=0 turns this off. Tests a15, a25, a31.
+// (seed 4273, stock files too), so such switch values are extract_bits(x, 0, w) instead. A single bit compared with
+// another 0 / 1 value meets it too: `(uint(bool(1u & v)) % (select(i, 65536u, (i & 2) != 0) | 1u)) == uint(!(a > b))`
+// in an unrolled loop is `(v & 1) == bool` in its last pass, and the `& 1` was dropped (seed 3010, stock files too),
+// so in `x == b` / `x != b` with b a bool, the `y & 1` in x (directly or under an unsigned division, remainder or
+// right shift) goes through extract_bits(y, 0, 1). AMD_BIT_TEST_FIX=0 turns this off. Tests a15, a25, a31.
 enum { kValueConstantInt = 18, kOpcodeICmpPredicateMask = 0x3f };
 static bool containsCounter(void *v, int depth);  // below, with the opcodes it needs
 static bool singleBitPhi(void *v, void *i32, unsigned *bit);
 static void *narrowSingleBit(void *masked, void *i32, void *extract, void *extractType, void *before);
 static bool maskedSwitch(void *term, void *i32, void **x, unsigned *bits);
+static bool bitAgainstBool(void *cmp, void *i32, void **user, void **bitAnd);
 static void *anyOperand(void *user, unsigned i);
 static bool constantIntValue(void *v, uint64_t *value) {
     if (subclassID(v) != kValueConstantInt || typeID(typeOf(v)) != kTypeInteger) return false;
@@ -1619,6 +1623,22 @@ static unsigned singleBitTestsAsExtracts(void *module, void *function, void *i32
             uint64_t zero, mask;
             void *masked = operand(inst, 0);
             unsigned bit;
+            void *bitUser, *bitAnd;
+            if ((predicate == kPredicateEQ || predicate == kPredicateNE) && typeOf(masked) == i32 &&
+                bitAgainstBool(inst, i32, &bitUser, &bitAnd)) {  // a single bit against a bool: protect its `y & 1`
+                if (!extract) {
+                    void *params[3] = {i32, i32, i32};
+                    extractType = api.functionTypeGet(i32, params, 3, false);
+                    extract = api.getOrInsertFunction(module, "air.extract_bits.u.i32", strlen("air.extract_bits.u.i32"), extractType);
+                    if (!extract || subclassID(extract) != kValueFunction) return rewritten;  // a bitcast: another declaration
+                }
+                uint64_t one;
+                unsigned k1 = constantIntValue(operand(bitAnd, 1), &one) && one == 1 ? 1 : 0;
+                void *args[3] = {operand(bitAnd, 1 - k1), api.constantIntGet(i32, 0, false), api.constantIntGet(i32, 1, false)};
+                api.replaceUsesOfWith(bitUser, bitAnd, createCall(extract, extractType, args, 3, bitUser));
+                rewritten++;
+                continue;
+            }
             if ((predicate == kPredicateEQ || predicate == kPredicateNE) && constantIntValue(operand(inst, 1), &zero) && !zero &&
                 singleBitPhi(masked, i32, &bit)) {
                 if (!extract) {
@@ -1864,6 +1884,27 @@ static void *narrowSingleBit(void *masked, void *i32, void *extract, void *extra
     void *args[3] = {api.castCreate(kOpcodeZExt, operand(masked, 1 - k), i32, &kNoName, before),
                      api.constantIntGet(i32, (uint64_t)__builtin_ctzll(m), false), api.constantIntGet(i32, 1, false)};
     return api.castCreate(kOpcodeTrunc, createCall(extract, extractType, args, 3, before), type, &kNoName, before);
+}
+// singleBitTests: `x == b` / `x != b` with b a zero-extended bool and x a `y & 1`, or an unsigned division, remainder or
+// right shift of one (up to three deep); gives the and and the instruction that uses it
+static bool bitAgainstBool(void *cmp, void *i32, void **user, void **bitAnd) {
+    for (unsigned side = 0; side < 2; side++) {
+        void *other = operand(cmp, 1 - side), *u = cmp, *v = operand(cmp, side);
+        if (!isInstruction(other, kOpcodeZExt) || hungOffUses(other) || numOperands(other) != 1 || intBits(typeOf(operand(other, 0))) != 1)
+            continue;
+        for (int depth = 0; depth < 3 && (isInstruction(v, kOpcodeUDiv) || isInstruction(v, kOpcodeURem) || isInstruction(v, kOpcodeLShr)) &&
+                            !hungOffUses(v) && numOperands(v) == 2; depth++) {
+            u = v;
+            v = operand(v, 0);
+        }
+        uint64_t one;
+        if (!isInstruction(v, kOpcodeAnd) || hungOffUses(v) || numOperands(v) != 2 || typeOf(v) != i32) continue;
+        if (!(constantIntValue(operand(v, 1), &one) && one == 1) && !(constantIntValue(operand(v, 0), &one) && one == 1)) continue;
+        *user = u;
+        *bitAnd = v;
+        return true;
+    }
+    return false;
 }
 static bool singleBitPhi(void *v, void *i32, unsigned *bit) {  // singleBitTests: phi [x & 2^k], [y & 2^k], ...
     if (!isInstruction(v, kOpcodePHI) || typeOf(v) != i32 || !numOperands(v)) return false;

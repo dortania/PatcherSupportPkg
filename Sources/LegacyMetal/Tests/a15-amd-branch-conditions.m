@@ -20,6 +20,9 @@
 //   switchbit: for (i < 3) { s = short2(short(i), short(a)) & short2(5474, 29237); switch ((uint(s.x) ^ uint(s.y) * 257)
 //             & 3) .. }  Unrolled, only bit 0 of the switch value varies for i = 0 and 1, and the lowering's bit test
 //             took the wrong case (seed 4273, stock files too): switches on low bits go through extract_bits
+//   bitbool:  for (i < 3) if (((c & 1) % (i | 1)) == uint(!((a ^ (t << i)) > b))) ..  The bit, divided, compared with a
+//             bool: libAMDIL902 drops the & 1 here too (seed 3010, stock files too), so a single bit compared with a
+//             zero-extended bool, directly or under an unsigned division, remainder or right shift, is an extract
 // 256 threads each, checked against the same code on the CPU. Stock OCLP: FAIL. Fixed: PASS.
 // Argument: GPU name substring (default: AMD).
 #import "repro.h"
@@ -69,6 +72,13 @@ static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n
     "    }\n"
     "    out[t * 2u] = v1 ^ (v2 << 8);\n"
     "    out[t * 2u + 1u] = uint(pc[0]) | (uint(pc[1]) << 8) | (uint(pc[2]) << 16) | (uint(pc[3]) << 24) ^ (uint(pc[4]) * 3u + uint(pc[5]) * 5u + uint(pc[6]) * 7u + uint(pc[7]) * 11u);\n"
+    "}\n"
+    "kernel void bitbool(device const uint *in [[buffer(0)]], device uint *out [[buffer(1)]], uint t [[thread_position_in_grid]]) {\n"
+    "    uint a = in[t * 4u] + t, b = in[t * 4u + 1u] * 3u + t, c = in[t * 4u + 2u] * 5u + t, d = in[t * 4u + 3u] * 7u + t;\n"
+    "    uint r = in[t * 4u + 1u] * 11u + t;\n"
+    "    for (uint i = 0u; i < 3u; i++)\n"
+    "        if (((c & 1u) % (i | 1u)) == uint(!((a ^ (t << i)) > b))) r = ~clz(a - d);\n"
+    "    out[t * 2u] = r; out[t * 2u + 1u] = 0u;\n"
     "}\n";
 
 static void reference(int kernel, const uint32_t *in, uint32_t t, uint32_t out[2]) {
@@ -115,6 +125,13 @@ static void reference(int kernel, const uint32_t *in, uint32_t t, uint32_t out[2
         }
         out[0] = v1 ^ (v2 << 8);
         out[1] = (uint32_t)pc[0] | ((uint32_t)pc[1] << 8) | ((uint32_t)pc[2] << 16) | (((uint32_t)pc[3] << 24) ^ (pc[4] * 3u + pc[5] * 5u + pc[6] * 7u + pc[7] * 11u));
+    } else if (kernel == 6) {
+        uint32_t a = in[t * 4] + t, b = in[t * 4 + 1] * 3 + t, c = in[t * 4 + 2] * 5 + t, d = in[t * 4 + 3] * 7 + t;
+        uint32_t r = in[t * 4 + 1] * 11 + t;
+        for (uint32_t i = 0; i < 3; i++)
+            if (((c & 1) % (i | 1)) == (uint32_t)!((a ^ (t << i)) > b)) r = ~(uint32_t)(a - d ? __builtin_clz(a - d) : 32);
+        out[0] = r;
+        out[1] = 0;
     } else {
         uint32_t p0 = in[t * 4], p1 = in[t * 4 + 1] + 1, v = in[t * 4] + t, n = 0;
         while (n < 8) {
@@ -143,9 +160,9 @@ int main(int argc, char **argv) {
             words[i] = i % 7 == 0 ? (x & 0xff) : x;
         }
         id<MTLCommandQueue> queue = [dev newCommandQueue];
-        static const char *const kernels[] = {"bittest", "loopexit", "bitphi", "bitshort", "maskfirst", "switchbit"};
+        static const char *const kernels[] = {"bittest", "loopexit", "bitphi", "bitshort", "maskfirst", "switchbit", "bitbool"};
         char report[300] = "";
-        for (int k = 0; k < 6; k++) {
+        for (int k = 0; k < 7; k++) {
             id<MTLComputePipelineState> ps = [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@(kernels[k])] error:&err];
             if (!ps) return FAIL(bug, "%s: %s: %s", dev.name.UTF8String, kernels[k], err.localizedDescription.UTF8String);
             id<MTLBuffer> out = [dev newBufferWithLength:T * 8 options:MTLResourceStorageModeShared];
@@ -170,6 +187,6 @@ int main(int argc, char **argv) {
             }
         }
         if (report[0]) return FAIL(bug, "%s: %s", dev.name.UTF8String, report);
-        return PASS(bug, "%s: bit tests or'ed with other conditions, of phis and of shorts, switches on low bits, and loops with two exits branch right", dev.name.UTF8String);
+        return PASS(bug, "%s: bit tests or'ed with other conditions, of phis and of shorts, against bools, switches on low bits, and loops with two exits branch right", dev.name.UTF8String);
     }
 }
