@@ -792,6 +792,8 @@ static unsigned narrowShifts(std::string &s) {
     };
     std::map<unsigned, long> bound;  // register -> the immediate (the value, or the mask)
     std::map<unsigned, int> definitions;
+    std::set<unsigned> widened;  // USTOI / UBTOI results: a 16- / 8-bit value zero-extended (VEC=1 seed 3325, i54: the
+                                 // shift of USTOI of a constant 7 by 8 came out 7, so (ushort)7 << 5 >> 13 gave 7, not 0)
     for (const std::string &l : lines) {
         unsigned d;
         char source[64], mask[32];
@@ -799,6 +801,9 @@ static unsigned narrowShifts(std::string &s) {
         long value;
         if (sscanf(l.c_str(), "\t%*[A-Za-z_0-9.] r%u", &d) != 1) continue;
         definitions[d]++;
+        if ((!l.compare(0, 7, "\tUSTOI ") || !l.compare(0, 7, "\tUBTOI ")) && sscanf(l.c_str() + 7, "r%u.x, %63[^;];%n", &d, source, &at) == 2 &&
+            at == (int)l.size() - 7)
+            widened.insert(d);
         if (sscanf(l.c_str(), "\tMOV r%u.x, %31[-0-9A-Fa-fx];%n", &d, mask, &at) == 2 && at == (int)l.size() && immediate(mask, value))
             bound[d] = value;
         else if (sscanf(l.c_str(), "\tAND r%u.x, %63[^,], %31[-0-9A-Fa-fx];%n", &d, source, mask, &at) == 3 && at == (int)l.size() &&
@@ -873,7 +878,7 @@ static unsigned narrowShifts(std::string &s) {
         unsigned r;
         int at = 0;
         if (sscanf(operand.c_str(), "r%u.x%n", &r, &at) == 1 && at == (int)operand.size())
-            return definitions[r] == 1 && bound.count(r) && bound[r] >= 0 && bound[r] < 65536;
+            return definitions[r] == 1 && ((bound.count(r) && bound[r] >= 0 && bound[r] < 65536) || widened.count(r));
         return immediate(operand.c_str(), value) && value >= 0 && value < 65536;
     };
     unsigned n = 0;
