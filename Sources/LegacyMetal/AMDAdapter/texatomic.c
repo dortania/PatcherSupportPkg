@@ -2792,6 +2792,59 @@ static unsigned plainUnsignedAverages(void *module) {
     return rewritten;
 }
 
+// The high 32 bits of a 64-bit mul_hi come out without the high half of one factor when the other's high half is a
+// large power of two: `uint(mulhi(ulong(x >> 16) << 32 | y, ulong(0x80000000u) << 32 | z) >> 32)` gave the value of
+// mulhi(ulong(y), ...), with stock files too, and 2^30 or a high half from `x >> 1` likewise (found by fuzzing with loop
+// counters in expressions, seed 5225); a32's average was most likely the same bug, its other factor's high half a 4.
+// Written out of 32-bit pieces in the shader the product is right; built from 64-bit multiplies here it isn't (the
+// faulty lowering is libAMDIL902's 64-bit multiply), so every scalar unsigned 64-bit mul_hi is built from the four
+// 32 x 32 bit products of the halves, each a 32-bit mul and mul_hi, summed with the middle terms' carries in 64 bits.
+// AMD_WIDE_MULHI_FIX=0 turns this off. Test a34.
+static unsigned wideMulHi(void *module) {
+    const char *setting = getenv("AMD_WIDE_MULHI_FIX");
+    if ((setting && !strcmp(setting, "0")) || !api.binaryCreate || !api.castCreate || !api.getFunction || !api.functionTypeGet ||
+        !api.getOrInsertFunction)
+        return 0;
+    void *function = api.getFunction(module, "air.mul_hi.u.i64", strlen("air.mul_hi.u.i64"));
+    if (!function) return 0;
+    unsigned rewritten = 0;
+    void *mulHi32 = NULL, *mulHi32Type = NULL;
+    for (void *use = firstUse(function); use;) {
+        void *call = api.getUser(use);
+        use = nextUse(use);
+        if (!isCall(call, function, 3)) continue;
+        void *a = operand(call, 0), *b = operand(call, 1), *i64 = typeOf(call);
+        if (typeOf(a) != i64 || typeOf(b) != i64 || typeID(i64) != kTypeInteger || intBits(i64) != 64) continue;
+        void *i32 = api.getInt32Ty(api.getContext(call));
+        if (!mulHi32) {
+            void *params[2] = {i32, i32};
+            mulHi32Type = api.functionTypeGet(i32, params, 2, false);
+            mulHi32 = api.getOrInsertFunction(module, "air.mul_hi.u.i32", strlen("air.mul_hi.u.i32"), mulHi32Type);
+            if (!mulHi32 || subclassID(mulHi32) != kValueFunction) return rewritten;  // a bitcast: another declaration
+        }
+        void *k32 = api.constantIntGet(i64, 32, false);
+        #define OP(o, x, y) api.binaryCreate(o, x, y, &kNoName, call)
+        #define CAST(o, x, t) api.castCreate(o, x, t, &kNoName, call)
+        #define HI(x, y) ({ void *_args[2] = {x, y}; createCall(mulHi32, mulHi32Type, _args, 2, call); })
+        // the halves, and each 32 x 32 bit product as a 32-bit mul (low) and mul_hi (high): no 64-bit multiply
+        void *aL = CAST(kOpcodeTrunc, a, i32), *aH = CAST(kOpcodeTrunc, OP(kOpcodeLShr, a, k32), i32);
+        void *bL = CAST(kOpcodeTrunc, b, i32), *bH = CAST(kOpcodeTrunc, OP(kOpcodeLShr, b, k32), i32);
+        void *p0h = HI(aL, bL), *p1l = OP(kOpcodeMul2, aL, bH), *p1h = HI(aL, bH), *p2l = OP(kOpcodeMul2, aH, bL), *p2h = HI(aH, bL);
+        void *p3l = OP(kOpcodeMul2, aH, bH), *p3h = HI(aH, bH);
+        void *mid = OP(kOpcodeAdd, OP(kOpcodeAdd, CAST(kOpcodeZExt, p0h, i64), CAST(kOpcodeZExt, p1l, i64)), CAST(kOpcodeZExt, p2l, i64));
+        void *p3 = OP(kOpcodeOrBits, OP(kOpcodeShl, CAST(kOpcodeZExt, p3h, i64), k32), CAST(kOpcodeZExt, p3l, i64));
+        void *high = OP(kOpcodeAdd, OP(kOpcodeAdd, OP(kOpcodeAdd, p3, CAST(kOpcodeZExt, p1h, i64)), CAST(kOpcodeZExt, p2h, i64)),
+                        OP(kOpcodeLShr, mid, k32));
+        #undef OP
+        #undef CAST
+        #undef HI
+        api.replaceAllUsesWith(call, high);
+        api.eraseFromParent(call);
+        rewritten++;
+    }
+    return rewritten;
+}
+
 static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *c, void *d, void *e) {
     if (module && resolveAPI()) {
         static bool optionsParsed;  // TEXATOMIC_LLVM_ARGS="-print-after-all ...": libAMDIL902's LLVM options (diagnostics)
@@ -2830,6 +2883,8 @@ static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *
         if (rolled && logging()) fprintf(stderr, "[texatomic] %u outer loop(s) around divergent loops kept rolled\n", rolled);
         unsigned averages = plainUnsignedAverages(module);
         if (averages && logging()) fprintf(stderr, "[texatomic] %u unsigned average(s) built with bitwise arithmetic\n", averages);
+        unsigned mulHis = wideMulHi(module);
+        if (mulHis && logging()) fprintf(stderr, "[texatomic] %u 64-bit mul_hi call(s) built from 32-bit halves\n", mulHis);
         unsigned zextShifts = zextShiftHalves(module);
         if (zextShifts && logging()) fprintf(stderr, "[texatomic] %u zext shift(s) built from halves\n", zextShifts);
         unsigned constants = constantMinMax(module);
