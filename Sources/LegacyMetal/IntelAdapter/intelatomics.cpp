@@ -623,8 +623,13 @@ static unsigned signExtensions(std::string &s) {
 // ---- negations feeding a signed divide, in the IGIL text ------------------------------------------------------------
 // i26's bug again, from a negation the IR doesn't show: the front end wrote (short)(-(int)v) % d as (v * -65536) >> 16,
 // and the back end, knowing v was 0 or 1, made that IADD r, 0, -v; iCBE folds that into the IDIV as a source modifier
-// and drops it, so the remainder came out as v % d in every thread (mslfuzz2 VEC=1 seed 917). An IDIV operand set by
-// IADD rA, rZero, -rX becomes XOR rT, rX, -1 and IADD rA, rT, 1, which iCBE leaves alone. INTEL_SIGNED_DIV_NEG_FIX=0
+// and drops it, so the remainder came out as v % d in every thread (mslfuzz2 VEC=1 seed 917). Such an IADD rA, rZero, -rX
+// becomes XOR rT, rX, -1 and IADD rA, rT, 1, which iCBE leaves alone. The negation also reaches the divide through
+// copies, merges included (v2 = -(int)x in one case of a switch, the loop that divides it made a subroutine reading a
+// copy of a copy: mslfuzz2 LONG=1 seed 2592, i60), and through operations iCBE folds into copies: v0 = -(int)(x &
+// 0x7fffffff); v0 -= min(mulhi(..., 0u), 0u) reached the back end as IADD r80, r78, -r79 with r79 = UMIN r19, r19 of
+// zeros, and (int)v0 / d dropped the sign (mslfuzz2 plain seed 7727, i61; the stock compiler is wrong in all three). So
+// every such negation in a shader with an IDIV is rewritten, whatever leads it to the divide. INTEL_SIGNED_DIV_NEG_FIX=0
 // turns it off with i26.
 static unsigned negatedDivideOperands(std::string &s) {
     if (disabled("INTEL_SIGNED_DIV_NEG_FIX") || s.find("\tIDIV ") == std::string::npos) return 0;
@@ -640,37 +645,19 @@ static unsigned negatedDivideOperands(std::string &s) {
     }
     std::map<unsigned, int> definitions;
     std::set<unsigned> zeros;  // registers whose only definition is MOV rN.x, 0
-    std::set<unsigned> divided;  // registers read as an IDIV operand (IDIV rQ.x, rR.x, rA.x, rB.x)
-    std::multimap<unsigned, unsigned> copiedFrom;  // MOV rD.x, rS.x: D <- S
     for (const std::string &l : lines) {
-        unsigned d, q, r, a, b;
-        int at = 0;
-        if (sscanf(l.c_str(), "\tIDIV r%u.x, r%u.x, r%u.x, r%u.x;%n", &q, &r, &a, &b, &at) == 4 && at == (int)l.size())
-            divided.insert(a), divided.insert(b);
-        at = 0;
-        if (sscanf(l.c_str(), "\tMOV r%u.x, r%u.x;%n", &d, &q, &at) == 2 && at == (int)l.size()) copiedFrom.insert({d, q});
+        unsigned d;
         if (sscanf(l.c_str(), "\t%*[A-Za-z_0-9.] r%u", &d) != 1) continue;
         definitions[d]++;
-        at = 0;
+        int at = 0;
         if (sscanf(l.c_str(), "\tMOV r%u.x, 0;%n", &d, &at) == 1 && at == (int)l.size()) zeros.insert(d);
-    }
-    // the negation can also reach the divide through copies, merges included: v2 = -(int)x in one case of a switch, the
-    // loop that divides it (IDIV r132, r133, r20, 65535) made a subroutine reading a copy of a copy (mslfuzz2 LONG=1
-    // seed 2592, i60; the stock compiler is wrong too)
-    std::vector<unsigned> work(divided.begin(), divided.end());
-    while (!work.empty()) {
-        unsigned r = work.back();
-        work.pop_back();
-        auto range = copiedFrom.equal_range(r);
-        for (auto it = range.first; it != range.second; ++it)
-            if (divided.insert(it->second).second) work.push_back(it->second);
     }
     unsigned n = 0;
     for (std::string &l : lines) {
         unsigned d, z, x;
         int at = 0;
         if (sscanf(l.c_str(), "\tIADD r%u.x, r%u.x, -r%u.x;%n", &d, &z, &x, &at) != 3 || at != (int)l.size()) continue;
-        if (!divided.count(d) || definitions[d] != 1 || !zeros.count(z) || definitions[z] != 1) continue;
+        if (!zeros.count(z) || definitions[z] != 1) continue;
         unsigned flipped = ++last;
         char buffer[160];
         snprintf(buffer, sizeof buffer, "\tXOR r%u.x, r%u.x, -1;\n\tIADD r%u.x, r%u.x, 1;", flipped, x, d, flipped);
@@ -1127,7 +1114,7 @@ extern "C" void intelatomicsFixIGIL(std::string *text) {
     if (unsigned n = narrowNegations(s); n && logging()) fprintf(stderr, "[inteltex] %u BADD / SADD negation(s) done as XOR and add\n", n);
     if (unsigned n = narrowShifts(s); n && logging()) fprintf(stderr, "[inteltex] %u SHR / SAR of a narrow value done on 32 bits\n", n);
     if (unsigned n = loopExitCopies(s); n && logging()) fprintf(stderr, "[inteltex] %u loop-carried copies moved after the loop's BREAK_CND\n", n);
-    if (unsigned n = negatedDivideOperands(s); n && logging()) fprintf(stderr, "[inteltex] %u negation(s) feeding an IDIV done as XOR and add\n", n);
+    if (unsigned n = negatedDivideOperands(s); n && logging()) fprintf(stderr, "[inteltex] %u negation(s) in a shader with an IDIV done as XOR and add\n", n);
     if (unsigned n = signExtensions(s); n && logging()) fprintf(stderr, "[inteltex] %u STOI / BTOI done as shift pairs\n", n);
     if (unsigned n = sampleLodOperands(s); n && logging()) fprintf(stderr, "[inteltex] %u explicit-LOD sample(s) given the register holding the LOD\n", n);
     if (getenv("INTELTEX_DUMP")) {  // debugging: the IGIL text after the fixes above
