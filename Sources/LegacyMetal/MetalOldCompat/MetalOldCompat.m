@@ -2219,7 +2219,32 @@ static CFTypeRef compatRegistryEntryCreateCFProperty(io_registry_entry_t entry, 
     return CFDataCreate(allocator, (const UInt8 *)model, sizeof model);
 }
 
+// 41. Metal's validation layers. Sequoia's and Tahoe's MetalTools (MTL_DEBUG_LAYER=1, Xcode's API validation) and their
+// shader validation (MTL_SHADER_VALIDATION=1) are built for the OS's own Metal. On MetalOld, API validation reads the
+// pipeline states' internals by the new layout and reports nonsense (a render pipeline's sample count 1065353216, the
+// bits of 1.0f, and the wrong pixel format) before aborting the process, calls functions the Metal wrapper only exports
+// as placeholder data (validateDispatchThreadsPerThreadgroupWithRTPTG: every compute dispatch crashed) and passes its
+// feature numbers to MetalOld's MTLValidateFeatureSupport, which numbers them differently ("Bicubic filtering of 16-bit
+// normalized values is not supported" on an indirect command buffer). Shader validation instruments shaders with the
+// OS's compiler, whose AIR the legacy compiler rejects, and throws on a missing pipeline-descriptor method first. So
+// both are switched off, with a note on stderr, before a device is made: at load for the launch environment, and in
+// MTLCreateSystemDefaultDevice / MTLCopyAllDevices for programs that set them at run time (wgpu's GPU tests). The
+// program then runs without validation instead of aborting. MTLSHIM_VALIDATION=1 leaves them on. Test s54.
+static void dropValidationLayers(void) {
+    const char *keep = getenv("MTLSHIM_VALIDATION");
+    if (keep && strcmp(keep, "0")) return;
+    static const char *const names[] = {"MTL_DEBUG_LAYER", "MTL_SHADER_VALIDATION"};
+    for (size_t i = 0; i < sizeof names / sizeof *names; i++) {
+        const char *value = getenv(names[i]);
+        if (!value || !strcmp(value, "0")) continue;
+        unsetenv(names[i]);
+        fprintf(stderr, "MetalOldCompat: %s ignored: Metal's validation layers need the OS's own Metal, not the legacy Metal "
+                        "this Mac runs (MTLSHIM_VALIDATION=1 keeps them)\n", names[i]);
+    }
+}
+
 static id<MTLDevice> compatCreateSystemDefaultDevice(void) {
+    dropValidationLayers();
     id<MTLDevice> device = MTLCreateSystemDefaultDevice();
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MTLCreateSystemDefaultDevice from %s -> %s\n", callerImage(__builtin_return_address(0)), device.name.UTF8String);
     pinDevice((__bridge const void *)device);
@@ -2235,6 +2260,7 @@ static id<MTLDevice> compatCreateSystemDefaultDevice(void) {
 }
 
 static CFArrayRef compatCopyAllDevices(void) {
+    dropValidationLayers();
     CFArrayRef all = (__bridge_retained CFArrayRef)MTLCopyAllDevices();
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MTLCopyAllDevices from %s\n", callerImage(__builtin_return_address(0)));
     for (CFIndex i = 0; all && i < CFArrayGetCount(all); i++) pinDevice(CFArrayGetValueAtIndex(all, i));
@@ -2242,6 +2268,7 @@ static CFArrayRef compatCopyAllDevices(void) {
 }
 
 static CFArrayRef compatCopyAllDevicesWithObserver(id<NSObject> __strong *observer, MTLDeviceNotificationHandler handler) {
+    dropValidationLayers();
     CFArrayRef all = (__bridge_retained CFArrayRef)MTLCopyAllDevicesWithObserver(observer, handler);
     for (CFIndex i = 0; all && i < CFArrayGetCount(all); i++) pinDevice(CFArrayGetValueAtIndex(all, i));
     return fromChromium(__builtin_return_address(0)) ? familyTwoOnly(all) : all;
@@ -2581,11 +2608,13 @@ __attribute__((used, section("__DATA,__interpose"))) static const struct { const
 // Build with -DMETALOLDCOMPAT_NOOP for a copy that loads the same way but changes nothing.
 __attribute__((constructor)) static void init(void) {
 #ifndef METALOLDCOMPAT_NOOP
+    if (onMetalOld()) dropValidationLayers();
     patchDeviceBase();
     installAIR27Retargeting();
     installWebKitRouting();
     keepPortraitLibraries();
 #else
+    (void)dropValidationLayers;
     (void)keepPortraitLibraries;
     (void)installWebKitRouting;
     (void)patchDeviceBase;
