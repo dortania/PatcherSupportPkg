@@ -26,7 +26,7 @@ for path in sorted(glob.glob('*.m')):
     s = open(path).read()
     for m in re.finditer(r'static NSString \*const (\w+) = (@".*?");\n', s, re.S):
         text = ''.join(re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(2)))
-        if '%' in text or 'metal_stdlib' not in text: continue
+        if re.search(r'%[-+#0-9.]*[a-zA-Z@]', text) or 'metal_stdlib' not in text: continue  # format strings, not modulo
         f = os.path.join(out, '%s-%s.metal' % (path[:-2], m.group(1)))
         open(f, 'w').write(text.encode().decode('unicode_escape'))
         text = open(f).read()
