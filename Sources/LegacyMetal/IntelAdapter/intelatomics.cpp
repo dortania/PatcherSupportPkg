@@ -3112,6 +3112,60 @@ static unsigned foldConstantSaturation(LLVMModuleRef module) {
     return fixed;
 }
 
+// The same fold happens when the operands become constant only in the plugin's own passes, after these rewrites: in a
+// loop with a constant trip count, which the plugin unrolls, addsat(i, -i) has two constant operands in every copy of
+// the body. The signed add_sat / sub_sat values then came out as plain sums, and an unsigned add_sat picking a private
+// array element (p[addsat(i, -i) & 7]) made a value read in the same iteration take its next one: with
+// v3 = (v5 ^ t) & 15 before v5 ^= p[...], v3 came from v5 after the update (231 of 256 threads; the as_type fragment
+// fuzzing, VEC=1 seed 108, compute too). The 32-bit add_sat calls (unsigned and signed) and signed sub_sat calls left
+// after the fold above, scalar or vector, are written out as an add or subtract, compares and selects, which LLVM folds
+// exactly; unsigned sub_sat was right and stays. INTEL_LATE_SAT_FIX=0 turns it off. Test: i63.
+static LLVMValueRef splat32(LLVMTypeRef type, uint32_t value) {  // value in an i32 or in every lane of an i32 vector
+    LLVMValueRef v = LLVMConstInt(scalarOf(type), value, false);
+    unsigned n = lanes(type);
+    if (!n) return v;
+    std::vector<LLVMValueRef> parts(n, v);
+    return LLVMConstVector(parts.data(), n);
+}
+static unsigned expandSaturation(LLVMModuleRef module) {
+    if (disabled("INTEL_LATE_SAT_FIX")) return 0;
+    enum { kIntULT = 36, kIntSLT = 40 };
+    LLVMBuilderRef b = nullptr;
+    unsigned fixed = 0;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
+        const char *name = LLVMGetValueName(f);
+        bool add = !strncmp(name, "air.add_sat.", 12), sub = !strncmp(name, "air.sub_sat.", 12);
+        if ((!add && !sub) || (name[12] != 'u' && name[12] != 's') || name[13] != '.') continue;
+        bool sign = name[12] == 's';
+        if (sub && !sign) continue;
+        std::vector<LLVMValueRef> calls;
+        for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u)) calls.push_back(LLVMGetUser(u));
+        for (LLVMValueRef call : calls) {
+            if (!LLVMIsACallInst(call) || LLVMGetNumOperands(call) != 3 || LLVMGetOperand(call, 2) != f) continue;
+            LLVMTypeRef type = LLVMTypeOf(call), scalar = scalarOf(type);
+            if (LLVMGetTypeKind(scalar) != kTypeKindInteger || LLVMGetIntTypeWidth(scalar) != 32) continue;
+            if (!b) b = LLVMCreateBuilderInContext(LLVMGetModuleContext(module));
+            LLVMPositionBuilderBefore(b, call);
+            LLVMValueRef x = LLVMGetOperand(call, 0), y = LLVMGetOperand(call, 1), r;
+            if (!sign) {  // the sum, or all ones where it wrapped (came out below x)
+                LLVMValueRef s = LLVMBuildAdd(b, x, y, "");
+                r = LLVMBuildSelect(b, LLVMBuildICmp(b, kIntULT, s, x, ""), splat32(type, 0xffffffffu), s, "");
+            } else {  // overflow: the result's sign differs from both operands' (add), or from x's where x and y differ (sub)
+                LLVMValueRef s = add ? LLVMBuildAdd(b, x, y, "") : LLVMBuildSub(b, x, y, ""), zero = LLVMConstNull(type);
+                LLVMValueRef both = LLVMBuildAnd(b, LLVMBuildXor(b, x, s, ""), LLVMBuildXor(b, add ? y : x, add ? s : y, ""), "");
+                LLVMValueRef limit = LLVMBuildSelect(b, LLVMBuildICmp(b, kIntSLT, x, zero, ""), splat32(type, 0x80000000u),
+                                                     splat32(type, 0x7fffffffu), "");
+                r = LLVMBuildSelect(b, LLVMBuildICmp(b, kIntSLT, both, zero, ""), limit, s, "");
+            }
+            LLVMReplaceAllUsesWith(call, r);
+            LLVMInstructionEraseFromParent(call);
+            fixed++;
+        }
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
 // ---- cube gathers: a sampler that keeps seamless addressing -----------------------------------------------------------
 // MetalOldCompat item 30 gives samplers whose min and mag filters are nearest the programmed (clamped) cube addressing,
 // because integer cube textures with tiny faces sample as 0 with the seamless kind in vertex and fragment functions (and
@@ -4448,6 +4502,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] %u 8/16-bit min / max / clamp call(s) done on 32-bit lanes\n", n);
         n = foldConstantSaturation(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u addsat / subsat of constants folded\n", n);
+        n = expandSaturation(module);  // after the fold: what's left may still become constant in the plugin's passes
+        if (n && logging()) fprintf(stderr, "[inteltex] %u 32-bit addsat / signed subsat written out as add, compares and selects\n", n);
         n = exactMadSat(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u madsat / mulhi / madhi call(s) done with 32-bit operations\n", n);
         n = exact64BitMultiplies(module);
