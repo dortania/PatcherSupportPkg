@@ -4375,6 +4375,80 @@ static unsigned splitHalfwordBytes(LLVMModuleRef module) {
     return (unsigned)found.size();
 }
 
+// ---- compares of byte and halfword vectors in vertex and fragment functions ----------------------------------------
+// In vertex and fragment functions the back end's type legalization of a compare between two <N x i8> (or <N x i16>)
+// vectors depends on how each was made: any(uchar4(a, b, c, d) <= as_type<uchar4>(x)) crashed the compiler service
+// (SelectionDAG::getZeroExtendInReg), any(as_type<char4>(x) > as_type<char4>(y)) came out wrong, and so did such compares
+// of the bytes i62 builds (as_type fragment fuzzing seeds 2 and 15, and the shapes in between). The same compare on
+// 32-bit lanes is right, where neither operand is a byte vector built with insertelement: zext of such a vector crashed
+// the same way. Each icmp of an i8 / i16 vector is done on <N x i32>: the operands sign-extended for a signed predicate,
+// zero-extended otherwise, with extendLanes (lane by lane for vectors put together with insertelement), and other
+// operands from their packed word with shifts (signedValue as for i02, unsignedValue): sext of an as_type<char4> gave
+// the wrong compare too, and zext of one crashed once a select used it. The result is the same <N x i1>. A per-lane select of byte vectors by such a compare
+// crashed the same way even then (select(uchar4(...), uchar4(...), as_type<uchar4>(x) <= ...), seed 15): selects of
+// i8 / i16 vectors with a vector condition are done on 32-bit lanes too and truncated back.
+// INTEL_NARROW_VECTOR_COMPARE_FIX=0 turns it off.
+// Test: i64.
+// The zero-extended lanes of a packed vector of i8 / i16 (16 or 32 bits), from its word: (word >> bits * k) & mask.
+static LLVMValueRef unsignedValue(LLVMBuilderRef b, LLVMTypeRef i32, LLVMValueRef x) {
+    unsigned bits = subwordBits(LLVMTypeOf(x)), n = lanes(LLVMTypeOf(x));
+    LLVMValueRef word = n && n <= 16 ? wordOf(b, i32, x) : nullptr;
+    if (!word) return nullptr;
+    LLVMTypeRef words = LLVMVectorType(i32, n);
+    LLVMValueRef zero[16], right[16], mask[16];
+    for (unsigned k = 0; k < n; k++)
+        zero[k] = LLVMConstInt(i32, 0, false), right[k] = LLVMConstInt(i32, bits * k, false), mask[k] = LLVMConstInt(i32, (1u << bits) - 1, false);
+    LLVMValueRef v = LLVMBuildShuffleVector(b, LLVMBuildInsertElement(b, LLVMGetUndef(words), word, LLVMConstInt(i32, 0, false), ""),
+                                            LLVMGetUndef(words), LLVMConstVector(zero, n), "");
+    return LLVMBuildAnd(b, LLVMBuildLShr(b, v, LLVMConstVector(right, n), ""), LLVMConstVector(mask, n), "");
+}
+static unsigned widenNarrowVectorCompares(LLVMModuleRef module) {
+    if (disabled("INTEL_NARROW_VECTOR_COMPARE_FIX")) return 0;
+    if (!LLVMGetNamedMetadataNumOperands(module, "air.vertex") && !LLVMGetNamedMetadataNumOperands(module, "air.fragment")) return 0;
+    enum { kICmp = 42, kSelect = 46, kIntSGT = 38, kIntSLE = 41 };
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(LLVMGetModuleContext(module));
+    std::vector<LLVMValueRef> found, selects;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                int op = LLVMGetInstructionOpcode(inst);
+                if (op == kICmp && lanes(LLVMTypeOf(LLVMGetOperand(inst, 0))) && subwordBits(LLVMTypeOf(LLVMGetOperand(inst, 0))))
+                    found.push_back(inst);
+                else if (op == kSelect && lanes(LLVMTypeOf(inst)) && subwordBits(LLVMTypeOf(inst)) && lanes(LLVMTypeOf(LLVMGetOperand(inst, 0))))
+                    selects.push_back(inst);
+            }
+    if (found.empty() && selects.empty()) return 0;
+    LLVMBuilderRef b = LLVMCreateBuilderInContext(LLVMGetModuleContext(module));
+    for (LLVMValueRef inst : selects) {  // per-lane selects of byte / halfword vectors: on 32-bit lanes, truncated
+        LLVMPositionBuilderBefore(b, inst);
+        LLVMTypeRef wide = LLVMVectorType(i32, lanes(LLVMTypeOf(inst)));
+        auto lanes32 = [&](LLVMValueRef v) {  // from the word where it isn't put together with insertelement
+            LLVMValueRef w = !LLVMIsAConstant(v) && !LLVMIsAInsertElementInst(v) ? unsignedValue(b, i32, v) : nullptr;
+            return w ? w : extendLanes(b, v, wide, false);
+        };
+        LLVMValueRef x = lanes32(LLVMGetOperand(inst, 1)), y = lanes32(LLVMGetOperand(inst, 2));
+        LLVMReplaceAllUsesWith(inst, LLVMBuildTrunc(b, LLVMBuildSelect(b, LLVMGetOperand(inst, 0), x, y, ""), LLVMTypeOf(inst), ""));
+        LLVMInstructionEraseFromParent(inst);
+    }
+    for (LLVMValueRef inst : found) {
+        LLVMPositionBuilderBefore(b, inst);
+        int predicate = LLVMGetICmpPredicate(inst);
+        bool sign = predicate >= kIntSGT && predicate <= kIntSLE;
+        LLVMTypeRef wide = LLVMVectorType(i32, lanes(LLVMTypeOf(LLVMGetOperand(inst, 0))));
+        LLVMValueRef x = LLVMGetOperand(inst, 0), y = LLVMGetOperand(inst, 1);
+        auto widen = [&](LLVMValueRef v) {  // signed: from the packed word with shifts (sext of a cast vector was wrong too)
+            LLVMValueRef w = LLVMIsAConstant(v) || LLVMIsAInsertElementInst(v) ? nullptr
+                             : sign ? signedValue(b, i32, v) : unsignedValue(b, i32, v);
+            return w ? w : extendLanes(b, v, wide, sign);
+        };
+        x = widen(x), y = widen(y);
+        LLVMReplaceAllUsesWith(inst, LLVMBuildICmp(b, predicate, x, y, ""));
+        LLVMInstructionEraseFromParent(inst);
+    }
+    LLVMDisposeBuilder(b);
+    return (unsigned)(found.size() + selects.size());
+}
+
 // ---- SIMD16 pixel kernels with a clobbered value ---------------------------------------------------------------------
 // The plugin has the GL driver's back end, iCBE, turn each fragment function into EU code: a SIMD8 and a SIMD16 kernel,
 // the hardware dispatching SIMD16 for full pixel groups. Under the SIMD16 kernel's higher register pressure, iCBE's
@@ -4538,6 +4612,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (flattened && logging()) fprintf(stderr, "[inteltex] %u short branch(es) folded into selects\n", flattened);
         n = selectBufferIndices(module);  // after flattenBranchChains, whose selects can pick pointers
         if (n && logging()) fprintf(stderr, "[inteltex] %u select(s) of pointers into one buffer turned into a selected index\n", n);
+        n = widenNarrowVectorCompares(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u compare(s) of byte / halfword vectors in a vertex/fragment module done on 32-bit lanes\n", n);
         n = splitHalfwordBytes(module);  // last: the rewrites above see the module as before
         if (n && logging()) fprintf(stderr, "[inteltex] %u bitcast(s) of halfwords to bytes in a vertex/fragment module done lane by lane\n", n);
         if (getenv("INTELTEX_DUMP_REWRITTEN")) {  // debugging: every module after these rewrites
