@@ -620,6 +620,72 @@ static unsigned signExtensions(std::string &s) {
     return n;
 }
 
+// ---- signed compares of a sum with zero, in the IGIL text ---------------------------------------------------------
+// In pixel and vertex shaders iCBE folds the constant of an add into a signed compare of the sum with zero, as if the add
+// couldn't overflow: (x + C) < 0 became x < -C (cmp g20, -902107310 in the EU code), and likewise (x + C) > 0. MSL's
+// unsigned add wraps, so where x + C wrapped past the sign bit the compare went the wrong way: in
+// `if (c) v += (int)(x + 902107310u) < 0 ? y % 1000 : 777u` the 14 pixels whose x was in [2^31 - C, 2^31) got 777
+// (fragment fuzzing on the Iris Pro, VEC=1 seed 445; also with a negative constant; compute functions, >= 0, <= -7,
+// other constants and unsigned compares were right). ICMP.lt / ge / gt / le of an IADD result and a zero register, either
+// way round, become tests of the sum's sign bit (SHR 31) and, for > 0 and <= 0, of the sum being 0 (ICMP.eq, which is
+// exact either way).
+// INTEL_SUM_SIGN_TEST_FIX=0 turns it off. Test: i65.
+static unsigned signTestsOfSums(std::string &s) {
+    if (disabled("INTEL_SUM_SIGN_TEST_FIX") || (s.find("\tPIXELSHADER") == std::string::npos && s.find("\tVERTEXSHADER") == std::string::npos))
+        return 0;
+    size_t temps = s.find("\tDCL_TEMPS r0..r");
+    if (temps == std::string::npos) return 0;
+    unsigned last = (unsigned)strtoul(s.c_str() + temps + 16, nullptr, 10);
+    std::vector<std::string> lines;
+    for (size_t pos = 0; pos <= s.size();) {
+        size_t eol = s.find('\n', pos);
+        if (eol == std::string::npos) eol = s.size();
+        lines.push_back(s.substr(pos, eol - pos));
+        pos = eol + 1;
+    }
+    std::set<unsigned> zeros, sums;  // registers last set by MOV r.x, 0 / by an IADD
+    unsigned n = 0;
+    for (std::string &l : lines) {
+        unsigned d, a, b;
+        int at = 0;
+        char op[16], pred[4];
+        if (sscanf(l.c_str(), "\tICMP.%3[a-z] r%u.x, r%u.x, r%u.x;%n", pred, &d, &a, &b, &at) == 4 && at == (int)l.size()) {
+            static const char *const kPreds[4] = {"lt", "ge", "gt", "le"}, *const kSwapped[4] = {"gt", "le", "lt", "ge"};
+            int k = 0;
+            while (k < 4 && strcmp(pred, kPreds[k])) k++;
+            bool sumFirst = sums.count(a) && zeros.count(b), sumSecond = zeros.count(a) && sums.count(b);
+            if (k < 4 && (sumFirst || sumSecond)) {
+                unsigned sum = sumFirst ? a : b, zero = sumFirst ? b : a, sign = ++last;
+                const char *p = sumFirst ? kPreds[k] : kSwapped[k];  // as sum <p> 0
+                char buffer[320];
+                if (!strcmp(p, "lt") || !strcmp(p, "ge"))  // negative: the sign bit set; >= 0: clear
+                    snprintf(buffer, sizeof buffer, "\tSHR r%u.x, r%u.x, 31;\n\tICMP.%s r%u.x, r%u.x, r%u.x;", sign, sum, !strcmp(p, "lt") ? "ne" : "eq", d, sign, zero);
+                else {  // > 0: neither negative nor zero; <= 0: either
+                    unsigned isZero = ++last, either = ++last;
+                    snprintf(buffer, sizeof buffer,
+                             "\tSHR r%u.x, r%u.x, 31;\n\tICMP.eq r%u.x, r%u.x, r%u.x;\n\tAND r%u.x, r%u.x, 0x1;\n\tOR r%u.x, r%u.x, r%u.x;\n\tICMP.%s r%u.x, r%u.x, r%u.x;",
+                             sign, sum, isZero, sum, zero, isZero, isZero, either, sign, isZero, !strcmp(p, "gt") ? "eq" : "ne", d, either, zero);
+                }
+                l = buffer;
+                n++;
+            }
+        }
+        // what the line leaves in its destination register
+        if (sscanf(l.c_str(), "\t%15s r%u", op, &d) == 2) {
+            zeros.erase(d), sums.erase(d);
+            if (!strcmp(op, "IADD")) sums.insert(d);
+            else if (!strcmp(op, "MOV") && sscanf(l.c_str(), "\tMOV r%u.x, 0;%n", &d, (at = 0, &at)) == 1 && at == (int)l.size()) zeros.insert(d);
+        }
+    }
+    if (!n) return 0;
+    std::string out;
+    for (size_t i = 0; i < lines.size(); i++) { out += lines[i]; if (i + 1 < lines.size()) out += '\n'; }
+    size_t numberAt = out.find("\tDCL_TEMPS r0..r") + 16, numberEnd = out.find_first_not_of("0123456789", numberAt);
+    out.replace(numberAt, numberEnd - numberAt, std::to_string(last));
+    s = out;
+    return n;
+}
+
 // ---- negations feeding a signed divide, in the IGIL text ------------------------------------------------------------
 // i26's bug again, from a negation the IR doesn't show: the front end wrote (short)(-(int)v) % d as (v * -65536) >> 16,
 // and the back end, knowing v was 0 or 1, made that IADD r, 0, -v; iCBE folds that into the IDIV as a source modifier
@@ -1115,6 +1181,7 @@ extern "C" void intelatomicsFixIGIL(std::string *text) {
     if (unsigned n = narrowShifts(s); n && logging()) fprintf(stderr, "[inteltex] %u SHR / SAR of a narrow value done on 32 bits\n", n);
     if (unsigned n = loopExitCopies(s); n && logging()) fprintf(stderr, "[inteltex] %u loop-carried copies moved after the loop's BREAK_CND\n", n);
     if (unsigned n = negatedDivideOperands(s); n && logging()) fprintf(stderr, "[inteltex] %u negation(s) in a shader with an IDIV done as XOR and add\n", n);
+    if (unsigned n = signTestsOfSums(s); n && logging()) fprintf(stderr, "[inteltex] %u signed compare(s) of a sum with zero done on its sign bit\n", n);
     if (unsigned n = signExtensions(s); n && logging()) fprintf(stderr, "[inteltex] %u STOI / BTOI done as shift pairs\n", n);
     if (unsigned n = sampleLodOperands(s); n && logging()) fprintf(stderr, "[inteltex] %u explicit-LOD sample(s) given the register holding the LOD\n", n);
     if (getenv("INTELTEX_DUMP")) {  // debugging: the IGIL text after the fixes above
