@@ -174,7 +174,7 @@ The 13.x front end stops at MSL 3.0, so MSL 3.1 texture atomics don't compile fr
 ## Known limitations
 
 - 64-bit integer division and remainder, and 64-bit shifts by a variable amount, crash the Intel compiler in vertex and fragment functions (`ulong` / `long`; addition, multiplication, constant shifts and compares are fine). Compute functions are right. WebGL and WebGPU have no 64-bit integers.
-- Bitwise and arithmetic operations on byte vectors made with `as_type` (`as_type<uchar4>(x) ^ as_type<uchar4>(y)`, `as_type<char4>(x) | select(...)`) crash the Intel compiler in vertex and fragment functions (the same type legalization; compute functions are right). Fixing it means doing every byte-vector operation there on 32-bit lanes; WebGL and WebGPU shaders have no 8-bit types, so only hand-written MSL meets it.
+- Bitwise and arithmetic operations on byte vectors made with `as_type` (`as_type<uchar4>(x) ^ as_type<uchar4>(y)`, `as_type<char4>(x) | select(...)`) crash the Intel compiler in vertex and fragment functions (the same type legalization; compute functions are right). Fixing it means doing every byte-vector operation there on 32-bit lanes; WebGL and WebGPU shaders have no 8-bit types, so only hand-written MSL meets it. Bitwise operations on byte vectors built element by element can also leave nearby code wrong there: a signed `min` in a branch whose condition came from `char2 & (char2 & char2)` (fragment fuzzing, VEC=1 seed 1248).
 
 - Metal's validation layers don't run on this stack (item 41 switches them off): API and shader validation need the OS's own Metal runtime and compiler.
 
