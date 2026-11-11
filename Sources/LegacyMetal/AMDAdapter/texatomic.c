@@ -33,7 +33,7 @@
 // Seventh job: load threadgroup bools as bytes (loadThreadgroupBoolsAsBytes): libAMDIL902 reads them as false.
 // AMD_LDS_BOOL_FIX=0 turns it off.
 //
-// Eighth job, with the 12.5-24 Bronze driver only (Sequoia without MetalOld): read multisample textures without their
+// Eighth job, with the 12.5-24 Bronze driver on Sequoia only (Darwin 24, no MetalOld): read multisample textures without their
 // FMASK (identityFmaskLookups). There the driver leaves the FMASK descriptor table (API slot 13) unset for render
 // stages, so a fragment shader's texture2d_ms read loads its FMASK descriptor from GPU address 0 and the GPU resets;
 // compute reads get a stale table and wrong samples. Both encoders expand compressed MSAA textures when they're bound
@@ -81,6 +81,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/sysctl.h>
 #include <unistd.h>
 
 // ---- hooked functions -------------------------------------------------------------------------------------------
@@ -3337,13 +3338,20 @@ static int normalizeFetch4(char *il) {
     return n;
 }
 
-// The eighth job's driver check: only the 12.5-24 copy of AMDMTLBronzeDriver links OCLP's impostor.dylib.
+// The eighth job's driver check: the 12.5-24 copy of AMDMTLBronzeDriver, which OCLP installs on Sequoia (Darwin 24)
+// and which links OCLP's impostor.dylib. Tahoe's 12.5-25 and 12.5-GCN-SKL-25 copies link impostor.dylib too, but set
+// the FMASK table themselves: there the identity map reads the wrong samples (a11, and s25's shader resolve: wrong
+// colours in Chrome and Electron), so the check also needs Darwin 24.
 static bool fmaskFixEnabled(void) {
     const char *setting = getenv("AMD_FMASK_FIX");
     if (setting) return strcmp(setting, "0") != 0;
     static int installed = -1;
-    if (installed < 0)
-        installed = !access("/System/Library/Extensions/AMDMTLBronzeDriver.bundle/Contents/MacOS/impostor.dylib", F_OK);
+    if (installed < 0) {
+        char release[32] = "";
+        size_t size = sizeof release;
+        installed = sysctlbyname("kern.osrelease", release, &size, NULL, 0) == 0 && atoi(release) == 24 &&
+                    !access("/System/Library/Extensions/AMDMTLBronzeDriver.bundle/Contents/MacOS/impostor.dylib", F_OK);
+    }
     return installed;
 }
 
