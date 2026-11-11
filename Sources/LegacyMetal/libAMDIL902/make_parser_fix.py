@@ -32,12 +32,19 @@ node to the AIRStructTypeInfo objects using it. ~AIRStructTypeInfo removes the f
 StructTypeInfo, which can be another object's: struct S { array a; ... } used by a buffer argument along with that same
 array on its own. The freed object's entry stays, and a later compile whose node lands on the same address reads the
 freed object as a StructTypeInfo pointer and crashes in CheckStructIndirectArgumentBuffer. Fix: it removes its own entry.
+6. A bit-field extract combine that reads a constant's operands (Tests/c05-amdil-bfe-constant): while it combines
+the selection DAG, ILTargetLowering::AnalyzeBFECombine matches shift and mask patterns, and in one of them reads operand
+0 of a node it takes for an operation. When the DAG has folded that node into a constant, which has no operands, the
+read goes through a null operand list and the compiler service crashes ("Compiler encountered an internal error").
+Fix: the combine returns false there (no BFE node; the caller drops what it had collected).
+
 The input is the stock 12.5 file or the 12.5-GCN-25 one (Tahoe), which is the stock file with OCLP's stub at the
 start of initializeIABArgTypeSet (0x7dbbc: return 0). The GCN-25 output keeps that stub and leaves out patch 1.
 
 usage: python3 make_parser_fix.py <stock 12.5 or 12.5-GCN-25 libAMDIL902.dylib> <out>
        PARSERFIX_SKIP_GEP_SELECT=1: without patch 4 (the tests' "without the fix" build for c03)
        PARSERFIX_SKIP_STRUCT_MAP=1: without patch 5 (the same for c04)
+       PARSERFIX_SKIP_BFE_GUARD=1: without patch 6 (the same for c05)
 """
 
 import hashlib
@@ -227,6 +234,25 @@ if os.environ.get("PARSERFIX_SKIP_STRUCT_MAP") != "1":
     off = STI_CMP - BASE
     assert data[off : off + 3] == STI_CMP_BYTES
     data[off : off + 3] = bytes.fromhex("4c39f2")
+# Patch 6: ILTargetLowering::AnalyzeBFECombine, in the pattern whose second node's operand 0 it has in r15: before it
+# reads that node's operand 0 (movq 0x20(%r15),%rax ; movq (%rax),%rsi), return false when the node has no operands
+# (its operand list is null: a constant the DAG folded it into). The caller then makes no BFE node and drops the
+# operands it was collecting.
+BFE_SITE, BFE_RESUME, BFE_EXIT = 0x4FFA0D3C4FA1, 0x4FFA0D3C4FA8, 0x4FFA0D3C5BE3  # exit: return %ebx
+BFE_SITE_BYTES = bytes.fromhex("498b4720" "488b30")
+CAVE6 = CAVE + 0x300
+bfe = bytearray(bytes.fromhex("498b4720" "4885c0" "7408" "488b30"))  # movq 0x20(%r15),%rax ; testq ; je 1f ; movq (%rax),%rsi
+bfe += b"\xe9" + struct.pack("<i", BFE_RESUME - (CAVE6 + len(bfe) + 5))  # jmp back to movl 0x8(%rax),%edx
+bfe += bytes.fromhex("31db")  # 1: xorl %ebx,%ebx                   false
+bfe += b"\xe9" + struct.pack("<i", BFE_EXIT - (CAVE6 + len(bfe) + 5))  # jmp to the epilogue
+assert bfe[12] == 0xE9 and bfe[17:19] == b"\x31\xdb"  # the je (+8) skips the 3-byte load and the 5-byte jmp
+if os.environ.get("PARSERFIX_SKIP_BFE_GUARD") != "1":
+    off = BFE_SITE - BASE
+    assert data[off : off + 7] == BFE_SITE_BYTES
+    assert data[BFE_EXIT - BASE : BFE_EXIT - BASE + 3] == bytes.fromhex("488b05")  # movq ___stack_chk_guard(%rip),%rax
+    assert data[CAVE6 - BASE : CAVE6 - BASE + len(bfe) + 16] == bytes(len(bfe) + 16), "cave 6 is not free"
+    data[CAVE6 - BASE : CAVE6 - BASE + len(bfe)] = bfe
+    data[off : off + 7] = b"\xe9" + struct.pack("<i", CAVE6 - (BFE_SITE + 5)) + b"\x90" * 2
 open(sys.argv[2], "wb").write(data)
 patch1 = "OCLP's stub kept instead of patch 1" if gcn25 else f"cave {len(code)} bytes at {hex(cave)}"
 print(f"{patch1}; text pin {text_pin(data)[1]} (re-sign the output: its signature is stale)")
