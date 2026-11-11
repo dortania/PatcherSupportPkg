@@ -11,6 +11,7 @@
 int main(int argc, char **argv) {
     @autoreleasepool {
         const char *bug = "s54-validation-layers";
+        if (!reproOnMetalOld()) return SKIP(bug, "MetalOldCompat needs OCLP's MetalOld wrapper");
         setenv("MTL_DEBUG_LAYER", "1", 1);
         setenv("MTL_SHADER_VALIDATION", "1", 1);
         id<MTLDevice> dev = reproDevice(argc, argv, "AMD");

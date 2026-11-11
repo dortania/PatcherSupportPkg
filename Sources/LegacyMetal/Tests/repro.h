@@ -35,11 +35,23 @@ __attribute__((unused)) static int SKIP(const char *bugId, const char *format, .
 }
 
 // The GPU named by argv[1] (substring, case-insensitive), else the first whose name contains `fallback`.
+// The first GPU whose name contains the argument (or `fallback`), preferring one with no display attached: on a Mac Pro
+// both GPUs match "AMD", and a test that resets the display GPU freezes the screen (dyorgio).
 __attribute__((unused)) static id<MTLDevice> reproDevice(int argc, char **argv, const char *fallback) {
     const char *want = argc > 1 && strcmp(argv[1], "--child") ? argv[1] : fallback;
+    id<MTLDevice> first = nil;
     for (id<MTLDevice> d in MTLCopyAllDevices())
-        if ([d.name rangeOfString:@(want) options:NSCaseInsensitiveSearch].location != NSNotFound) return d;
-    return nil;
+        if ([d.name rangeOfString:@(want) options:NSCaseInsensitiveSearch].location != NSNotFound) {
+            if (d.isHeadless) return d;
+            if (!first) first = d;
+        }
+    return first;
+}
+
+// OCLP's legacy Metal (MetalOld behind the Metal.framework wrapper), the only place MetalOldCompat loads. Tests of the
+// shim's fixes that don't apply to the OS's own Metal (GCN-only Macs) skip without it, as verify.sh does.
+__attribute__((unused)) static bool reproOnMetalOld(void) {
+    return access("/System/Library/Frameworks/Metal.framework/Versions/A/MetalOld.dylib", F_OK) == 0;
 }
 
 // "--child <mode>" in argv: the mode this copy runs, else NULL.

@@ -56,6 +56,7 @@ int main(int argc, char **argv) {
         if (mode) return child(argc, argv, mode);
         id<MTLDevice> dev = reproDevice(argc, argv, "AMD");
         if (!dev) return SKIP("s08-sdk-properties", "no such GPU");
+        if (!reproOnMetalOld()) return SKIP("s08-sdk-properties", "MetalOldCompat needs OCLP's MetalOld wrapper");
         char failed[256] = "";
         for (int i = 0; i < 4; i++) {
             int status = reproRunChild(argc, argv, kCalls[i]);

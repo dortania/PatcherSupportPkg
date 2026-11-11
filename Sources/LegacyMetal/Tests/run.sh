@@ -7,7 +7,7 @@ rm -rf "$(getconf DARWIN_USER_CACHE_DIR)com.apple.metal"
 pass=0 fail=0 skip=0
 for t in $(ls | sort); do
     [ -x "$t" ] && [ -f "$t" ] || continue  # the test programs (s09-msl-3.2 has a dot; data/ and metallibs aren't)
-    case "$t" in *.metallib|*.air) continue ;; esac
+    case "$t" in *.metallib|*.air) continue ;; [a-z][0-9]*) ;; *) continue ;; esac  # tests only (not ivb-compile.sh's ivbcompile)
     line=$(./"$t" "$@" 2>/dev/null | grep -E '^(PASS|FAIL|SKIP) ' | tail -1)
     [ -n "$line" ] || line="FAIL $t: no result line (crashed?)"
     echo "$line"

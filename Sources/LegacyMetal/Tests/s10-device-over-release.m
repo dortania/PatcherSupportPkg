@@ -21,6 +21,7 @@ static int child(void) {
 
 int main(int argc, char **argv) {
     if (reproChildMode(argc, argv)) return child();
+    if (!reproOnMetalOld()) return SKIP("s10-device-over-release", "MetalOldCompat needs OCLP's MetalOld wrapper");
     setenv("MallocScribble", "1", 1);
     int status = reproRunChild(argc, argv, "release");
     if (status == 0) return PASS("s10-device-over-release", "devices still valid after an over-release");
