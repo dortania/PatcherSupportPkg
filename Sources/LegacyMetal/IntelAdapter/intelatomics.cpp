@@ -4281,6 +4281,46 @@ static unsigned flattenBranchChains(LLVMModuleRef module) {
     return rewrites;
 }
 
+// ---- halfword vectors viewed as bytes in vertex and fragment functions --------------------------------------------
+// as_type<uchar4>(ushort2) and as_type<char4>(short2), a bitcast <2 x i16> -> <4 x i8>, abort the compile of a vertex or
+// fragment function (IGILTargetLowering::ReplaceNodeResults in libIGIL-Metal): the compiler service crashes and the
+// pipeline fails with "Compiler encountered an internal error". The same cast in a compute function is right, and so are
+// the other casts between words and vectors of bytes or halfwords (uint <-> uchar4 / ushort2, uchar4 -> ushort2,
+// ushort <-> uchar2). Found by fuzzing fragment functions. In a module with a vertex or fragment function, each such
+// bitcast becomes its bytes, put together lane by lane: byte 2k is halfword k truncated, byte 2k + 1 the halfword
+// shifted right by 8 (in 32 bits). Runs after the other rewrites, which then see the module as before.
+// INTEL_HALFWORD_BYTES_FIX=0 turns it off. Test: i62.
+static unsigned splitHalfwordBytes(LLVMModuleRef module) {
+    if (disabled("INTEL_HALFWORD_BYTES_FIX")) return 0;
+    if (!LLVMGetNamedMetadataNumOperands(module, "air.vertex") && !LLVMGetNamedMetadataNumOperands(module, "air.fragment")) return 0;
+    enum { kBitCast = 41 };
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMTypeRef i8 = LLVMIntTypeInContext(context, 8), i32 = LLVMInt32TypeInContext(context);
+    std::vector<LLVMValueRef> found;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                if (LLVMGetInstructionOpcode(inst) != kBitCast) continue;
+                LLVMTypeRef to = LLVMTypeOf(inst), from = LLVMTypeOf(LLVMGetOperand(inst, 0));
+                if (subwordBits(to) == 8 && subwordBits(from) == 16 && lanes(from) && lanes(to) == 2 * lanes(from)) found.push_back(inst);
+            }
+    if (found.empty()) return 0;
+    LLVMBuilderRef b = LLVMCreateBuilderInContext(context);
+    for (LLVMValueRef inst : found) {
+        LLVMPositionBuilderBefore(b, inst);
+        LLVMValueRef halves = LLVMGetOperand(inst, 0), bytes = LLVMGetUndef(LLVMTypeOf(inst));
+        for (unsigned k = 0; k < lanes(LLVMTypeOf(inst)); k++) {
+            LLVMValueRef half = LLVMBuildZExt(b, LLVMBuildExtractElement(b, halves, LLVMConstInt(i32, k / 2, false), ""), i32, "");
+            if (k & 1) half = LLVMBuildLShr(b, half, LLVMConstInt(i32, 8, false), "");
+            bytes = LLVMBuildInsertElement(b, bytes, LLVMBuildTrunc(b, half, i8, ""), LLVMConstInt(i32, k, false), "");
+        }
+        LLVMReplaceAllUsesWith(inst, bytes);
+        LLVMInstructionEraseFromParent(inst);
+    }
+    LLVMDisposeBuilder(b);
+    return (unsigned)found.size();
+}
+
 // ---- SIMD16 pixel kernels with a clobbered value ---------------------------------------------------------------------
 // The plugin has the GL driver's back end, iCBE, turn each fragment function into EU code: a SIMD8 and a SIMD16 kernel,
 // the hardware dispatching SIMD16 for full pixel groups. Under the SIMD16 kernel's higher register pressure, iCBE's
@@ -4442,6 +4482,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (flattened && logging()) fprintf(stderr, "[inteltex] %u short branch(es) folded into selects\n", flattened);
         n = selectBufferIndices(module);  // after flattenBranchChains, whose selects can pick pointers
         if (n && logging()) fprintf(stderr, "[inteltex] %u select(s) of pointers into one buffer turned into a selected index\n", n);
+        n = splitHalfwordBytes(module);  // last: the rewrites above see the module as before
+        if (n && logging()) fprintf(stderr, "[inteltex] %u bitcast(s) of halfwords to bytes in a vertex/fragment module done lane by lane\n", n);
         if (getenv("INTELTEX_DUMP_REWRITTEN")) {  // debugging: every module after these rewrites
             static int serial;
             char path[1024];
