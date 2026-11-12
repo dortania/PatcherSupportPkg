@@ -61,12 +61,18 @@ case ${PAYLOAD:-12.5} in 12.5) ;; 12.5-GCN-25) V=-GCN-25 ;; *) echo "PAYLOAD: 12
 FIXED=$(mktemp -d) NOADAPTER=$(mktemp -d) STOCK=$(mktemp -d) PATCH3=$(mktemp -d) PATCH4=$(mktemp -d) PATCH5=$(mktemp -d)
 # AMDBronzeCompat goes in the library folders too: where it is installed, the driver loads it by leaf name from there
 # instead of the installed copy, which would otherwise take the driver code first.
-cp "$B/AMDTextureAtomics.dylib" "$B/IntelTextureAtomics.dylib" "$B/libMTLIntelCompilerPlugin.dylib" "$B/AMDBronzeCompat.dylib" "$FIXED/"
+# The Intel compiler plugin of this Mac's own Intel driver: on Ivy Bridge (HD 4000) the one from OCLP's 11.7.10
+# AppleIntelHD4000GraphicsMTLDriver, which build.sh writes as libMTLIntelCompilerPlugin-IVB.dylib; the Haswell one fails
+# most Intel pipelines there ("Compilation failed").
+IVB=
+ioreg -rc IntelAccelerator -d1 -w0 2>/dev/null | grep -q AppleIntelHD4000Graphics && IVB=-IVB
+cp "$B/AMDTextureAtomics.dylib" "$B/IntelTextureAtomics.dylib" "$B/AMDBronzeCompat.dylib" "$FIXED/"
+cp "$B/libMTLIntelCompilerPlugin$IVB.dylib" "$FIXED/libMTLIntelCompilerPlugin.dylib"
 cp "$B/AMDShared$V" "$FIXED/AMDShared"
 cp "$B/libAMDIL902$V.dylib" "$FIXED/libAMDIL902.dylib"
 for d in "$NOADAPTER" "$STOCK" "$PATCH3" "$PATCH4" "$PATCH5"; do cp "$FIXED"/* "$d/"; done
 cp "$B/stock/AMDShared$V" "$NOADAPTER/AMDShared"
-cp "$B/stock/libMTLIntelCompilerPlugin.dylib" "$NOADAPTER/"
+cp "$B/stock/libMTLIntelCompilerPlugin$IVB.dylib" "$NOADAPTER/libMTLIntelCompilerPlugin.dylib"
 cp "$B/stock/libAMDIL902$V.dylib" "$STOCK/libAMDIL902.dylib"
 PARSERFIX_SKIP_GEP_SELECT=1 python3 -I ../libAMDIL902/make_parser_fix.py "$B/stock/libAMDIL902$V.dylib" \
     "$PATCH3/libAMDIL902.dylib" > /dev/null
@@ -105,16 +111,16 @@ run() {  # <test[@gpu]> <removed fix or "fixed">
         subword) env=(INTEL_SIGNED_SUBWORD_FIX=0) ;; comparebias) env=(INTEL_COMPARE_BIAS_FIX=0) ;; intoffset) env=(INTEL_INTEGER_OFFSET_FIX=0) ;; samplerstate) env=(INTEL_SAMPLER_STATE_FIX=0 AMD_SAMPLER_STATE_FIX=0 __XPC_AMD_SAMPLER_STATE_FIX=0) ;; float3) env=(INTEL_VERTEX_FLOAT3_FIX=0) ;; privatearray) env=(INTEL_PRIVATE_ARRAY_FIX=0) ;; kernelgradient) env=(INTEL_KERNEL_GRADIENT_FIX=0) ;; fragfloat3) env=(INTEL_FRAGMENT_FLOAT3_FIX=0) ;; numsamples) env=(INTEL_NUM_SAMPLES_FIX=0) ;; swizzleimm) env=(INTEL_SWIZZLE_IMMEDIATE_FIX=0) ;; branchchain) env=(INTEL_BRANCH_CHAIN_FIX=0) ;; basevertex) env=(INTEL_BASE_VERTEX_FIX=0) ;; simd16clobber) env=(INTEL_SIMD16_CLOBBER_FIX=0) ;; finederiv) env=(INTEL_FINE_DERIVATIVES_FIX=0) ;; typepun) env=(INTEL_TYPE_PUN_FIX=0) ;; privateselect) env=(INTEL_PRIVATE_SELECT_FIX=0) ;; kernelgather) env=(INTEL_KERNEL_GATHER_OFFSET_FIX=0) ;; cubegather) env=(INTEL_CUBE_GATHER_SAMPLER_FIX=0) ;; madsat) env=(INTEL_MAD_SAT_FIX=0) ;; narrowminmax) env=(INTEL_NARROW_MINMAX_FIX=0) ;; bufferselect) env=(INTEL_BUFFER_SELECT_FIX=0) ;; samplelod) env=(INTEL_SAMPLE_LOD_OPERAND_FIX=0) ;; signeddivneg) env=(INTEL_SIGNED_DIV_NEG_FIX=0) ;; mul64) env=(INTEL_MUL64_FIX=0) ;; sdivpow2) env=(INTEL_SDIV_POW2_FIX=0) ;; narrowmask) env=(INTEL_NARROW_MASK_FIX=0) ;; narrowudiv) env=(INTEL_NARROW_UDIV_FIX=0) ;; narrowdiv) env=(INTEL_NARROW_DIV_FIX=0) ;; constantlanes) env=(INTEL_NARROW_CONSTANT_LANES_FIX=0) ;; constantcall) env=(INTEL_CONSTANT_CALL_FIX=0) ;; narrownegate) env=(INTEL_NARROW_NEGATE_FIX=0) ;; constsat) env=(INTEL_CONST_SAT_FIX=0) ;; widedivlane) env=(INTEL_WIDE_DIV_INDEX_FIX=0) ;; narrowshift) env=(INTEL_NARROW_SHIFT_FIX=0) ;; loopexitcopy) env=(INTEL_LOOP_EXIT_COPY_FIX=0) ;; signextend) env=(INTEL_SIGN_EXTEND_FIX=0) ;; narrowprivate) env=(INTEL_NARROW_PRIVATE_ARRAY_FIX=0) ;; uniformdep) env=(INTEL_UNIFORM_DEPENDENCY_FIX=0) ;; gathergreen) env=(INTEL_GATHER_GREEN_FIX=0) ;; halfwordbytes) env=(INTEL_HALFWORD_BYTES_FIX=0) ;; latesat) env=(INTEL_LATE_SAT_FIX=0) ;; bytecompare) env=(INTEL_NARROW_VECTOR_COMPARE_FIX=0) ;; sumsign) env=(INTEL_SUM_SIGN_TEST_FIX=0) ;; bytearith) env=(INTEL_NARROW_VECTOR_ARITH_FIX=0) ;; renderint64) env=(INTEL_RENDER_INT64_FIX=0) ;; bittest) env=(INTEL_BIT_TEST_COMPARE_FIX=0) ;; narrowvecdiv) env=(INTEL_NARROW_VECTOR_OPERAND_FIX=0) ;; endlessloop) env=(INTEL_INFINITE_LOOP_FIX=0 __XPC_INTEL_INFINITE_LOOP_FIX=0) ;; narrowshiftsat) env=(INTEL_NARROW_SHIFT_FIX=0 INTEL_LATE_SAT_FIX=0) ;; constantcallsat) env=(INTEL_CONSTANT_CALL_FIX=0 INTEL_LATE_SAT_FIX=0) ;; targetdepth) env=(MTLSHIM_TARGET_DEPTH=0) ;; computecompare) env=(MTLSHIM_COMPUTE_SAMPLER_COMPARE=0) ;; lodpreclamp) env=(MTLSHIM_COMPUTE_LOD_PRECLAMP=0) ;; nearestcube) env=(MTLSHIM_NEAREST_CUBE_CLAMP=0) ;; sdoflibrary) env=(MTLSHIM_SDOF_LIBRARY=0) ;; mpsmatmul) env=(MTLSHIM_MPS_MATMUL=0) ;;
     esac
     # s13's fix (item 25) works in MTLCompilerService, which gets the shim under test this way (i05's metallib needs it too)
-    [ "$t" = s13-new-air-metallib ] || [ "$t" = i05-intel-constexpr-sampler ] && env+=(__XPC_DYLD_INSERT_LIBRARIES=$shim)
+    [ "$t" = s13-new-air-metallib ] || [ "$t" = i05-intel-constexpr-sampler ] && env+=("__XPC_DYLD_INSERT_LIBRARIES=$shim")
     # On the AMD GPU the in-process compiler can't load i05's macOS 15.4 library ("image not loaded"), so there it compiles
     # in MTLCompilerService, which takes the build's compiler files by leaf name
     local cc=$CC
-    [ "$t" = i05-intel-constexpr-sampler ] && [[ $gpu == *AMD* ]] && cc= && env+=(__XPC_DYLD_LIBRARY_PATH=$libs)
+    [ "$t" = i05-intel-constexpr-sampler ] && [[ $gpu == *AMD* ]] && cc= && env+=("__XPC_DYLD_LIBRARY_PATH=$libs")
     local inserted
     inserted=$(printf '%s\n' "$shim" "$cc" "$inject" | grep . | paste -sd: -)
     rm -rf "$(getconf DARWIN_USER_CACHE_DIR)com.apple.metal" "$(getconf DARWIN_USER_CACHE_DIR)com.apple.metalfe"
-    env ${env[@]+"${env[@]}"} AMD_BRONZE_COMPAT_PATH=$libs/AMDBronzeCompat.dylib \
-        DYLD_INSERT_LIBRARIES=$inserted DYLD_LIBRARY_PATH=$libs ./build/"$t" ${gpu:+"$gpu"} 2>/dev/null |
+    env ${env[@]+"${env[@]}"} AMD_BRONZE_COMPAT_PATH="$libs/AMDBronzeCompat.dylib" \
+        DYLD_INSERT_LIBRARIES="$inserted" DYLD_LIBRARY_PATH="$libs" ./build/"$t" ${gpu:+"$gpu"} 2>/dev/null |
         grep -E '^(PASS|FAIL|SKIP) ' | tail -1
 }
 

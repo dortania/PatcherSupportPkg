@@ -3758,9 +3758,10 @@ static bool onlyDirectAccesses(LLVMValueRef pointer, int depth = 0) {
 // read in a narrow min / max or division kept the bits above its byte (mslfuzz2 VEC=1 seed 1497, i47). An array of 8-
 // or 16-bit integers that only GEPs into its elements reach, with only loads and stores of the element type behind
 // them, becomes an array of i32: stores zero-extend, loads truncate. Runs before i07, which then rewrites the 32-bit
-// array. INTEL_NARROW_PRIVATE_ARRAY_FIX=0 turns it off.
+// array. Not with OCLP's 11.7.10 Ivy Bridge plugin: on an HD 4000 its compiler gets i47 right as it is and 161 of 256
+// threads wrong with the words (a test report on a MacBookPro9,2). INTEL_NARROW_PRIVATE_ARRAY_FIX=0 turns it off.
 static unsigned widenNarrowPrivateArrays(LLVMModuleRef module) {
-    if (disabled("INTEL_NARROW_PRIVATE_ARRAY_FIX") || runtimeNamesBound(module)) return 0;
+    if (disabled("INTEL_NARROW_PRIVATE_ARRAY_FIX") || ivyBridgePlugin || runtimeNamesBound(module)) return 0;
     enum { kArrayKind = 11 };
     LLVMContextRef context = LLVMGetModuleContext(module);
     LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
