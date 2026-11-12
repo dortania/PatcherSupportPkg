@@ -69,6 +69,9 @@
 //      -[CIKernelLibrary initWithData:error:]; NSData returns those metallibs from a cache that keeps them alive
 //  42. viewports 1-15 on the 12.x Intel driver before the app sets a viewport (they cover nothing: primitives sent to them
 //      with [[viewport_array_index]] draw nothing): each render encoder starts with the default viewport set explicitly
+//  43. Metal Performance Shaders' NDArray matrix multiplication on the Haswell / Ivy Bridge GPUs, which encoded nothing
+//      (MPSNDArrayMatrixMultiplication and MPSGraph's matmul left their results at 0): it gets the classic
+//      MPSMatrixMultiplication it uses on the AMD GPU
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -2275,8 +2278,11 @@ static void dropValidationLayers(void) {
     }
 }
 
+static void installMPSMatmulFallback(void);  // item 43
+
 static id<MTLDevice> compatCreateSystemDefaultDevice(void) {
     dropValidationLayers();
+    installMPSMatmulFallback();
     id<MTLDevice> device = MTLCreateSystemDefaultDevice();
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MTLCreateSystemDefaultDevice from %s -> %s\n", callerImage(__builtin_return_address(0)), device.name.UTF8String);
     pinDevice((__bridge const void *)device);
@@ -2293,6 +2299,7 @@ static id<MTLDevice> compatCreateSystemDefaultDevice(void) {
 
 static CFArrayRef compatCopyAllDevices(void) {
     dropValidationLayers();
+    installMPSMatmulFallback();
     CFArrayRef all = (__bridge_retained CFArrayRef)MTLCopyAllDevices();
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MTLCopyAllDevices from %s\n", callerImage(__builtin_return_address(0)));
     for (CFIndex i = 0; all && i < CFArrayGetCount(all); i++) pinDevice(CFArrayGetValueAtIndex(all, i));
@@ -2301,6 +2308,7 @@ static CFArrayRef compatCopyAllDevices(void) {
 
 static CFArrayRef compatCopyAllDevicesWithObserver(id<NSObject> __strong *observer, MTLDeviceNotificationHandler handler) {
     dropValidationLayers();
+    installMPSMatmulFallback();
     CFArrayRef all = (__bridge_retained CFArrayRef)MTLCopyAllDevicesWithObserver(observer, handler);
     for (CFIndex i = 0; all && i < CFArrayGetCount(all); i++) pinDevice(CFArrayGetValueAtIndex(all, i));
     return fromChromium(__builtin_return_address(0)) ? familyTwoOnly(all) : all;
@@ -2617,6 +2625,69 @@ static void keepPortraitLibraries(void) {
     if (m) origDataWithContentsOfURL = method_setImplementation(m, (IMP)keptPortraitLibrary);
 }
 
+// ---- 43. MPS NDArray matrix multiplication on the Intel GPU --------------------------------------------------------
+// MPSNDArrayMatrixMultiplication (and through it MPSGraph's matrixMultiplication, the matmul of anything built on
+// MPSGraph) multiplies with its own NDArray kernels on GPUs that MPSCore's device record types as 18-24, and with an
+// MPSMatrixMultiplication it creates in -initWithDevice:sourceCount: (its _mmul) on the others. MPSCore types the
+// Haswell / Ivy Bridge GPUs 24 (the R9 M370X 26), so on them no _mmul is made, and the NDArray path has no kernel for
+// these family-1 GPUs: the encode opens and closes a compute encoder with no dispatch, and every result stays 0 (any
+// size, transposed, batched, float16, with a bias). MPSMatrixMultiplication itself runs right there: MPS's classic API
+// uses its MatrixMultiplyNN kernels on the Iris Pro. So before an encode on such a GPU, an
+// MPSNDArrayMatrixMultiplication without _mmul gets the same MPSMatrixMultiplication it creates on the AMD GPU, and
+// then takes the AMD GPU's path. Installed (an override of the encode method it inherits from
+// MPSNDArrayMultiaryKernel, through which the public encodes and MPSGraph's both pass) once MPSNDArray is loaded, from
+// this library's initializer and the device calls that come before any MPS kernel. Only the class itself (not its
+// gather / quantized subclasses) on the 12.x Intel driver's devices. MTLSHIM_MPS_MATMUL=0 turns it off. Test: s57.
+@interface NSObject (MetalOldCompatMPSMatmul)  // MPSMatrixMultiplication's initializer (this library doesn't link MPS)
+- (instancetype)initWithDevice:(id)device transposeLeft:(BOOL)transposeLeft transposeRight:(BOOL)transposeRight resultRows:(NSUInteger)rows
+                 resultColumns:(NSUInteger)columns interiorColumns:(NSUInteger)interior alpha:(double)alpha beta:(double)beta;
+@end
+typedef void (*MPSEncodeIMP)(id, SEL, void *, void *, void *, void *, void *, void *);
+static MPSEncodeIMP inheritedMPSEncode;
+static Class mpsMatmulClass;
+static ptrdiff_t mpsMatmulFallbackOffset;
+
+static void encodeMatmulWithFallback(id self, SEL _cmd, void *encoder, void *commandBuffer, void *sources, void *state, void *destination,
+                                     void *dag) {
+    void **fallback = (void **)((char *)(__bridge void *)self + mpsMatmulFallbackOffset);
+    if (object_getClass(self) == mpsMatmulClass && !*fallback) {
+        id device = ((id (*)(id, SEL))objc_msgSend)(self, @selector(device));
+        Class matmul = objc_getClass("MPSMatrixMultiplication");
+        if (matmul && device && !strncmp(object_getClassName(device), "MTLIGAccel", 10)) {
+            id kernel = [[matmul alloc] initWithDevice:device transposeLeft:NO transposeRight:NO resultRows:1 resultColumns:1 interiorColumns:1
+                                                 alpha:1 beta:0];
+            if (kernel) *fallback = (__bridge_retained void *)kernel;  // owned by the object, as its own _mmul would be
+            if (kernel && getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MPSNDArrayMatrixMultiplication: classic MPSMatrixMultiplication added\n");
+        }
+    }
+    inheritedMPSEncode(self, _cmd, encoder, commandBuffer, sources, state, destination, dag);
+}
+
+static void installMPSMatmulFallback(void) {
+    static os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
+    static BOOL done;
+    if (done) return;
+    os_unfair_lock_lock(&lock);
+    const char *setting = getenv("MTLSHIM_MPS_MATMUL");
+    Class matmul = objc_getClass("MPSNDArrayMatrixMultiplication");
+    if (done || (setting && !strcmp(setting, "0"))) done = YES;
+    else if (matmul) {
+        done = YES;  // one try once the class is there
+        SEL encode = sel_registerName("encodeToMPSCommandEncoder:commandBuffer:sourceArrays:resultState:destinationArray:kernelDAGObject:");
+        Method inherited = class_getInstanceMethod(class_getSuperclass(matmul), encode);
+        Ivar fallback = class_getInstanceVariable(matmul, "_mmul");
+        const char *type = fallback ? ivar_getTypeEncoding(fallback) : "";
+        if (inherited && fallback && type[0] == '@' && !strcmp(method_getTypeEncoding(inherited), "v64@0:8@16@24@32@40@48@56")) {
+            inheritedMPSEncode = (MPSEncodeIMP)method_getImplementation(inherited);
+            mpsMatmulClass = matmul;
+            mpsMatmulFallbackOffset = ivar_getOffset(fallback);
+            BOOL added = class_addMethod(matmul, encode, (IMP)encodeMatmulWithFallback, method_getTypeEncoding(inherited));
+            if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MPS NDArray matmul fallback %s\n", added ? "installed" : "not installed (the class has its own encode)");
+        }
+    }
+    os_unfair_lock_unlock(&lock);
+}
+
 static void installWebKitRouting(void) {
     Method supportsFamily = class_getInstanceMethod(objc_getClass("_MTLDevice"), @selector(supportsFamily:));
     if (supportsFamily) realSupportsFamily = (BOOL (*)(id, SEL, NSInteger))method_getImplementation(supportsFamily);
@@ -2645,9 +2716,11 @@ __attribute__((constructor)) static void init(void) {
     installAIR27Retargeting();
     installWebKitRouting();
     keepPortraitLibraries();
+    if (onMetalOld()) installMPSMatmulFallback();
 #else
     (void)dropValidationLayers;
     (void)keepPortraitLibraries;
+    (void)installMPSMatmulFallback;
     (void)installWebKitRouting;
     (void)patchDeviceBase;
     (void)installAIR27Retargeting;
