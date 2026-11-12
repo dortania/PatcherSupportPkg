@@ -16,11 +16,13 @@
 //  10. depth of mipmapped depth-stencil textures read by shaders (small levels come from the wrong place)
 //  11. Stencil8 textures with several levels or slices (blits, the depth unit and shaders address them differently)
 //  12. depth-stencil textures attached as stencil only (the depth unit misaddresses them up to 32 texels wide)
+//  13. viewports 1-15 before the app sets a viewport (they cover nothing: vertex amplification views mapped to them and
+//      primitives sent to them with [[viewport_array_index]] draw nothing; wgpu's multiview)
 // 1 and 2 come from riptidewave93's bronzefix, found and tested on Tahoe with a MacPro6,1's FirePro D700s.
 // AMD_BRONZE_COMPAT=0 turns everything off for a process, AMD_EXACT_TRILINEAR=0 only item 3,
 // AMD_BRONZE_SRGB_RESOLVE=0 only item 4, AMD_BRONZE_MEMORYLESS=0 only item 8, AMD_BRONZE_DEPTH_MIPS=0 only item 10,
 // AMD_BRONZE_STENCIL_VIEW=0 only item 1's stencil view descriptors, AMD_BRONZE_STENCIL8=0 only item 11,
-// AMD_BRONZE_STENCIL_DEPTH=0 only item 12;
+// AMD_BRONZE_STENCIL_DEPTH=0 only item 12, AMD_BRONZE_VIEWPORTS=0 only item 13;
 // AMD_BRONZE_VERBOSE=1 logs.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -441,12 +443,39 @@ static MTLRenderPassDescriptor *stencilOnlyWithDepth(MTLRenderPassDescriptor *de
     return fixed;
 }
 
+// 13. Until the app sets a viewport, Metal's default viewport covers the render target, in every one of the 16 viewport
+// slots on Apple GPUs. The driver sets that up only for slot 0: slots 1-15 cover nothing until setViewport: or
+// setViewports:count:, so a vertex amplification view mapped to viewportArrayIndexOffset 1+ (wgpu maps view i to slot i
+// and sets a viewport only when the app does: multiview::draw_multiview drew nothing into layer 1) and primitives sent
+// to a slot with [[viewport_array_index]] are dropped. The driver's setViewport: fills every slot, so each encoder
+// starts with the default viewport set explicitly: renderTargetWidth/Height when given, otherwise the smallest
+// attachment, which is what the driver uses for slot 0. Test: s56.
+static BOOL viewportFix;
+
+static void setDefaultViewport(id<MTLRenderCommandEncoder> encoder, MTLRenderPassDescriptor *descriptor) {
+    NSUInteger width = descriptor.renderTargetWidth, height = descriptor.renderTargetHeight;
+    if (!width || !height) {
+        width = height = NSUIntegerMax;
+        MTLRenderPassAttachmentDescriptor *attachments[10] = {descriptor.depthAttachment, descriptor.stencilAttachment};
+        for (NSUInteger i = 0; i < 8; i++) attachments[2 + i] = descriptor.colorAttachments[i];
+        for (NSUInteger i = 0; i < 10; i++) {
+            id<MTLTexture> texture = attachments[i].texture;
+            if (!texture) continue;
+            width = MIN(width, MAX(texture.width >> attachments[i].level, 1));
+            height = MIN(height, MAX(texture.height >> attachments[i].level, 1));
+        }
+        if (width == NSUIntegerMax) return;
+    }
+    [encoder setViewport:(MTLViewport){0, 0, (double)width, (double)height, 0, 1}];
+}
+
 static id renderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor) {
     NSMutableArray *resolves = nil;
     NSArray *route = nil;
     MTLRenderPassDescriptor *fixed = takeSrgbResolves(stencilOnlyWithDepth(stencilViewToParent(descriptor)), &resolves);
     fixed = routeDepthMipStencil(self, fixed, &route);
     id encoder = origRenderEncoder(self, _cmd, fixed);
+    if (encoder && viewportFix) setDefaultViewport(encoder, descriptor);
     if (encoder && (resolves || route)) {
         objc_setAssociatedObject(encoder, kPendingResolves, resolves, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(encoder, kDepthMipRoute, route, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -490,7 +519,8 @@ static void installRenderPassHooks(void) {
     if (definesMethod(encoder, @selector(endEncoding)) && (srgbResolve || depthMipFixInstalled()))
         origRenderEndEncoding = (EndEncodingIMP)swizzle(encoder, @selector(endEncoding), (IMP)renderEndEncoding);
     srgbResolveFix = srgbResolve && origRenderEndEncoding;
-    if (origViewInit || origRenderEndEncoding)
+    viewportFix = !disabled("AMD_BRONZE_VIEWPORTS") && definesMethod(encoder, @selector(setViewport:));
+    if (origViewInit || origRenderEndEncoding || viewportFix)
         origRenderEncoder = (RenderEncoderIMP)swizzle(commandBuffer, @selector(renderCommandEncoderWithDescriptor:), (IMP)renderEncoder);
 }
 
@@ -992,11 +1022,11 @@ __attribute__((constructor)) static void init(void) {
         if (!disabled("AMD_EXACT_TRILINEAR")) installTrilinearFix(name);
         BOOL coherence = installCoherenceFix();
         if (verbose()) fprintf(stderr, "[bronzecompat] view fix %s, sRGB mipmaps %s, trilinear %s, sRGB resolve %s, copy pitch %s, memoryless %s, "
-                               "device coherence %s, depth mips %s\n",
+                               "device coherence %s, depth mips %s, default viewports %s\n",
                                origViewInit ? "on" : "off", origGenerateMipmaps ? "on" : "off", origSamplerInit ? "on" : "off",
                                srgbResolveFix ? "on" : "off", origCopyToBuffer ? "on" : "off",
                                origNewTexture && memorylessFix ? "on" : "off", coherence ? "on" : "off",
-                               origNewTexture && origAddrComputeSurfaceInfo ? "on" : "off");
+                               origNewTexture && origAddrComputeSurfaceInfo ? "on" : "off", viewportFix && origRenderEncoder ? "on" : "off");
         return;
     }
 }

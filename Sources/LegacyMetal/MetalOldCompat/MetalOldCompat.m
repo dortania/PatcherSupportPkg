@@ -67,6 +67,8 @@
 //      SDOFV2MetalKernelNamed:] and SDOFV3MetalKernelNamed: pass a static NSData that the library's once-block stores
 //      without retaining, so once an autorelease pool drains it is freed and the next portrait kernel crashes in
 //      -[CIKernelLibrary initWithData:error:]; NSData returns those metallibs from a cache that keeps them alive
+//  42. viewports 1-15 on the 12.x Intel driver before the app sets a viewport (they cover nothing: primitives sent to them
+//      with [[viewport_array_index]] draw nothing): each render encoder starts with the default viewport set explicitly
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -931,6 +933,33 @@ static void clearThroughTemporary(id<MTLCommandBuffer> commandBuffer, MTLRenderP
     [blit endEncoding];
 }
 
+// 42. Until the app sets a viewport, Metal's default viewport covers the render target, in every one of the 16 viewport
+// slots on Apple GPUs. The 12.x Intel driver sets that up only for slot 0: slots 1-15 cover nothing until setViewport:
+// or setViewports:count:, so primitives sent to one with [[viewport_array_index]] are dropped (the 12.5 AMD driver does
+// the same: AMDBronzeCompat item 13). The driver's setViewport: fills every slot, so each encoder starts with the
+// default viewport set explicitly: renderTargetWidth/Height when given, otherwise the smallest attachment, as on Apple
+// GPUs (for attachments of different sizes the driver's own slot 0 took the first color attachment's).
+// MTLSHIM_DEFAULT_VIEWPORTS=0 turns this off. Test: s56.
+static void setDefaultViewport(id<MTLRenderCommandEncoder> encoder, MTLRenderPassDescriptor *descriptor) {
+    static int enabled = -1;
+    if (enabled < 0) enabled = !(getenv("MTLSHIM_DEFAULT_VIEWPORTS") && !strcmp(getenv("MTLSHIM_DEFAULT_VIEWPORTS"), "0"));
+    if (!enabled) return;
+    NSUInteger width = descriptor.renderTargetWidth, height = descriptor.renderTargetHeight;
+    if (!width || !height) {
+        width = height = NSUIntegerMax;
+        MTLRenderPassAttachmentDescriptor *attachments[10] = {descriptor.depthAttachment, descriptor.stencilAttachment};
+        for (NSUInteger i = 0; i < 8; i++) attachments[2 + i] = descriptor.colorAttachments[i];
+        for (NSUInteger i = 0; i < 10; i++) {
+            id<MTLTexture> texture = attachments[i].texture;
+            if (!texture) continue;
+            width = MIN(width, MAX(texture.width >> attachments[i].level, 1));
+            height = MIN(height, MAX(texture.height >> attachments[i].level, 1));
+        }
+        if (width == NSUIntegerMax) return;
+    }
+    [encoder setViewport:(MTLViewport){0, 0, (double)width, (double)height, 0, 1}];
+}
+
 static id igRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor) {
     MTLRenderPassDescriptor *redirected = nil;
     NSMutableArray *copies = nil;  // {temporary, destination, level, slice, depth plane}
@@ -1063,6 +1092,7 @@ static id igRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor
         }
     }
     id encoder = origIGRenderEncoder(self, _cmd, redirected ?: descriptor);
+    if (encoder) setDefaultViewport(encoder, descriptor);
     if (encoder && copies.count) {
         if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] %lu attachment(s) copied out of temporary textures at the end\n", (unsigned long)copies.count);
         objc_setAssociatedObject(encoder, kPendingResolveCopies, @[self, copies], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
