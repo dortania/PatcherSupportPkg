@@ -70,9 +70,12 @@
 // Installed: AMDShared.bundle/Contents/MacOS/AMDTextureAtomics.dylib, loaded by a weak load command in AMDShared.
 // Test use (in-process compiling): DYLD_INSERT_LIBRARIES=Tests/tools/localcc.dylib:build/texatomic.dylib <app>
 //   TEXATOMIC_LOG=1   log what is rewritten
+//   TEXATOMIC_DUMP_DIR=<dir>   write each module (as received and after these jobs) and its IL there; it also works in
+//   MTLCompilerService (__XPC_TEXATOMIC_DUMP_DIR, with __XPC_DYLD_LIBRARY_PATH naming a folder with AMDShared and this library)
 #include "sihazard.h"
 #include <CommonCrypto/CommonDigest.h>
 #include <dlfcn.h>
+#include <fcntl.h>
 #include <mach-o/loader.h>
 #include <mach-o/nlist.h>
 #include <stdarg.h>
@@ -1966,6 +1969,11 @@ static bool exactNarrow(void *v, void **stack, int depth) {
     return false;
 }
 
+static bool disabledSetting(const char *name) {
+    const char *setting = getenv(name);
+    return setting && !strcmp(setting, "0");
+}
+
 static unsigned narrowUnsignedConstants(void *module) {
     const char *setting = getenv("AMD_NARROW_CONSTANT_FIX");
     if ((setting && !strcmp(setting, "0")) || !api.binaryCreate || !api.castCreate || !api.functionTypeGet || !api.getOrInsertFunction ||
@@ -2039,6 +2047,38 @@ static unsigned narrowUnsignedConstants(void *module) {
                 continue;
             }
             unsigned packedBits = lanes * width;
+            if (lanes == 3 && isInstruction(v, kOpcodeLoad) && api.extractElement && api.insertElement && api.undefGet && api.userNew &&
+                !disabledSetting("AMD_NARROW_LOAD3_FIX")) {
+                // A loaded 3-lane vector (MPS's image kernels compare their thread position with a short3 size in their
+                // parameters): zero-extended whole, libAMDIL902 folds the extension into the load as a <3 x i32> one
+                // and fetches lane 2 at byte 8 instead of 4, past a short3 into the padding MPS leaves uncleared, so
+                // the bounds check of MPSImageAdd / MPSImageMultiply read a leftover pointer's bits as the depth and
+                // the kernel wrote nothing about half the time. Each lane is extracted, extended and cut on its own
+                // (AMD_NARROW_LOAD3_FIX=0 leaves the whole-vector extension, for r02).
+                int s1 = extendSigned ? 1 : 0;
+                if (!extract[s1][1]) {
+                    if (!extractType[1]) {
+                        void *params[3] = {i32, i32, i32};
+                        extractType[1] = api.functionTypeGet(i32, params, 3, false);
+                    }
+                    const char *name = s1 ? "air.extract_bits.s.i32" : "air.extract_bits.u.i32";
+                    extract[s1][1] = api.getOrInsertFunction(module, name, strlen(name), extractType[1]);
+                    if (!extract[s1][1] || subclassID(extract[s1][1]) != kValueFunction) return rewritten;
+                }
+                void *vector = api.undefGet(wideType);
+                for (unsigned lane = 0; lane < lanes; lane++) {
+                    void *narrowLane = api.userNew(96, 2);
+                    api.extractElement(narrowLane, v, api.constantIntGet(i32, lane, false), &kNoName, inst);
+                    void *args[3] = {api.castCreate(kOpcodeZExt, narrowLane, i32, &kNoName, inst), api.constantIntGet(i32, 0, false),
+                                     api.constantIntGet(i32, width, false)};
+                    void *element = createCall(extract[s1][1], extractType[1], args, 3, inst);
+                    void *next = api.userNew(96, 3);
+                    api.insertElement(next, vector, element, api.constantIntGet(i32, lane, false), &kNoName, inst);
+                    vector = next;
+                }
+                wide[k] = vector;
+                continue;
+            }
             if (lanes > 1 && isInstruction(v, kOpcodeLoad) && nextUse(firstUse(v)) && (packedBits == 16 || packedBits == 32) &&
                 api.insertElement && api.undefGet && api.userNew && api.getInt16Ty) {
                 // A loaded narrow vector with other users (`v == uchar4(..)` beside `as_type<uint>(v)`): zero-extended,
@@ -2977,7 +3017,29 @@ static unsigned wideMulHi(void *module) {
     return rewritten;
 }
 
+// TEXATOMIC_DUMP_DIR=<dir> (debugging): each module as libAMDIL902 receives it and after this library's jobs, as
+// <dir>/module-<pid>-<n>-{in,out}.ll (llvm::Module::dump writes to stderr, which is pointed at the file meanwhile).
+static void dumpModuleToFile(void *module, const char *tag, int serial) {
+    const char *dir = getenv("TEXATOMIC_DUMP_DIR");
+    if (!dir || !api.moduleDump) return;
+    char path[1024];
+    snprintf(path, sizeof path, "%s/module-%d-%d-%s.ll", dir, getpid(), serial, tag);
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return;
+    fflush(stderr);
+    int saved = dup(2);
+    dup2(fd, 2);
+    close(fd);
+    api.moduleDump(module);
+    fflush(stderr);
+    dup2(saved, 2);
+    close(saved);
+}
+
 static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *c, void *d, void *e) {
+    static int dumpSerial;
+    int serial = dumpSerial++;
+    if (module && resolveAPI()) dumpModuleToFile(module, "in", serial);
     if (module && resolveAPI()) {
         static bool optionsParsed;  // TEXATOMIC_LLVM_ARGS="-print-after-all ...": libAMDIL902's LLVM options (diagnostics)
         const char *llvmArgs = getenv("TEXATOMIC_LLVM_ARGS");
@@ -3041,6 +3103,7 @@ static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *
         if (arrayStores && logging()) fprintf(stderr, "[texatomic] %u variable-index private array store(s) done per element\n", arrayStores);
         unsigned n = lowerTextureAtomics(module);
         if (logging()) fprintf(stderr, "[texatomic] compileShader: %u texture atomic call(s) lowered\n", n);
+        dumpModuleToFile(module, "out", serial);
     } else if (logging()) {
         fprintf(stderr, "[texatomic] compileShader: LLVM API unavailable\n");
     }
@@ -3506,6 +3569,13 @@ static int hookedSCCompileShader(void *sc, void *src, void *out) {
     uint32_t *size = (uint32_t *)((char *)src + kSrcSize);
     Text il = {0};
     SCDumpILShader(&il, *tokens, *size, appendFormatted);
+    if (getenv("TEXATOMIC_DUMP_DIR") && il.buf) {  // debugging: the IL SC receives (before this step's rewrites)
+        static int serial;
+        char path[1024];
+        snprintf(path, sizeof path, "%s/il-%d-%d.txt", getenv("TEXATOMIC_DUMP_DIR"), getpid(), serial++);
+        FILE *f = fopen(path, "w");
+        if (f) fputs(il.buf, f), fclose(f);
+    }
     int fmasks = 0;
     if (il.buf && strstr(il.buf, "load_fptr") && fmaskFixEnabled()) {
         Text identity = {0};
