@@ -4933,6 +4933,43 @@ static void installICBEHook() {
     if (logging()) fprintf(stderr, "[inteltex] iCBE CompilePixelShaderOpenGL %s\n", originalCompilePixelShader ? "hooked" : "NOT hooked");
 }
 
+// ---- loops that never exit -------------------------------------------------------------------------------------------
+// A block whose only instruction branches back to itself is a loop that can never exit or do anything; LLVM leaves one
+// where a loop can't advance for the function constants it was specialized with (MPS's reduce_multiple_passes_axes_*
+// kernels, entered when a stride is 0). The IGIL back end compiles most of them, but nested in MPSGraph's outer-axis
+// reductions (reductionMaximum / softMax over axis 0) its compile never finishes (USC::CompileComputeShaderOpenCL_Gen7
+// spins), the stock compiler too, and the app waits forever. A thread that reached such a loop would hang the GPU, so
+// it returns instead: nothing a finishing thread does changes. INTEL_INFINITE_LOOP_FIX=0 leaves them.
+extern "C" {
+LLVMValueRef LLVMBuildRetVoid(LLVMBuilderRef);
+LLVMValueRef LLVMBuildRet(LLVMBuilderRef, LLVMValueRef);
+LLVMTypeRef LLVMGetReturnType(LLVMTypeRef);
+}
+enum { kOpcodeBr = 2, kTypeKindVoid = 0 };
+static unsigned returnFromEndlessLoops(LLVMModuleRef module) {
+    if (disabled("INTEL_INFINITE_LOOP_FIX")) return 0;
+    unsigned n = 0;
+    LLVMBuilderRef builder = nullptr;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
+        if (LLVMIsDeclaration(f)) continue;
+        LLVMTypeRef result = LLVMGetReturnType(LLVMGetElementType(LLVMTypeOf(f)));
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb)) {
+            LLVMValueRef branch = LLVMGetBasicBlockTerminator(bb);
+            if (!branch || LLVMGetFirstInstruction(bb) != branch || LLVMGetInstructionOpcode(branch) != kOpcodeBr || LLVMIsConditional(branch) ||
+                LLVMGetNumSuccessors(branch) != 1 || LLVMGetSuccessor(branch, 0) != bb)
+                continue;
+            if (!builder) builder = LLVMCreateBuilderInContext(LLVMGetModuleContext(module));
+            LLVMPositionBuilderBefore(builder, branch);
+            if (LLVMGetTypeKind(result) == kTypeKindVoid) LLVMBuildRetVoid(builder);
+            else LLVMBuildRet(builder, LLVMGetUndef(result));
+            LLVMInstructionEraseFromParent(branch);
+            n++;
+        }
+    }
+    if (builder) LLVMDisposeBuilder(builder);
+    return n;
+}
+
 static int hookedRun(void *self, LLVMModuleRef module) {
     pthread_mutex_lock(&installLock);
     installIntoPlugin(false);  // test process: the plugin was dlopened after we were inserted
@@ -4948,6 +4985,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
     if (module) {
         unsigned n = dropMaxWorkGroupSize(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u air.max_work_group_size attribute(s) dropped\n", n);
+        n = returnFromEndlessLoops(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u loop(s) that never exit made returns\n", n);
         n = dropArrayStructInfo(module);
         if (n && logging()) fprintf(stderr, "[inteltex] struct info dropped from %u array-of-struct argument(s)\n", n);
         n = fixEscapedHandleLoads(module);
