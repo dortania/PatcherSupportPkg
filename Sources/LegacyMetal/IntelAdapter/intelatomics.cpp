@@ -4516,6 +4516,59 @@ static unsigned widenNarrowVectorCompares(LLVMModuleRef module) {
     return (unsigned)(found.size() + selects.size());
 }
 
+// ---- compares of a 0/1 value with 1 in vertex and fragment functions --------------------------------------------------
+// if (((x & 1u) & y) != 1u) { ... } in a fragment function took the branch by the wrong pixels: the front end makes it
+// icmp eq (and (and x, 1), y), 1 with the targets swapped, and the back end, inverting it, turns the compare of a value
+// that can only be 0 or 1 into the value itself, takes the `& 1` out of it as redundant for a 0/1 test, and then tests
+// the whole register (IGIL: AND r, x, y; IF_CND.z r). Pixels where x & y has bits above bit 0 set went the wrong way.
+// Compares with 0 of the same value are right, and so are selects on it. Found by fuzzing fragment functions (VEC=1
+// seed 1248: x = insert_bits(...) & 1, y = mulhi(...); it began as a char2 & (char2(33, 56) & char2) expression that
+// the front end folded to scalars). In a module with a vertex or fragment function, each icmp eq / ne of a value that
+// can only be 0 or 1 (an and with such an operand, a shift right by all but one bit, zext of a bool, or, xor and select
+// of such values) with 1 becomes icmp ne / eq with 0. INTEL_BIT_TEST_COMPARE_FIX=0 turns it off. Test: i68.
+static bool zeroOrOne(LLVMValueRef v, int depth = 0) {
+    if (LLVMIsAConstantInt(v)) return LLVMConstIntGetZExtValue(v) <= 1;
+    if (depth > 8 || !LLVMIsAInstruction(v)) return false;
+    enum { kLShr = 21, kAnd = 23, kOr = 24, kXor = 25, kZExt = 31, kSelect = 46 };
+    switch (LLVMGetInstructionOpcode(v)) {
+    case kAnd: return zeroOrOne(LLVMGetOperand(v, 0), depth + 1) || zeroOrOne(LLVMGetOperand(v, 1), depth + 1);
+    case kOr: case kXor: return zeroOrOne(LLVMGetOperand(v, 0), depth + 1) && zeroOrOne(LLVMGetOperand(v, 1), depth + 1);
+    case kSelect: return zeroOrOne(LLVMGetOperand(v, 1), depth + 1) && zeroOrOne(LLVMGetOperand(v, 2), depth + 1);
+    case kZExt: return LLVMGetTypeKind(LLVMTypeOf(LLVMGetOperand(v, 0))) == kTypeKindInteger && LLVMGetIntTypeWidth(LLVMTypeOf(LLVMGetOperand(v, 0))) == 1;
+    case kLShr: {
+        LLVMValueRef amount = LLVMGetOperand(v, 1);
+        return LLVMIsAConstantInt(amount) && LLVMConstIntGetZExtValue(amount) == LLVMGetIntTypeWidth(LLVMTypeOf(v)) - 1;
+    }
+    default: return false;
+    }
+}
+static unsigned bitTestCompares(LLVMModuleRef module) {
+    if (disabled("INTEL_BIT_TEST_COMPARE_FIX")) return 0;
+    if (!LLVMGetNamedMetadataNumOperands(module, "air.vertex") && !LLVMGetNamedMetadataNumOperands(module, "air.fragment")) return 0;
+    enum { kICmp = 42, kIntEQ = 32, kIntNE = 33 };
+    std::vector<LLVMValueRef> found;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                if (LLVMGetInstructionOpcode(inst) != kICmp || LLVMGetTypeKind(LLVMTypeOf(LLVMGetOperand(inst, 0))) != kTypeKindInteger) continue;
+                int predicate = LLVMGetICmpPredicate(inst);
+                LLVMValueRef one = LLVMGetOperand(inst, 1);
+                if ((predicate == kIntEQ || predicate == kIntNE) && LLVMIsAConstantInt(one) && LLVMConstIntGetZExtValue(one) == 1 &&
+                    !LLVMIsAConstant(LLVMGetOperand(inst, 0)) && zeroOrOne(LLVMGetOperand(inst, 0)))
+                    found.push_back(inst);
+            }
+    if (found.empty()) return 0;
+    LLVMBuilderRef b = LLVMCreateBuilderInContext(LLVMGetModuleContext(module));
+    for (LLVMValueRef inst : found) {
+        LLVMPositionBuilderBefore(b, inst);
+        LLVMValueRef v = LLVMGetOperand(inst, 0);
+        LLVMReplaceAllUsesWith(inst, LLVMBuildICmp(b, LLVMGetICmpPredicate(inst) == kIntEQ ? kIntNE : kIntEQ, v, LLVMConstNull(LLVMTypeOf(v)), ""));
+        LLVMInstructionEraseFromParent(inst);
+    }
+    LLVMDisposeBuilder(b);
+    return (unsigned)found.size();
+}
+
 // ---- SIMD16 pixel kernels with a clobbered value ---------------------------------------------------------------------
 // The plugin has the GL driver's back end, iCBE, turn each fragment function into EU code: a SIMD8 and a SIMD16 kernel,
 // the hardware dispatching SIMD16 for full pixel groups. Under the SIMD16 kernel's higher register pressure, iCBE's
@@ -4679,6 +4732,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (flattened && logging()) fprintf(stderr, "[inteltex] %u short branch(es) folded into selects\n", flattened);
         n = selectBufferIndices(module);  // after flattenBranchChains, whose selects can pick pointers
         if (n && logging()) fprintf(stderr, "[inteltex] %u select(s) of pointers into one buffer turned into a selected index\n", n);
+        n = bitTestCompares(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u compare(s) of a 0/1 value with 1 in a vertex/fragment module done as a compare with 0\n", n);
         n = widenNarrowVectorCompares(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u compare(s) of byte / halfword vectors in a vertex/fragment module done on 32-bit lanes\n", n);
         n = splitHalfwordBytes(module);  // last: the rewrites above see the module as before
