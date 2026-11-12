@@ -1,0 +1,6 @@
+build/
+Tests/build/
+Tests/tools/localcc.dylib
+Tests/tools/bronzeload.dylib
+Tests/RESULTS*.md
+Tests/fuzz/runs/

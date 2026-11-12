@@ -1,0 +1,8 @@
+--- !tapi-tbd
+tbd-version:     4
+targets:         [ x86_64-macos ]
+install-name:    '/System/Library/Extensions/AMDShared.bundle/Contents/PlugIns/libAMDIL902.dylib'
+exports:
+  - targets:     [ x86_64-macos ]
+    symbols:     [ '__ZN4llvm12amdMtlPlugin14ILPluginHelper13compileShaderERNS_6ModuleERNSt3__112basic_stringIcNS4_11char_traitsIcEENS4_9allocatorIcEEEERPcRySD_SE_SB_' ]
+...

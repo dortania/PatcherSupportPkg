@@ -1,0 +1,35 @@
+# LegacyMetal
+
+Sources for the legacy Metal fixes in `Universal-Binaries/13.2.1-24` and `13.2.1-25` (Metal.framework), `Universal-Binaries/12.5`
+(AMDShared.bundle, AppleIntelHD5000GraphicsMTLDriver.bundle) and `Universal-Binaries/12.5-GCN-25` (Tahoe's
+AMDShared.bundle): a compatibility library for MetalOld, adapters for the 12.5 AMD and 3802 Intel shader compilers,
+the libAMDIL902 patches, and fixes for the 12.5 AMD Metal driver (`AMDBronzeCompat.dylib`, loaded by
+`AMDMTLBronzeDriver.bundle` in `12.5`, `12.5-24`, `12.5-25` and `12.5-GCN-SKL-*`).
+
+`build.sh` also writes Tahoe's compiler for this stack into `13.6-25` and `13.2.1-25`: the `14.2 Beta 1` compiler under the
+`Versions/31001` paths (`tools/make_tahoe_compiler.py`).
+
+What each fix does, the bug behind it and its test: [FIXES.md](FIXES.md). New fixes get their entry there.
+
+## Build
+
+    ./build.sh
+
+Rebuilds the libraries and the patched files from the stock payload in git and writes them to `Universal-Binaries/`.
+With Xcode 26 (macOS SDK 26.2, ld 1230) the output is byte-identical to the committed files. Older Command Line Tools
+(for example 16.4, SDK 15.5) also build them, but the binaries differ.
+
+## Test
+
+On a Mac with OCLP's legacy Metal stack:
+
+    cd Tests && ./build.sh && ./verify.sh
+
+`verify.sh` runs each test without and with its fix, without installing anything. `PAYLOAD=12.5-GCN-25 ./verify.sh`
+runs the AMD compiler tests with Tahoe's AMDShared files (they load on Sequoia too). `run.sh` runs them against what is
+installed. On Tahoe, use `run.sh`: `verify.sh` compiles in the test process through `tools/localcc.dylib`, which crashed there when last tried.
+
+Each test uses the GPU its bug is about and reports SKIP where that GPU is missing. Both scripts take a GPU name
+substring to run every test on one GPU: on a Mac without the AMD GPU, use `./verify.sh Intel` and `./run.sh Intel`.
+Without OCLP's MetalOld wrapper (GCN-only Macs), MetalOldCompat can't load, so `verify.sh` reports SKIP for its tests
+and runs the rest without it.
