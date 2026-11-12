@@ -75,6 +75,10 @@
 //  44. MetalFX's temporal scaler on the Haswell / Ivy Bridge GPUs, which said it was supported but whose pass needs
 //      quad-group functions these family-1 GPUs don't have (its kernel failed to compile and the first encode crashed
 //      the app): reported unsupported there, and not created
+//  45. texture reads through Metal 4's read sampler (Xcode 26: every read of a Metal 4.0 library, and SceneKit's, VFX's
+//      and CoreComposite's depth, cube and 1D reads on macOS 26) on Tahoe's compiler, which crashed on those with ushort
+//      coordinates (SceneKit's temporal antialiasing) and passed the rest to back ends that can't build them: rebuilt in
+//      the older form, without the sampler
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -1196,15 +1200,15 @@ static void computePatchSamplerObject(void *context, const void *patchInfo, cons
     if (computeLodPreClamp) hardware[0] = (hardware[0] & ~(1u << 28)) | (state[0] & (1u << 28));  // LODPreClampEnable
 }
 
-// entry -> replacement, for a function starting push rbp; mov rbp, rsp; push r15; push r14; push r13; push r12 (position
-// independent): returns a trampoline running those 12 bytes and continuing after them
-static void *hookStandardPrologue(unsigned char *entry, void *replacement) {
+// entry -> replacement, for a function whose first `length` (>= 12) bytes are whole position-independent instructions
+// (checked by the caller): returns a trampoline running those bytes and continuing after them
+static void *hookPrologue(unsigned char *entry, size_t length, void *replacement) {
     unsigned char *stub = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
-    if (stub == MAP_FAILED) return NULL;
+    if (stub == MAP_FAILED || length < 12 || length > 64) return NULL;
     unsigned char *p = stub;
-    memcpy(p, entry, 12), p += 12;
-    *p++ = 0x48, *p++ = 0xb8;  // mov rax, entry + 12
-    uint64_t back = (uint64_t)(entry + 12);
+    memcpy(p, entry, length), p += length;
+    *p++ = 0x48, *p++ = 0xb8;  // mov rax, entry + length
+    uint64_t back = (uint64_t)(entry + length);
     memcpy(p, &back, 8), p += 8;
     *p++ = 0xff, *p++ = 0xe0;  // jmp rax
     if (mprotect(stub, 4096, PROT_READ | PROT_EXEC)) return NULL;
@@ -1218,6 +1222,9 @@ static void *hookStandardPrologue(unsigned char *entry, void *replacement) {
     vm_protect(mach_task_self(), page, vm_page_size * 2, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
     return stub;
 }
+
+// hookPrologue for a function starting push rbp; mov rbp, rsp; push r15; push r14; push r13; push r12 (12 bytes)
+static void *hookStandardPrologue(unsigned char *entry, void *replacement) { return hookPrologue(entry, 12, replacement); }
 
 static void computeSamplerCompare(void) {
     static const unsigned char kExpected[42] = {
@@ -2480,6 +2487,212 @@ static void installAIR27Retargeting(void) {
     _dyld_register_func_for_add_image(interposeCompilerImage);  // also called for the images already loaded
 }
 
+// 45. Texture reads through the read sampler. Xcode 26's front end builds every texture read of a Metal 4.0 library, and
+// depth, cube and 1D reads in some of macOS 26's own libraries (SceneKit, VFX, CoreComposite), as
+// air.read_<texture>(texture, air.get_read_sampler(), ...): the older form's arguments with the sampler second and, for
+// 2D, 2D-array, 3D and depth 2D(-array) textures, a texel offset after the coordinates (or the layer). Tahoe's compiler
+// on this stack (the macOS 14.2 front end, installed as GPUCompiler 31001) predates the form: its
+// AIR16BitTextureCoordinateEmulationPass, which widens ushort coordinates for these GPUs, takes the sampler for the
+// coordinates and crashes MTLCompilerService on such a read with ushort coordinates (SceneKit's temporal_aa, behind
+// SCNView's temporal antialiasing; any Metal 4.0 kernel reading with a ushort thread position), and MetalOld resends the
+// request forever. The other reads reach the back ends as they are, and libAMDIL902 can't build them ("SC compilation
+// failure There is a call to an undefined label": SceneKit's HDR exposure adaptation, cube and depth copies). A read takes
+// no sampler state, so before that pass every such call is rebuilt in the older form, the one the runtime compiler
+// emits: without the sampler, the offset added to the coordinates. The pass is wrapped by an inline hook (its 14-byte
+// prologue checked), the module edited through the C API of the same libLLVM. MTLSHIM_READ_SAMPLER=0 turns it off.
+// Test: s59.
+static struct {
+    LLVMRef (*getNamedFunction)(LLVMRef module, const char *name);
+    LLVMRef (*firstFunction)(LLVMRef module);
+    LLVMRef (*nextFunction)(LLVMRef function);
+    const char *(*valueName)(LLVMRef value, size_t *length);
+    void (*setValueName)(LLVMRef value, const char *name, size_t length);
+    LLVMRef (*firstUse)(LLVMRef value);
+    LLVMRef (*nextUse)(LLVMRef use);
+    LLVMRef (*user)(LLVMRef use);
+    LLVMRef (*isACallInst)(LLVMRef value);
+    LLVMRef (*calledValue)(LLVMRef call);
+    LLVMRef (*operand)(LLVMRef user, unsigned i);
+    LLVMRef (*globalValueType)(LLVMRef global);
+    LLVMRef (*returnType)(LLVMRef functionType);
+    unsigned (*paramCount)(LLVMRef functionType);
+    void (*paramTypes)(LLVMRef functionType, LLVMRef *out);
+    int (*typeKind)(LLVMRef type);
+    unsigned (*pointerAddressSpace)(LLVMRef type);
+    LLVMRef (*functionType)(LLVMRef result, LLVMRef *params, unsigned count, int varArg);
+    LLVMRef (*addFunction)(LLVMRef module, const char *name, LLVMRef type);
+    LLVMRef (*moduleContext)(LLVMRef module);
+    LLVMRef (*createBuilder)(LLVMRef context);
+    void (*positionBefore)(LLVMRef builder, LLVMRef instruction);
+    LLVMRef (*buildAdd)(LLVMRef builder, LLVMRef lhs, LLVMRef rhs, const char *name);
+    LLVMRef (*buildCall)(LLVMRef builder, LLVMRef type, LLVMRef function, LLVMRef *args, unsigned count, const char *name);
+    void (*disposeBuilder)(LLVMRef builder);
+    void (*replaceAllUses)(LLVMRef old, LLVMRef replacement);
+    void (*eraseInstruction)(LLVMRef instruction);
+    void (*deleteFunction)(LLVMRef function);
+    int (*isNull)(LLVMRef value);
+    unsigned (*attributeCount)(LLVMRef function, unsigned index);
+    void (*attributes)(LLVMRef function, unsigned index, LLVMRef *out);
+    void (*addAttribute)(LLVMRef function, unsigned index, LLVMRef attribute);
+    unsigned (*callAttributeCount)(LLVMRef call, unsigned index);
+    void (*callAttributes)(LLVMRef call, unsigned index, LLVMRef *out);
+    void (*addCallAttribute)(LLVMRef call, unsigned index, LLVMRef attribute);
+} llvmFE;
+_Static_assert(sizeof llvmFE == 35 * sizeof(void *), "one slot per name in installReadSamplerRewrite");
+enum { kLLVMPointerTypeKind = 12, kLLVMFunctionIndex = ~0u, kReadArguments = 12 };
+typedef void *(*PassRunFn)(void *result, void *pass, void *module, void *analyses);  // PreservedAnalyses returned in memory
+static PassRunFn origCoordinateEmulationRun;
+
+// The function-level attributes (nounwind, memory effects) of `from` on `to`: a declaration, or a call site.
+static void copyFunctionAttributes(LLVMRef from, LLVMRef to, bool calls) {
+    unsigned count = calls ? llvmFE.callAttributeCount(from, kLLVMFunctionIndex) : llvmFE.attributeCount(from, kLLVMFunctionIndex);
+    LLVMRef attributes[32];
+    if (count > 32) return;
+    if (calls) llvmFE.callAttributes(from, kLLVMFunctionIndex, attributes);
+    else llvmFE.attributes(from, kLLVMFunctionIndex, attributes);
+    for (unsigned i = 0; i < count; i++)
+        if (calls) llvmFE.addCallAttribute(to, kLLVMFunctionIndex, attributes[i]);
+        else llvmFE.addAttribute(to, kLLVMFunctionIndex, attributes[i]);
+}
+
+// One read intrinsic in the newer form -> the older one; returns the calls rebuilt (0 if any use isn't such a call).
+static unsigned plainReadFunction(LLVMRef module, LLVMRef read, const char *name) {
+    static const struct { const char *prefix; unsigned coord, offset; } kOffsets[] = {
+        {"air.read_texture_2d.", 2, 3}, {"air.read_texture_2d_array.", 2, 4}, {"air.read_texture_3d.", 2, 3},
+        {"air.read_depth_2d.", 3, 4},   {"air.read_depth_2d_array.", 3, 5},
+    };
+    unsigned coord = 0, offset = 0;
+    for (size_t k = 0; k < sizeof kOffsets / sizeof *kOffsets; k++)
+        if (!strncmp(name, kOffsets[k].prefix, strlen(kOffsets[k].prefix))) coord = kOffsets[k].coord, offset = kOffsets[k].offset;
+    LLVMRef type = llvmFE.globalValueType(read), params[kReadArguments], kept[kReadArguments];
+    unsigned count = llvmFE.paramCount(type), keptCount = 0;
+    if (count < 3 || count > kReadArguments) return 0;
+    llvmFE.paramTypes(type, params);
+    if (llvmFE.typeKind(params[1]) != kLLVMPointerTypeKind || llvmFE.pointerAddressSpace(params[1]) != 2) return 0;
+    if (offset && (offset >= count || params[offset] != params[coord])) return 0;
+    unsigned calls = 0;
+    for (LLVMRef use = llvmFE.firstUse(read); use; use = llvmFE.nextUse(use), calls++) {
+        LLVMRef call = llvmFE.user(use);
+        if (!llvmFE.isACallInst(call) || llvmFE.calledValue(call) != read) return 0;
+    }
+    if (!calls) return 0;
+    LLVMRef *found = malloc(calls * sizeof *found);
+    if (!found) return 0;
+    unsigned n = 0;
+    for (LLVMRef use = llvmFE.firstUse(read); use; use = llvmFE.nextUse(use)) found[n++] = llvmFE.user(use);
+    for (unsigned a = 0; a < count; a++)
+        if (a != 1 && (!offset || a != offset)) kept[keptCount++] = params[a];
+    LLVMRef plainType = llvmFE.functionType(llvmFE.returnType(type), kept, keptCount, 0);
+    char *saved = strdup(name);
+    llvmFE.setValueName(read, "", 0);  // the older form takes the name
+    LLVMRef plain = llvmFE.addFunction(module, saved, plainType);
+    free(saved);
+    copyFunctionAttributes(read, plain, false);
+    LLVMRef builder = llvmFE.createBuilder(llvmFE.moduleContext(module));
+    for (unsigned c = 0; c < calls; c++) {
+        LLVMRef call = found[c], args[kReadArguments];
+        unsigned argCount = 0;
+        llvmFE.positionBefore(builder, call);
+        for (unsigned a = 0; a < count; a++) {
+            if (a == 1 || (offset && a == offset)) continue;
+            LLVMRef value = llvmFE.operand(call, a);
+            if (offset && a == coord && !llvmFE.isNull(llvmFE.operand(call, offset)))
+                value = llvmFE.buildAdd(builder, value, llvmFE.operand(call, offset), "");
+            args[argCount++] = value;
+        }
+        LLVMRef rebuilt = llvmFE.buildCall(builder, plainType, plain, args, argCount, "");
+        copyFunctionAttributes(call, rebuilt, true);
+        llvmFE.replaceAllUses(call, rebuilt);
+        llvmFE.eraseInstruction(call);
+    }
+    llvmFE.disposeBuilder(builder);
+    free(found);
+    llvmFE.deleteFunction(read);
+    return calls;
+}
+
+static unsigned plainReads(LLVMRef module) {
+    LLVMRef sampler = llvmFE.getNamedFunction(module, "air.get_read_sampler");
+    if (!sampler) return 0;
+    LLVMRef reads[64];
+    unsigned count = 0, rebuilt = 0;
+    for (LLVMRef f = llvmFE.firstFunction(module); f && count < 64; f = llvmFE.nextFunction(f)) {
+        size_t length = 0;
+        const char *name = llvmFE.valueName(f, &length);
+        if (name && (!strncmp(name, "air.read_texture_", 17) || !strncmp(name, "air.read_depth_", 15))) reads[count++] = f;
+    }
+    for (unsigned i = 0; i < count; i++) {
+        size_t length = 0;
+        char name[128];
+        const char *current = llvmFE.valueName(reads[i], &length);
+        if (!current || length >= sizeof name) continue;
+        memcpy(name, current, length), name[length] = 0;
+        rebuilt += plainReadFunction(module, reads[i], name);
+    }
+    LLVMRef *dead = NULL;
+    unsigned deadCount = 0;
+    for (LLVMRef use = llvmFE.firstUse(sampler); use; use = llvmFE.nextUse(use)) {  // read-sampler calls left unused
+        LLVMRef call = llvmFE.user(use);
+        if (!llvmFE.isACallInst(call) || llvmFE.firstUse(call)) continue;
+        LLVMRef *grown = realloc(dead, (deadCount + 1) * sizeof *dead);
+        if (!grown) break;
+        dead = grown, dead[deadCount++] = call;
+    }
+    for (unsigned i = 0; i < deadCount; i++) llvmFE.eraseInstruction(dead[i]);
+    free(dead);
+    if (!llvmFE.firstUse(sampler)) llvmFE.deleteFunction(sampler);
+    if (rebuilt && getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] %u texture read(s) rebuilt without the read sampler\n", rebuilt);
+    return rebuilt;
+}
+
+static void *coordinateEmulationRun(void *result, void *pass, void *module, void *analyses) {
+    plainReads(module);
+    return origCoordinateEmulationRun(result, pass, module, analyses);
+}
+
+static const char kGPUCompiler31001[] = "/System/Library/PrivateFrameworks/GPUCompiler.framework/Versions/31001/Libraries/";
+
+static void hookCoordinateEmulation(const struct mach_header *mh, intptr_t slide) {
+    static const unsigned char kPrologue[14] = {0x55, 0x48, 0x89, 0xe5, 0x41, 0x56, 0x53, 0x48, 0x83, 0xec, 0x10, 0x49, 0x89, 0xd6};
+    Dl_info info;
+    const size_t dirLength = sizeof kGPUCompiler31001 - 1;
+    (void)slide;
+    if (origCoordinateEmulationRun || !dladdr(mh, &info) || !info.dli_fname || strncmp(info.dli_fname, kGPUCompiler31001, dirLength) ||
+        strcmp(info.dli_fname + dirLength, "libGPUCompilerImpl.dylib"))
+        return;
+    void *impl = dlopen(info.dli_fname, RTLD_NOLOAD | RTLD_LAZY);
+    char path[256];
+    snprintf(path, sizeof path, "%slibLLVM_real.dylib", kGPUCompiler31001);
+    void *llvm = dlopen(path, RTLD_NOLOAD | RTLD_LAZY);
+    unsigned char *entry = impl ? dlsym(impl, "_ZN4llvm3air38AIR16BitTextureCoordinateEmulationPass3runERNS_6ModuleERNS_15AnalysisManagerIS2_JEEE") : NULL;
+    if (!llvm || !entry || memcmp(entry, kPrologue, sizeof kPrologue)) {
+        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] read sampler rewrite: compiler not as expected, left alone\n");
+        return;
+    }
+    const char *names[] = {"LLVMGetNamedFunction", "LLVMGetFirstFunction", "LLVMGetNextFunction", "LLVMGetValueName2",
+                           "LLVMSetValueName2", "LLVMGetFirstUse", "LLVMGetNextUse", "LLVMGetUser", "LLVMIsACallInst",
+                           "LLVMGetCalledValue", "LLVMGetOperand", "LLVMGlobalGetValueType", "LLVMGetReturnType",
+                           "LLVMCountParamTypes", "LLVMGetParamTypes", "LLVMGetTypeKind", "LLVMGetPointerAddressSpace",
+                           "LLVMFunctionType", "LLVMAddFunction", "LLVMGetModuleContext", "LLVMCreateBuilderInContext",
+                           "LLVMPositionBuilderBefore", "LLVMBuildAdd", "LLVMBuildCall2", "LLVMDisposeBuilder",
+                           "LLVMReplaceAllUsesWith", "LLVMInstructionEraseFromParent", "LLVMDeleteFunction", "LLVMIsNull",
+                           "LLVMGetAttributeCountAtIndex", "LLVMGetAttributesAtIndex", "LLVMAddAttributeAtIndex",
+                           "LLVMGetCallSiteAttributeCount", "LLVMGetCallSiteAttributes", "LLVMAddCallSiteAttribute"};
+    _Static_assert(sizeof names / sizeof *names == sizeof llvmFE / sizeof(void *), "one name per slot");
+    void **slots = (void **)&llvmFE;
+    for (size_t i = 0; i < sizeof names / sizeof *names; i++)
+        if (!(slots[i] = dlsym(llvm, names[i]))) return;
+    origCoordinateEmulationRun = (PassRunFn)hookPrologue(entry, sizeof kPrologue, (void *)coordinateEmulationRun);
+    if (getenv("MTLSHIM_VERBOSE"))
+        shimLog("[mtlshim] read sampler rewrite: %s\n", origCoordinateEmulationRun ? "installed" : "hook failed");
+}
+
+static void installReadSamplerRewrite(void) {
+    const char *setting = getenv("MTLSHIM_READ_SAMPLER");
+    if ((setting && !strcmp(setting, "0")) || strcmp(getprogname(), "MTLCompilerService")) return;
+    _dyld_register_func_for_add_image(hookCoordinateEmulation);  // also called for the images already loaded
+}
+
 // Item 11 for WebKit in the dyld shared cache, which is where it lives on Tahoe (Sequoia's Safari has its own copy on disk) and for
 // WKWebView apps: __interpose doesn't reach calls made from there, and ANGLE would run WebGL on the Intel iGPU. Those calls go
 // through __stubs and import slots outside the images, which several images can share; the replacements leave other callers alone.
@@ -2776,6 +2989,7 @@ __attribute__((constructor)) static void init(void) {
     if (onMetalOld()) dropValidationLayers();
     patchDeviceBase();
     installAIR27Retargeting();
+    installReadSamplerRewrite();
     installWebKitRouting();
     keepPortraitLibraries();
     if (onMetalOld()) installMPSMatmulFallback(), installMetalFXTemporalLimit();
@@ -2787,5 +3001,6 @@ __attribute__((constructor)) static void init(void) {
     (void)installWebKitRouting;
     (void)patchDeviceBase;
     (void)installAIR27Retargeting;
+    (void)installReadSamplerRewrite;
 #endif
 }

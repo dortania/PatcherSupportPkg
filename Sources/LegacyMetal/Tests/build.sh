@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build.sh: builds every repro program into build/ (and s13's and i05's metallibs if Xcode's metal compiler is available).
+# build.sh: builds every repro program into build/ (and s13's, i05's and s59's metallibs if Xcode's metal compiler is available).
 set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p build
@@ -24,7 +24,14 @@ if xcrun -sdk macosx -f metal >/dev/null 2>&1; then
             rm -f "build/$test-$tag.air"
         done
     done
+    # s59: a Metal 4.0 library (Xcode 26), whose texture reads all go through the read sampler
+    if xcrun -sdk macosx metal -std=metal4.0 -mmacosx-version-min=26.0 -c data/s59-reads.metal -o build/s59.air 2>/dev/null; then
+        xcrun -sdk macosx metallib build/s59.air -o build/s59-metal4.metallib
+        rm -f build/s59.air
+    else
+        echo "build.sh: this metal compiler has no Metal 4.0 (Xcode 26); s59 will SKIP" >&2
+    fi
 else
-    echo "build.sh: Xcode's metal compiler not found; s13 and i05 will SKIP" >&2
+    echo "build.sh: Xcode's metal compiler not found; s13, i05 and s59 will SKIP" >&2
 fi
 find build -maxdepth 1 -type f -perm -u+x ! -name '*.metallib' | wc -l | xargs echo "programs built:"
