@@ -72,6 +72,9 @@
 //  43. Metal Performance Shaders' NDArray matrix multiplication on the Haswell / Ivy Bridge GPUs, which encoded nothing
 //      (MPSNDArrayMatrixMultiplication and MPSGraph's matmul left their results at 0): it gets the classic
 //      MPSMatrixMultiplication it uses on the AMD GPU
+//  44. MetalFX's temporal scaler on the Haswell / Ivy Bridge GPUs, which said it was supported but whose pass needs
+//      quad-group functions these family-1 GPUs don't have (its kernel failed to compile and the first encode crashed
+//      the app): reported unsupported there, and not created
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -2279,10 +2282,12 @@ static void dropValidationLayers(void) {
 }
 
 static void installMPSMatmulFallback(void);  // item 43
+static void installMetalFXTemporalLimit(void);  // item 44
 
 static id<MTLDevice> compatCreateSystemDefaultDevice(void) {
     dropValidationLayers();
     installMPSMatmulFallback();
+    installMetalFXTemporalLimit();
     id<MTLDevice> device = MTLCreateSystemDefaultDevice();
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MTLCreateSystemDefaultDevice from %s -> %s\n", callerImage(__builtin_return_address(0)), device.name.UTF8String);
     pinDevice((__bridge const void *)device);
@@ -2300,6 +2305,7 @@ static id<MTLDevice> compatCreateSystemDefaultDevice(void) {
 static CFArrayRef compatCopyAllDevices(void) {
     dropValidationLayers();
     installMPSMatmulFallback();
+    installMetalFXTemporalLimit();
     CFArrayRef all = (__bridge_retained CFArrayRef)MTLCopyAllDevices();
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MTLCopyAllDevices from %s\n", callerImage(__builtin_return_address(0)));
     for (CFIndex i = 0; all && i < CFArrayGetCount(all); i++) pinDevice(CFArrayGetValueAtIndex(all, i));
@@ -2309,6 +2315,7 @@ static CFArrayRef compatCopyAllDevices(void) {
 static CFArrayRef compatCopyAllDevicesWithObserver(id<NSObject> __strong *observer, MTLDeviceNotificationHandler handler) {
     dropValidationLayers();
     installMPSMatmulFallback();
+    installMetalFXTemporalLimit();
     CFArrayRef all = (__bridge_retained CFArrayRef)MTLCopyAllDevicesWithObserver(observer, handler);
     for (CFIndex i = 0; all && i < CFArrayGetCount(all); i++) pinDevice(CFArrayGetValueAtIndex(all, i));
     return fromChromium(__builtin_return_address(0)) ? familyTwoOnly(all) : all;
@@ -2688,6 +2695,61 @@ static void installMPSMatmulFallback(void) {
     os_unfair_lock_unlock(&lock);
 }
 
+// ---- 44. MetalFX's temporal scaler on the Intel GPU ----------------------------------------------------------------
+// +[MTLFXTemporalScalerDescriptor supportsDevice:] says yes for the Haswell / Ivy Bridge GPUs, but the temporal pass
+// (unified_pass_tile / unified_pass_kern) uses quad_shuffle_xor and quad_sum, which these family-1 GPUs don't have: the
+// IGIL back end's built-in inliner aborts on them (the stock compiler too), MetalFX keeps going without the pipeline
+// and the first -encodeToCommandBuffer: crashes the app in the driver's setKernel. Emulating quad operations would need
+// threadgroup memory and barriers at every use, which is only safe in uniform control flow. So on the 12.x Intel
+// driver's devices the temporal scaler is reported unsupported and not created (nil, as for any unsupported device),
+// and apps take their path without it; the spatial scaler works there. MTLSHIM_METALFX_TEMPORAL=0 turns this off. Test: s58.
+typedef BOOL (*SupportsDeviceIMP)(id, SEL, id);
+typedef id (*NewTemporalIMP)(id, SEL, id) RETURNS_RETAINED;
+typedef id (*NewTemporalCompilerIMP)(id, SEL, id, id) RETURNS_RETAINED;
+static SupportsDeviceIMP origTemporalSupportsDevice;
+static NewTemporalIMP origNewTemporalScaler;
+static NewTemporalCompilerIMP origNewTemporalScalerCompiler;
+
+static BOOL legacyIntelDevice(id device) { return device && !strncmp(object_getClassName(device), "MTLIGAccel", 10); }
+
+static BOOL temporalSupportsDevice(id self, SEL _cmd, id device) {
+    return legacyIntelDevice(device) ? NO : origTemporalSupportsDevice(self, _cmd, device);
+}
+static id newTemporalScaler(id self, SEL _cmd, id device) RETURNS_RETAINED;
+static id newTemporalScaler(id self, SEL _cmd, id device) {
+    if (!legacyIntelDevice(device)) return origNewTemporalScaler(self, _cmd, device);
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MetalFX temporal scaler: not on this GPU (no quad-group functions)\n");
+    return nil;
+}
+static id newTemporalScalerCompiler(id self, SEL _cmd, id device, id compiler) RETURNS_RETAINED;
+static id newTemporalScalerCompiler(id self, SEL _cmd, id device, id compiler) {
+    return legacyIntelDevice(device) ? nil : origNewTemporalScalerCompiler(self, _cmd, device, compiler);
+}
+
+static void installMetalFXTemporalLimit(void) {
+    static os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
+    static BOOL done;
+    if (done) return;
+    os_unfair_lock_lock(&lock);
+    const char *setting = getenv("MTLSHIM_METALFX_TEMPORAL");
+    Class descriptor = objc_getClass("MTLFXTemporalScalerDescriptor");
+    if (done || (setting && !strcmp(setting, "0"))) done = YES;
+    else if (descriptor) {
+        done = YES;
+        Method supports = class_getClassMethod(descriptor, @selector(supportsDevice:));
+        Method create = class_getInstanceMethod(descriptor, @selector(newTemporalScalerWithDevice:));
+        Method createCompiler = class_getInstanceMethod(descriptor, sel_registerName("newTemporalScalerWithDevice:compiler:"));
+        if (supports && !strcmp(method_getTypeEncoding(supports), "c24@0:8@16"))
+            origTemporalSupportsDevice = (SupportsDeviceIMP)method_setImplementation(supports, (IMP)temporalSupportsDevice);
+        if (create && !strcmp(method_getTypeEncoding(create), "@24@0:8@16"))
+            origNewTemporalScaler = (NewTemporalIMP)method_setImplementation(create, (IMP)newTemporalScaler);
+        if (createCompiler && !strcmp(method_getTypeEncoding(createCompiler), "@32@0:8@16@24"))
+            origNewTemporalScalerCompiler = (NewTemporalCompilerIMP)method_setImplementation(createCompiler, (IMP)newTemporalScalerCompiler);
+        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MetalFX temporal scaler limit installed\n");
+    }
+    os_unfair_lock_unlock(&lock);
+}
+
 static void installWebKitRouting(void) {
     Method supportsFamily = class_getInstanceMethod(objc_getClass("_MTLDevice"), @selector(supportsFamily:));
     if (supportsFamily) realSupportsFamily = (BOOL (*)(id, SEL, NSInteger))method_getImplementation(supportsFamily);
@@ -2716,11 +2778,12 @@ __attribute__((constructor)) static void init(void) {
     installAIR27Retargeting();
     installWebKitRouting();
     keepPortraitLibraries();
-    if (onMetalOld()) installMPSMatmulFallback();
+    if (onMetalOld()) installMPSMatmulFallback(), installMetalFXTemporalLimit();
 #else
     (void)dropValidationLayers;
     (void)keepPortraitLibraries;
     (void)installMPSMatmulFallback;
+    (void)installMetalFXTemporalLimit;
     (void)installWebKitRouting;
     (void)patchDeviceBase;
     (void)installAIR27Retargeting;

@@ -8,6 +8,7 @@ for src in [a-z][0-9]*.m; do
     extra=
     grep -q '<CoreImage/CoreImage.h>' "$src" && extra="-framework CoreImage -framework CoreGraphics"  # s53 only: the others stay without it
     grep -q '<MetalPerformanceShadersGraph/' "$src" && extra="-framework MetalPerformanceShaders -framework MetalPerformanceShadersGraph"  # s57
+    grep -q '<MetalFX/' "$src" && extra="-framework MetalFX"  # s58
     clang -arch x86_64 -mmacosx-version-min=12.0 -fobjc-arc -O1 -Wall -Wno-unguarded-availability-new \
         -framework Foundation -framework Metal $extra -o "build/$name" "$src"
 done
