@@ -2386,6 +2386,32 @@ LLVMValueRef LLVMBuildURem(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const cha
 LLVMValueRef LLVMBuildSDiv(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
 LLVMValueRef LLVMBuildSRem(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
 }
+static LLVMValueRef unsignedValue(LLVMBuilderRef b, LLVMTypeRef i32, LLVMValueRef x);
+extern "C" LLVMValueRef LLVMIsAInstruction(LLVMValueRef);
+// The lanes of an i8 / i16 vector as <N x i32>, zero- or sign-extended, for vertex and fragment functions, where the back
+// end's legalization of a narrow vector depends on how it was made: put together with insertelement or a constant, lane
+// by lane (extendLanes); a 16 / 32-bit vector made otherwise (as_type, a load), from its word with shifts (signedValue,
+// unsignedValue: sext of an as_type<char4> came out wrong and zext of one crashed); a trunc of 32-bit lanes, those lanes
+// masked or sign-extended; anything else (ushort3, ushort4, uchar3), lane by lane: extending the whole vector crashed for
+// as_type<ushort3>(half3) (i69).
+static LLVMValueRef renderLanes32(LLVMBuilderRef b, LLVMTypeRef i32, LLVMValueRef v, bool sign) {
+    unsigned n = lanes(LLVMTypeOf(v)), bits = subwordBits(LLVMTypeOf(v));
+    LLVMTypeRef wide = LLVMVectorType(i32, n);
+    if (LLVMIsAConstant(v) || LLVMIsAInsertElementInst(v)) return extendLanes(b, v, wide, sign);
+    if (LLVMValueRef x = sign ? signedValue(b, i32, v) : unsignedValue(b, i32, v)) return x;
+    enum { kTrunc = 30 };
+    if (LLVMIsAInstruction(v) && LLVMGetInstructionOpcode(v) == kTrunc && LLVMTypeOf(LLVMGetOperand(v, 0)) == wide) {
+        LLVMValueRef w = LLVMGetOperand(v, 0), s = splat(LLVMConstInt(i32, 32 - bits, false), n);
+        return sign ? LLVMBuildAShr(b, LLVMBuildShl(b, w, s, ""), s, "") : LLVMBuildAnd(b, w, splat(LLVMConstInt(i32, (1u << bits) - 1, false), n), "");
+    }
+    LLVMValueRef x = LLVMGetUndef(wide);
+    for (unsigned k = 0; k < n; k++) {
+        LLVMValueRef lane = LLVMBuildExtractElement(b, v, LLVMConstInt(i32, k, false), "");
+        lane = sign ? LLVMBuildSExt(b, lane, i32, "") : LLVMBuildZExt(b, lane, i32, "");
+        x = LLVMBuildInsertElement(b, x, lane, LLVMConstInt(i32, k, false), "");
+    }
+    return x;
+}
 static unsigned widenNarrowDivisions(LLVMModuleRef module) {
     if (disabled("INTEL_NARROW_DIV_FIX") || runtimeNamesBound(module)) return 0;
     enum { kOpcodeUDiv = 14, kOpcodeSDiv = 15, kOpcodeURem = 17, kOpcodeSRem = 18 };
@@ -4456,6 +4482,14 @@ static unsigned splitHalfwordBytes(LLVMModuleRef module) {
 // i8 / i16 vectors with a vector condition are done on 32-bit lanes too and truncated back.
 // INTEL_NARROW_VECTOR_COMPARE_FIX=0 turns it off.
 // Test: i64.
+// Arithmetic and bitwise operations on byte vectors crashed in the same legalization (as_type<uchar4>(x) ^
+// as_type<uchar4>(y), as_type<char4>(x) | select(...): as_type fragment fuzzing seed 9), so add, sub, mul, shl, lshr,
+// ashr, and, or and xor of i8 / i16 vectors are done on 32-bit lanes as well. Each such operation and select gets one
+// <N x i32> value whose low bits are its lanes; the operations, selects and compares that use it take that value (masked
+// or sign-extended where the high bits matter: the value lshr / ashr shifts, every shift amount, compares), and a trunc
+// to the narrow vector serves the other uses. Phis
+// of such vectors get a 32-bit phi beside them, so a vector carried around a loop isn't packed and unpacked each time.
+// INTEL_NARROW_VECTOR_ARITH_FIX=0 leaves those operations alone. Test: i66.
 // The zero-extended lanes of a packed vector of i8 / i16 (16 or 32 bits), from its word: (word >> bits * k) & mask.
 static LLVMValueRef unsignedValue(LLVMBuilderRef b, LLVMTypeRef i32, LLVMValueRef x) {
     unsigned bits = subwordBits(LLVMTypeOf(x)), n = lanes(LLVMTypeOf(x));
@@ -4470,50 +4504,103 @@ static LLVMValueRef unsignedValue(LLVMBuilderRef b, LLVMTypeRef i32, LLVMValueRe
     return LLVMBuildAnd(b, LLVMBuildLShr(b, v, LLVMConstVector(right, n), ""), LLVMConstVector(mask, n), "");
 }
 static unsigned widenNarrowVectorCompares(LLVMModuleRef module) {
-    if (disabled("INTEL_NARROW_VECTOR_COMPARE_FIX")) return 0;
+    bool compares = !disabled("INTEL_NARROW_VECTOR_COMPARE_FIX"), arithmetic = !disabled("INTEL_NARROW_VECTOR_ARITH_FIX");
+    if (!compares && !arithmetic) return 0;
     if (!LLVMGetNamedMetadataNumOperands(module, "air.vertex") && !LLVMGetNamedMetadataNumOperands(module, "air.fragment")) return 0;
-    enum { kICmp = 42, kSelect = 46, kIntSGT = 38, kIntSLE = 41 };
+    enum { kAdd = 8, kSub = 10, kMul = 12, kShl = 20, kLShr = 21, kAShr = 22, kAnd = 23, kOr = 24, kXor = 25, kICmp = 42, kPHI = 44,
+           kSelect = 46, kIntSGT = 38, kIntSLE = 41 };
     LLVMTypeRef i32 = LLVMInt32TypeInContext(LLVMGetModuleContext(module));
-    std::vector<LLVMValueRef> found, selects;
+    std::vector<LLVMValueRef> found, narrow;  // compares; selects and operations done on 32-bit lanes
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
         for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
             for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
                 int op = LLVMGetInstructionOpcode(inst);
-                if (op == kICmp && lanes(LLVMTypeOf(LLVMGetOperand(inst, 0))) && subwordBits(LLVMTypeOf(LLVMGetOperand(inst, 0))))
+                bool vector = lanes(LLVMTypeOf(inst)) && subwordBits(LLVMTypeOf(inst));
+                if (op == kICmp && compares && lanes(LLVMTypeOf(LLVMGetOperand(inst, 0))) && subwordBits(LLVMTypeOf(LLVMGetOperand(inst, 0))))
                     found.push_back(inst);
-                else if (op == kSelect && lanes(LLVMTypeOf(inst)) && subwordBits(LLVMTypeOf(inst)) && lanes(LLVMTypeOf(LLVMGetOperand(inst, 0))))
-                    selects.push_back(inst);
+                else if (op == kSelect && compares && vector && lanes(LLVMTypeOf(LLVMGetOperand(inst, 0))))
+                    narrow.push_back(inst);
+                else if (arithmetic && vector && (op == kAdd || op == kSub || op == kMul || (op >= kShl && op <= kXor) || op == kPHI))
+                    narrow.push_back(inst);
             }
-    if (found.empty() && selects.empty()) return 0;
+    if (found.empty() && narrow.empty()) return 0;
+    std::set<LLVMValueRef> isNarrow(narrow.begin(), narrow.end());
+    std::map<LLVMValueRef, LLVMValueRef> wideOf;  // one of `narrow`, or the trunc that replaced it: its 32-bit lanes
+    std::function<LLVMValueRef(LLVMValueRef)> wideValue;
     LLVMBuilderRef b = LLVMCreateBuilderInContext(LLVMGetModuleContext(module));
-    for (LLVMValueRef inst : selects) {  // per-lane selects of byte / halfword vectors: on 32-bit lanes, truncated
-        LLVMPositionBuilderBefore(b, inst);
-        LLVMTypeRef wide = LLVMVectorType(i32, lanes(LLVMTypeOf(inst)));
-        auto lanes32 = [&](LLVMValueRef v) {  // from the word where it isn't put together with insertelement
-            LLVMValueRef w = !LLVMIsAConstant(v) && !LLVMIsAInsertElementInst(v) ? unsignedValue(b, i32, v) : nullptr;
-            return w ? w : extendLanes(b, v, wide, false);
-        };
-        LLVMValueRef x = lanes32(LLVMGetOperand(inst, 1)), y = lanes32(LLVMGetOperand(inst, 2));
-        LLVMReplaceAllUsesWith(inst, LLVMBuildTrunc(b, LLVMBuildSelect(b, LLVMGetOperand(inst, 0), x, y, ""), LLVMTypeOf(inst), ""));
+    // v's lanes as <N x i32> before `at`: kind 0 with any high bits, 1 zero-extended, 2 sign-extended (renderLanes32 for
+    // values that aren't one of `narrow`).
+    auto operand = [&](LLVMValueRef v, LLVMValueRef at, int kind) -> LLVMValueRef {
+        unsigned n = lanes(LLVMTypeOf(v)), bits = subwordBits(LLVMTypeOf(v));
+        auto known = wideOf.find(v);
+        LLVMValueRef w = known != wideOf.end() ? known->second : isNarrow.count(v) ? wideValue(v) : nullptr;
+        LLVMPositionBuilderBefore(b, at);
+        if (w && kind == 1) return LLVMBuildAnd(b, w, splat(LLVMConstInt(i32, (1u << bits) - 1, false), n), "");
+        if (w && kind == 2) {
+            LLVMValueRef s = splat(LLVMConstInt(i32, 32 - bits, false), n);
+            return LLVMBuildAShr(b, LLVMBuildShl(b, w, s, ""), s, "");
+        }
+        if (w) return w;
+        return renderLanes32(b, i32, v, kind == 2);
+    };
+    wideValue = [&](LLVMValueRef inst) -> LLVMValueRef {  // built before `inst`, from its operands' 32-bit lanes
+        auto known = wideOf.find(inst);
+        if (known != wideOf.end()) return known->second;
+        int op = LLVMGetInstructionOpcode(inst);
+        LLVMValueRef w;
+        if (op == kPHI) {  // its incoming values are added below, once every operation has its 32-bit value
+            LLVMPositionBuilderBefore(b, inst);
+            return wideOf[inst] = LLVMBuildPhi(b, LLVMVectorType(i32, lanes(LLVMTypeOf(inst))), "");
+        }
+        if (op == kSelect) {
+            LLVMValueRef x = operand(LLVMGetOperand(inst, 1), inst, 0), y = operand(LLVMGetOperand(inst, 2), inst, 0);
+            LLVMPositionBuilderBefore(b, inst);
+            w = LLVMBuildSelect(b, LLVMGetOperand(inst, 0), x, y, "");
+        } else {  // the high bits matter for the value lshr / ashr shift and for every shift amount
+            LLVMValueRef x = operand(LLVMGetOperand(inst, 0), inst, op == kLShr ? 1 : op == kAShr ? 2 : 0);
+            LLVMValueRef y = operand(LLVMGetOperand(inst, 1), inst, op >= kShl && op <= kAShr ? 1 : 0);
+            LLVMPositionBuilderBefore(b, inst);
+            w = op == kAdd ? LLVMBuildAdd(b, x, y, "") : op == kSub ? LLVMBuildSub(b, x, y, "") : op == kMul ? LLVMBuildMul(b, x, y, "")
+              : op == kShl ? LLVMBuildShl(b, x, y, "") : op == kLShr ? LLVMBuildLShr(b, x, y, "") : op == kAShr ? LLVMBuildAShr(b, x, y, "")
+              : op == kAnd ? LLVMBuildAnd(b, x, y, "") : op == kOr ? LLVMBuildOr(b, x, y, "") : LLVMBuildXor(b, x, y, "");
+        }
+        wideOf[inst] = w;
+        return w;
+    };
+    for (LLVMValueRef inst : narrow) wideValue(inst);
+    for (LLVMValueRef inst : narrow) {  // phis: a loop-carried vector goes around the loop as 32-bit lanes
+        if (LLVMGetInstructionOpcode(inst) != kPHI) continue;
+        LLVMValueRef w = wideOf[inst];
+        std::map<LLVMBasicBlockRef, LLVMValueRef> fromBlock;  // a switch with several cases to here: one value per block (i53)
+        for (unsigned k = 0, n = LLVMCountIncoming(inst); k < n; k++) {
+            LLVMBasicBlockRef from = LLVMGetIncomingBlock(inst, k);
+            LLVMValueRef &value = fromBlock[from];
+            if (!value) value = operand(LLVMGetIncomingValue(inst, k), LLVMGetBasicBlockTerminator(from), 0);
+            LLVMAddIncoming(w, &value, &from, 1);
+        }
+    }
+    for (LLVMValueRef inst : narrow) {  // the narrow vector for the other uses: stores, lane reads, casts, phis
+        LLVMValueRef at = inst;
+        while (LLVMIsAPHINode(at)) at = LLVMGetNextInstruction(at);  // (after the block's phis)
+        LLVMPositionBuilderBefore(b, at);
+        LLVMValueRef w = wideOf[inst], t = LLVMBuildTrunc(b, w, LLVMTypeOf(inst), "");
+        LLVMReplaceAllUsesWith(inst, t);
+        wideOf[t] = w;
+    }
+    for (LLVMValueRef inst : narrow) {
+        wideOf.erase(inst);
         LLVMInstructionEraseFromParent(inst);
     }
     for (LLVMValueRef inst : found) {
-        LLVMPositionBuilderBefore(b, inst);
         int predicate = LLVMGetICmpPredicate(inst);
-        bool sign = predicate >= kIntSGT && predicate <= kIntSLE;
-        LLVMTypeRef wide = LLVMVectorType(i32, lanes(LLVMTypeOf(LLVMGetOperand(inst, 0))));
-        LLVMValueRef x = LLVMGetOperand(inst, 0), y = LLVMGetOperand(inst, 1);
-        auto widen = [&](LLVMValueRef v) {  // signed: from the packed word with shifts (sext of a cast vector was wrong too)
-            LLVMValueRef w = LLVMIsAConstant(v) || LLVMIsAInsertElementInst(v) ? nullptr
-                             : sign ? signedValue(b, i32, v) : unsignedValue(b, i32, v);
-            return w ? w : extendLanes(b, v, wide, sign);
-        };
-        x = widen(x), y = widen(y);
+        int kind = predicate >= kIntSGT && predicate <= kIntSLE ? 2 : 1;
+        LLVMValueRef x = operand(LLVMGetOperand(inst, 0), inst, kind), y = operand(LLVMGetOperand(inst, 1), inst, kind);
+        LLVMPositionBuilderBefore(b, inst);
         LLVMReplaceAllUsesWith(inst, LLVMBuildICmp(b, predicate, x, y, ""));
         LLVMInstructionEraseFromParent(inst);
     }
     LLVMDisposeBuilder(b);
-    return (unsigned)(found.size() + selects.size());
+    return (unsigned)(found.size() + narrow.size());
 }
 
 // ---- compares of a 0/1 value with 1 in vertex and fragment functions --------------------------------------------------
@@ -4913,7 +5000,7 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         n = expandRenderInt64(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u 64-bit division(s) / variable shift(s) in a vertex/fragment function done on 32-bit halves\n", n);
         n = widenNarrowVectorCompares(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u compare(s) of byte / halfword vectors in a vertex/fragment module done on 32-bit lanes\n", n);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u compare(s), select(s) and operation(s) on byte / halfword vectors in a vertex/fragment module done on 32-bit lanes\n", n);
         n = splitHalfwordBytes(module);  // last: the rewrites above see the module as before
         if (n && logging()) fprintf(stderr, "[inteltex] %u bitcast(s) of halfwords to bytes in a vertex/fragment module done lane by lane\n", n);
         if (getenv("INTELTEX_DUMP_REWRITTEN")) {  // debugging: every module after these rewrites
