@@ -4,7 +4,7 @@ targets:         [ x86_64-macos ]
 install-name:    '/System/Library/PrivateFrameworks/GPUCompiler.framework/Versions/3802/Libraries/libLLVM.dylib'
 exports:
   - targets:     [ x86_64-macos ]
-    symbols:     [ '__ZN4llvm6legacy11PassManager3runERNS_6ModuleE', _LLVMGetNamedFunction, _LLVMGetFirstFunction,
+    symbols:     [ '__ZN4llvm6legacy11PassManager3runERNS_6ModuleE', _LLVMGetNamedFunction, _LLVMAppendBasicBlockInContext, _LLVMMoveBasicBlockAfter, _LLVMGetFirstFunction,
                    _LLVMGetNextFunction, _LLVMGetValueName, _LLVMGetFirstBasicBlock, _LLVMGetNextBasicBlock,
                    _LLVMGetFirstInstruction, _LLVMGetNextInstruction, _LLVMIsALoadInst, _LLVMIsAStoreInst, _LLVMGetAlignment,
                    _LLVMSetAlignment, _LLVMGetPointerAddressSpace, _LLVMGetIntTypeWidth, _LLVMGetFirstUse, _LLVMGetNextUse, _LLVMGetUser,

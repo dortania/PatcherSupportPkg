@@ -4569,6 +4569,182 @@ static unsigned bitTestCompares(LLVMModuleRef module) {
     return (unsigned)found.size();
 }
 
+// ---- 64-bit division and variable shifts in vertex and fragment functions ---------------------------------------------
+// 64-bit udiv / sdiv / urem / srem, and shifts of an i64 by an amount that isn't a constant, crash the compiler service
+// in a vertex or fragment function (((ulong)x << 32 | y) / (ulong)(x | 1u), (long)a / (long)(int)b, a >> (y & 63u)):
+// the pipeline fails with "Compiler encountered an internal error". The same operations in a compute function are
+// right, and so are 64-bit add, mul (i27), compares and shifts by a constant. Found by fuzzing fragment functions with
+// 64-bit values, where every seed crashed. In a module with a vertex or fragment function, outside functions that only
+// kernels call, each is done on the 32-bit halves of its operands (of each lane, for vectors): a shift by s & 63 as
+// 32-bit shifts and a select on s & 32; a division as 64 shift-and-subtract steps in a loop (the shifted remainder kept
+// in 65 bits, so divisors above 2^63 are right), giving the quotient and the remainder, for sdiv / srem on the
+// magnitudes with the sign put back. Division by zero, undefined in MSL, gives all ones and the dividend.
+// INTEL_RENDER_INT64_FIX=0 turns it off. Test: i67.
+extern "C" {
+LLVMBasicBlockRef LLVMAppendBasicBlockInContext(LLVMContextRef, LLVMValueRef, const char *);
+void LLVMMoveBasicBlockAfter(LLVMBasicBlockRef, LLVMBasicBlockRef);
+}
+namespace int64 {
+enum { kUDiv = 14, kSDiv = 15, kURem = 17, kSRem = 18, kShl = 20, kLShr = 21, kAShr = 22,
+       kIntEQ = 32, kIntNE = 33, kIntUGT = 34, kIntUGE = 35, kIntULT = 36 };
+struct Halves { LLVMValueRef lo, hi; };  // i32, or <N x i32> for <N x i64>
+
+struct Builder {
+    LLVMBuilderRef b;
+    LLVMContextRef context;
+    LLVMTypeRef i32, i64, type;  // type: i32 or <N x i32>
+    unsigned n;
+    LLVMValueRef c(unsigned v) { return splat(LLVMConstInt(i32, v, false), n); }
+    LLVMValueRef shl(LLVMValueRef x, LLVMValueRef y) { return LLVMBuildShl(b, x, y, ""); }
+    LLVMValueRef lshr(LLVMValueRef x, LLVMValueRef y) { return LLVMBuildLShr(b, x, y, ""); }
+    LLVMValueRef ashr(LLVMValueRef x, LLVMValueRef y) { return LLVMBuildAShr(b, x, y, ""); }
+    LLVMValueRef bitOr(LLVMValueRef x, LLVMValueRef y) { return LLVMBuildOr(b, x, y, ""); }
+    LLVMValueRef bitXor(LLVMValueRef x, LLVMValueRef y) { return LLVMBuildXor(b, x, y, ""); }
+    LLVMValueRef cmp(int predicate, LLVMValueRef x, LLVMValueRef y) { return LLVMBuildICmp(b, predicate, x, y, ""); }
+    LLVMValueRef sel(LLVMValueRef c, LLVMValueRef x, LLVMValueRef y) { return LLVMBuildSelect(b, c, x, y, ""); }
+    LLVMValueRef bit(LLVMValueRef condition) { return LLVMBuildZExt(b, condition, type, ""); }
+
+    Halves split(LLVMValueRef v) {  // v: i64 or <N x i64>
+        auto one = [&](LLVMValueRef s) -> Halves {
+            return {LLVMBuildTrunc(b, s, i32, ""), LLVMBuildTrunc(b, LLVMBuildLShr(b, s, LLVMConstInt(i64, 32, false), ""), i32, "")};
+        };
+        if (!n) return one(v);
+        Halves h = {LLVMGetUndef(type), LLVMGetUndef(type)};
+        for (unsigned k = 0; k < n; k++) {
+            LLVMValueRef index = LLVMConstInt(i32, k, false);
+            Halves lane = one(LLVMBuildExtractElement(b, v, index, ""));
+            h.lo = LLVMBuildInsertElement(b, h.lo, lane.lo, index, "");
+            h.hi = LLVMBuildInsertElement(b, h.hi, lane.hi, index, "");
+        }
+        return h;
+    }
+    LLVMValueRef join(Halves h, LLVMTypeRef wide) {
+        auto one = [&](LLVMValueRef lo, LLVMValueRef hi) {
+            return LLVMBuildOr(b, LLVMBuildZExt(b, lo, i64, ""), LLVMBuildShl(b, LLVMBuildZExt(b, hi, i64, ""), LLVMConstInt(i64, 32, false), ""), "");
+        };
+        if (!n) return one(h.lo, h.hi);
+        LLVMValueRef v = LLVMGetUndef(wide);
+        for (unsigned k = 0; k < n; k++) {
+            LLVMValueRef index = LLVMConstInt(i32, k, false);
+            v = LLVMBuildInsertElement(b, v, one(LLVMBuildExtractElement(b, h.lo, index, ""), LLVMBuildExtractElement(b, h.hi, index, "")), index, "");
+        }
+        return v;
+    }
+    Halves add(Halves x, Halves y) {
+        LLVMValueRef lo = LLVMBuildAdd(b, x.lo, y.lo, "");
+        return {lo, LLVMBuildAdd(b, LLVMBuildAdd(b, x.hi, y.hi, ""), bit(cmp(kIntULT, lo, x.lo)), "")};
+    }
+    Halves negatedWhere(Halves x, LLVMValueRef mask) {  // mask: 0 or ~0 in each lane; ~x + 1 where it is ~0
+        return add({bitXor(x.lo, mask), bitXor(x.hi, mask)}, {LLVMBuildAnd(b, mask, c(1), ""), c(0)});
+    }
+    Halves shifted(int op, Halves x, LLVMValueRef amount) {  // amount: the low half of the shift amount
+        LLVMValueRef t = LLVMBuildAnd(b, amount, c(31), ""), back = LLVMBuildSub(b, c(31), t, "");
+        LLVMValueRef far = cmp(kIntNE, LLVMBuildAnd(b, amount, c(32), ""), c(0));  // by 32..63
+        if (op == kShl) {  // the bits moved up from lo: (lo >> 1) >> (31 - t), which is 0 for t = 0
+            LLVMValueRef lo = shl(x.lo, t), hi = bitOr(shl(x.hi, t), lshr(lshr(x.lo, c(1)), back));
+            return {sel(far, c(0), lo), sel(far, lo, hi)};
+        }
+        LLVMValueRef lo = bitOr(lshr(x.lo, t), shl(shl(x.hi, c(1)), back));
+        LLVMValueRef hi = op == kAShr ? ashr(x.hi, t) : lshr(x.hi, t), fill = op == kAShr ? ashr(x.hi, c(31)) : c(0);
+        return {sel(far, hi, lo), sel(far, fill, hi)};
+    }
+    // x / y and x % y by 64 shift-and-subtract steps, in a loop between the end of `bb` (left without a terminator)
+    // and `tail`
+    void divide(LLVMBasicBlockRef bb, LLVMBasicBlockRef tail, Halves x, Halves y, Halves &q, Halves &r) {
+        LLVMBasicBlockRef loop = LLVMAppendBasicBlockInContext(context, LLVMGetBasicBlockParent(bb), "");
+        LLVMMoveBasicBlockAfter(loop, bb);
+        LLVMPositionBuilderAtEnd(b, bb);
+        LLVMBuildBr(b, loop);
+        LLVMPositionBuilderAtEnd(b, loop);
+        LLVMValueRef step = LLVMBuildPhi(b, i32, ""), xl = LLVMBuildPhi(b, type, ""), xh = LLVMBuildPhi(b, type, "");
+        LLVMValueRef rl = LLVMBuildPhi(b, type, ""), rh = LLVMBuildPhi(b, type, ""), ql = LLVMBuildPhi(b, type, ""), qh = LLVMBuildPhi(b, type, "");
+        LLVMValueRef top = cmp(kIntNE, lshr(rh, c(31)), c(0));  // bit 64 of 2r + (next bit of x)
+        LLVMValueRef sh = bitOr(shl(rh, c(1)), lshr(rl, c(31))), sl = bitOr(shl(rl, c(1)), lshr(xh, c(31)));
+        LLVMValueRef fits = bitOr(top, bitOr(cmp(kIntUGT, sh, y.hi), LLVMBuildAnd(b, cmp(kIntEQ, sh, y.hi), cmp(kIntUGE, sl, y.lo), "")));
+        LLVMValueRef dl = LLVMBuildSub(b, sl, y.lo, ""), dh = LLVMBuildSub(b, LLVMBuildSub(b, sh, y.hi, ""), bit(cmp(kIntULT, sl, y.lo)), "");
+        LLVMValueRef rl2 = sel(fits, dl, sl), rh2 = sel(fits, dh, sh);
+        LLVMValueRef ql2 = bitOr(shl(ql, c(1)), bit(fits)), qh2 = bitOr(shl(qh, c(1)), lshr(ql, c(31)));
+        LLVMValueRef xl2 = shl(xl, c(1)), xh2 = bitOr(shl(xh, c(1)), lshr(xl, c(31)));
+        LLVMValueRef next = LLVMBuildAdd(b, step, LLVMConstInt(i32, 1, false), "");
+        LLVMBuildCondBr(b, LLVMBuildICmp(b, kIntEQ, next, LLVMConstInt(i32, 64, false), ""), tail, loop);
+        LLVMBasicBlockRef from[2] = {bb, loop};
+        auto incoming = [&](LLVMValueRef phi, LLVMValueRef first, LLVMValueRef again) {
+            LLVMValueRef values[2] = {first, again};
+            LLVMAddIncoming(phi, values, from, 2);
+        };
+        incoming(step, LLVMConstInt(i32, 0, false), next);
+        incoming(xl, x.lo, xl2), incoming(xh, x.hi, xh2);
+        incoming(rl, c(0), rl2), incoming(rh, c(0), rh2), incoming(ql, c(0), ql2), incoming(qh, c(0), qh2);
+        q = {ql2, qh2}, r = {rl2, rh2};
+    }
+};
+
+// Moves `inst` and everything after it in its block into a new block right after it (the successors' phis follow);
+// the block is left without a terminator.
+static LLVMBasicBlockRef splitAt(LLVMBuilderRef b, LLVMContextRef context, LLVMValueRef inst) {
+    LLVMBasicBlockRef bb = LLVMGetInstructionParent(inst);
+    LLVMBasicBlockRef tail = LLVMAppendBasicBlockInContext(context, LLVMGetBasicBlockParent(bb), "");
+    LLVMMoveBasicBlockAfter(tail, bb);
+    for (LLVMValueRef v = inst, next; v; v = next) {
+        next = LLVMGetNextInstruction(v);
+        LLVMInstructionRemoveFromParent(v);
+        LLVMPositionBuilderAtEnd(b, tail);
+        LLVMInsertIntoBuilder(b, v);
+    }
+    LLVMValueRef term = LLVMGetBasicBlockTerminator(tail);
+    for (unsigned i = 0, n = term ? LLVMGetNumSuccessors(term) : 0; i < n; i++)
+        flatten::retargetPhis(b, LLVMGetSuccessor(term, i), bb, tail, [](LLVMValueRef, LLVMValueRef to, LLVMValueRef) { return to; });
+    return tail;
+}
+}  // namespace int64
+
+static unsigned expandRenderInt64(LLVMModuleRef module) {
+    using namespace int64;
+    if (disabled("INTEL_RENDER_INT64_FIX")) return 0;
+    if (!LLVMGetNamedMetadataNumOperands(module, "air.vertex") && !LLVMGetNamedMetadataNumOperands(module, "air.fragment")) return 0;
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    std::vector<LLVMValueRef> found;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
+        if (!LLVMGetFirstBasicBlock(f) || kernelOnly(module, f)) continue;
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                int op = LLVMGetInstructionOpcode(inst);
+                LLVMTypeRef scalar = scalarOf(LLVMTypeOf(inst));
+                if (LLVMGetTypeKind(scalar) != kTypeKindInteger || LLVMGetIntTypeWidth(scalar) != 64) continue;
+                if (op == kUDiv || op == kSDiv || op == kURem || op == kSRem ||
+                    (op >= kShl && op <= kAShr && !LLVMIsAConstant(LLVMGetOperand(inst, 1))))
+                    found.push_back(inst);
+            }
+    }
+    if (found.empty()) return 0;
+    Builder g;
+    g.b = LLVMCreateBuilderInContext(context), g.context = context;
+    g.i32 = LLVMInt32TypeInContext(context), g.i64 = LLVMInt64TypeInContext(context);
+    for (LLVMValueRef inst : found) {
+        int op = LLVMGetInstructionOpcode(inst);
+        LLVMTypeRef wide = LLVMTypeOf(inst);
+        g.n = lanes(wide), g.type = shaped(g.i32, g.n);
+        LLVMPositionBuilderBefore(g.b, inst);
+        Halves x = g.split(LLVMGetOperand(inst, 0)), y = g.split(LLVMGetOperand(inst, 1)), result;
+        if (op >= kShl && op <= kAShr) {
+            result = g.shifted(op, x, y.lo);
+        } else {
+            bool sign = op == kSDiv || op == kSRem;
+            LLVMValueRef sx = sign ? g.ashr(x.hi, g.c(31)) : nullptr, sy = sign ? g.ashr(y.hi, g.c(31)) : nullptr;
+            if (sign) x = g.negatedWhere(x, sx), y = g.negatedWhere(y, sy);
+            LLVMBasicBlockRef bb = LLVMGetInstructionParent(inst), tail = splitAt(g.b, context, inst);
+            Halves q, r;
+            g.divide(bb, tail, x, y, q, r);
+            LLVMPositionBuilderBefore(g.b, inst);
+            result = op == kUDiv ? q : op == kURem ? r : op == kSDiv ? g.negatedWhere(q, g.bitXor(sx, sy)) : g.negatedWhere(r, sx);
+        }
+        LLVMReplaceAllUsesWith(inst, g.join(result, wide));
+        LLVMInstructionEraseFromParent(inst);
+    }
+    LLVMDisposeBuilder(g.b);
+    return (unsigned)found.size();
+}
+
 // ---- SIMD16 pixel kernels with a clobbered value ---------------------------------------------------------------------
 // The plugin has the GL driver's back end, iCBE, turn each fragment function into EU code: a SIMD8 and a SIMD16 kernel,
 // the hardware dispatching SIMD16 for full pixel groups. Under the SIMD16 kernel's higher register pressure, iCBE's
@@ -4734,6 +4910,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] %u select(s) of pointers into one buffer turned into a selected index\n", n);
         n = bitTestCompares(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u compare(s) of a 0/1 value with 1 in a vertex/fragment module done as a compare with 0\n", n);
+        n = expandRenderInt64(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u 64-bit division(s) / variable shift(s) in a vertex/fragment function done on 32-bit halves\n", n);
         n = widenNarrowVectorCompares(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u compare(s) of byte / halfword vectors in a vertex/fragment module done on 32-bit lanes\n", n);
         n = splitHalfwordBytes(module);  // last: the rewrites above see the module as before
