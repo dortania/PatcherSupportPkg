@@ -54,8 +54,8 @@
 //      Intel GPUs, which those kernels can't handle (min/max, mean and variance wrong): 32 threads
 //  36. multisampled Stencil8 textures on the 12.x Intel driver, which shaders read wrong (most of the right half reads
 //      the left half): created as Depth32Float_Stencil8, whose stencil reads right, with Stencil8 views made X32_Stencil8
-//  37. stencil copied between a buffer and a mip level 1+ on the 12.x Intel driver with a buffer offset or bytesPerRow
-//      that isn't a multiple of 256 (a texel of each row taken from its neighbour): through a level-0 temporary texture
+//  37. stencil copied between a buffer and a mip level 1+ or a slice 1+ on the 12.x Intel driver with a buffer offset or
+//      bytesPerRow that isn't a multiple of 256 (texels taken from a neighbour, or none): through a level-0 temporary texture
 //  38. stencil views (X32_Stencil8, X24_Stencil8) of depth/stencil textures on the 12.x Intel driver, which describe the
 //      stencil plane with the depth plane's 4-texel mip alignment (levels 2+ read 0 for many widths): 8, as laid out
 //  39. size queries (get_width/height) on writable 2D-array views that start at mip level 1+ in fragment functions on
@@ -1440,20 +1440,22 @@ static TextureToTextureOptionsIMP origIGTextureToTextureOptions;
 // bytesPerRow isn't a multiple of 256: some texels come from their left neighbour (at mip 2 of a 20x16 texture, the 5th
 // texel of each row reads or writes as the 4th), for Stencil8 and the stencil of depth/stencil formats alike. Dawn
 // copies a tight buffer's last row on its own with bytesPerRow = its width, so WebGPU CTS
-// image_copy rowsPerImage_and_bytesPerRow_depth_stencil lost the last texel (9 cases). Copies at level 0, and texture to
-// texture copies at any level, are right. Such copies go through a level-0 temporary texture of the same format: out of
+// image_copy rowsPerImage_and_bytesPerRow_depth_stencil lost the last texel (9 cases). Slice 1+ of a Stencil8 array goes
+// wrong the same way: with such a buffer offset, a copy out of it reads 0 and a copy into it with such a bytesPerRow
+// writes nothing (wgpu's copy_unaligned_rows). Copies at level 0 / slice 0, and texture to texture copies at any level
+// and slice, are right. Such copies go through a level-0 temporary texture of the same format: out of
 // the level by a texture copy, then to the buffer; or into the temporary (filled from the level first, which keeps the
 // depth of a depth/stencil texture) and back by a texture copy, which item 27 sees. MTLSHIM_STENCIL_COPY=0 turns it off.
-// Test: s41.
+// Tests: s41, s55.
 typedef void (*TextureToBufferIMP)(id, SEL, id, NSUInteger, NSUInteger, MTLOrigin, MTLSize, id, NSUInteger, NSUInteger, NSUInteger);
 typedef void (*TextureToBufferOptionsIMP)(id, SEL, id, NSUInteger, NSUInteger, MTLOrigin, MTLSize, id, NSUInteger, NSUInteger, NSUInteger,
                                           MTLBlitOption);
 static TextureToBufferIMP origIGTextureToBuffer;
 static TextureToBufferOptionsIMP origIGTextureToBufferOptions;
 
-static id<MTLTexture> stencilCopyTemporary(id<MTLTexture> t, NSUInteger level, NSUInteger offset, NSUInteger bytesPerRow, MTLSize size,
-                                          MTLBlitOption options) {
-    if (!level || !t || t.parentTexture || t.sampleCount > 1 || size.depth != 1 || (!(offset % 256) && !(bytesPerRow % 256))) return nil;
+static id<MTLTexture> stencilCopyTemporary(id<MTLTexture> t, NSUInteger slice, NSUInteger level, NSUInteger offset, NSUInteger bytesPerRow,
+                                          MTLSize size, MTLBlitOption options) {
+    if ((!level && !slice) || !t || t.parentTexture || t.sampleCount > 1 || size.depth != 1 || (!(offset % 256) && !(bytesPerRow % 256))) return nil;
     MTLPixelFormat f = t.pixelFormat;
     BOOL stencil = f == MTLPixelFormatStencil8 || ((options & MTLBlitOptionStencilFromDepthStencil) &&
                                                    (f == MTLPixelFormatDepth32Float_Stencil8 || f == MTLPixelFormatDepth24Unorm_Stencil8));
@@ -1463,7 +1465,7 @@ static id<MTLTexture> stencilCopyTemporary(id<MTLTexture> t, NSUInteger level, N
     d.storageMode = MTLStorageModePrivate;
     d.usage = MTLTextureUsageShaderRead;
     id<MTLTexture> temporary = [t.device newTextureWithDescriptor:d];
-    if (temporary && getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] stencil copy at level %lu through a level-0 temporary\n", (unsigned long)level);
+    if (temporary && getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] stencil copy at level %lu slice %lu through a level-0 temporary\n", (unsigned long)level, (unsigned long)slice);
     return temporary;
 }
 static void textureCopy(id encoder, id<MTLTexture> from, NSUInteger fromSlice, NSUInteger fromLevel, MTLOrigin fromOrigin, MTLSize size,
@@ -1474,7 +1476,7 @@ static void textureCopy(id encoder, id<MTLTexture> from, NSUInteger fromSlice, N
 // Buffer to texture (item 27's hooks call this first): YES if done here.
 static BOOL stencilCopyIn(id self, id buffer, NSUInteger offset, NSUInteger row, NSUInteger image, MTLSize size, id<MTLTexture> t,
                           NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLBlitOption options, BOOL withOptions) {
-    id<MTLTexture> temporary = stencilCopyTemporary(t, level, offset, row, size, options);
+    id<MTLTexture> temporary = stencilCopyTemporary(t, slice, level, offset, row, size, options);
     if (!temporary) return NO;
     const MTLOrigin zero = MTLOriginMake(0, 0, 0);
     textureCopy(self, t, slice, level, origin, size, temporary, 0, 0, zero);
@@ -1487,14 +1489,14 @@ static BOOL stencilCopyIn(id self, id buffer, NSUInteger offset, NSUInteger row,
 }
 static void igTextureToBuffer(id self, SEL _cmd, id t, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLSize size, id buffer,
                               NSUInteger offset, NSUInteger row, NSUInteger image) {
-    id<MTLTexture> temporary = stencilCopyTemporary(t, level, offset, row, size, MTLBlitOptionNone);
+    id<MTLTexture> temporary = stencilCopyTemporary(t, slice, level, offset, row, size, MTLBlitOptionNone);
     if (!temporary) return origIGTextureToBuffer(self, _cmd, t, slice, level, origin, size, buffer, offset, row, image);
     textureCopy(self, t, slice, level, origin, size, temporary, 0, 0, MTLOriginMake(0, 0, 0));
     origIGTextureToBuffer(self, _cmd, temporary, 0, 0, MTLOriginMake(0, 0, 0), size, buffer, offset, row, image);
 }
 static void igTextureToBufferOptions(id self, SEL _cmd, id t, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLSize size, id buffer,
                                      NSUInteger offset, NSUInteger row, NSUInteger image, MTLBlitOption options) {
-    id<MTLTexture> temporary = stencilCopyTemporary(t, level, offset, row, size, options);
+    id<MTLTexture> temporary = stencilCopyTemporary(t, slice, level, offset, row, size, options);
     if (!temporary) return origIGTextureToBufferOptions(self, _cmd, t, slice, level, origin, size, buffer, offset, row, image, options);
     textureCopy(self, t, slice, level, origin, size, temporary, 0, 0, MTLOriginMake(0, 0, 0));
     origIGTextureToBufferOptions(self, _cmd, temporary, 0, 0, MTLOriginMake(0, 0, 0), size, buffer, offset, row, image, options);
