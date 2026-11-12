@@ -2380,6 +2380,11 @@ static unsigned exactMadSat(LLVMModuleRef module) {
 // x) | 1) gave 0x1200 in the first lane, not 0 (the MacBookPro11,5 session's narrow-vector fuzzing, VEC=1 ASTYPE=1,
 // seed 53). udiv / urem / sdiv / srem on i8 and i16, scalar or vector, are done on 32-bit lanes: operands zero- or
 // sign-extended, the i32 operation, the result truncated. INTEL_NARROW_DIV_FIX=0 turns it off.
+// In vertex and fragment functions a vector operand made with as_type went wrong when extended as a whole vector:
+// as_type<uchar4>(x) % uchar4(41, 23, 33, 100) crashed the compiler service and as_type<char4>(x) % char4(41, -23, ...)
+// came out as the unsigned remainder (fragment fuzzing with as_type, seed 55). There vector operands are widened with
+// renderLanes32 instead, and so are those of the 8/16-bit min / max / clamp below (a signed max(char4(...),
+// as_type<char4>(y)) was wrong, seed 245). INTEL_NARROW_VECTOR_OPERAND_FIX=0 turns that part off (both). Test: i70.
 extern "C" {
 LLVMValueRef LLVMBuildUDiv(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
 LLVMValueRef LLVMBuildURem(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
@@ -2415,6 +2420,7 @@ static LLVMValueRef renderLanes32(LLVMBuilderRef b, LLVMTypeRef i32, LLVMValueRe
 static unsigned widenNarrowDivisions(LLVMModuleRef module) {
     if (disabled("INTEL_NARROW_DIV_FIX") || runtimeNamesBound(module)) return 0;
     enum { kOpcodeUDiv = 14, kOpcodeSDiv = 15, kOpcodeURem = 17, kOpcodeSRem = 18 };
+    bool render = LLVMGetNamedMetadataNumOperands(module, "air.vertex") || LLVMGetNamedMetadataNumOperands(module, "air.fragment");
     LLVMContextRef context = LLVMGetModuleContext(module);
     LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
     std::vector<LLVMValueRef> divisions;
@@ -2438,8 +2444,13 @@ static unsigned widenNarrowDivisions(LLVMModuleRef module) {
         if (!b) b = LLVMCreateBuilderInContext(context);
         LLVMPositionBuilderBefore(b, division);
         LLVMValueRef x = LLVMGetOperand(division, 0), y = LLVMGetOperand(division, 1);
-        x = extendLanes(b, x, wide, sign);
-        y = extendLanes(b, y, wide, sign);
+        if (n && render && !disabled("INTEL_NARROW_VECTOR_OPERAND_FIX")) {  // i70: as_type<uchar4>(x) % uchar4(41, ...) crashed, char4 % was unsigned
+            x = renderLanes32(b, i32, x, sign);
+            y = renderLanes32(b, i32, y, sign);
+        } else {
+            x = extendLanes(b, x, wide, sign);
+            y = extendLanes(b, y, wide, sign);
+        }
         LLVMValueRef r = opcode == kOpcodeUDiv ? LLVMBuildUDiv(b, x, y, "") : opcode == kOpcodeURem ? LLVMBuildURem(b, x, y, "")
                        : opcode == kOpcodeSDiv ? LLVMBuildSDiv(b, x, y, "") : LLVMBuildSRem(b, x, y, "");
         LLVMValueRef result = LLVMBuildTrunc(b, r, type, "");
@@ -2732,6 +2743,8 @@ static unsigned selectWideDivisionLanes(LLVMModuleRef module) {
 // sign-extended, the i32 function called, the result truncated. INTEL_NARROW_MINMAX_FIX=0 turns it off.
 static unsigned widenNarrowMinMax(LLVMModuleRef module) {
     if (disabled("INTEL_NARROW_MINMAX_FIX") || runtimeNamesBound(module)) return 0;
+    bool render = (LLVMGetNamedMetadataNumOperands(module, "air.vertex") || LLVMGetNamedMetadataNumOperands(module, "air.fragment")) &&
+                  !disabled("INTEL_NARROW_VECTOR_OPERAND_FIX");  // signed max(char4, as_type<char4>(x)) was wrong there (seed 245, i70)
     LLVMContextRef context = LLVMGetModuleContext(module);
     LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
     LLVMBuilderRef b = nullptr;
@@ -2765,7 +2778,7 @@ static unsigned widenNarrowMinMax(LLVMModuleRef module) {
             std::vector<LLVMTypeRef> params;
             for (int k = 0; k < operands; k++) {
                 LLVMValueRef v = LLVMGetOperand(call, k);
-                args.push_back(extendLanes(b, v, wide, sign));
+                args.push_back(n && render ? renderLanes32(b, i32, v, sign) : extendLanes(b, v, wide, sign));
                 params.push_back(wide);
             }
             char wideName[64];
