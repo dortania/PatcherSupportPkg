@@ -2150,7 +2150,12 @@ static unsigned greenGathers(LLVMModuleRef module) {
             LLVMValueRef green = LLVMBuildCall(b, f, args.data(), count, "");
             args[offsetIndex + 1] = LLVMConstInt(i32, 0, false);
             LLVMValueRef red = LLVMBuildCall(b, f, args.data(), count, "");
-            LLVMTypeRef words = LLVMVectorType(i32, 4);
+            // compared as integers of the lanes' own width: MetalFX's spatial scaler gathers half4 (a <4 x i32> bitcast of
+            // those failed the verifier, and the compiler service aborted on MFX_Scale)
+            LLVMTypeRef element = LLVMGetElementType(result);
+            int elementKind = LLVMGetTypeKind(element);
+            unsigned bits = elementKind == kTypeKindHalf ? 16 : elementKind == kTypeKindInteger ? LLVMGetIntTypeWidth(element) : 32;
+            LLVMTypeRef words = LLVMVectorType(LLVMIntTypeInContext(context, bits), 4);
             LLVMValueRef same = LLVMBuildICmp(b, kIntEQ, LLVMBuildBitCast(b, green, words, ""), LLVMBuildBitCast(b, red, words, ""), "");
             LLVMValueRef all = LLVMBuildExtractElement(b, same, LLVMConstInt(i32, 0, false), "");
             for (unsigned k = 1; k < 4; k++) all = LLVMBuildAnd(b, all, LLVMBuildExtractElement(b, same, LLVMConstInt(i32, k, false), ""), "");
