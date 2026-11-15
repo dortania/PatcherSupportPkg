@@ -13,6 +13,8 @@ for src in [a-z][0-9]*.m; do
         -framework Foundation -framework Metal $extra -o "build/$name" "$src"
 done
 [ -f tools/localcc.dylib ] || clang++ -std=c++17 -fblocks -dynamiclib tools/localcc.cpp -o tools/localcc.dylib  # c04 and verify.sh
+[ -f tools/angle-caller/libANGLE-shared.dylib ] || clang -fobjc-arc -dynamiclib -framework Foundation -framework Metal \
+    tools/angle-caller/anglecaller.m -o tools/angle-caller/libANGLE-shared.dylib  # s63 with S63_METALLIB
 cp -R data build/
 if xcrun -sdk macosx -f metal >/dev/null 2>&1; then
     for source in s13:s13-air i05:i05-samplers; do
