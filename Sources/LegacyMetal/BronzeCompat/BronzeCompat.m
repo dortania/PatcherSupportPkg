@@ -18,11 +18,13 @@
 //  12. depth-stencil textures attached as stencil only (the depth unit misaddresses them up to 32 texels wide)
 //  13. viewports 1-15 before the app sets a viewport (they cover nothing: vertex amplification views mapped to them and
 //      primitives sent to them with [[viewport_array_index]] draw nothing; wgpu's multiview)
+//  14. buffer copies into a texture view of slice 1+ that cover the whole slice (written nowhere)
 // 1 and 2 come from riptidewave93's bronzefix, found and tested on Tahoe with a MacPro6,1's FirePro D700s.
 // AMD_BRONZE_COMPAT=0 turns everything off for a process, AMD_EXACT_TRILINEAR=0 only item 3,
 // AMD_BRONZE_SRGB_RESOLVE=0 only item 4, AMD_BRONZE_MEMORYLESS=0 only item 8, AMD_BRONZE_DEPTH_MIPS=0 only item 10,
 // AMD_BRONZE_STENCIL_VIEW=0 only item 1's stencil view descriptors, AMD_BRONZE_STENCIL8=0 only item 11,
-// AMD_BRONZE_STENCIL_DEPTH=0 only item 12, AMD_BRONZE_VIEWPORTS=0 only item 13;
+// AMD_BRONZE_STENCIL_DEPTH=0 only item 12 (AMD_BRONZE_STENCIL_DEPTH_STATE=0 only its depth/stencil state copies),
+// AMD_BRONZE_VIEWPORTS=0 only item 13, AMD_BRONZE_VIEW_UPLOADS=0 only item 14;
 // AMD_BRONZE_VERBOSE=1 logs.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -423,8 +425,49 @@ static MTLRenderPassDescriptor *takeSrgbResolves(MTLRenderPassDescriptor *descri
 // stencil passes for a quarter to a half of a 32x16 texture's texels, some in the wrong place, and REPLACE writes half
 // (a Stencil8 texture, 2D tiled like the leftover state, is right). ANGLE attaches a packed depth-stencil buffer this way
 // when GL binds it as GL_STENCIL_ATTACHMENT only. The same texture, level and slice is attached as depth too, loaded
-// and stored, so its depth stays what it was; with the app's stencil-only pipeline nothing tests or writes depth.
-// Test: s47.
+// and stored, so its depth stays what it was. The depth unit then applies the app's depth/stencil state to that depth,
+// which a pass without a depth attachment doesn't (an M3 tests nothing there and writes nothing, the driver without
+// this fix neither): a depth test against the old depth dropped stencil writes, and depth writes changed it. So on
+// such encoders each depth/stencil state is swapped for a copy that neither tests nor writes depth, made once per
+// state from the descriptor it was created with. A depth compare of Never is kept, as on the M3, where it still
+// rejects every fragment. Tests: s47, r03.
+static const void *kDepthAddedForStencil = &kDepthAddedForStencil, *kStateDescriptor = &kStateDescriptor, *kWithoutDepth = &kWithoutDepth;
+typedef void *(*NewDepthStencilStateIMP)(id, SEL, MTLDepthStencilDescriptor *);  // +1, outside ARC as the view hooks
+typedef void (*SetDepthStencilStateIMP)(id, SEL, id);
+static NewDepthStencilStateIMP origNewDepthStencilState;
+static SetDepthStencilStateIMP origSetDepthStencilState;
+
+static void *newDepthStencilState(id self, SEL _cmd, MTLDepthStencilDescriptor *descriptor) {
+    void *state = origNewDepthStencilState(self, _cmd, descriptor);
+    if (state && descriptor) objc_setAssociatedObject((__bridge id)state, kStateDescriptor, [descriptor copy], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return state;
+}
+
+static void setDepthStencilState(id self, SEL _cmd, id state) {
+    if (state && objc_getAssociatedObject(self, kDepthAddedForStencil)) {
+        id variant = objc_getAssociatedObject(state, kWithoutDepth);
+        MTLDepthStencilDescriptor *d = variant ? nil : objc_getAssociatedObject(state, kStateDescriptor);
+        MTLCompareFunction compare = d.depthCompareFunction;
+        if (d && ((compare != MTLCompareFunctionAlways && compare != MTLCompareFunctionNever) || d.depthWriteEnabled)) {
+            MTLDepthStencilDescriptor *copy = [d copy];
+            if (compare != MTLCompareFunctionNever) copy.depthCompareFunction = MTLCompareFunctionAlways;
+            copy.depthWriteEnabled = NO;
+            variant = [[(id<MTLRenderCommandEncoder>)self device] newDepthStencilStateWithDescriptor:copy];
+            if (variant) objc_setAssociatedObject(state, kWithoutDepth, variant, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        if (variant) state = variant;
+    }
+    origSetDepthStencilState(self, _cmd, state);
+}
+
+static void installDepthStateCopies(void) {
+    if (disabled("AMD_BRONZE_STENCIL_DEPTH") || disabled("AMD_BRONZE_STENCIL_DEPTH_STATE")) return;
+    Class device = objc_getClass("BronzeMtlDevice"), encoder = objc_getClass("BronzeMtlRenderCmdEncoder");
+    if (!definesMethod(device, @selector(newDepthStencilStateWithDescriptor:)) || !definesMethod(encoder, @selector(setDepthStencilState:))) return;
+    origNewDepthStencilState = (NewDepthStencilStateIMP)swizzle(device, @selector(newDepthStencilStateWithDescriptor:), (IMP)newDepthStencilState);
+    origSetDepthStencilState = (SetDepthStencilStateIMP)swizzle(encoder, @selector(setDepthStencilState:), (IMP)setDepthStencilState);
+}
+
 static MTLRenderPassDescriptor *stencilOnlyWithDepth(MTLRenderPassDescriptor *descriptor) {
     static int enabled = -1;
     if (enabled < 0) enabled = !disabled("AMD_BRONZE_STENCIL_DEPTH");
@@ -472,10 +515,13 @@ static void setDefaultViewport(id<MTLRenderCommandEncoder> encoder, MTLRenderPas
 static id renderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor) {
     NSMutableArray *resolves = nil;
     NSArray *route = nil;
-    MTLRenderPassDescriptor *fixed = takeSrgbResolves(stencilOnlyWithDepth(stencilViewToParent(descriptor)), &resolves);
+    MTLRenderPassDescriptor *parented = stencilViewToParent(descriptor), *withDepth = stencilOnlyWithDepth(parented);
+    MTLRenderPassDescriptor *fixed = takeSrgbResolves(withDepth, &resolves);
     fixed = routeDepthMipStencil(self, fixed, &route);
     id encoder = origRenderEncoder(self, _cmd, fixed);
     if (encoder && viewportFix) setDefaultViewport(encoder, descriptor);
+    if (encoder && withDepth != parented && origSetDepthStencilState)  // item 12
+        objc_setAssociatedObject(encoder, kDepthAddedForStencil, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     if (encoder && (resolves || route)) {
         objc_setAssociatedObject(encoder, kPendingResolves, resolves, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(encoder, kDepthMipRoute, route, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -677,8 +723,28 @@ static ToBufferIMP origToBuffer;
 static TextureToTextureIMP origTextureToTexture;
 static TextureLevelsIMP origTextureLevels;
 
+// ---- 14. Buffer copies into a texture view of slice 1+ -------------------------------------------------------------
+// A copy from a buffer into a texture view whose first slice isn't its parent's slice 0 (a single-face 2D view of a cube,
+// a view of a 2D array's slice 1+), and that covers the whole slice, is written nowhere: not to the view's slice, not
+// to slice 0, not anywhere in a 128-slice array. Smaller regions, copies into views of another level only, and copies
+// from a texture into the same view are right. Such copies go to the parent texture at the view's slice and level, when
+// the view has the parent's pixel format. Test: s65 (on the AMD GPU).
+static BOOL viewUploadFix;
+
+static id uploadTarget(id texture, NSUInteger *slice, NSUInteger *level) {
+    while (viewUploadFix && [texture respondsToSelector:@selector(parentTexture)]) {
+        id<MTLTexture> view = texture, parent = view.parentTexture;
+        if (!parent || !view.parentRelativeSlice || view.pixelFormat != parent.pixelFormat) break;
+        *slice += view.parentRelativeSlice;
+        *level += view.parentRelativeLevel;
+        texture = parent;
+    }
+    return texture;
+}
+
 static void fromBuffer(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInteger bytesPerRow, NSUInteger bytesPerImage, MTLSize size,
                        id texture, NSUInteger slice, NSUInteger level, MTLOrigin origin) {
+    texture = uploadTarget(texture, &slice, &level);  // item 14
     if (!isStencil8StandIn(texture)) return origFromBuffer(self, _cmd, buffer, offset, bytesPerRow, bytesPerImage, size, texture, slice, level, origin);
     [self copyFromBuffer:buffer sourceOffset:offset sourceBytesPerRow:bytesPerRow sourceBytesPerImage:bytesPerImage sourceSize:size
                toTexture:texture destinationSlice:slice destinationLevel:level destinationOrigin:origin options:MTLBlitOptionStencilFromDepthStencil];
@@ -686,6 +752,7 @@ static void fromBuffer(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInteg
 
 static void fromBufferOptions(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInteger bytesPerRow, NSUInteger bytesPerImage, MTLSize size,
                               id texture, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLBlitOption options) {
+    texture = uploadTarget(texture, &slice, &level);  // item 14
     if (!(options & (MTLBlitOptionDepthFromDepthStencil | MTLBlitOptionStencilFromDepthStencil)) && isStencil8StandIn(texture))
         options |= MTLBlitOptionStencilFromDepthStencil;
     origFromBufferOptions(self, _cmd, buffer, offset, bytesPerRow, bytesPerImage, size, texture, slice, level, origin, options);
@@ -757,14 +824,19 @@ static void *viewSwizzle(id self, SEL _cmd, MTLPixelFormat format, MTLTextureTyp
 }
 
 static void installStencil8Fix(void) {
-    if (disabled("AMD_BRONZE_STENCIL8")) return;
+    Class blit = objc_getClass("BronzeMtlBlitCmdEncoder");
+    BOOL stencil8 = !disabled("AMD_BRONZE_STENCIL8");
+    viewUploadFix = !disabled("AMD_BRONZE_VIEW_UPLOADS");  // item 14 shares the buffer-to-texture hooks
+    if (stencil8 || viewUploadFix) {
+        origFromBuffer = (FromBufferIMP)swizzle(blit, @selector(copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:), (IMP)fromBuffer);
+        origFromBufferOptions = (FromBufferOptionsIMP)swizzle(blit, @selector(copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:options:), (IMP)fromBufferOptions);
+    }
+    viewUploadFix = viewUploadFix && origFromBuffer && origFromBufferOptions;
+    if (!stencil8) return;
     Class texture = objc_getClass("BronzeMtlTexture");
     origView = (ViewIMP)swizzle(texture, @selector(newTextureViewWithPixelFormat:), (IMP)view);
     origViewRange = (ViewRangeIMP)swizzle(texture, @selector(newTextureViewWithPixelFormat:textureType:levels:slices:), (IMP)viewRange);
     origViewSwizzle = (ViewSwizzleIMP)swizzle(texture, @selector(newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:), (IMP)viewSwizzle);
-    Class blit = objc_getClass("BronzeMtlBlitCmdEncoder");
-    origFromBuffer = (FromBufferIMP)swizzle(blit, @selector(copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:), (IMP)fromBuffer);
-    origFromBufferOptions = (FromBufferOptionsIMP)swizzle(blit, @selector(copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:options:), (IMP)fromBufferOptions);
     origToBuffer = (ToBufferIMP)swizzle(blit, @selector(copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:), (IMP)toBuffer);
     origTextureToTexture = (TextureToTextureIMP)swizzle(blit, @selector(copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:), (IMP)textureToTexture);
     origTextureLevels = (TextureLevelsIMP)swizzle(blit, @selector(copyFromTexture:sourceSlice:sourceLevel:toTexture:destinationSlice:destinationLevel:sliceCount:levelCount:), (IMP)textureLevels);
@@ -1014,6 +1086,7 @@ __attribute__((constructor)) static void init(void) {
         installMipFix();
         if (!disabled("AMD_BRONZE_DEPTH_MIPS")) installDepthMipFix(name);  // before the render pass hooks, which route for it
         installRenderPassHooks();
+        installDepthStateCopies();  // item 12, for the encoders installRenderPassHooks marks
         installCopyFix();
         installStencil8Fix();
         installWebKitFixes();
