@@ -5537,7 +5537,8 @@ static unsigned expandRenderInt64(LLVMModuleRef module) {
 // kernel (a flag-writing instruction overwriting a value nothing has read yet, read again afterwards; optimized code
 // leaves no such dead stores), and if it's there the shader is compiled again with SIMD level 1, SIMD8 only (iCBE's
 // kernel program then builds no SIMD16 kernel). INTEL_SIMD16_CLOBBER_FIX=0 turns it off; INTEL_SIMD8_PIXEL=1 asks for
-// SIMD8 only for every fragment function (testing). Haswell's iCBE only (the Ivy Bridge plugin's is not looked at).
+// SIMD8 only for every fragment function (testing). The clobber check reads Haswell's iCBE output only; Ivy Bridge's iCBE
+// is wrapped below for the SIMD level alone (i77, and INTEL_SIMD8_PIXEL).
 // The C export: (compiler, platform index, ?, OPTIMIZER_LEVEL, SIMD_LEVEL, input state, ?, AIR::SCompilerOutputPixelShader
 // **, PLATFORM_STR *); it fills the caller's output block, which holds the SIMD8/16/32 kernel pointers at 0x47fb and their
 // sizes (uint32) at 0x4813.
