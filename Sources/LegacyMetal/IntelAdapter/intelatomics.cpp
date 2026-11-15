@@ -1458,8 +1458,131 @@ static unsigned hookedGetDependency(void *self, const void *value) {
     return originalGetDependency(self, value);
 }
 
+// ---- IGILHelperFunctions::isValueUsed (Ivy Bridge libIGIL-Metal) ------------------------------------------------------
+// IGILair_ldst_handling asks, for every load and store, which argument (or global) its address comes from:
+// trackArgIndexOfMemInst walks every global and then every pointer argument with isValueUsed(visited, target, root,
+// uses), a depth-first walk over the root's users that marks each user it reaches in a std::set and recurses through
+// GEPs (where the walked value is the base), loads' and stores' neighbours excepted, every other instruction and calls
+// to intrinsics other than llvm.igil.ld/st. Each step calls Use::getUser (which walks to the end of the user's operand
+// list) five times and allocates a set node, so on Core Animation's specialised uber shader (fixed_frag_lpf_cpf, which
+// WindowServer, Terminal and Safari build after each install) the pass took most of a 26 s compile, and at the first
+// boot after an install WindowServer waited on it for up to a minute (its renderer timed out on fences; the Dock never
+// appeared). The stock compiler is as slow. This is the same walk in the same order with the same answers: one
+// getUser per use, a flat pointer set, an explicit stack. Hooked only on the Ivy Bridge build of the function (checked
+// byte for byte by its hash) and only for an empty set, which is all its callers pass (the set is destroyed unread).
+// INTEL_VALUE_USED_FIX=0 turns it off; INTEL_VALUE_USED_CHECK=1 runs the original too and reports any difference. (i74)
+static const uint64_t kIsValueUsedHashIVB = 0xe6c9c39bb2e6d97dULL;
+static const size_t kIsValueUsedSizeIVB = 594;
+static bool (*originalIsValueUsed)(void *visited, const char *target, const char *root, const char *begin, const char *end);
+extern "C" const char *useGetUser(const char *use) asm("__ZNK4llvm3Use7getUserEv");
+struct NameRef { const char *data; size_t length; };
+extern "C" NameRef valueGetName(const char *value) asm("__ZNK4llvm5Value7getNameEv");
+static std::atomic<unsigned long> valueUsedMismatches, valueUsedCalls, valueUsedSteps, valueUsedRootKinds[256];
+namespace valueused {
+enum : unsigned char { kFunction = 5, kLoad = 0x36, kStore = 0x37, kGEP = 0x38, kCall = 0x4e };
+static unsigned char id(const char *v) { return (unsigned char)v[0x18]; }
+static const char *useList(const char *v) { return *(const char *const *)(v + 0x10); }
+static const char *nextUse(const char *use) { return *(const char *const *)(use + 8); }
+static unsigned operandCount(const char *user) { return *(const uint32_t *)(user + 0x1c) & 0xfffffff; }
+static const char *operand(const char *user, unsigned i) { return *(const char *const *)(user - 24 * (size_t)(operandCount(user) - i)); }
+static const char *lastOperand(const char *user) { return *(const char *const *)(user - 24); }
+// Open addressing on pointers; returns false if already present. Kept per thread and emptied after each walk by
+// clearing only the slots it filled (a compile calls the walk thousands of times).
+struct PointerSet {
+    std::vector<uintptr_t> slots = std::vector<uintptr_t>(1024);
+    std::vector<size_t> filled;
+    bool insert(uintptr_t p) {
+        if (2 * (filled.size() + 1) > slots.size()) grow();
+        size_t mask = slots.size() - 1, i = (p >> 4) * 0x9e3779b97f4a7c15ULL >> 20 & mask;
+        for (;; i = (i + 1) & mask) {
+            if (slots[i] == p) return false;
+            if (!slots[i]) return slots[i] = p, filled.push_back(i), true;
+        }
+    }
+    void grow() {
+        std::vector<uintptr_t> old(slots.size() * 2);
+        old.swap(slots);
+        filled.clear();
+        for (uintptr_t p : old) if (p) insert(p);
+    }
+    void clear() {
+        for (size_t i : filled) slots[i] = 0;
+        filled.clear();
+    }
+};
+static bool namePrefix(const char *function, const char *prefix, size_t n) {
+    NameRef name = valueGetName(function);
+    return name.length >= n && !memcmp(name.data, prefix, n);
+}
+struct Frame { const char *value, *next, *end; };
+struct Walker { std::vector<Frame> stack; PointerSet visited; };
+static bool walk(const char *target, const char *root, const char *begin, const char *end) {
+    static thread_local Walker walker;
+    struct Reset { Walker &w; ~Reset() { w.stack.clear(); w.visited.clear(); } } reset{walker};
+    std::vector<Frame> &stack = walker.stack;
+    PointerSet &visited = walker.visited;
+    stack.push_back({root, begin, end});
+    while (!stack.empty()) {
+        Frame &f = stack.back();
+        if (f.next == f.end) { stack.pop_back(); continue; }
+        const char *use = f.next, *value = f.value;
+        f.next = nextUse(use);
+        const char *user = useGetUser(use);
+        if (!visited.insert((uintptr_t)user)) continue;
+        if (logging()) valueUsedSteps++;
+        unsigned char kind = id(user);
+        if (user == target) {
+            if (kind == kLoad || kind == kStore) { if (lastOperand(user) == value) return true; continue; }
+            return true;
+        }
+        if (kind == kGEP) {
+            if (operand(user, 0) == value) stack.push_back({user, useList(user), nullptr});
+            continue;
+        }
+        if (kind == kLoad || kind == kStore) continue;
+        if (kind == kCall) {
+            const char *callee = lastOperand(user);
+            if (!callee || id(callee) != kFunction || !namePrefix(callee, "llvm.", 5)) continue;  // Function::isIntrinsic
+            if (namePrefix(callee, "llvm.igil.ld", 12) || namePrefix(callee, "llvm.igil.st", 12)) continue;
+        }
+        stack.push_back({user, useList(user), nullptr});
+    }
+    return false;
+}
+}  // namespace valueused
+static void reportValueUsed() {
+    fprintf(stderr, "[inteltex] isValueUsed: %lu walks, %lu users visited; roots by value id:", valueUsedCalls.load(), valueUsedSteps.load());
+    for (int i = 0; i < 256; i++) if (valueUsedRootKinds[i]) fprintf(stderr, " %d:%lu", i, valueUsedRootKinds[i].load());
+    fprintf(stderr, "\n");
+}
+static bool hookedIsValueUsed(void *visited, const char *target, const char *root, const char *begin, const char *end) {
+    if (((const size_t *)visited)[2]) return originalIsValueUsed(visited, target, root, begin, end);  // std::set size
+    bool result = valueused::walk(target, root, begin, end);
+    if (logging()) {
+        static std::once_flag once;
+        std::call_once(once, [] { atexit(reportValueUsed); });
+        valueUsedCalls++;
+        valueUsedRootKinds[valueused::id(root)]++;
+    }
+    static const bool check = getenv("INTEL_VALUE_USED_CHECK") && !disabled("INTEL_VALUE_USED_CHECK");
+    if (check && result != originalIsValueUsed(visited, target, root, begin, end)) {
+        valueUsedMismatches++;
+        fprintf(stderr, "[inteltex] isValueUsed MISMATCH: fast %d (target %p root %p)\n", result, target, root);
+    }
+    return result;
+}
+static uint64_t fnv1a(const unsigned char *p, size_t n) {
+    uint64_t h = 0xcbf29ce484222325ULL;
+    while (n--) h = (h ^ *p++) * 0x100000001b3ULL;
+    return h;
+}
+
 // The back-end hooks, once libIGIL-Metal is loaded (the plugin loads it on demand).
 static bool installIntoBackEnd(void *igil) {
+    unsigned char *valueUsed = (unsigned char *)dlsym(igil, "_ZN19IGILHelperFunctions11isValueUsedERNSt3__13setIPN4llvm5ValueENS0_4lessIS4_EENS0_9allocatorIS4_EEEEPKS3_SC_NS3_17use_iterator_implIKNS2_3UseEEESG_");
+    if (valueUsed && fnv1a(valueUsed, kIsValueUsedSizeIVB) == kIsValueUsedHashIVB && !disabled("INTEL_VALUE_USED_FIX"))
+        originalIsValueUsed = (bool (*)(void *, const char *, const char *, const char *, const char *))hookFunction(valueUsed, (void *)hookedIsValueUsed);
+    if (logging()) fprintf(stderr, "[inteltex] libIGIL-Metal: isValueUsed %s\n", originalIsValueUsed ? "hooked" : "NOT hooked");
     unsigned char *dependency = (unsigned char *)dlsym(igil, "_ZN4llvm19IGILUniformAnalysis13getDependencyEPKNS_5ValueE");
     uniformHasDependency = (bool (*)(void *, const void *))dlsym(igil, "_ZN4llvm19IGILUniformAnalysis13hasDependencyEPKNS_5ValueE");
     if (dependency && uniformHasDependency && !disabled("INTEL_UNIFORM_DEPENDENCY_FIX"))

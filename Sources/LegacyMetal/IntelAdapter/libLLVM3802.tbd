@@ -21,7 +21,7 @@ exports:
                    '__ZN4llvm11raw_ostream5writeEPKcm', _LLVMGetNamedMetadataNumOperands, _LLVMGetNamedMetadataOperands,
                    _LLVMGetMDNodeNumOperands, _LLVMGetMDNodeOperands, _LLVMGetMDString, _LLVMIsAMDNode, _LLVMIsAMDString,
                    _LLVMIsAConstantInt, _LLVMConstIntGetZExtValue, _LLVMMDNodeInContext,
-                   '__ZN4llvm6MDNode18replaceOperandWithEjPNS_8MetadataE',
+                   '__ZN4llvm6MDNode18replaceOperandWithEjPNS_8MetadataE', '__ZNK4llvm3Use7getUserEv', '__ZNK4llvm5Value7getNameEv',
                    _LLVMIsAAllocaInst, _LLVMBuildAlloca, _LLVMArrayType, _LLVMGetAllocatedType, _LLVMIsAGetElementPtrInst, _LLVMIsABitCastInst, _LLVMIsASelectInst, _LLVMGetVolatile, _LLVMAddNamedMetadataOperand, _LLVMMDStringInContext, _LLVMBuildMul, _LLVMBuildAdd, _LLVMConstIntGetSExtValue, _LLVMBuildLShr, _LLVMIsAConstant,
                    _LLVMIsDeclaration, _LLVMGetAttribute, _LLVMGetArrayLength, _LLVMGetStructName, _LLVMBuildInBoundsGEP,
                    _LLVMBuildSelect, _LLVMBuildShl, _LLVMBuildAShr, _LLVMBuildSExt, _LLVMBuildTrunc, _LLVMBuildSIToFP,
