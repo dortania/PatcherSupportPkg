@@ -6,7 +6,7 @@ mkdir -p build
 for src in [a-z][0-9]*.m; do
     name=${src%.m}
     extra=
-    grep -q '<CoreImage/CoreImage.h>' "$src" && extra="-framework CoreImage -framework CoreGraphics"  # s53 only: the others stay without it
+    grep -q '<CoreImage/CoreImage.h>' "$src" && extra="-framework CoreImage -framework CoreGraphics"  # s53 and s68 only: the others stay without it
     grep -q '<MetalPerformanceShadersGraph/' "$src" && extra="-framework MetalPerformanceShaders -framework MetalPerformanceShadersGraph"  # s57
     grep -q '<MetalFX/' "$src" && extra="-framework MetalFX"  # s58
     clang -arch x86_64 -mmacosx-version-min=12.0 -fobjc-arc -O1 -Wall -Wno-unguarded-availability-new \
@@ -26,6 +26,16 @@ if xcrun -sdk macosx -f metal >/dev/null 2>&1; then
             rm -f "build/$test-$tag.air"
         done
     done
+    # s68: a precompiled Core Image kernel for macOS 14.0 and 15.0 (AIR 2.7, as Office 16.115 ships), and a stitchable one
+    for target in 14.0:macos14 15.0:macos15; do
+        version=${target%%:*}; tag=${target#*:}
+        xcrun -sdk macosx metal -fcikernel -mmacosx-version-min="$version" -c data/s68-ci-color.metal -o "build/s68-$tag.air"
+        xcrun -sdk macosx metallib -cikernel "build/s68-$tag.air" -o "build/s68-ci-$tag.metallib"
+        rm -f "build/s68-$tag.air"
+    done
+    xcrun -sdk macosx metal -mmacosx-version-min=14.0 -c data/s68-ci-stitchable.metal -o build/s68-stitchable.air
+    xcrun -sdk macosx metal build/s68-stitchable.air -framework CoreImage -o build/s68-ci-stitchable.metallib
+    rm -f build/s68-stitchable.air
     # s59: a Metal 4.0 library (Xcode 26), whose texture reads all go through the read sampler
     if xcrun -sdk macosx metal -std=metal4.0 -mmacosx-version-min=26.0 -c data/s59-reads.metal -o build/s59.air 2>/dev/null; then
         xcrun -sdk macosx metallib build/s59.air -o build/s59-metal4.metallib
@@ -34,6 +44,6 @@ if xcrun -sdk macosx -f metal >/dev/null 2>&1; then
         echo "build.sh: this metal compiler has no Metal 4.0 (Xcode 26); s59 will SKIP" >&2
     fi
 else
-    echo "build.sh: Xcode's metal compiler not found; s13, i05 and s59 will SKIP" >&2
+    echo "build.sh: Xcode's metal compiler not found; s13, i05 and s59 will SKIP, and s68 checks only the Metal half" >&2
 fi
 find build -maxdepth 1 -type f -perm -u+x ! -name '*.metallib' | wc -l | xargs echo "programs built:"

@@ -15,10 +15,12 @@
 #                                           the same, from OCLP's 11.7.10 plugin
 #   AMDMTLBronzeDriver.bundle/Contents/MacOS/ in 12.5, 12.5-24, 12.5-25 and 12.5-GCN-SKL-22..25:
 #                                           AMDMTLBronzeDriver (+ weak load of AMDBronzeCompat.dylib), AMDBronzeCompat.dylib
+#   14.0 Beta 3-24 CoreImage.framework/Versions/A/
+#                                           CoreImageOld.dylib with reflect, kernelsWithString and its own sections back (tools/make_coreimage_fix.py)
 # The stock inputs come from git (STOCK_REF, default: the merge base with origin/HEAD, the upstream default branch), never from the patched files
 # in the working tree, so re-running it gives the same output. STOCK_DIR=<dir> takes them from a folder instead
 # (files: Metal Metal-25 MetalOld.dylib AMDShared libAMDIL902.dylib AMDShared-GCN-25 libAMDIL902-GCN-25.dylib
-# libMTLIntelCompilerPlugin.dylib AMDMTLBronzeDriver-<variant>).
+# libMTLIntelCompilerPlugin.dylib AMDMTLBronzeDriver-<variant> CoreImageOld.dylib).
 # Everything is ad-hoc signed; release signing happens as for the rest of the payload. Needs Xcode command-line tools.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -32,6 +34,7 @@ BRONZE=System/Library/Extensions/AMDMTLBronzeDriver.bundle/Contents/MacOS
 BRONZE_VARIANTS="12.5 12.5-24 12.5-25 12.5-GCN-SKL-22 12.5-GCN-SKL-23 12.5-GCN-SKL-24 12.5-GCN-SKL-25"
 INTEL=12.5/System/Library/Extensions/AppleIntelHD5000GraphicsMTLDriver.bundle/Contents/MacOS
 IVB_VARIANTS="11.7.10 11.7.10-22" IVB=System/Library/Extensions/AppleIntelHD4000GraphicsMTLDriver.bundle/Contents/MacOS
+CI="14.0 Beta 3-24/System/Library/Frameworks/CoreImage.framework/Versions/A"
 rm -rf "$B"; mkdir -p "$B/stock"
 stock() {  # <path under Universal-Binaries> <file name>
     if [ -n "${STOCK_DIR:-}" ]; then cp "$STOCK_DIR/$2" "$B/stock/$2"; return; fi
@@ -48,6 +51,7 @@ stock "$GCN25/PlugIns/libAMDIL902.dylib" libAMDIL902-GCN-25.dylib
 stock "$INTEL/libMTLIntelCompilerPlugin.dylib" libMTLIntelCompilerPlugin.dylib
 stock "11.7.10/$IVB/libMTLIntelCompilerPlugin.dylib" libMTLIntelCompilerPlugin-IVB.dylib  # the same file in 11.7.10-22
 for v in $BRONZE_VARIANTS; do stock "$v/$BRONZE/AMDMTLBronzeDriver" "AMDMTLBronzeDriver-$v"; done
+stock "$CI/CoreImageOld.dylib" CoreImageOld.dylib
 
 # 1. MetalOldCompat, and the no-op build the tests use for "without the fix" (same load commands, does nothing)
 for variant in "" -noop; do
@@ -86,12 +90,13 @@ weak AMDShared-GCN-25 AMDShared-GCN-25 @loader_path/AMDTextureAtomics.dylib
 weak libMTLIntelCompilerPlugin.dylib libMTLIntelCompilerPlugin.dylib @loader_path/IntelTextureAtomics.dylib
 weak libMTLIntelCompilerPlugin-IVB.dylib libMTLIntelCompilerPlugin-IVB.dylib @loader_path/IntelTextureAtomics.dylib
 for v in $BRONZE_VARIANTS; do weak "AMDMTLBronzeDriver-$v" "AMDMTLBronzeDriver-$v" @loader_path/AMDBronzeCompat.dylib; done
+python3 -I "$HERE/tools/make_coreimage_fix.py" "$B/stock/CoreImageOld.dylib" "$B/CoreImageOld.dylib"
 cd "$B"
 codesign -f -s - MetalOldCompat.dylib MetalOldCompat-noop.dylib AMDTextureAtomics.dylib IntelTextureAtomics.dylib \
     libAMDIL902.dylib libAMDIL902-GCN-25.dylib Metal Metal-25 AMDShared AMDShared-GCN-25 libMTLIntelCompilerPlugin.dylib \
     libMTLIntelCompilerPlugin-IVB.dylib \
     2>/dev/null
-codesign -f -s - AMDBronzeCompat.dylib 2>/dev/null
+codesign -f -s - AMDBronzeCompat.dylib CoreImageOld.dylib 2>/dev/null
 for v in $BRONZE_VARIANTS; do codesign -f -s - "AMDMTLBronzeDriver-$v" 2>/dev/null; done
 # 6. into the payload
 cp Metal MetalOldCompat.dylib "$UB/$WRAPPER/"
@@ -111,6 +116,8 @@ for v in $BRONZE_VARIANTS; do
     cp "AMDMTLBronzeDriver-$v" "$UB/$v/$BRONZE/AMDMTLBronzeDriver"
     cp AMDBronzeCompat.dylib "$UB/$v/$BRONZE/"
 done
+cp CoreImageOld.dylib "$UB/$CI/"
 [ -n "${STOCK_DIR:-}" ] || python3 -I "$HERE/tools/make_tahoe_compiler.py" "$ROOT" "${STOCK_REF:-$(git -C "$ROOT" merge-base HEAD origin/HEAD)}"
 shasum -a 256 MetalOldCompat.dylib AMDTextureAtomics.dylib IntelTextureAtomics.dylib AMDBronzeCompat.dylib libAMDIL902.dylib Metal \
-    Metal-25 AMDShared libAMDIL902-GCN-25.dylib AMDShared-GCN-25 libMTLIntelCompilerPlugin.dylib libMTLIntelCompilerPlugin-IVB.dylib
+    Metal-25 AMDShared libAMDIL902-GCN-25.dylib AMDShared-GCN-25 libMTLIntelCompilerPlugin.dylib libMTLIntelCompilerPlugin-IVB.dylib \
+    CoreImageOld.dylib

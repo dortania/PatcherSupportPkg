@@ -92,6 +92,12 @@
 //      first quarter: a compute read after the pass makes the driver resolve all of it
 //  51. stencil drawn with a sample mask on the Ivy Bridge driver, which wrote none when the render pass had no depth
 //      attachment: a combined depth/stencil texture attached as stencil only is attached as depth too
+//  52. reflection of [[stitchable]] functions (their return type and arguments), which aborted in MetalOld's
+//      MTLStitchingReflectionReader on the reply of Sequoia's compiler service: the reader gets the MTLPSBIN section out of
+//      the reply's newer container. With CoreImageOld's CIKernelReflection::reflect restored in the payload, precompiled
+//      and stitchable Core Image kernels load again (Microsoft Office's picture corrections), and with its own
+//      sections found again, kernels from Metal source (kernelsWithMetalString:, which aborted) and from kernel-language
+//      source, which now take Core Image's Metal path, reflect too
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -3869,6 +3875,62 @@ static void keepPortraitLibraries(void) {
     if (m) origDataWithContentsOfURL = method_setImplementation(m, (IMP)keptPortraitLibrary);
 }
 
+// ---- 52. Reflection of stitchable functions ---------------------------------------------------------------------------
+// MetalOld reflects a [[stitchable]] function (its return type and arguments, filled in by -[_MTLFunctionInternal
+// initializeStitchableFunctionMetadata] when something asks for them) with a reflection-only request to
+// MTLCompilerService, whose reply MTLStitchingReflectionReader reads. 13.2.1's reader takes the reply to be the reflection
+// itself, an "MTLPSBIN" section, or a section without that header. Sequoia's compiler service puts the section in a newer
+// container: a 0x50-byte header (a 0xef13c710 magic, then the offset and size of each of four sections), so the reader
+// read a header word as the first argument's kind (0x50000000 where it wants 0x14) and called abort(). The section inside
+// is in a format the reader knows (version 2.0, which it reads as 1.2 or later: the same argument records). Core Image
+// reflects every kernel it loads from a metallib this way, through CIKernelReflection::reflect, and OCLP's CoreImageOld.dylib
+// (the 14.0 beta 3 Core Image of the 3802 payloads) has reflect stubbed out to avoid that abort, which also made every
+// precompiled Core Image kernel an app makes come back nil without an error: +[CIKernel kernelWithFunctionName:
+// fromMetalLibraryData:error:], behind Microsoft Office's picture corrections, colour and artistic effects (Oimg.metallib).
+// The payload's CoreImageOld has reflect back (tools/make_coreimage_fix.py), and here the reply handler of
+// -[MTLCompiler reflectionWithFunction:options:sync:pipelineLibrary:binaryArchives:completionHandler:], which the other
+// reflectionWithFunction: variants call, gets just the MTLPSBIN section when the reply is such a container. Precompiled
+// and stitchable Core Image kernels then build and render on the Iris Pro and the R9 M370X, the 237 built-in filters render
+// the same pixels as before, and CIDepthBlurEffect's portrait kernels (item 41), which are stitchable, reflect instead of
+// aborting, as they would with reflect restored alone. Replies in any other form are passed on as they are.
+// MTLSHIM_STITCHING_REFLECTION=0 turns it off (with the payload's CoreImageOld, stitchable kernels then abort again).
+// Test: s68.
+typedef void (^ReflectionHandler)(NSUInteger status, dispatch_data_t reflection, NSString *error);
+typedef void (*ReflectionIMP)(id, SEL, id function, NSUInteger options, BOOL sync, id pipelineLibrary, id binaryArchives,
+                              ReflectionHandler handler);
+static ReflectionIMP origReflectionWithFunction;
+static dispatch_data_t stitchingReflectionSection(dispatch_data_t reply) {
+    const void *bytes = NULL;
+    size_t size = 0;
+    dispatch_data_t map = reply ? dispatch_data_create_map(reply, &bytes, &size) : nil;
+    if (!map || size < 0x50 || *(const uint32_t *)bytes != 0xef13c710u) return reply;
+    for (size_t entry = 0x10; entry < 0x50; entry += 0x10) {
+        uint64_t offset, length;
+        memcpy(&offset, (const char *)bytes + entry, 8);
+        memcpy(&length, (const char *)bytes + entry + 8, 8);
+        if (offset < 0x50 || offset > size || length < 12 || length > size - offset || memcmp((const char *)bytes + offset, "MTLPSBIN", 8))
+            continue;
+        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] stitchable function reflection: MTLPSBIN section of the reply's container (%zu -> %llu bytes)\n", size, length);
+        return dispatch_data_create_subrange(reply, offset, length);
+    }
+    return reply;
+}
+static void reflectionWithFunction(id self, SEL _cmd, id function, NSUInteger options, BOOL sync, id pipelineLibrary,
+                                   id binaryArchives, ReflectionHandler handler) {
+    ReflectionHandler unwrapping = handler ? ^(NSUInteger status, dispatch_data_t reflection, NSString *error) {
+        handler(status, stitchingReflectionSection(reflection), error);
+    } : nil;
+    origReflectionWithFunction(self, _cmd, function, options, sync, pipelineLibrary, binaryArchives, unwrapping);
+}
+static void installStitchingReflection(void) {
+    const char *setting = getenv("MTLSHIM_STITCHING_REFLECTION");
+    if (setting && !strcmp(setting, "0")) return;
+    Method m = class_getInstanceMethod(objc_getClass("MTLCompiler"),
+                                       sel_registerName("reflectionWithFunction:options:sync:pipelineLibrary:binaryArchives:completionHandler:"));
+    if (m && !strcmp(method_getTypeEncoding(m), "v60@0:8@16Q24c32@36@44@?52"))
+        origReflectionWithFunction = (ReflectionIMP)method_setImplementation(m, (IMP)reflectionWithFunction);
+}
+
 // ---- 43. MPS NDArray matrix multiplication on the Intel GPU --------------------------------------------------------
 // MPSNDArrayMatrixMultiplication (and through it MPSGraph's matrixMultiplication, the matmul of anything built on
 // MPSGraph) multiplies with its own NDArray kernels on GPUs that MPSCore's device record types as 18-24, and with an
@@ -4016,10 +4078,11 @@ __attribute__((constructor)) static void init(void) {
     installReadSamplerRewrite();
     installWebKitRouting();
     keepPortraitLibraries();
-    if (onMetalOld()) installMPSMatmulFallback(), installMetalFXTemporalLimit();
+    if (onMetalOld()) installMPSMatmulFallback(), installMetalFXTemporalLimit(), installStitchingReflection();
 #else
     (void)dropValidationLayers;
     (void)keepPortraitLibraries;
+    (void)installStitchingReflection;
     (void)installMPSMatmulFallback;
     (void)installMetalFXTemporalLimit;
     (void)installWebKitRouting;
