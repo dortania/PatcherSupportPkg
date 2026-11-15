@@ -89,8 +89,9 @@ same.
 
 The MacBookPro11,4's Iris Pro 5200 (Haswell GT3e) was tested with this PR's payload at 479fcaf. Its final round found
 no wrong kernel in plain seeds 7651-9650, VEC seeds 7921-8920 or LONG seeds 3521-4020. The HD 4000 (Ivy Bridge, OCLP's 11.7.10
-compiler) was tested on Sequoia with this PR's payload: of plain seeds 1-300, VEC seeds 1-200, LONG seeds 1-200, FRAG
-seeds 1-200 and `mslfuzz.py` seeds 1-200, one kernel was wrong, VEC seed 23 (i75). Results from other GPUs are
+compiler) was tested on Sequoia with this PR's payload: plain seeds 1-1300, VEC seeds 1-1600, LONG seeds 1-700, FRAG
+seeds 1-700 and `mslfuzz.py` seeds 1-700. Three kernels were wrong: VEC seeds 23 (i75) and 468 (i76), and FRAG seed 613
+(i77, which the Iris Pro gets wrong too). With those fixes, FRAG seeds 1-700 run again had none. Results from other GPUs are
 welcome, above all from GPUs this PR hasn't been tested on. When posting one, include:
 - the GPU and macOS version
 - the settings and seed range
