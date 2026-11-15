@@ -5127,9 +5127,33 @@ static unsigned splitHalfwordBytes(LLVMModuleRef module) {
 // 0: in vf(as_type<short2>(uchar4(a, b, c, d) & uchar4(e, 0, f, 28))) & 255, the low byte of .y (byte 2) came out as 0
 // in 78 of 256 threads (mslfuzz2 VEC seed 23 on an HD 4000; the stock compiler too). The IR and the IGIL text are right,
 // and so are the same halves put together from the bytes with shifts, and as_type<uint>(uchar4). Each such bitcast
-// becomes its halfwords, put together lane by lane: halfword k = byte 2k | byte 2k + 1 << 8, in 32 bits. Runs after the
-// other rewrites, which then see the module as before. Ivy Bridge only. INTEL_BYTE_HALFWORDS_FIX=0 turns it off.
-// Test: i75.
+// becomes its halfwords, put together lane by lane: halfword k = byte 2k | byte 2k + 1 << 8, in 32 bits. Only where a
+// byte lane is a known 0 (a constant lane, an inserted 0, or an AND with either), the shape iCBE gets wrong: elsewhere
+// the back end's own BPACK is right, and the shifts could trip its narrow-shift handling instead (as_type<short2> of a
+// uchar4 shifted by a uchar4, VEC seed 2598: 2 threads wrong with the rewrite, none without it). Runs after the other
+// rewrites, which then see the module as before. Ivy Bridge only. INTEL_BYTE_HALFWORDS_FIX=0 turns it off. Test: i75.
+static bool knownZeroByteLane(LLVMValueRef v, int depth = 0) {
+    enum { kAnd = 23, kInsertElement = 51 };
+    if (depth > 8) return false;
+    if (LLVMIsAConstantAggregateZero(v)) return true;
+    bool data = LLVMIsAConstantDataSequential(v) != nullptr;
+    if (data || LLVMIsAConstantVector(v)) {
+        for (unsigned k = 0; k < lanes(LLVMTypeOf(v)); k++) {
+            LLVMValueRef e = data ? LLVMGetElementAsConstant(v, k) : LLVMGetOperand(v, k);
+            if (e && LLVMIsAConstantInt(e) && LLVMConstIntGetZExtValue(e) == 0) return true;
+        }
+        return false;
+    }
+    if (!LLVMIsAInstruction(v)) return false;
+    int opcode = LLVMGetInstructionOpcode(v);
+    if (opcode == kInsertElement) {
+        LLVMValueRef x = LLVMGetOperand(v, 1);
+        if (LLVMIsAConstantInt(x) && LLVMConstIntGetZExtValue(x) == 0) return true;
+        return knownZeroByteLane(LLVMGetOperand(v, 0), depth + 1);
+    }
+    if (opcode == kAnd) return knownZeroByteLane(LLVMGetOperand(v, 0), depth + 1) || knownZeroByteLane(LLVMGetOperand(v, 1), depth + 1);
+    return false;
+}
 static unsigned packByteHalfwords(LLVMModuleRef module) {
     if (disabled("INTEL_BYTE_HALFWORDS_FIX") || !ivyBridgePlugin) return 0;
     enum { kBitCast = 41 };
@@ -5141,7 +5165,9 @@ static unsigned packByteHalfwords(LLVMModuleRef module) {
             for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
                 if (LLVMGetInstructionOpcode(inst) != kBitCast) continue;
                 LLVMTypeRef to = LLVMTypeOf(inst), from = LLVMTypeOf(LLVMGetOperand(inst, 0));
-                if (subwordBits(from) == 8 && subwordBits(to) == 16 && lanes(to) && lanes(from) == 2 * lanes(to)) found.push_back(inst);
+                if (subwordBits(from) == 8 && subwordBits(to) == 16 && lanes(to) && lanes(from) == 2 * lanes(to) &&
+                    knownZeroByteLane(LLVMGetOperand(inst, 0)))
+                    found.push_back(inst);
             }
     if (found.empty()) return 0;
     LLVMBuilderRef b = LLVMCreateBuilderInContext(context);
