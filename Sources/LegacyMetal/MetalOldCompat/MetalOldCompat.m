@@ -90,6 +90,8 @@
 //      faces after ANGLE's generateMipmap): addressed through the view's parent at its slice and level
 //  50. multisampled depth cleared by a render pass on the Ivy Bridge driver, which later render passes saw only in its
 //      first quarter: a compute read after the pass makes the driver resolve all of it
+//  51. stencil drawn with a sample mask on the Ivy Bridge driver, which wrote none when the render pass had no depth
+//      attachment: a combined depth/stencil texture attached as stencil only is attached as depth too
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -1705,6 +1707,50 @@ typedef void (*EndEncodingIMP)(id, SEL);
 static const void *kPendingResolveCopies = &kPendingResolveCopies;
 static const void *kPendingDepthTouch = &kPendingDepthTouch;  // item 50
 static BOOL ivbDepthTouch;
+
+// 51. Stencil written by a fragment function that writes [[sample_mask]] on the Ivy Bridge driver: when the render pass
+// has no depth attachment, none of its stencil writes land (a Depth32Float_Stencil8 or Stencil8 stencil attachment, at
+// 1x and 4x alike); with the same Depth32Float_Stencil8 texture attached as depth too, they do. ANGLE's fragment
+// functions write the sample mask whenever they render multisampled, and a multisampled GL_STENCIL_INDEX8 renderbuffer
+// is a stencil-only attachment (item 36 makes it Depth32Float_Stencil8), so every draw's stencil was lost: dEQP
+// fbomultisample stencil_index8 in Chrome, Safari and Firefox resolved stencil 0 everywhere. A pass with a combined
+// depth/stencil texture as its stencil attachment and no depth attachment gets the same texture as its depth attachment
+// (loaded and stored, so the depth plane keeps its contents), and its depth/stencil states are swapped for copies that
+// write no depth and compare Always, except a Never compare, which stays: that's what a pass without a depth attachment
+// does on Apple's GPUs (measured on an M3 Pro: Never rejects every fragment, the other compares pass them, and the depth
+// plane is left alone). A Stencil8 texture can't be attached
+// as depth, so a single-sample Stencil8 stencil-only pass drawn with a sample mask still loses its stencil (ANGLE only
+// writes the mask when multisampled). MTLSHIM_STENCIL_WITH_DEPTH=0 turns it off. (s67)
+static const void *kDepthAddedForStencil = &kDepthAddedForStencil;
+static const void *kDepthStencilDescriptor = &kDepthStencilDescriptor;
+static const void *kWithoutDepthTest = &kWithoutDepthTest;
+static BOOL ivbStencilWithDepth;
+typedef id (*NewDepthStencilStateIMP)(id, SEL, MTLDepthStencilDescriptor *);
+typedef void (*SetDepthStencilStateIMP)(id, SEL, id);
+static NewDepthStencilStateIMP origIGNewDepthStencilState;
+static SetDepthStencilStateIMP origIGSetDepthStencilState;
+static id igNewDepthStencilState(id self, SEL _cmd, MTLDepthStencilDescriptor *descriptor) RETURNS_RETAINED;
+static id igNewDepthStencilState(id self, SEL _cmd, MTLDepthStencilDescriptor *descriptor) {
+    id state = origIGNewDepthStencilState(self, _cmd, descriptor);
+    if (state && descriptor) objc_setAssociatedObject(state, kDepthStencilDescriptor, [descriptor copy], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return state;
+}
+static void igSetDepthStencilState(id self, SEL _cmd, id state) {
+    if (state && objc_getAssociatedObject(self, kDepthAddedForStencil)) {
+        id variant = objc_getAssociatedObject(state, kWithoutDepthTest);
+        MTLDepthStencilDescriptor *d = variant ? nil : objc_getAssociatedObject(state, kDepthStencilDescriptor);
+        BOOL never = d.depthCompareFunction == MTLCompareFunctionNever;
+        if (d && ((!never && d.depthCompareFunction != MTLCompareFunctionAlways) || d.depthWriteEnabled)) {
+            MTLDepthStencilDescriptor *copy = [d copy];
+            if (!never) copy.depthCompareFunction = MTLCompareFunctionAlways;
+            copy.depthWriteEnabled = NO;
+            variant = [[(id<MTLRenderCommandEncoder>)self device] newDepthStencilStateWithDescriptor:copy];
+            if (variant) objc_setAssociatedObject(state, kWithoutDepthTest, variant, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        if (variant) state = variant;
+    }
+    origIGSetDepthStencilState(self, _cmd, state);
+}
 typedef id (*RenderEncoderIMP)(id, SEL, MTLRenderPassDescriptor *);
 static RenderEncoderIMP origIGRenderEncoder;
 static EndEncodingIMP origIGRenderEndEncoding;
@@ -1927,7 +1973,28 @@ static id igRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor
             }
         }
     }
+    // Item 51: a combined depth/stencil texture attached as stencil only is attached as depth too.
+    BOOL depthAdded = NO;
+    {
+        MTLRenderPassDescriptor *current = redirected ?: descriptor;
+        MTLRenderPassStencilAttachmentDescriptor *st = current.stencilAttachment;
+        MTLPixelFormat format = st.texture.pixelFormat;
+        if (ivbStencilWithDepth && st.texture && !current.depthAttachment.texture &&
+            (format == MTLPixelFormatDepth32Float_Stencil8 || format == MTLPixelFormatDepth24Unorm_Stencil8)) {
+            if (!redirected) redirected = [descriptor copy];
+            MTLRenderPassDepthAttachmentDescriptor *dp = redirected.depthAttachment;
+            dp.texture = st.texture;
+            dp.level = st.level;
+            dp.slice = st.slice;
+            dp.depthPlane = st.depthPlane;
+            dp.loadAction = MTLLoadActionLoad;
+            dp.storeAction = MTLStoreActionStore;
+            depthAdded = YES;
+            if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] stencil-only pass: depth attached as well\n");
+        }
+    }
     id encoder = origIGRenderEncoder(self, _cmd, redirected ?: descriptor);
+    if (encoder && depthAdded) objc_setAssociatedObject(encoder, kDepthAddedForStencil, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     if (encoder) setDefaultViewport(encoder, descriptor);
     id<MTLTexture> depth = descriptor.depthAttachment.texture;  // item 50
     if (encoder && ivbDepthTouch && depth && depth.textureType == MTLTextureType2DMultisample && (depth.usage & MTLTextureUsageShaderRead) &&
@@ -3024,6 +3091,14 @@ static void patchDriverClasses(void) {
         definesMethod("MTLIGAccelRenderCommandEncoder", "endEncoding")) {
         const char *touch = getenv("MTLSHIM_MSAA_DEPTH_RESOLVE"), *image = class_getImageName(objc_getClass("MTLIGAccelRenderCommandEncoder"));
         ivbDepthTouch = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !(touch && !strcmp(touch, "0"));  // item 50
+        const char *withDepth = getenv("MTLSHIM_STENCIL_WITH_DEPTH");  // item 51
+        if (image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !(withDepth && !strcmp(withDepth, "0")) &&
+            definesMethod("MTLIGAccelDevice", "newDepthStencilStateWithDescriptor:") &&
+            definesMethod("MTLIGAccelRenderCommandEncoder", "setDepthStencilState:")) {
+            origIGNewDepthStencilState = (NewDepthStencilStateIMP)swizzle("MTLIGAccelDevice", "newDepthStencilStateWithDescriptor:", (IMP)igNewDepthStencilState);
+            origIGSetDepthStencilState = (SetDepthStencilStateIMP)swizzle("MTLIGAccelRenderCommandEncoder", "setDepthStencilState:", (IMP)igSetDepthStencilState);
+            ivbStencilWithDepth = origIGNewDepthStencilState && origIGSetDepthStencilState;
+        }
         origIGRenderEncoder = (RenderEncoderIMP)swizzle("MTLIGAccelCommandBuffer", "renderCommandEncoderWithDescriptor:", (IMP)igRenderEncoder);
         origIGRenderEndEncoding = (EndEncodingIMP)swizzle("MTLIGAccelRenderCommandEncoder", "endEncoding", (IMP)igRenderEndEncoding);
     }
