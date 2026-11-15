@@ -5071,6 +5071,46 @@ static unsigned splitHalfwordBytes(LLVMModuleRef module) {
     return (unsigned)found.size();
 }
 
+// ---- byte vectors viewed as halfwords on Ivy Bridge -----------------------------------------------------------------
+// as_type<short2>(uchar4) and as_type<ushort2>(char4), a bitcast <4 x i8> -> <2 x i16>, reach the back end as BPACK of
+// the bytes into a word and SUNPACK of its halves, and Ivy Bridge's iCBE reads a half wrong when a byte lane is a known
+// 0: in vf(as_type<short2>(uchar4(a, b, c, d) & uchar4(e, 0, f, 28))) & 255, the low byte of .y (byte 2) came out as 0
+// in 78 of 256 threads (mslfuzz2 VEC seed 23 on an HD 4000; the stock compiler too). The IR and the IGIL text are right,
+// and so are the same halves put together from the bytes with shifts, and as_type<uint>(uchar4). Each such bitcast
+// becomes its halfwords, put together lane by lane: halfword k = byte 2k | byte 2k + 1 << 8, in 32 bits. Runs after the
+// other rewrites, which then see the module as before. Ivy Bridge only. INTEL_BYTE_HALFWORDS_FIX=0 turns it off.
+// Test: i75.
+static unsigned packByteHalfwords(LLVMModuleRef module) {
+    if (disabled("INTEL_BYTE_HALFWORDS_FIX") || !ivyBridgePlugin) return 0;
+    enum { kBitCast = 41 };
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMTypeRef i16 = LLVMIntTypeInContext(context, 16), i32 = LLVMInt32TypeInContext(context);
+    std::vector<LLVMValueRef> found;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                if (LLVMGetInstructionOpcode(inst) != kBitCast) continue;
+                LLVMTypeRef to = LLVMTypeOf(inst), from = LLVMTypeOf(LLVMGetOperand(inst, 0));
+                if (subwordBits(from) == 8 && subwordBits(to) == 16 && lanes(to) && lanes(from) == 2 * lanes(to)) found.push_back(inst);
+            }
+    if (found.empty()) return 0;
+    LLVMBuilderRef b = LLVMCreateBuilderInContext(context);
+    for (LLVMValueRef inst : found) {
+        LLVMPositionBuilderBefore(b, inst);
+        LLVMValueRef bytes = LLVMGetOperand(inst, 0), halves = LLVMGetUndef(LLVMTypeOf(inst));
+        for (unsigned k = 0; k < lanes(LLVMTypeOf(inst)); k++) {
+            LLVMValueRef low = LLVMBuildZExt(b, LLVMBuildExtractElement(b, bytes, LLVMConstInt(i32, 2 * k, false), ""), i32, "");
+            LLVMValueRef high = LLVMBuildZExt(b, LLVMBuildExtractElement(b, bytes, LLVMConstInt(i32, 2 * k + 1, false), ""), i32, "");
+            LLVMValueRef half = LLVMBuildOr(b, low, LLVMBuildShl(b, high, LLVMConstInt(i32, 8, false), ""), "");
+            halves = LLVMBuildInsertElement(b, halves, LLVMBuildTrunc(b, half, i16, ""), LLVMConstInt(i32, k, false), "");
+        }
+        LLVMReplaceAllUsesWith(inst, halves);
+        LLVMInstructionEraseFromParent(inst);
+    }
+    LLVMDisposeBuilder(b);
+    return (unsigned)found.size();
+}
+
 // ---- compares of byte and halfword vectors in vertex and fragment functions ----------------------------------------
 // In vertex and fragment functions the back end's type legalization of a compare between two <N x i8> (or <N x i16>)
 // vectors depends on how each was made: any(uchar4(a, b, c, d) <= as_type<uchar4>(x)) crashed the compiler service
@@ -5651,8 +5691,10 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] %u 64-bit division(s) / variable shift(s) in a vertex/fragment function done on 32-bit halves\n", n);
         n = widenNarrowVectorCompares(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u compare(s), select(s) and operation(s) on byte / halfword vectors in a vertex/fragment module done on 32-bit lanes\n", n);
-        n = splitHalfwordBytes(module);  // last: the rewrites above see the module as before
+        n = splitHalfwordBytes(module);  // after the rewrites above, which see the module as before
         if (n && logging()) fprintf(stderr, "[inteltex] %u bitcast(s) of halfwords to bytes in a vertex/fragment module done lane by lane\n", n);
+        n = packByteHalfwords(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u bitcast(s) of bytes to halfwords put together lane by lane (Ivy Bridge)\n", n);
         if (getenv("INTELTEX_DUMP_REWRITTEN")) {  // debugging: every module after these rewrites
             static int serial;
             char path[1024];
