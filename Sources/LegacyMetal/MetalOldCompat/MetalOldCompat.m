@@ -86,6 +86,10 @@
 //      hidden indices the Intel adapter gives them (WebGL 2 uniform blocks)
 //  48. direct draws after an indirect draw in the same render encoder on the Ivy Bridge driver, which kept the indirect
 //      draw's base instance and base vertex: drawn through an indirect buffer of the shim's own
+//  49. blits from or into texture views on the Ivy Bridge driver, which reached the parent's slice 0 and level 0 (cube
+//      faces after ANGLE's generateMipmap): addressed through the view's parent at its slice and level
+//  50. multisampled depth cleared by a render pass on the Ivy Bridge driver, which later render passes saw only in its
+//      first quarter: a compute read after the pass makes the driver resolve all of it
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -1699,6 +1703,8 @@ typedef void (*EndEncodingIMP)(id, SEL);
 // pass resolves into a temporary 2D texture instead, which a blit copies to the real level/slice when the encoder ends.
 // Store actions left unknown at encoder creation and parallel render encoders are not changed.
 static const void *kPendingResolveCopies = &kPendingResolveCopies;
+static const void *kPendingDepthTouch = &kPendingDepthTouch;  // item 50
+static BOOL ivbDepthTouch;
 typedef id (*RenderEncoderIMP)(id, SEL, MTLRenderPassDescriptor *);
 static RenderEncoderIMP origIGRenderEncoder;
 static EndEncodingIMP origIGRenderEndEncoding;
@@ -1923,6 +1929,10 @@ static id igRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor
     }
     id encoder = origIGRenderEncoder(self, _cmd, redirected ?: descriptor);
     if (encoder) setDefaultViewport(encoder, descriptor);
+    id<MTLTexture> depth = descriptor.depthAttachment.texture;  // item 50
+    if (encoder && ivbDepthTouch && depth && depth.textureType == MTLTextureType2DMultisample && (depth.usage & MTLTextureUsageShaderRead) &&
+        descriptor.depthAttachment.loadAction == MTLLoadActionClear)
+        objc_setAssociatedObject(encoder, kPendingDepthTouch, @[self, depth], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     if (encoder && copies.count) {
         if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] %lu attachment(s) copied out of temporary textures at the end\n", (unsigned long)copies.count);
         objc_setAssociatedObject(encoder, kPendingResolveCopies, @[self, copies], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -1930,9 +1940,47 @@ static id igRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor
     return encoder;
 }
 
+// 50. Multisampled depth cleared by a render pass on the Ivy Bridge driver: the clear is a fast clear, and before a later
+// render pass samples the texture the driver resolves only its first width/2 x height/2 texels (single-sample extents
+// on the 4x surface); the rest reads 0. Ahead of a compute dispatch it resolves all of it. ANGLE resolves a multisampled
+// depth renderbuffer for glBlitFramebuffer by sampling it in a fragment shader, so cleared depth copied out of one came
+// out as 0 (WebGL CTS multisampled-depth-renderbuffer-initialization; three.js resolves the depth of multisampled render
+// targets that way). After a pass that clears a sampleable multisampled depth attachment, a one-thread compute dispatch
+// reads the texture. MTLSHIM_MSAA_DEPTH_RESOLVE=0 turns it off. (s66)
+static void touchMultisampledDepth(id<MTLCommandBuffer> commandBuffer, id<MTLTexture> texture) {
+    static id<MTLComputePipelineState> pipeline;
+    static id<MTLBuffer> scratch;
+    static os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
+    os_unfair_lock_lock(&lock);
+    if (!pipeline || pipeline.device != texture.device) {
+        id<MTLLibrary> library = [texture.device newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal;\n"
+            "kernel void touch(texture2d_ms<float> t [[texture(0)]], device float *o [[buffer(0)]]) { o[0] = t.read(uint2(0, 0), 0).r; }\n"
+                                                              options:nil error:nil];
+        id<MTLFunction> function = [library newFunctionWithName:@"touch"];
+        pipeline = function ? [texture.device newComputePipelineStateWithFunction:function error:nil] : nil;
+        scratch = [texture.device newBufferWithLength:16 options:MTLResourceStorageModePrivate];
+    }
+    id<MTLComputePipelineState> p = pipeline;
+    id<MTLBuffer> b = scratch;
+    os_unfair_lock_unlock(&lock);
+    if (!p || !b) return;
+    id<MTLComputeCommandEncoder> compute = [commandBuffer computeCommandEncoder];
+    [compute setComputePipelineState:p];
+    [compute setTexture:texture atIndex:0];
+    [compute setBuffer:b offset:0 atIndex:0];
+    [compute dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+    [compute endEncoding];
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] cleared multisampled depth resolved by a compute read\n");
+}
+
 static void igRenderEndEncoding(id self, SEL _cmd) {
     NSArray *pending = objc_getAssociatedObject(self, kPendingResolveCopies);
+    NSArray *touch = objc_getAssociatedObject(self, kPendingDepthTouch);
     origIGRenderEndEncoding(self, _cmd);
+    if (touch) {  // item 50
+        objc_setAssociatedObject(self, kPendingDepthTouch, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        touchMultisampledDepth(touch[0], touch[1]);
+    }
     if (!pending) return;
     objc_setAssociatedObject(self, kPendingResolveCopies, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     id<MTLBlitCommandEncoder> blit = [(id<MTLCommandBuffer>)pending[0] blitCommandEncoder];
@@ -2318,6 +2366,16 @@ static BufferToTextureIMP origIGBufferToTexture;
 static BufferToTextureOptionsIMP origIGBufferToTextureOptions;
 static TextureToTextureIMP origIGTextureToTexture;
 static TextureToTextureOptionsIMP origIGTextureToTextureOptions;
+// 49. Blits through texture views on the Ivy Bridge driver: a blit from or into a view (between textures, or with a
+// buffer) ignores the view's offset into its parent and reaches the parent's slice 0 and level 0; shaders reach the right
+// subresource through the same view. ANGLE copies a cube's faces through single-face 2D views when generateMipmap gives
+// the texture a mip chain, so every face became +X's (WebGL CTS texture-size-cube-maps, texture-sub-image-cube-maps,
+// texture-mips). Such blits address the view's parent (of the same pixel format) at the view's slice and level instead.
+// MTLSHIM_VIEW_BLITS=0 turns it off. (s65)
+static BOOL ivbViewBlits;
+static id<MTLTexture> viewBlitTarget(id<MTLTexture> t, NSUInteger *slice, NSUInteger *level) {
+    return ivbViewBlits && t.parentTexture ? rootTexture(t, level, slice) : t;
+}
 
 // 37. Stencil copied between a buffer and mip level 1 or higher on the 12.x Intel driver, when the buffer offset or
 // bytesPerRow isn't a multiple of 256: some texels come from their left neighbour (at mip 2 of a 20x16 texture, the 5th
@@ -2393,6 +2451,7 @@ static void textureToBuffer(id self, SEL _cmd, id<MTLTexture> t, NSUInteger slic
 }
 static void igTextureToBuffer(id self, SEL _cmd, id t, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLSize size, id buffer,
                               NSUInteger offset, NSUInteger row, NSUInteger image) {
+    t = viewBlitTarget(t, &slice, &level);  // item 49
     id<MTLTexture> temporary = stencilCopyTemporary(t, slice, level, offset, row, size, MTLBlitOptionNone);
     if (!temporary) return textureToBuffer(self, _cmd, t, slice, level, origin, size, buffer, offset, row, image, MTLBlitOptionNone, NO);
     textureCopy(self, t, slice, level, origin, size, temporary, 0, 0, MTLOriginMake(0, 0, 0));
@@ -2400,6 +2459,7 @@ static void igTextureToBuffer(id self, SEL _cmd, id t, NSUInteger slice, NSUInte
 }
 static void igTextureToBufferOptions(id self, SEL _cmd, id t, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLSize size, id buffer,
                                      NSUInteger offset, NSUInteger row, NSUInteger image, MTLBlitOption options) {
+    t = viewBlitTarget(t, &slice, &level);  // item 49
     id<MTLTexture> temporary = stencilCopyTemporary(t, slice, level, offset, row, size, options);
     if (!temporary) return textureToBuffer(self, _cmd, t, slice, level, origin, size, buffer, offset, row, image, options, YES);
     textureCopy(self, t, slice, level, origin, size, temporary, 0, 0, MTLOriginMake(0, 0, 0));
@@ -2480,23 +2540,29 @@ static id igBlitEncoder(id self, SEL _cmd) {
 }
 static void igBufferToTexture(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInteger row, NSUInteger image, MTLSize size, id t,
                               NSUInteger slice, NSUInteger level, MTLOrigin origin) {
+    t = viewBlitTarget(t, &slice, &level);  // item 49
     if (stencilCopyIn(self, buffer, offset, row, image, size, t, slice, level, origin, MTLBlitOptionNone, NO)) return;  // item 37
     origIGBufferToTexture(self, _cmd, buffer, offset, row, image, size, t, slice, level, origin);
     noteDepthStencilWrite(self, t, slice, level, origin, size, MTLBlitOptionNone);
 }
 static void igBufferToTextureOptions(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInteger row, NSUInteger image, MTLSize size, id t,
                                      NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLBlitOption options) {
+    t = viewBlitTarget(t, &slice, &level);  // item 49
     if (stencilCopyIn(self, buffer, offset, row, image, size, t, slice, level, origin, options, YES)) return;  // item 37
     origIGBufferToTextureOptions(self, _cmd, buffer, offset, row, image, size, t, slice, level, origin, options);
     noteDepthStencilWrite(self, t, slice, level, origin, size, options);
 }
 static void igTextureToTexture(id self, SEL _cmd, id source, NSUInteger sourceSlice, NSUInteger sourceLevel, MTLOrigin sourceOrigin, MTLSize size,
                                id t, NSUInteger slice, NSUInteger level, MTLOrigin origin) {
+    source = viewBlitTarget(source, &sourceSlice, &sourceLevel);  // item 49
+    t = viewBlitTarget(t, &slice, &level);
     origIGTextureToTexture(self, _cmd, source, sourceSlice, sourceLevel, sourceOrigin, size, t, slice, level, origin);
     noteDepthStencilWrite(self, t, slice, level, origin, size, MTLBlitOptionNone);
 }
 static void igTextureToTextureOptions(id self, SEL _cmd, id source, NSUInteger sourceSlice, NSUInteger sourceLevel, MTLOrigin sourceOrigin,
                                       MTLSize size, id t, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLBlitOption options) {
+    source = viewBlitTarget(source, &sourceSlice, &sourceLevel);  // item 49
+    t = viewBlitTarget(t, &slice, &level);
     origIGTextureToTextureOptions(self, _cmd, source, sourceSlice, sourceLevel, sourceOrigin, size, t, slice, level, origin, options);
     noteDepthStencilWrite(self, t, slice, level, origin, size, options);
 }
@@ -2640,6 +2706,8 @@ static void blitsIntoDepthStencil(void) {
         "copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:";
     static const char *const kTextureToTexture =
         "copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:";
+    const char *views = getenv("MTLSHIM_VIEW_BLITS"), *image = class_getImageName(objc_getClass("MTLIGAccelBlitCommandEncoder"));
+    ivbViewBlits = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !(views && !strcmp(views, "0"));  // item 49
     char withOptions[256];
     const char *setting = getenv("MTLSHIM_DEPTH_STENCIL_BLITS");
     if (origIGBlitEndEncoding || (setting && !strcmp(setting, "0"))) return;
@@ -2954,6 +3022,8 @@ static void patchDriverClasses(void) {
     os_unfair_lock_lock(&lock);
     if (!origIGRenderEncoder && definesMethod("MTLIGAccelCommandBuffer", "renderCommandEncoderWithDescriptor:") &&
         definesMethod("MTLIGAccelRenderCommandEncoder", "endEncoding")) {
+        const char *touch = getenv("MTLSHIM_MSAA_DEPTH_RESOLVE"), *image = class_getImageName(objc_getClass("MTLIGAccelRenderCommandEncoder"));
+        ivbDepthTouch = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !(touch && !strcmp(touch, "0"));  // item 50
         origIGRenderEncoder = (RenderEncoderIMP)swizzle("MTLIGAccelCommandBuffer", "renderCommandEncoderWithDescriptor:", (IMP)igRenderEncoder);
         origIGRenderEndEncoding = (EndEncodingIMP)swizzle("MTLIGAccelRenderCommandEncoder", "endEncoding", (IMP)igRenderEndEncoding);
     }
