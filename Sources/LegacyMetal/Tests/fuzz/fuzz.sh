@@ -36,8 +36,9 @@ for ((c = first; c < first + count; c += 50)); do
         c1=$(grep -F "$f HASH " <<< "$cpu" | cut -d' ' -f2-)
         [ -n "$c1" ] || c1=$(env "$@" python3 "$H/cpuref.py" "$f" | head -1)
         g1=$(env "$@" "$H/gpu.sh" "$f" "$gpu" | head -1)
-        # A dropped dispatch (seen under load on Haswell) says nothing about the compiler: once more.
-        [ "$g1" = "RUN untouched" ] && g1=$(env "$@" "$H/gpu.sh" "$f" "$gpu" | head -1)
+        # A dropped dispatch (seen under load on Haswell), or a run that printed nothing at all (once each on the HD 4000
+        # and the Iris Pro; both right when run again), says nothing about the compiler: once more.
+        { [ "$g1" = "RUN untouched" ] || [ -z "$g1" ]; } && g1=$(env "$@" "$H/gpu.sh" "$f" "$gpu" | head -1)
         n=$((n + 1))
         if [[ $c1 == HASH* ]] && [ "$g1" = "$c1" ]; then
             echo "$s ok" >> "$d/all.txt"; rm -f "$f"
