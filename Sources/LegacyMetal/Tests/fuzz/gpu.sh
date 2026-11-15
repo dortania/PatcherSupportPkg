@@ -21,10 +21,16 @@ if [ -n "${BUILD:-}" ]; then
         -framework Metal -o "$T/tools/bronzeload.dylib"
     # The compiler files by their leaf names in a folder of their own (build/ also holds a Metal, which must not load).
     L=$H/build/libs; mkdir -p "$L"
-    for f in AMDTextureAtomics.dylib IntelTextureAtomics.dylib libMTLIntelCompilerPlugin.dylib AMDBronzeCompat.dylib \
-        AMDShared libAMDIL902.dylib; do
+    for f in AMDTextureAtomics.dylib IntelTextureAtomics.dylib AMDBronzeCompat.dylib AMDShared libAMDIL902.dylib; do
         [ "$B/$f" -nt "$L/$f" ] && cp -p "$B/$f" "$L/$f"
     done
+    # The Intel compiler plugin of this Mac's own driver, as in verify.sh: on Ivy Bridge (HD 4000) the one from OCLP's
+    # 11.7.10 driver, which build.sh writes as libMTLIntelCompilerPlugin-IVB.dylib. With Haswell's, the adapter's Ivy
+    # Bridge fixes stay off and the kernels test the wrong compiler.
+    ivb=
+    ioreg -rc IntelAccelerator -d1 -w0 2>/dev/null | grep -q AppleIntelHD4000Graphics && ivb=-IVB
+    cmp -s "$B/libMTLIntelCompilerPlugin$ivb.dylib" "$L/libMTLIntelCompilerPlugin.dylib" ||
+        cp -p "$B/libMTLIntelCompilerPlugin$ivb.dylib" "$L/libMTLIntelCompilerPlugin.dylib"
     inserted=$T/tools/localcc.dylib:$T/tools/bronzeload.dylib
     [ -f /System/Library/Frameworks/Metal.framework/Versions/A/MetalOld.dylib ] && inserted=$B/MetalOldCompat.dylib:$inserted
     unset MTL_USE_AIRNT_BA
