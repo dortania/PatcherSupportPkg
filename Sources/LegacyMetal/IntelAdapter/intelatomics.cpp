@@ -1170,6 +1170,37 @@ static unsigned narrowMasksThroughCopies(std::string &s) {
     return n;
 }
 
+// ---- integer divides in a branch of a pixel shader: SIMD8 only -------------------------------------------------------
+// In a SIMD16 pixel kernel with an integer divide inside a branch, values that the compiler moves into that branch can be
+// read stale: in a loop that stores into a uint4 w at one run-time lane and adds w[popcount(x) & 3] ^ (w.y << 1) ^ w.w to
+// v0, the compiler moved that last add into a switch case that divides v0 by 65535, and in 11-17 of 256 pixels it saw w
+// as it was before the store (mslfuzz2 FRAG seed 613, on the HD 4000 and the Iris Pro alike; the R9 M370X and an M3 Pro
+// are right). The IR and the IGIL text are right, and the SIMD8 kernel is right on both. Gen7 divides integers eight
+// channels at a time, so the SIMD16 kernel splits each divide in two; without the divide, or with the read at a constant
+// lane, it was right. Rewriting the IR (the store and the read as selects) didn't help: iCBE still moved the read. So a
+// pixel shader whose IGIL has an integer divide (UDIV, IDIV, UBDIV, USDIV) inside an IF or a LOOP, or anywhere when it has
+// subroutines (CALL), which can be reached from a branch, is compiled SIMD8 only, as INTEL_SIMD8_PIXEL=1 does for all of
+// them. The IGIL text arrives here just before iCBE compiles it on the same thread. INTEL_PIXEL_DIVIDE_SIMD8_FIX=0 turns
+// it off. Test: i77.
+static thread_local bool pixelDivideInBranch;
+static bool divideInBranch(const std::string &s) {
+    if (s.find("PIXELSHADER") == std::string::npos || disabled("INTEL_PIXEL_DIVIDE_SIMD8_FIX")) return false;
+    bool calls = s.find("\tCALL") != std::string::npos;
+    int depth = 0;
+    for (size_t pos = 0; pos < s.size();) {
+        size_t eol = s.find('\n', pos);
+        if (eol == std::string::npos) eol = s.size();
+        const char *l = s.c_str() + pos;
+        if (!strncmp(l, "\tIF_", 4) || !strncmp(l, "\tLOOP;", 6)) depth++;
+        else if ((!strncmp(l, "\tENDIF;", 7) || !strncmp(l, "\tENDLOOP;", 9)) && depth > 0) depth--;
+        else if ((!strncmp(l, "\tUDIV ", 6) || !strncmp(l, "\tIDIV ", 6) || !strncmp(l, "\tUBDIV ", 7) || !strncmp(l, "\tUSDIV ", 7)) &&
+                 (depth > 0 || calls))
+            return true;
+        pos = eol + 1;
+    }
+    return false;
+}
+
 static thread_local std::string lastIGILForDump;  // INTELTEX_DUMP_KERNELS: the IGIL text iCBE compiles next on this thread
 extern "C" void intelatomicsFixIGIL(std::string *text) {
     if (getenv("INTELTEX_DUMP_KERNELS")) lastIGILForDump = *text;
@@ -1202,6 +1233,8 @@ extern "C" void intelatomicsFixIGIL(std::string *text) {
     if (unsigned n = signTestsOfSums(s); n && logging()) fprintf(stderr, "[inteltex] %u signed compare(s) of a sum with zero done on its sign bit\n", n);
     if (unsigned n = signExtensions(s); n && logging()) fprintf(stderr, "[inteltex] %u STOI / BTOI done as shift pairs\n", n);
     if (unsigned n = sampleLodOperands(s); n && logging()) fprintf(stderr, "[inteltex] %u explicit-LOD sample(s) given the register holding the LOD\n", n);
+    pixelDivideInBranch = divideInBranch(s);
+    if (pixelDivideInBranch && logging()) fprintf(stderr, "[inteltex] pixel shader with an integer divide in a branch: SIMD8 only\n");
     if (getenv("INTELTEX_DUMP")) {  // debugging: the IGIL text after the fixes above
         static int serial;
         char path[1024];
@@ -5546,6 +5579,8 @@ static void dumpPixelKernels(void *output, const char *tag) {
 static long hookedCompilePixelShader(void *compiler, int platform, void *a3, int optimizer, int simd, void *input, void *a7,
                                      void *output, void *platformInfo) {
     if (getenv("INTEL_SIMD8_PIXEL") && !disabled("INTEL_SIMD8_PIXEL")) simd = 1;
+    if (pixelDivideInBranch) simd = 1;  // set by intelatomicsFixIGIL for the IGIL text this compiles
+    pixelDivideInBranch = false;
     long result = originalCompilePixelShader(compiler, platform, a3, optimizer, simd, input, a7, output, platformInfo);
     if (!result || simd == 1 || !output || disabled("INTEL_SIMD16_CLOBBER_FIX")) return dumpPixelKernels(output, ""), result;
     const uint8_t *block = *(uint8_t **)output, *kernel16 = nullptr;
@@ -5568,9 +5603,30 @@ static long hookedCompilePixelShader(void *compiler, int platform, void *a3, int
     if (again) return dumpPixelKernels(output, ""), again;
     return originalCompilePixelShader(compiler, platform, a3, optimizer, simd, input, a7, output, platformInfo);  // as before
 }
+// Ivy Bridge's iCBE (the HD 4000 GL driver's) exports the same CompilePixelShaderOpenGL, its fourth and fifth arguments
+// the OPTIMIZER_LEVEL and SIMD_LEVEL it hands to USC::CompilePixelShaderOpenGL. Only the SIMD level is changed there: the
+// output block isn't read, its layout is unverified on that build.
+static CompilePixelShaderFn originalCompilePixelShaderIVB;
+static long hookedCompilePixelShaderIVB(void *compiler, int platform, void *a3, int optimizer, int simd, void *input, void *a7,
+                                        void *output, void *platformInfo) {
+    if (getenv("INTEL_SIMD8_PIXEL") && !disabled("INTEL_SIMD8_PIXEL")) simd = 1;
+    if (pixelDivideInBranch) simd = 1;  // set by intelatomicsFixIGIL for the IGIL text this compiles
+    pixelDivideInBranch = false;
+    return originalCompilePixelShaderIVB(compiler, platform, a3, optimizer, simd, input, a7, output, platformInfo);
+}
 static void installICBEHook() {
     static bool done;
-    if (done || ivyBridgePlugin) return;
+    if (done) return;
+    if (ivyBridgePlugin) {
+        done = true;
+        const char *path = "/System/Library/Extensions/AppleIntelHD4000GraphicsGLDriver.bundle/Contents/MacOS/iCBE.dylib";
+        void *h = dlopen(path, RTLD_NOLOAD | RTLD_LAZY);
+        if (!h) h = dlopen(path, RTLD_LAZY);
+        unsigned char *entry = h ? (unsigned char *)dlsym(h, "CompilePixelShaderOpenGL") : nullptr;
+        if (entry) originalCompilePixelShaderIVB = (CompilePixelShaderFn)hookFunction(entry, (void *)hookedCompilePixelShaderIVB);
+        if (logging()) fprintf(stderr, "[inteltex] Ivy Bridge iCBE CompilePixelShaderOpenGL %s\n", originalCompilePixelShaderIVB ? "hooked" : "NOT hooked");
+        return;
+    }
     done = true;
     void *h = nullptr;
     for (const char *path : kICBEPaths) if ((h = dlopen(path, RTLD_NOLOAD | RTLD_LAZY))) break;
