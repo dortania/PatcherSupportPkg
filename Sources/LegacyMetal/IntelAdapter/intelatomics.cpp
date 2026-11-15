@@ -13,8 +13,9 @@
 //      for the binding found through coords.w, which is cleared.
 // Installed: AppleIntelHD5000GraphicsMTLDriver.bundle/Contents/MacOS/IntelTextureAtomics.dylib (Haswell, 12.5 payload) and
 // AppleIntelHD4000GraphicsMTLDriver.bundle/Contents/MacOS/IntelTextureAtomics.dylib (Ivy Bridge, 11.7.10 payloads), a weak
-// dependency of each bundle's libMTLIntelCompilerPlugin.dylib. On Ivy Bridge the IGIL entry hooks (texture atomics) don't
-// match its plugin and stay off, and the Haswell sampler workaround is skipped; the IR fixes for compiler crashes apply. Test use: DYLD_INSERT_LIBRARIES=Tests/tools/localcc.dylib:build/intelatomics-test.dylib
+// dependency of each bundle's libMTLIntelCompilerPlugin.dylib. Ivy Bridge's plugin is an older build: its IGIL entry
+// points have their own names, its argument buffers need the hidden bindings below, and the narrow-private-array rewrite
+// and the SIMD16 check stay off there. Test use: DYLD_INSERT_LIBRARIES=Tests/tools/localcc.dylib:build/intelatomics-test.dylib
 //   INTELTEX_LOG=1        log what is rewritten (INTELTEX_LOG=/path: append the log to that file, e.g. from
 //                         MTLCompilerService through __XPC_INTELTEX_LOG)
 //   INTELTEX_DUMP=<dir>   write each lowered module and the IGIL text before the fix
@@ -453,7 +454,8 @@ static unsigned perPixelSwizzleImmediates(std::string &s) {
 // c0) list BASE_VERTEX_ID and the driver sets the draw up so VERTEXID includes it (direct draws are right either way).
 // WebGPU's drawIndexedIndirect with a base vertex drew from the wrong vertices wherever Dawn's shaders use the vertex
 // index (CTS draw:arguments, robust_access_vertex). Vertex shaders that read VERTEXID get BASE_VERTEX_ID in a free slot
-// of c0 (or a c0 of their own). Haswell only (the IGIL hook). INTEL_BASE_VERTEX_FIX=0 turns it off.
+// of c0 (or a c0 of their own). Haswell and Ivy Bridge (the IGIL hooks; on Ivy Bridge, direct draws after an indirect
+// draw also need MetalOldCompat item 48). INTEL_BASE_VERTEX_FIX=0 turns it off.
 static bool disabled(const char *setting);
 static bool declareBaseVertex(std::string &s) {
     if (s.find("VERTEXSHADER") == std::string::npos || s.find(", VERTEXID;") == std::string::npos ||
@@ -1257,12 +1259,24 @@ extern "C" void intelatomicsFixIGIL(std::string *text) {
 // ---- installation --------------------------------------------------------------------------------------------------
 static const char *const kPluginSuffix = "libMTLIntelCompilerPlugin.dylib";
 static const unsigned char kPrologue[12] = {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54};
+// The Ivy Bridge plugin's compileComputeFunctionIGILtoBinary saves fewer registers: push rbp; mov rbp, rsp; push r14;
+// push rbx; sub rsp, 0xa0. 14 bytes are the whole instructions that cover the 12-byte jump (none RIP-relative).
+static const unsigned char kPrologueIVBCompute[14] = {0x55, 0x48, 0x89, 0xe5, 0x41, 0x56, 0x53, 0x48, 0x81, 0xec, 0xa0, 0x00, 0x00, 0x00};
 // compile*FunctionIGILtoBinary(this, std::string &igil, ...): the IGIL text is the second argument (rsi).
 static const char *const kIGILEntryPoints[] = {
     "_ZN16MTLIntelCompiler33compileVertexFunctionIGILtoBinaryERNSt3__112basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEERPN3AIR13Serialization25SSerializedCompilerOutputINS8_27SCompilerOutputVertexShaderEEEjP21MTLIntelCompilerInputS7_",
     "_ZN16MTLIntelCompiler34compileComputeFunctionIGILtoBinaryERNSt3__112basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEEP22MTLIntelCSDeviceBinaryRPN3AIR13Serialization25SSerializedCompilerOutputINSA_28SCompilerOutputComputeShaderEEEjS7_",
     "_ZN16MTLIntelCompiler35compileFragmentFunctionIGILtoBinaryERNSt3__112basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEERPN3AIR13Serialization25SSerializedCompilerOutputINS8_26SCompilerOutputPixelShaderEEEjS7_",
     "_ZN16MTLIntelCompiler40compileTessellationFunctionsIGILtoBinaryERNSt3__112basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEERPN3AIR13Serialization25SSerializedCompilerOutputINS8_25SCompilerOutputHullShaderEEERPNSA_INS8_27SCompilerOutputDomainShaderEEEjS7_",
+};
+// The same entry points in OCLP's 11.7.10 / 11.7.10-22 Ivy Bridge plugin, an older build of the compiler whose outputs
+// are MTLIntel*DeviceBinary structs instead of SSerializedCompilerOutput: other mangled names, the same IGIL argument.
+// INTEL_IVB_TEXT_FIX=0 leaves them unhooked (the IGIL text fixes off on Ivy Bridge, as before).
+static const char *const kIGILEntryPointsIVB[] = {
+    "_ZN16MTLIntelCompiler33compileVertexFunctionIGILtoBinaryERNSt3__112basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEEP22MTLIntelVSDeviceBinaryjP21MTLIntelCompilerInputS7_",
+    "_ZN16MTLIntelCompiler34compileComputeFunctionIGILtoBinaryERNSt3__112basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEEP22MTLIntelCSDeviceBinaryjS7_",
+    "_ZN16MTLIntelCompiler35compileFragmentFunctionIGILtoBinaryERNSt3__112basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEEP22MTLIntelPSDeviceBinaryjS7_",
+    "_ZN16MTLIntelCompiler40compileTessellationFunctionsIGILtoBinaryERNSt3__112basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEER32MTLIntelTessellationDeviceBinaryjS7_",
 };
 
 static int hookedRun(void *self, LLVMModuleRef module);
@@ -1342,10 +1356,13 @@ static void *hookFunction(unsigned char *entry, void *replacement, const unsigne
 }
 
 
-// Entry stub: save the argument registers, intelatomicsFixIGIL(rsi), restore, run the 12 relocated prologue bytes,
-// continue at entry + 12. The function's other arguments, including stack ones, are untouched.
+// Entry stub: save the argument registers, intelatomicsFixIGIL(rsi), restore, run the relocated prologue (12 bytes, or
+// 14 for the Ivy Bridge compute entry), continue after it. The function's other arguments, including stack ones, are untouched.
 static bool hookIGILEntry(unsigned char *entry) {
-    if (memcmp(entry, kPrologue, sizeof kPrologue)) return false;
+    size_t length = !memcmp(entry, kPrologue, sizeof kPrologue)                     ? sizeof kPrologue
+                    : !memcmp(entry, kPrologueIVBCompute, sizeof kPrologueIVBCompute) ? sizeof kPrologueIVBCompute
+                                                                                      : 0;
+    if (!length) return false;
     unsigned char *stub = (unsigned char *)mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
     if (stub == MAP_FAILED) return false;
     static const unsigned char save[] = {0x57, 0x56, 0x52, 0x51, 0x41, 0x50, 0x41, 0x51, 0x50};  // push rdi rsi rdx rcx r8 r9 rax
@@ -1359,8 +1376,8 @@ static bool hookIGILEntry(unsigned char *entry) {
     p = emitMovRax(p, (void *)intelatomicsFixIGIL);
     p = emit(p, call, sizeof call);
     p = emit(p, restore, sizeof restore);
-    p = emit(p, entry, sizeof kPrologue);
-    p = emitMovRax(p, entry + sizeof kPrologue);
+    p = emit(p, entry, length);
+    p = emitMovRax(p, entry + length);
     p = emit(p, jump, sizeof jump);
     if (mprotect(stub, 4096, PROT_READ | PROT_EXEC)) return false;
     vm_address_t page = (vm_address_t)entry & ~(vm_address_t)(vm_page_size - 1);
@@ -1395,7 +1412,7 @@ static unsigned redirectPassManager(const mach_header_64 *header, intptr_t slide
 // Installs into the loaded plugin once: import redirect (unless interposed already) and the IGIL entry hooks.
 static pthread_mutex_t installLock = PTHREAD_MUTEX_INITIALIZER;
 static bool textFixInstalled;
-static bool ivyBridgePlugin;  // OCLP's 11.7.10 AppleIntelHD4000GraphicsMTLDriver plugin: compiler fixes only, no Haswell workarounds
+static bool ivyBridgePlugin;  // OCLP's 11.7.10 AppleIntelHD4000GraphicsMTLDriver plugin
 static void installIntoPlugin(bool redirectImport) {
     static bool done;
     if (done) return;
@@ -1404,15 +1421,20 @@ static void installIntoPlugin(bool redirectImport) {
         size_t len = name ? strlen(name) : 0, suffix = strlen(kPluginSuffix);
         if (len < suffix || strcmp(name + len - suffix, kPluginSuffix)) continue;
         done = true;
-        ivyBridgePlugin = strstr(name, "AppleIntelHD4000GraphicsMTLDriver") != nullptr;
         void *h = dlopen(name, RTLD_NOLOAD | RTLD_LAZY);
+        // Told apart by its own entry point, not only by the bundle in its path: test runs load the plugin by leaf name
+        // from a temporary folder.
+        ivyBridgePlugin = strstr(name, "AppleIntelHD4000GraphicsMTLDriver") || (h && dlsym(h, kIGILEntryPointsIVB[1]));
         unsigned imports = redirectImport ? redirectPassManager((const mach_header_64 *)_dyld_get_image_header(i), _dyld_get_image_vmaddr_slide(i)) : 0;
+        const char *const *symbols = ivyBridgePlugin ? kIGILEntryPointsIVB : kIGILEntryPoints;
+        size_t count = ivyBridgePlugin ? sizeof kIGILEntryPointsIVB / sizeof *kIGILEntryPointsIVB : sizeof kIGILEntryPoints / sizeof *kIGILEntryPoints;
+        if (ivyBridgePlugin && disabled("INTEL_IVB_TEXT_FIX")) count = 0;
         unsigned hooks = 0;
-        for (const char *symbol : kIGILEntryPoints) {
-            unsigned char *entry = h ? (unsigned char *)dlsym(h, symbol) : nullptr;
+        for (size_t s = 0; s < count; s++) {
+            unsigned char *entry = h ? (unsigned char *)dlsym(h, symbols[s]) : nullptr;
             if (entry && hookIGILEntry(entry)) hooks++;
         }
-        textFixInstalled = hooks == sizeof kIGILEntryPoints / sizeof *kIGILEntryPoints;
+        textFixInstalled = count && hooks == count;
         if (logging()) fprintf(stderr, "[inteltex] %s: %u import(s) redirected, %u IGIL entry point(s) hooked\n", name, imports, hooks);
     }
 }
@@ -1549,6 +1571,446 @@ static unsigned dropArrayStructInfo(LLVMModuleRef module) {
         }
     }
     return dropped;
+}
+
+// ---- argument buffers on Ivy Bridge ---------------------------------------------------------------------------------
+// OCLP's 11.7.10 Ivy Bridge plugin doesn't emulate argument buffers (the 12.x plugin makes each buffer an argument
+// buffer points to a hidden constant buffer, EMULATION_ARGUMENT TRUE, that its driver binds at the draw), and its driver
+// has no argument-buffer runtime. It reads a pointer member as an offset into the argument buffer's own surface: a
+// kernel read the argument buffer instead of the buffer it pointed to, and a vertex or fragment function that
+// dereferenced one didn't build at all ("Compilation failed", or the compiler service crashed). WebKit's ANGLE puts every
+// WebGL 2 uniform block in an argument buffer. Here each pointer member of an argument buffer (an air.indirect_buffer
+// argument's struct_type_info members of kind air.buffer, arrays of them too) becomes a hidden buffer parameter named
+// __ivbab_<argument buffer index>_<id>, at a buffer index the function doesn't use, counted down from 30 over every
+// pointer member in order of argument buffer index and id (vertex functions keep 0-16 for vertex buffers), and its
+// loads read that parameter. MetalOldCompat item 47 encodes the argument buffer and binds each buffer it points to at
+// that index before the draw or dispatch. Constants stay in the argument buffer, which this back end reads right.
+// Ivy Bridge only. INTEL_IVB_ARGUMENT_BUFFER_FIX=0 turns it off.
+extern "C" {
+int LLVMIsFunctionVarArg(LLVMTypeRef);
+unsigned LLVMCountParamTypes(LLVMTypeRef);
+void LLVMGetParamTypes(LLVMTypeRef, LLVMTypeRef *);
+LLVMTypeRef LLVMGetReturnType(LLVMTypeRef);
+LLVMTypeRef LLVMFunctionType(LLVMTypeRef, LLVMTypeRef *, unsigned, int);
+LLVMValueRef LLVMAddFunction(LLVMModuleRef, const char *, LLVMTypeRef);
+void LLVMRemoveBasicBlockFromParent(LLVMBasicBlockRef);
+void LLVMDeleteFunction(LLVMValueRef);
+unsigned LLVMCountStructElementTypes(LLVMTypeRef);
+LLVMTypeRef LLVMStructGetTypeAtIndex(LLVMTypeRef, unsigned);
+LLVMValueRef LLVMMDStringInContext(LLVMContextRef, const char *, unsigned);
+void LLVMSetValueName(LLVMValueRef, const char *);
+int LLVMGetLinkage(LLVMValueRef);
+void LLVMSetLinkage(LLVMValueRef, int);
+typedef struct LLVMOpaqueAttributeRef *LLVMAttributeRef;
+typedef struct LLVMOpaquePassManager *LLVMPassManagerRef;
+LLVMAttributeRef LLVMCreateEnumAttribute(LLVMContextRef, unsigned, uint64_t);
+void LLVMAddAttributeAtIndex(LLVMValueRef, unsigned, LLVMAttributeRef);
+void LLVMRemoveEnumAttributeAtIndex(LLVMValueRef, unsigned, unsigned);
+unsigned LLVMGetEnumAttributeKindForName(const char *, size_t);
+LLVMPassManagerRef LLVMCreatePassManager(void);
+void LLVMAddAlwaysInlinerPass(LLVMPassManagerRef);
+int LLVMRunPassManager(LLVMPassManagerRef, LLVMModuleRef);
+void LLVMDisposePassManager(LLVMPassManagerRef);
+LLVMValueRef LLVMGetCalledValue(LLVMValueRef);
+LLVMValueRef LLVMIsACallInst(LLVMValueRef);
+LLVMValueRef LLVMIsAFunction(LLVMValueRef);
+}
+// (LLVMGetAttributeCountAtIndex dereferences an empty attribute set in this LLVM, so the attributes go over whole)
+extern "C" void functionCopyAttributesFrom(void *function, const void *source) asm("__ZN4llvm8Function18copyAttributesFromEPKNS_11GlobalValueE");
+extern "C" void basicBlockInsertInto(void *block, void *function, void *before) asm("__ZN4llvm10BasicBlock10insertIntoEPNS_8FunctionEPS0_");
+extern "C" void *valueAsMetadataGet(void *value) asm("__ZN4llvm15ValueAsMetadata3getEPNS_5ValueE");
+
+enum { kAbStructKind = 10, kAbArrayKind = 11, kAbPointerKind = 12 };  // LLVMTypeKind
+
+struct ArgumentBufferSlot {  // one pointer of an argument buffer, reached by GEP(argument buffer, 0, path...)
+    unsigned bufferIndex, id, hidden;
+    std::vector<unsigned> path;
+    LLVMValueRef kindNode;  // the member's !{n, !"air.buffer", !"air.location_index", id, count, ...}
+    LLVMValueRef param = nullptr;
+};
+
+static long metadataInt(LLVMValueRef value) {
+    return value && LLVMIsAConstantInt(value) ? (long)LLVMConstIntGetZExtValue(value) : -1;
+}
+static long fieldAfter(const std::vector<LLVMValueRef> &fields, const char *key, unsigned skip = 1) {
+    for (size_t k = 0; k + skip < fields.size(); k++)
+        if (isString(fields[k], key)) return metadataInt(fields[k + skip]);
+    return -1;
+}
+
+// The members of a struct_type_info node: [!"air.struct_type_info", !nested,] offset, size, count, type name, name,
+// !"air.indirect_argument", !kind-or-i32 each. The i32 of a nested member (a metal::array) is its first id.
+struct StructInfoMember { long count; LLVMValueRef nested, kind; long firstId; };
+static bool structInfoMembers(LLVMValueRef info, std::vector<StructInfoMember> &out) {
+    std::vector<LLVMValueRef> ops = metadataOperands(info);
+    for (size_t i = 0; i < ops.size();) {
+        LLVMValueRef nested = nullptr;
+        if (isString(ops[i], "air.struct_type_info")) {
+            if (i + 1 >= ops.size() || !LLVMIsAMDNode(ops[i + 1])) return false;
+            nested = ops[i + 1];
+            i += 2;
+        }
+        if (i + 7 > ops.size() || !isString(ops[i + 5], "air.indirect_argument")) return false;
+        bool node = LLVMIsAMDNode(ops[i + 6]);
+        out.push_back({metadataInt(ops[i + 2]), nested, node ? ops[i + 6] : nullptr, node ? -1 : metadataInt(ops[i + 6])});
+        i += 7;
+    }
+    return !out.empty();
+}
+static bool isBufferKind(LLVMValueRef kind, long &id) {
+    std::vector<LLVMValueRef> f = metadataOperands(kind);
+    if (f.size() < 2 || !isString(f[1], "air.buffer")) return false;
+    id = fieldAfter(f, "air.location_index");
+    return id >= 0;
+}
+
+// The pointer slots of one argument buffer: pointer members (path {m}) and metal::array members of pointers
+// ({m, 0, j}: a struct holding [n x pointer], described by a nested __elems member with count n). False if the layout
+// is one this pass doesn't follow; constants, textures and samplers are left alone.
+static bool argumentBufferSlots(LLVMValueRef info, LLVMTypeRef structType, unsigned bufferIndex, std::vector<ArgumentBufferSlot> &out) {
+    std::vector<StructInfoMember> members;
+    if (!structInfoMembers(info, members) || LLVMGetTypeKind(structType) != kAbStructKind ||
+        LLVMCountStructElementTypes(structType) != members.size())
+        return false;
+    for (unsigned m = 0; m < members.size(); m++) {
+        LLVMTypeRef element = LLVMStructGetTypeAtIndex(structType, m);
+        long id = -1;
+        if (members[m].kind && isBufferKind(members[m].kind, id)) {
+            if (LLVMGetTypeKind(element) != kAbPointerKind) return false;
+            out.push_back({bufferIndex, (unsigned)id, 0, {m}, members[m].kind});
+            continue;
+        }
+        if (!members[m].nested) continue;
+        std::vector<StructInfoMember> inner;
+        if (!structInfoMembers(members[m].nested, inner) || inner.size() != 1 || !inner[0].kind || !isBufferKind(inner[0].kind, id))
+            continue;  // a nested struct of something else
+        if (LLVMGetTypeKind(element) != kAbStructKind || LLVMCountStructElementTypes(element) != 1) return false;
+        LLVMTypeRef array = LLVMStructGetTypeAtIndex(element, 0);
+        if (LLVMGetTypeKind(array) != kAbArrayKind || LLVMGetTypeKind(LLVMGetElementType(array)) != kAbPointerKind ||
+            inner[0].count != (long)LLVMGetArrayLength(array))
+            return false;
+        // the __elems member's id counts from the array's own first id (!"air.indirect_argument", i32 3 for
+        // array<constant B *, 3> b [[id(3)]]), which an argument buffer with two arrays needs
+        long first = members[m].firstId > 0 ? members[m].firstId : 0;
+        for (unsigned j = 0; j < LLVMGetArrayLength(array); j++) out.push_back({bufferIndex, (unsigned)(first + id) + j, 0, {m, 0, j}, inner[0].kind});
+    }
+    return true;
+}
+
+// The slot a load reads its pointer through: GEP(param, 0, path...) with constant indices.
+static ArgumentBufferSlot *slotOf(LLVMValueRef gep, LLVMValueRef param, unsigned bufferIndex, std::vector<ArgumentBufferSlot> &slots) {
+    if (!gep || !LLVMIsAGetElementPtrInst(gep) || LLVMGetOperand(gep, 0) != param) return nullptr;
+    int n = LLVMGetNumOperands(gep);
+    if (n < 3) return nullptr;
+    std::vector<unsigned> path;
+    for (int i = 1; i < n; i++) {
+        LLVMValueRef index = LLVMGetOperand(gep, i);
+        if (!LLVMIsAConstantInt(index)) return nullptr;
+        if (i > 1) path.push_back((unsigned)LLVMConstIntGetZExtValue(index));
+        else if (LLVMConstIntGetZExtValue(index)) return nullptr;
+    }
+    for (ArgumentBufferSlot &s : slots)
+        if (s.bufferIndex == bufferIndex && s.path == path) return &s;
+    return nullptr;
+}
+
+// ---- program-scope constants in vertex and fragment functions on Ivy Bridge -----------------------------------------
+// The 11.7.10 plugin puts a vertex or fragment function's program-scope constant data (MSL `constant` variables) in an
+// inline constant buffer, and the driver doesn't bind that buffer: the loads read whatever the app has bound at buffer 0
+// of that stage, or 0 (a `volatile constexpr constant uint` read 0x2 where the app had bound a buffer holding 2 at
+// index 0; Tint declares such constants, tint_volatile_zero). Compute kernels get it right. So in vertex and fragment
+// modules, loads at a constant address in such a variable (a scalar, a vector, an element) read the initializer's value
+// instead, volatile ones too (the variable is constant: its value can't change), and loads of a small array (64 scalar
+// or vector elements at most) at a run-time index a select over its elements. Bigger tables are left as they are.
+// Ivy Bridge only. INTEL_IVB_INLINE_CONSTANT_FIX=0 turns it off.
+extern "C" {
+LLVMValueRef LLVMGetFirstGlobal(LLVMModuleRef);
+LLVMValueRef LLVMGetNextGlobal(LLVMValueRef);
+LLVMValueRef LLVMGetInitializer(LLVMValueRef);
+unsigned LLVMGetPointerAddressSpace(LLVMTypeRef);
+LLVMValueRef LLVMIsAGlobalVariable(LLVMValueRef);
+LLVMValueRef LLVMIsAConstantDataSequential(LLVMValueRef);
+LLVMValueRef LLVMIsAConstantAggregateZero(LLVMValueRef);
+LLVMValueRef LLVMIsAConstantArray(LLVMValueRef);
+LLVMValueRef LLVMIsAConstantStruct(LLVMValueRef);
+LLVMValueRef LLVMIsAConstantVector(LLVMValueRef);
+LLVMValueRef LLVMIsAConstantExpr(LLVMValueRef);
+int LLVMGetConstOpcode(LLVMValueRef);
+LLVMValueRef LLVMGetElementAsConstant(LLVMValueRef, unsigned);
+LLVMValueRef LLVMBuildSelect(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, LLVMValueRef, const char *);
+}
+// Element `index` of a constant aggregate, or null.
+static LLVMValueRef constantElement(LLVMValueRef c, unsigned index) {
+    LLVMTypeRef type = LLVMTypeOf(c);
+    int kind = LLVMGetTypeKind(type);
+    if (kind == kAbArrayKind && index >= LLVMGetArrayLength(type)) return nullptr;
+    if (kind == kAbStructKind && index >= LLVMCountStructElementTypes(type)) return nullptr;
+    if (kind != kAbArrayKind && kind != kAbStructKind) return nullptr;
+    if (LLVMIsAConstantAggregateZero(c))
+        return LLVMConstNull(kind == kAbArrayKind ? LLVMGetElementType(type) : LLVMStructGetTypeAtIndex(type, index));
+    if (LLVMIsAConstantDataSequential(c)) return LLVMGetElementAsConstant(c, index);
+    if (LLVMIsAConstantArray(c) || LLVMIsAConstantStruct(c)) return LLVMGetOperand(c, index);
+    return nullptr;
+}
+static bool scalarOrVector(LLVMTypeRef type) {
+    int kind = LLVMGetTypeKind(type);
+    return kind == 1 || kind == 2 || kind == 3 || kind == 8 || kind == 13;  // half, float, double, integer, vector
+}
+
+static unsigned ivbInlineConstants(LLVMModuleRef module) {
+    if (!LLVMGetNamedMetadataNumOperands(module, "air.vertex") && !LLVMGetNamedMetadataNumOperands(module, "air.fragment")) return 0;
+    enum { kGEP = 29 };  // LLVMOpcode
+    unsigned replaced = 0;
+    LLVMBuilderRef builder = nullptr;
+    for (LLVMValueRef global = LLVMGetFirstGlobal(module); global; global = LLVMGetNextGlobal(global)) {
+        LLVMValueRef init = LLVMGetInitializer(global);
+        if (!init || LLVMIsDeclaration(global) || LLVMGetPointerAddressSpace(LLVMTypeOf(global)) != 2) continue;
+        std::vector<LLVMValueRef> users;
+        for (LLVMUseRef u = LLVMGetFirstUse(global); u; u = LLVMGetNextUse(u)) users.push_back(LLVMGetUser(u));
+        for (LLVMValueRef user : users) {
+            // the element a constant path leads to, from the variable itself (path empty) or a constant GEP of it
+            std::vector<LLVMValueRef> loads, path;
+            LLVMValueRef dynamic = nullptr;  // a run-time last index
+            if (LLVMIsALoadInst(user)) {
+                loads.push_back(user);
+            } else if ((LLVMIsAConstantExpr(user) && LLVMGetConstOpcode(user) == kGEP) || LLVMIsAGetElementPtrInst(user)) {
+                int n = LLVMGetNumOperands(user);
+                if (n < 3 || LLVMGetOperand(user, 0) != global || !LLVMIsAConstantInt(LLVMGetOperand(user, 1)) ||
+                    LLVMConstIntGetZExtValue(LLVMGetOperand(user, 1)) != 0)
+                    continue;
+                bool ok = true;
+                for (int i = 2; i < n; i++) {
+                    LLVMValueRef index = LLVMGetOperand(user, i);
+                    if (LLVMIsAConstantInt(index)) path.push_back(index);
+                    else if (i == n - 1 && LLVMIsAGetElementPtrInst(user)) dynamic = index;
+                    else ok = false;
+                }
+                if (!ok) continue;
+                for (LLVMUseRef u = LLVMGetFirstUse(user); u; u = LLVMGetNextUse(u))
+                    if (LLVMIsALoadInst(LLVMGetUser(u)) && LLVMGetOperand(LLVMGetUser(u), 0) == user) loads.push_back(LLVMGetUser(u));
+            }
+            if (loads.empty()) continue;
+            LLVMValueRef value = init;
+            for (LLVMValueRef index : path)
+                if (value) value = constantElement(value, (unsigned)LLVMConstIntGetZExtValue(index));
+            if (!value) continue;
+            std::vector<LLVMValueRef> elements;  // for a run-time index: the array's elements
+            if (dynamic) {
+                LLVMTypeRef type = LLVMTypeOf(value);
+                if (LLVMGetTypeKind(type) != kAbArrayKind || LLVMGetArrayLength(type) > 64 || !LLVMGetArrayLength(type) ||
+                    !scalarOrVector(LLVMGetElementType(type)))
+                    continue;
+                for (unsigned k = 0; k < LLVMGetArrayLength(type); k++) elements.push_back(constantElement(value, k));
+                if (std::find(elements.begin(), elements.end(), nullptr) != elements.end()) continue;
+            } else if (!scalarOrVector(LLVMTypeOf(value)))
+                continue;
+            for (LLVMValueRef load : loads) {
+                LLVMValueRef result = value;
+                if (dynamic) {
+                    if (!builder) builder = LLVMCreateBuilderInContext(LLVMGetModuleContext(module));
+                    LLVMPositionBuilderBefore(builder, load);
+                    result = elements.back();
+                    for (size_t k = elements.size() - 1; k-- > 0;) {
+                        LLVMValueRef is = LLVMBuildICmp(builder, 32 /* LLVMIntEQ */, dynamic, LLVMConstInt(LLVMTypeOf(dynamic), k, 0), "");
+                        result = LLVMBuildSelect(builder, is, elements[k], result, "");
+                    }
+                }
+                if (LLVMTypeOf(result) != LLVMTypeOf(load)) continue;
+                LLVMReplaceAllUsesWith(load, result);
+                LLVMInstructionEraseFromParent(load);
+                replaced++;
+            }
+            if (LLVMIsAGetElementPtrInst(user) && !LLVMGetFirstUse(user)) LLVMInstructionEraseFromParent(user);
+        }
+    }
+    if (builder) LLVMDisposeBuilder(builder);
+    return replaced;
+}
+
+// ANGLE's entry functions hand the argument buffer to the translated main (an internal function), so the pointer loads
+// are in a callee when the module gets here: every function such an entry calls, transitively, is inlined first
+// (alwaysinline and LLVM's always-inliner), which the back end would have done anyway.
+static bool inlineArgumentBufferCallees(LLVMModuleRef module) {
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    std::vector<LLVMValueRef> work;
+    for (const char *list : {"air.kernel", "air.fragment", "air.vertex"}) {
+        std::vector<LLVMValueRef> entries(LLVMGetNamedMetadataNumOperands(module, list));
+        if (entries.empty()) continue;
+        LLVMGetNamedMetadataOperands(module, list, entries.data());
+        for (LLVMValueRef entry : entries) {
+            std::vector<LLVMValueRef> parts = metadataOperands(entry);
+            if (parts.size() < 3 || !parts[0] || !LLVMIsAFunction(parts[0]) || LLVMIsDeclaration(parts[0])) continue;
+            bool passed = false;
+            for (LLVMValueRef arg : metadataOperands(parts[2])) {
+                std::vector<LLVMValueRef> f = metadataOperands(arg);
+                long param = f.size() > 1 && isString(f[1], "air.indirect_buffer") ? metadataInt(f[0]) : -1;
+                if (param < 0 || (unsigned)param >= LLVMCountParams(parts[0])) continue;
+                for (LLVMUseRef u = LLVMGetFirstUse(LLVMGetParam(parts[0], (unsigned)param)); u; u = LLVMGetNextUse(u))
+                    if (LLVMIsACallInst(LLVMGetUser(u))) passed = true;
+            }
+            if (passed) work.push_back(parts[0]);
+        }
+    }
+    std::set<LLVMValueRef> marked;
+    unsigned alwaysInline = LLVMGetEnumAttributeKindForName("alwaysinline", 12);
+    unsigned noInline = LLVMGetEnumAttributeKindForName("noinline", 8);
+    while (!work.empty()) {
+        LLVMValueRef f = work.back();
+        work.pop_back();
+        for (LLVMBasicBlockRef block = LLVMGetFirstBasicBlock(f); block; block = LLVMGetNextBasicBlock(block))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(block); inst; inst = LLVMGetNextInstruction(inst)) {
+                LLVMValueRef callee = LLVMIsACallInst(inst) ? LLVMGetCalledValue(inst) : nullptr;
+                if (!callee || !LLVMIsAFunction(callee) || LLVMIsDeclaration(callee) || marked.count(callee)) continue;
+                marked.insert(callee);
+                if (noInline) LLVMRemoveEnumAttributeAtIndex(callee, ~0u, noInline);
+                LLVMAddAttributeAtIndex(callee, ~0u, LLVMCreateEnumAttribute(context, alwaysInline, 0));
+                work.push_back(callee);
+            }
+    }
+    if (marked.empty() || !alwaysInline) return false;
+    LLVMPassManagerRef passes = LLVMCreatePassManager();
+    LLVMAddAlwaysInlinerPass(passes);
+    LLVMRunPassManager(passes, module);
+    LLVMDisposePassManager(passes);
+    if (logging()) fprintf(stderr, "[inteltex] %zu function(s) an argument buffer is passed to inlined\n", marked.size());
+    return true;
+}
+
+static unsigned ivbArgumentBuffers(LLVMModuleRef module) {
+    inlineArgumentBufferCallees(module);
+    unsigned rewritten = 0;
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    for (const char *list : {"air.kernel", "air.fragment", "air.vertex"}) {
+        std::vector<LLVMValueRef> entries(LLVMGetNamedMetadataNumOperands(module, list));
+        if (entries.empty()) continue;
+        LLVMGetNamedMetadataOperands(module, list, entries.data());
+        for (LLVMValueRef entry : entries) {
+            std::vector<LLVMValueRef> parts = metadataOperands(entry);
+            if (parts.size() < 3 || !parts[0] || LLVMIsDeclaration(parts[0])) continue;
+            LLVMValueRef function = parts[0];
+            unsigned params = LLVMCountParams(function);
+            std::vector<LLVMValueRef> args = metadataOperands(parts[2]);
+            // buffer indices the function already uses, and its argument buffers in index order
+            std::set<unsigned> used;
+            std::map<unsigned, std::pair<unsigned, LLVMValueRef>> buffers;  // index -> (param, struct_type_info)
+            bool ok = true;
+            for (LLVMValueRef arg : args) {
+                std::vector<LLVMValueRef> f = metadataOperands(arg);
+                if (f.size() < 2) continue;
+                bool plain = isString(f[1], "air.buffer"), indirect = isString(f[1], "air.indirect_buffer");
+                if (!plain && !indirect) continue;
+                long index = fieldAfter(f, "air.location_index"), count = fieldAfter(f, "air.location_index", 2), param = metadataInt(f[0]);
+                if (index < 0 || param < 0 || (unsigned)param >= params) { ok = false; break; }
+                for (long k = 0; k < (count > 0 ? count : 1); k++) used.insert((unsigned)(index + k));
+                if (!indirect) continue;
+                long info = -1;
+                for (size_t k = 0; k + 1 < f.size(); k++)
+                    if (isString(f[k], "air.struct_type_info")) info = (long)k + 1;
+                if (info < 0) { ok = false; break; }
+                buffers[(unsigned)index] = {(unsigned)param, f[info]};
+            }
+            if (!ok || buffers.empty()) continue;
+            std::vector<ArgumentBufferSlot> slots;
+            for (auto &b : buffers) {
+                LLVMTypeRef type = LLVMTypeOf(LLVMGetParam(function, b.second.first));
+                if (LLVMGetTypeKind(type) != kAbPointerKind ||
+                    !argumentBufferSlots(b.second.second, LLVMGetElementType(type), b.first, slots)) { ok = false; break; }
+            }
+            if (!ok || slots.empty()) continue;
+            std::sort(slots.begin(), slots.end(), [](const ArgumentBufferSlot &a, const ArgumentBufferSlot &b) {
+                return a.bufferIndex != b.bufferIndex ? a.bufferIndex < b.bufferIndex : a.id < b.id;
+            });
+            int next = 30;
+            unsigned lowest = !strcmp(list, "air.vertex") ? 17 : 0;
+            for (ArgumentBufferSlot &s : slots) {
+                while (next >= (int)lowest && used.count((unsigned)next)) next--;
+                if (next < (int)lowest) { ok = false; break; }
+                s.hidden = (unsigned)next--;
+            }
+            if (!ok) {
+                if (logging()) fprintf(stderr, "[inteltex] %s: %zu argument-buffer pointers, not enough free buffer indices\n",
+                                       LLVMGetValueName(function), slots.size());
+                continue;
+            }
+            // the pointer loads: load(GEP(argument buffer, 0, member[, element]))
+            std::vector<std::pair<LLVMValueRef, ArgumentBufferSlot *>> loads;
+            for (auto &b : buffers) {
+                LLVMValueRef param = LLVMGetParam(function, b.second.first);
+                for (LLVMUseRef u = LLVMGetFirstUse(param); u; u = LLVMGetNextUse(u)) {
+                    LLVMValueRef gep = LLVMGetUser(u);
+                    ArgumentBufferSlot *slot = slotOf(gep, param, b.first, slots);
+                    if (!slot) continue;
+                    for (LLVMUseRef v = LLVMGetFirstUse(gep); v; v = LLVMGetNextUse(v)) {
+                        LLVMValueRef load = LLVMGetUser(v);
+                        if (LLVMIsALoadInst(load) && LLVMGetOperand(load, 0) == gep) loads.push_back({load, slot});
+                    }
+                }
+            }
+            if (loads.empty()) continue;
+            std::vector<ArgumentBufferSlot *> hidden;  // slots that get a parameter, in parameter order
+            for (auto &l : loads)
+                if (std::find(hidden.begin(), hidden.end(), l.second) == hidden.end()) hidden.push_back(l.second);
+            // the new function: the old parameters, then one per loaded slot; the body moves over
+            LLVMTypeRef type = LLVMGetElementType(LLVMTypeOf(function));
+            std::vector<LLVMTypeRef> types(LLVMCountParamTypes(type));
+            LLVMGetParamTypes(type, types.data());
+            for (ArgumentBufferSlot *s : hidden)
+                for (auto &l : loads)
+                    if (l.second == s) { types.push_back(LLVMTypeOf(l.first)); break; }
+            std::string name = LLVMGetValueName(function);
+            LLVMSetValueName(function, (name + ".ivbab").c_str());
+            LLVMValueRef rewrittenFn = LLVMAddFunction(module, name.c_str(),
+                LLVMFunctionType(LLVMGetReturnType(type), types.data(), (unsigned)types.size(), LLVMIsFunctionVarArg(type)));
+            LLVMSetLinkage(rewrittenFn, LLVMGetLinkage(function));
+            functionCopyAttributesFrom(rewrittenFn, function);  // the attribute set by position: the old parameters keep theirs
+            for (unsigned p = 0; p < params; p++) {
+                LLVMSetValueName(LLVMGetParam(rewrittenFn, p), LLVMGetValueName(LLVMGetParam(function, p)));
+                LLVMReplaceAllUsesWith(LLVMGetParam(function, p), LLVMGetParam(rewrittenFn, p));
+            }
+            while (LLVMBasicBlockRef block = LLVMGetFirstBasicBlock(function)) {
+                LLVMRemoveBasicBlockFromParent(block);
+                basicBlockInsertInto(block, rewrittenFn, nullptr);
+            }
+            std::vector<LLVMValueRef> newArgs = args;
+            for (size_t h = 0; h < hidden.size(); h++) {
+                ArgumentBufferSlot *s = hidden[h];
+                s->param = LLVMGetParam(rewrittenFn, params + (unsigned)h);
+                char hiddenName[48];
+                snprintf(hiddenName, sizeof hiddenName, "__ivbab_%u_%u", s->bufferIndex, s->id);
+                LLVMSetValueName(s->param, hiddenName);
+                std::vector<LLVMValueRef> f = metadataOperands(s->kindNode);
+                f[0] = LLVMConstInt(i32, params + h, 0);
+                for (size_t k = 0; k + 1 < f.size(); k++) {
+                    if (isString(f[k], "air.location_index") && k + 2 < f.size()) {
+                        f[k + 1] = LLVMConstInt(i32, s->hidden, 0);
+                        f[k + 2] = LLVMConstInt(i32, 1, 0);
+                    }
+                    if (isString(f[k], "air.arg_name")) f[k + 1] = LLVMMDStringInContext(context, hiddenName, (unsigned)strlen(hiddenName));
+                }
+                newArgs.push_back(LLVMMDNodeInContext(context, f.data(), (unsigned)f.size()));
+            }
+            for (auto &l : loads) {
+                LLVMValueRef gep = LLVMGetOperand(l.first, 0);
+                LLVMReplaceAllUsesWith(l.first, l.second->param);
+                LLVMInstructionEraseFromParent(l.first);
+                if (!LLVMGetFirstUse(gep)) LLVMInstructionEraseFromParent(gep);
+            }
+            void *node = metadataOf(entry), *argList = metadataOf(LLVMMDNodeInContext(context, newArgs.data(), (unsigned)newArgs.size()));
+            if (node && argList) {
+                mdNodeReplaceOperand(node, 0, valueAsMetadataGet(rewrittenFn));
+                mdNodeReplaceOperand(node, 2, argList);
+            }
+            if (!LLVMGetFirstUse(function)) LLVMDeleteFunction(function);
+            rewritten++;
+            if (logging()) {
+                fprintf(stderr, "[inteltex] %s: %zu argument-buffer pointer load(s) read hidden buffer(s)", name.c_str(), loads.size());
+                for (ArgumentBufferSlot *s : hidden) fprintf(stderr, " %u.%u->%u", s->bufferIndex, s->id, s->hidden);
+                fprintf(stderr, "\n");
+            }
+        }
+    }
+    return rewritten;
 }
 
 
@@ -2097,7 +2559,7 @@ static unsigned lowerIntegerGradients(LLVMModuleRef module) {
 }
 
 // ---- green gathers from R32G32 textures ---------------------------------------------------------------------------
-// Haswell's gather4 returns red for the green component of R32G32 formats (rg32float, rg32uint, rg32sint): a hardware
+// Haswell's and Ivy Bridge's gather4 return red for the green component of R32G32 formats (rg32float, rg32uint, rg32sint): a hardware
 // erratum that Mesa works around with a separate surface state for gathers, which this driver doesn't have, and the
 // shader can't tell an R32G32 texture from any other (WebGPU CTS textureGather rg32float: 252 cases, 216 of them 2D and
 // 2D array). A green gather from a 2D texture or 2D array is also done as a red one, and where the two agree in all four
@@ -2112,7 +2574,7 @@ LLVMValueRef LLVMBuildAdd(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char
 LLVMValueRef LLVMBuildZExt(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
 }
 static unsigned greenGathers(LLVMModuleRef module) {
-    if (disabled("INTEL_GATHER_GREEN_FIX") || ivyBridgePlugin || runtimeNamesBound(module)) return 0;
+    if (disabled("INTEL_GATHER_GREEN_FIX") || runtimeNamesBound(module)) return 0;
     enum { kIntEQ = 32, kRealOGT = 2 };
     LLVMContextRef context = LLVMGetModuleContext(module);
     LLVMTypeRef i32 = LLVMInt32TypeInContext(context), f32 = LLVMFloatTypeInContext(context), i1 = LLVMInt1TypeInContext(context);
@@ -3404,16 +3866,15 @@ static unsigned fixSamplerStateWords(LLVMModuleRef module) {
 }
 
 // ---- explicit LODs in compute kernels ------------------------------------------------------------------------------
-// Samplers in compute kernels on Haswell blend between mip levels only in the middle quarter of each step: with a linear
+// Samplers in compute kernels on Haswell and Ivy Bridge blend between mip levels only in the middle quarter of each step: with a linear
 // mip filter, level n + f reads level n for f <= 0.375 and level n + 1 for f >= 0.625, and blends linearly in between
 // (weight (f - 0.375) * 4). Vertex and fragment functions blend over the whole step, and the sampler state's
 // TrilinearFilterQuality (0, full) changes nothing. So in compute kernels an explicit level with a fraction becomes
 // n + 0.375 + f / 4, which gives weight f. A nearest mip filter still picks the same level (f < 0.5 stays below the
 // middle), and whole levels are left alone (whether the min or mag filter applies depends on LOD > 0). Gradients in
 // compute kernels blend the same way and are left as they are: their LOD would have to be computed in the shader.
-// Haswell only: Ivy Bridge's samplers haven't been measured. Modules can reach the pass manager twice, so remapped calls
-// are marked (!intel.level_remapped). INTEL_COMPUTE_TRILINEAR_FIX=0
-// turns it off.
+// The HD 4000 blends the same way (s19). Modules can reach the pass manager twice, so remapped calls are marked
+// (!intel.level_remapped). INTEL_COMPUTE_TRILINEAR_FIX=0 turns it off.
 extern "C" {
 LLVMValueRef LLVMBuildFSub(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
 unsigned LLVMGetMDKindIDInContext(LLVMContextRef, const char *, unsigned);
@@ -3423,7 +3884,7 @@ void LLVMSetMetadata(LLVMValueRef, unsigned, LLVMValueRef);
 
 static unsigned remapComputeLevels(LLVMModuleRef module) {
     const char *setting = getenv("INTEL_COMPUTE_TRILINEAR_FIX");
-    if ((setting && !strcmp(setting, "0")) || ivyBridgePlugin || !LLVMGetNamedMetadataNumOperands(module, "air.kernel")) return 0;
+    if ((setting && !strcmp(setting, "0")) || !LLVMGetNamedMetadataNumOperands(module, "air.kernel")) return 0;
     enum { kRealOEQ = 1, kRealOGT = 2 };  // LLVMRealPredicate
     LLVMContextRef context = LLVMGetModuleContext(module);
     LLVMTypeRef i32 = LLVMInt32TypeInContext(context), f32 = LLVMFloatTypeInContext(context);
@@ -4989,6 +5450,14 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (FILE *f = fopen(path, "w")) { char *text = LLVMPrintModuleToString(module); fputs(text, f); LLVMDisposeMessage(text); fclose(f); }
     }
     if (module) {
+        if (ivyBridgePlugin && !disabled("INTEL_IVB_INLINE_CONSTANT_FIX")) {
+            unsigned replaced = ivbInlineConstants(module);
+            if (replaced && logging()) fprintf(stderr, "[inteltex] %u load(s) of program-scope constants read their values\n", replaced);
+        }
+        if (ivyBridgePlugin && !disabled("INTEL_IVB_ARGUMENT_BUFFER_FIX")) {
+            unsigned rewritten = ivbArgumentBuffers(module);
+            if (rewritten && logging()) fprintf(stderr, "[inteltex] %u function(s): argument-buffer pointers made hidden buffers\n", rewritten);
+        }
         unsigned n = dropMaxWorkGroupSize(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u air.max_work_group_size attribute(s) dropped\n", n);
         n = returnFromEndlessLoops(module);

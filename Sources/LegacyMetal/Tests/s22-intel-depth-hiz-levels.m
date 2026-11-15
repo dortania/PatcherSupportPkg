@@ -4,7 +4,8 @@
 // CTS copy_depth_stencil, texture_zero with depth formats). Depth is drawn into level/slice 0 of one Depth32Float
 // array texture (3 levels, 4 slices), blit-copied into level 2 / slice 0 and level 0 / slice 1 of another, and the
 // same quad is drawn again against each with compare Equal into a color target: every pixel must come out green.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// On the Ivy Bridge driver, which has no bHizDisable, item 27 writes such blits again with a render pass instead.
+// Stock OCLP: FAIL. Fixed: PASS (Haswell, HD 4000). Argument: GPU name substring (default: Intel).
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

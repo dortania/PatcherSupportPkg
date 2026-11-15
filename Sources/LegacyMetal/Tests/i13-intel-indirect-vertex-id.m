@@ -4,7 +4,9 @@
 // drew from the wrong vertices wherever Dawn's shader uses the vertex index (CTS draw:arguments, robust_access_vertex).
 // A vertex function with rasterization off writes [[vertex_id]] and [[instance_id]] to a buffer, in indexed draws (base
 // vertex 5 and 2, first index 0 and 1, base instance 7) and a non-indexed draw, each direct and indirect (arguments in a
-// private buffer filled by a blit). Stock OCLP: FAIL. Fixed: PASS (Haswell). Argument: GPU name substring (default: Intel).
+// private buffer filled by a blit). On the Ivy Bridge driver the direct draws after an indirect one also kept its base
+// instance and (with the adapter's fix) base vertex (MetalOldCompat item 48). Stock OCLP: FAIL. Fixed: PASS (Haswell,
+// HD 4000). Argument: GPU name substring (default: Intel).
 #import "repro.h"
 
 int main(int argc, char **argv) {

@@ -56,6 +56,7 @@
 //      the left half): created as Depth32Float_Stencil8, whose stencil reads right, with Stencil8 views made X32_Stencil8
 //  37. stencil copied between a buffer and a mip level 1+ or a slice 1+ on the 12.x Intel driver with a buffer offset or
 //      bytesPerRow that isn't a multiple of 256 (texels taken from a neighbour, or none): through a level-0 temporary texture
+//      (and on the Ivy Bridge driver, stencil copied into a buffer with padded rows, which kept only its first row: row by row)
 //  38. stencil views (X32_Stencil8, X24_Stencil8) of depth/stencil textures on the 12.x Intel driver, which describe the
 //      stencil plane with the depth plane's 4-texel mip alignment (levels 2+ read 0 for many widths): 8, as laid out
 //  39. size queries (get_width/height) on writable 2D-array views that start at mip level 1+ in fragment functions on
@@ -79,10 +80,17 @@
 //      and CoreComposite's depth, cube and 1D reads on macOS 26) on Tahoe's compiler, which crashed on those with ushort
 //      coordinates (SceneKit's temporal antialiasing) and passed the rest to back ends that can't build them: rebuilt in
 //      the older form, without the sampler
+//  46. argument encoders on the Ivy Bridge driver, which has none: MetalOld's abort() (Safari's GPU process at the first
+//      WebGL 2 uniform block once item 14 had restored the encoders) becomes nil
+//  47. argument buffers on the Ivy Bridge driver: layouts and encoders, and the buffers they point to bound at the
+//      hidden indices the Intel adapter gives them (WebGL 2 uniform blocks)
+//  48. direct draws after an indirect draw in the same render encoder on the Ivy Bridge driver, which kept the indirect
+//      draw's base instance and base vertex: drawn through an indirect buffer of the shim's own
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
-// sends it to the unified log, for sandboxed XPC services such as WebKit's GPU process). Build with build.sh.
+// sends it to the unified log, for sandboxed XPC services such as WebKit's GPU process; MTLSHIM_DUMP_SOURCES=1 also writes
+// every compiled source and every loaded metallib to the temporary directory). Build with build.sh.
 // Methods are only added if the class doesn't already implement them (class_addMethod never overrides).
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -436,9 +444,20 @@ static void reportCompileFailure(NSString *source, NSError *error) {
     shimLog("[mtlshim] compile failed (%s): %.700s\n", path.UTF8String, error.localizedDescription.UTF8String ?: "?");
 }
 
+// MTLSHIM_DUMP_SOURCES=1 (debugging): every source compiled through the hooks below is written to the temporary directory.
+static void dumpSource(NSString *source) {
+    if (!getenv("MTLSHIM_DUMP_SOURCES") || !source) return;
+    static int n;
+    NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                      [NSString stringWithFormat:@"mtlshim-src-%d-%d.metal", getpid(), __sync_fetch_and_add(&n, 1)]];
+    [source writeToFile:path atomically:NO encoding:NSUTF8StringEncoding error:nil];
+    shimLog("[mtlshim] source written: %s\n", path.UTF8String);
+}
+
 static id newLibrarySync(id self, SEL _cmd, NSString *source, id options, NSError **error) __attribute__((ns_returns_retained));
 static id newLibrarySync(id self, SEL _cmd, NSString *source, id options, NSError **error) {
     NSString *compiled = downgradeSource(source, options);
+    dumpSource(compiled);
     NSError *failure = nil;
     id library = origNewLibrarySync(self, _cmd, compiled, options, &failure);
     if (!library) reportCompileFailure(compiled, failure);
@@ -448,6 +467,7 @@ static id newLibrarySync(id self, SEL _cmd, NSString *source, id options, NSErro
 
 static void newLibraryAsync(id self, SEL _cmd, NSString *source, id options, id handler) {
     NSString *compiled = downgradeSource(source, options);
+    dumpSource(compiled);
     void (^done)(id, NSError *) = handler;
     origNewLibraryAsync(self, _cmd, compiled, options, ^(id library, NSError *error) {
         if (!library) reportCompileFailure(compiled, error);
@@ -613,6 +633,772 @@ static void restoreArgumentEncoders(void) {
         swizzle(hooks[i].cls, hooks[i].sel, hooks[i].imp);
     }
     os_unfair_lock_unlock(&lock);
+}
+
+// 46. Argument encoders on the Ivy Bridge driver (OCLP's 11.7.10 AppleIntelHD4000GraphicsMTLDriver), which has no
+// argument-buffer layouts or encoders of its own (the 12.x Intel driver has MTLIGEmulationIndirectArgumentEncoder): the
+// request ends in MetalOld's -[MTLIOAccelDevice newIndirectArgumentEncoderWithLayout:], which is abort(). With item 14
+// that took down Safari's GPU process at the first WebGL 2 draw with a uniform block, and every WebGL context of the
+// page with it, where the wrapper's stub had given ANGLE nil. MetalOld's abort becomes nil (drivers that implement the
+// method themselves never reach it). MTLSHIM_ARGUMENT_ENCODER_GUARD=0 turns it off. (s60)
+static id nilIndirectArgumentEncoder(id self, SEL _cmd, id layout) __attribute__((ns_returns_retained));
+static id nilIndirectArgumentEncoder(id self, SEL _cmd, id layout) {
+    if (getenv("MTLSHIM_VERBOSE"))
+        shimLog("[mtlshim] %s has no argument encoders: nil instead of MetalOld's abort\n", class_getName(object_getClass(self)));
+    return nil;
+}
+
+static void guardArgumentEncoders(void) {
+    const char *setting = getenv("MTLSHIM_ARGUMENT_ENCODER_GUARD");
+    Method m = class_getInstanceMethod(objc_getClass("MTLIOAccelDevice"), sel_registerName("newIndirectArgumentEncoderWithLayout:"));
+    if ((setting && !strcmp(setting, "0")) || !m || !definesMethod("MTLIOAccelDevice", "newIndirectArgumentEncoderWithLayout:") ||
+        !fromMetalOld(method_getImplementation(m)))
+        return;
+    method_setImplementation(m, (IMP)nilIndirectArgumentEncoder);
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MetalOld's argument-encoder abort guarded\n");
+}
+
+// 47. Argument buffers on the Ivy Bridge driver. Its plugin doesn't emulate them and its driver has no argument-buffer
+// runtime (item 46): WebGL 2 uniform blocks, which WebKit's ANGLE puts in an argument buffer, couldn't work at all. The
+// Intel adapter (IntelTextureAtomics, INTEL_IVB_ARGUMENT_BUFFER_FIX) makes each pointer member of an argument buffer a
+// hidden buffer parameter, at a buffer index the function doesn't use, counted down from 30 over every pointer member
+// in order of argument buffer index and id (vertex functions keep 0-16 for vertex buffers). Here:
+//  - the device gets argument-buffer layouts (the struct's C layout, which the compiled shaders read constants by) and
+//    encoders: a pointer member holds a token (buffer id << 32 | offset; ids name buffers weakly), constants their data;
+//  - each pipeline gets that index assignment worked out from its reflection, which lists every buffer argument
+//    (unused ones too) and each argument buffer's struct;
+//  - before each draw or dispatch, the buffers the bound argument buffers point to are bound at their hidden indices
+//    with the driver's own setters, and whatever the app had bound there is put back afterwards.
+// Textures and samplers inside argument buffers, nested argument buffers and tessellation draws aren't covered.
+// Ivy Bridge driver only (a device class without argument encoders of its own). MTLSHIM_IVB_ARGUMENT_BUFFERS=0 turns it
+// off. (s61)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"  // MetalOld has only the macOS 12 reflection API (MTLArgument)
+@interface _MTLIndirectArgumentBufferLayout : NSObject
+- (void)setStructType:(MTLStructType *)structType withDevice:(id<MTLDevice>)device;
+@end
+@interface _MTLIndirectArgumentEncoder : NSObject
+- (instancetype)initWithLayout:(id)layout device:(id<MTLDevice>)device;
+@end
+
+typedef struct { uint32_t id, offset, pointer; } ABSlot;                   // a member: [[id]], byte offset, pointer?
+typedef struct { uint8_t stage, argument, hidden; uint32_t offset; } ABBinding;  // stage: 0 vertex, 1 fragment, 2 compute
+static BOOL ivbArgumentBuffersOn;
+
+static NSUInteger abAlignUp(NSUInteger v, NSUInteger a) { return a > 1 ? (v + a - 1) / a * a : v; }
+static void abSizeAlign(MTLDataType t, NSUInteger *size, NSUInteger *align) {
+    NSUInteger s = 8, a = 8;  // pointers, textures, samplers and other handles
+    switch (t) {
+        case MTLDataTypeBool: case MTLDataTypeChar: case MTLDataTypeUChar: s = a = 1; break;
+        case MTLDataTypeBool2: case MTLDataTypeChar2: case MTLDataTypeUChar2: case MTLDataTypeShort: case MTLDataTypeUShort:
+        case MTLDataTypeHalf: s = a = 2; break;
+        case MTLDataTypeBool3: case MTLDataTypeBool4: case MTLDataTypeChar3: case MTLDataTypeChar4: case MTLDataTypeUChar3:
+        case MTLDataTypeUChar4: case MTLDataTypeShort2: case MTLDataTypeUShort2: case MTLDataTypeHalf2: case MTLDataTypeFloat:
+        case MTLDataTypeInt: case MTLDataTypeUInt: s = a = 4; break;
+        case MTLDataTypeShort3: case MTLDataTypeShort4: case MTLDataTypeUShort3: case MTLDataTypeUShort4: case MTLDataTypeHalf3:
+        case MTLDataTypeHalf4: case MTLDataTypeFloat2: case MTLDataTypeInt2: case MTLDataTypeUInt2: case MTLDataTypeLong:
+        case MTLDataTypeULong: s = a = 8; break;
+        case MTLDataTypeFloat3: case MTLDataTypeFloat4: case MTLDataTypeInt3: case MTLDataTypeInt4: case MTLDataTypeUInt3:
+        case MTLDataTypeUInt4: case MTLDataTypeLong2: case MTLDataTypeULong2: s = a = 16; break;
+        case MTLDataTypeLong3: case MTLDataTypeLong4: case MTLDataTypeULong3: case MTLDataTypeULong4: s = a = 32; break;
+        case MTLDataTypeFloat2x2: s = 16; a = 8; break;
+        case MTLDataTypeFloat2x3: case MTLDataTypeFloat2x4: s = 32; a = 16; break;
+        case MTLDataTypeFloat3x2: s = 24; a = 8; break;
+        case MTLDataTypeFloat3x3: case MTLDataTypeFloat3x4: s = 48; a = 16; break;
+        case MTLDataTypeFloat4x2: s = 32; a = 8; break;
+        case MTLDataTypeFloat4x3: case MTLDataTypeFloat4x4: s = 64; a = 16; break;
+        case MTLDataTypeHalf2x2: s = 8; a = 4; break;
+        case MTLDataTypeHalf2x3: case MTLDataTypeHalf2x4: s = 16; a = 8; break;
+        case MTLDataTypeHalf3x2: s = 12; a = 4; break;
+        case MTLDataTypeHalf3x3: case MTLDataTypeHalf3x4: s = 24; a = 8; break;
+        case MTLDataTypeHalf4x2: s = 16; a = 4; break;
+        case MTLDataTypeHalf4x3: case MTLDataTypeHalf4x4: s = 32; a = 8; break;
+        default: break;
+    }
+    *size = s;
+    *align = a;
+}
+
+// The C layout of an argument buffer's struct (the offsets its shaders read), as slots; ids of nested members count
+// from their parent's.
+static void abFlatten(MTLStructType *type, NSUInteger idBase, NSMutableData *slots, NSUInteger *outSize, NSUInteger *outAlign) {
+    NSUInteger offset = 0, maxAlign = 1;
+    for (MTLStructMember *m in type.members) {
+        NSUInteger size, align, id = idBase + m.argumentIndex;
+        if (m.dataType == MTLDataTypeStruct) {
+            NSMutableData *inner = [NSMutableData data];
+            abFlatten(m.structType, id, inner, &size, &align);
+            offset = abAlignUp(offset, align);
+            ABSlot *s = inner.mutableBytes;
+            for (NSUInteger k = 0; k < inner.length / sizeof(ABSlot); k++) {
+                s[k].offset += (uint32_t)offset;
+                [slots appendBytes:&s[k] length:sizeof(ABSlot)];
+            }
+        } else if (m.dataType == MTLDataTypeArray) {
+            MTLArrayType *array = m.arrayType;
+            NSUInteger elementSize, elementAlign;
+            if (array.elementType == MTLDataTypeStruct) {
+                NSMutableData *ignored = [NSMutableData data];
+                abFlatten(array.elementStructType, id, ignored, &elementSize, &elementAlign);
+            } else
+                abSizeAlign(array.elementType, &elementSize, &elementAlign);
+            elementSize = abAlignUp(elementSize, elementAlign);
+            offset = abAlignUp(offset, elementAlign);
+            if (array.elementType != MTLDataTypeStruct)
+                for (NSUInteger j = 0; j < array.arrayLength; j++) {
+                    ABSlot s = {(uint32_t)(id + j * MAX(array.argumentIndexStride, (NSUInteger)1)), (uint32_t)(offset + j * elementSize),
+                                array.elementType == MTLDataTypePointer};
+                    [slots appendBytes:&s length:sizeof s];
+                }
+            size = elementSize * array.arrayLength;
+            align = elementAlign;
+        } else {
+            abSizeAlign(m.dataType, &size, &align);
+            offset = abAlignUp(offset, align);
+            ABSlot s = {(uint32_t)id, (uint32_t)offset, m.dataType == MTLDataTypePointer};
+            [slots appendBytes:&s length:sizeof s];
+        }
+        offset += size;
+        maxAlign = MAX(maxAlign, align);
+    }
+    *outSize = abAlignUp(offset, maxAlign);
+    *outAlign = maxAlign;
+}
+
+// Buffers named by tokens: a weak table, so a token left behind by a freed buffer names nothing.
+static os_unfair_lock abLock = OS_UNFAIR_LOCK_INIT;
+static NSPointerArray *abBuffers;
+static const void *kABBufferIdKey = &kABBufferIdKey;
+static uint32_t abBufferId(id buffer) {
+    if (!buffer) return 0;
+    os_unfair_lock_lock(&abLock);
+    NSNumber *known = objc_getAssociatedObject(buffer, kABBufferIdKey);
+    uint32_t i = known.unsignedIntValue;
+    if (!known) {
+        if (!abBuffers) {
+            abBuffers = [NSPointerArray weakObjectsPointerArray];
+            [abBuffers addPointer:NULL];  // id 0 is no buffer
+        }
+        i = (uint32_t)abBuffers.count;
+        [abBuffers addPointer:(__bridge void *)buffer];
+        objc_setAssociatedObject(buffer, kABBufferIdKey, @(i), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    os_unfair_lock_unlock(&abLock);
+    return i;
+}
+static id abBufferForId(uint32_t i) {
+    os_unfair_lock_lock(&abLock);
+    id buffer = i && i < abBuffers.count ? (__bridge id)[abBuffers pointerAtIndex:i] : nil;
+    os_unfair_lock_unlock(&abLock);
+    return buffer;
+}
+
+@interface MTLShimArgumentLayout : _MTLIndirectArgumentBufferLayout {
+  @public
+    NSData *slots;
+    NSUInteger size, align;
+}
+@end
+@implementation MTLShimArgumentLayout
+- (void)setStructType:(MTLStructType *)structType withDevice:(id<MTLDevice>)device {
+    [super setStructType:structType withDevice:device];
+    NSMutableData *flat = [NSMutableData data];
+    NSUInteger s = 0, a = 1;
+    abFlatten(structType, 0, flat, &s, &a);
+    slots = flat;
+    size = MAX(s, (NSUInteger)8);
+    align = MAX(a, (NSUInteger)8);
+}
+- (NSUInteger)encodedLength { return size; }
+- (NSUInteger)alignment { return align; }
+- (BOOL)bufferLayoutMatchesFrontEndLayout { return YES; }
+- (const ABSlot *)slotForId:(NSUInteger)i pointer:(BOOL)pointer {
+    const ABSlot *s = slots.bytes;
+    for (NSUInteger k = 0; k < slots.length / sizeof(ABSlot); k++)
+        if (s[k].id == i && (BOOL)s[k].pointer == pointer) return &s[k];
+    return NULL;
+}
+- (NSUInteger)constantOffsetAtIndex:(NSUInteger)i {
+    const ABSlot *s = [self slotForId:i pointer:NO];
+    return s ? s->offset : NSNotFound;
+}
+@end
+
+@interface MTLShimArgumentEncoder : _MTLIndirectArgumentEncoder {
+    MTLShimArgumentLayout *abLayout;
+    id<MTLBuffer> abBuffer;
+    NSUInteger abOffset;
+}
+@end
+@implementation MTLShimArgumentEncoder
+- (instancetype)initWithLayout:(id)layout device:(id<MTLDevice>)device {
+    if ((self = [super initWithLayout:layout device:device])) abLayout = layout;
+    return self;
+}
+- (NSUInteger)encodedLength { return abLayout->size; }
+- (NSUInteger)alignment { return abLayout->align; }
+- (void)setArgumentBuffer:(id<MTLBuffer>)buffer offset:(NSUInteger)offset {
+    abBuffer = buffer;
+    abOffset = offset;
+}
+- (void)setArgumentBuffer:(id<MTLBuffer>)buffer startOffset:(NSUInteger)start arrayElement:(NSUInteger)element {
+    abBuffer = buffer;
+    abOffset = start + element * abAlignUp(abLayout->size, abLayout->align);
+}
+- (void)setBuffer:(id<MTLBuffer>)buffer offset:(NSUInteger)offset atIndex:(NSUInteger)index {
+    const ABSlot *s = [abLayout slotForId:index pointer:YES];
+    uint8_t *p = abBuffer.contents;
+    if (!s || !p || abOffset + s->offset + 8 > abBuffer.length) return;
+    uint64_t token = buffer ? (uint64_t)abBufferId(buffer) << 32 | (uint32_t)offset : 0;
+    memcpy(p + abOffset + s->offset, &token, sizeof token);
+}
+- (void)setBuffers:(const id<MTLBuffer> __unsafe_unretained[])buffers offsets:(const NSUInteger[])offsets withRange:(NSRange)range {
+    for (NSUInteger i = 0; i < range.length; i++) [self setBuffer:buffers[i] offset:offsets[i] atIndex:range.location + i];
+}
+- (void *)constantDataAtIndex:(NSUInteger)index {
+    const ABSlot *s = [abLayout slotForId:index pointer:NO];
+    uint8_t *p = abBuffer.contents;
+    return s && p && abOffset + s->offset < abBuffer.length ? p + abOffset + s->offset : NULL;
+}
+- (void)unsupported:(const char *)what {
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] argument buffer on the Ivy Bridge GPU: %s not supported\n", what);
+}
+- (void)setTexture:(id<MTLTexture>)texture atIndex:(NSUInteger)index { [self unsupported:"textures"]; }
+- (void)setTextures:(const id<MTLTexture> __unsafe_unretained[])textures withRange:(NSRange)range { [self unsupported:"textures"]; }
+- (void)setSamplerState:(id<MTLSamplerState>)sampler atIndex:(NSUInteger)index { [self unsupported:"samplers"]; }
+- (void)setSamplerStates:(const id<MTLSamplerState> __unsafe_unretained[])samplers withRange:(NSRange)range { [self unsupported:"samplers"]; }
+- (id<MTLArgumentEncoder>)newArgumentEncoderForBufferAtIndex:(NSUInteger)index { return nil; }
+@end
+
+static id ivbNewArgumentLayout(id self, SEL _cmd, MTLStructType *type) __attribute__((ns_returns_retained));
+static id ivbNewArgumentLayout(id self, SEL _cmd, MTLStructType *type) {
+    MTLShimArgumentLayout *layout = [[MTLShimArgumentLayout alloc] init];
+    [layout setStructType:type withDevice:self];
+    return layout;
+}
+static id ivbNewArgumentEncoder(id self, SEL _cmd, id layout) __attribute__((ns_returns_retained));
+static id ivbNewArgumentEncoder(id self, SEL _cmd, id layout) {
+    return [layout isKindOfClass:[MTLShimArgumentLayout class]] ? [[MTLShimArgumentEncoder alloc] initWithLayout:layout device:self] : nil;
+}
+
+// The adapter's hidden indices for one stage, from its reflection arguments.
+static void abStageBindings(NSArray<MTLArgument *> *arguments, uint8_t stage, NSMutableData *out) {
+    BOOL used[31] = {NO};
+    typedef struct { NSUInteger buffer, id, offset; } Pointer;
+    NSMutableData *pointers = [NSMutableData data];
+    for (MTLArgument *a in arguments) {
+        if (a.type != MTLArgumentTypeBuffer) continue;
+        for (NSUInteger k = 0; k < MAX(a.arrayLength, (NSUInteger)1); k++)
+            if (a.index + k < 31) used[a.index + k] = YES;
+        MTLStructType *type = a.bufferStructType;
+        if (!type || a.index >= 31) continue;
+        // the members the adapter rewrites: pointers, and metal::array structs of pointers
+        NSMutableIndexSet *ids = [NSMutableIndexSet indexSet];
+        for (MTLStructMember *m in type.members) {
+            if (m.dataType == MTLDataTypePointer) [ids addIndex:m.argumentIndex];
+            if (m.dataType != MTLDataTypeStruct || m.structType.members.count != 1) continue;
+            MTLStructMember *inner = m.structType.members.firstObject;
+            if (inner.dataType != MTLDataTypeArray || inner.arrayType.elementType != MTLDataTypePointer) continue;
+            for (NSUInteger j = 0; j < inner.arrayType.arrayLength; j++)
+                [ids addIndex:m.argumentIndex + inner.argumentIndex + j * MAX(inner.arrayType.argumentIndexStride, (NSUInteger)1)];
+        }
+        if (!ids.count) continue;
+        NSMutableData *flat = [NSMutableData data];
+        NSUInteger size, align;
+        abFlatten(type, 0, flat, &size, &align);
+        const ABSlot *s = flat.bytes;
+        for (NSUInteger k = 0; k < flat.length / sizeof(ABSlot); k++)
+            if (s[k].pointer && [ids containsIndex:s[k].id]) {
+                Pointer p = {a.index, s[k].id, s[k].offset};
+                [pointers appendBytes:&p length:sizeof p];
+            }
+    }
+    NSUInteger n = pointers.length / sizeof(Pointer);
+    if (!n) return;
+    Pointer *p = pointers.mutableBytes;
+    qsort_b(p, n, sizeof(Pointer), ^int(const void *x, const void *y) {
+        const Pointer *a = x, *b = y;
+        if (a->buffer != b->buffer) return a->buffer < b->buffer ? -1 : 1;
+        return a->id < b->id ? -1 : a->id > b->id;
+    });
+    int next = 30, lowest = stage == 0 ? 17 : 0;
+    NSMutableData *bindings = [NSMutableData data];
+    for (NSUInteger k = 0; k < n; k++) {
+        while (next >= lowest && used[next]) next--;
+        if (next < lowest) return;  // the adapter left this function alone
+        ABBinding b = {stage, (uint8_t)p[k].buffer, (uint8_t)next--, (uint32_t)p[k].offset};
+        [bindings appendBytes:&b length:sizeof b];
+    }
+    [out appendData:bindings];
+}
+
+static const void *kABBindingsKey = &kABBindingsKey;
+static void abAttach(id pipeline, NSArray *vertex, NSArray *fragment, NSArray *compute) {
+    if (!pipeline) return;
+    NSMutableData *bindings = [NSMutableData data];
+    abStageBindings(vertex, 0, bindings);
+    abStageBindings(fragment, 1, bindings);
+    abStageBindings(compute, 2, bindings);
+    if (!bindings.length) return;
+    objc_setAssociatedObject(pipeline, kABBindingsKey, bindings, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] pipeline with %lu argument-buffer pointer(s) bound at hidden indices\n",
+                                           (unsigned long)(bindings.length / sizeof(ABBinding)));
+}
+
+static BOOL abDevice(id device) {
+    static Class intel;
+    if (!intel) intel = objc_getClass("MTLIGAccelDevice");
+    return ivbArgumentBuffersOn && intel && [device isKindOfClass:intel];
+}
+static const MTLPipelineOption kABReflection = MTLPipelineOptionArgumentInfo | MTLPipelineOptionBufferTypeInfo;
+
+typedef id (*ABRenderReflIMP)(id, SEL, MTLRenderPipelineDescriptor *, MTLPipelineOption, MTLAutoreleasedRenderPipelineReflection *, NSError **);
+typedef void (*ABRenderOptAsyncIMP)(id, SEL, MTLRenderPipelineDescriptor *, MTLPipelineOption, MTLNewRenderPipelineStateWithReflectionCompletionHandler);
+typedef id (*ABComputeFnReflIMP)(id, SEL, id<MTLFunction>, MTLPipelineOption, MTLAutoreleasedComputePipelineReflection *, NSError **);
+typedef id (*ABComputeDescReflIMP)(id, SEL, MTLComputePipelineDescriptor *, MTLPipelineOption, MTLAutoreleasedComputePipelineReflection *, NSError **);
+typedef void (*ABComputeFnOptAsyncIMP)(id, SEL, id<MTLFunction>, MTLPipelineOption, MTLNewComputePipelineStateWithReflectionCompletionHandler);
+typedef void (*ABComputeDescOptAsyncIMP)(id, SEL, MTLComputePipelineDescriptor *, MTLPipelineOption, MTLNewComputePipelineStateWithReflectionCompletionHandler);
+static ABRenderReflIMP abOrigRenderRefl;
+static ABRenderOptAsyncIMP abOrigRenderOptAsync;
+static ABComputeFnReflIMP abOrigComputeFnRefl;
+static ABComputeDescReflIMP abOrigComputeDescRefl;
+static ABComputeFnOptAsyncIMP abOrigComputeFnOptAsync;
+static ABComputeDescOptAsyncIMP abOrigComputeDescOptAsync;
+
+static id abRenderRefl(id self, SEL _cmd, MTLRenderPipelineDescriptor *d, MTLPipelineOption options,
+                       MTLAutoreleasedRenderPipelineReflection *reflection, NSError **error) __attribute__((ns_returns_retained));
+static id abRenderRefl(id self, SEL _cmd, MTLRenderPipelineDescriptor *d, MTLPipelineOption options,
+                       MTLAutoreleasedRenderPipelineReflection *reflection, NSError **error) {
+    if (!abDevice(self)) return abOrigRenderRefl(self, _cmd, d, options, reflection, error);
+    MTLAutoreleasedRenderPipelineReflection r = nil;
+    NSError *failure = nil;
+    id pipeline = abOrigRenderRefl(self, _cmd, d, options | kABReflection, &r, &failure);
+    if (error) *error = failure;
+    if (!pipeline && getenv("MTLSHIM_VERBOSE"))
+        shimLog("[mtlshim] render pipeline failed (vertex %s, fragment %s): %.600s\n", d.vertexFunction.name.UTF8String ?: "-",
+                d.fragmentFunction.name.UTF8String ?: "-", failure.localizedDescription.UTF8String ?: "?");
+    abAttach(pipeline, r.vertexArguments, r.fragmentArguments, nil);
+    if (reflection) *reflection = r;
+    return pipeline;
+}
+static id abRender(id self, SEL _cmd, MTLRenderPipelineDescriptor *d, NSError **error) __attribute__((ns_returns_retained));
+static id abRender(id self, SEL _cmd, MTLRenderPipelineDescriptor *d, NSError **error) {
+    return ((id(*)(id, SEL, id, MTLPipelineOption, id *, NSError **))objc_msgSend)(
+        self, sel_registerName("newRenderPipelineStateWithDescriptor:options:reflection:error:"), d, MTLPipelineOptionNone, NULL, error);
+}
+static void abRenderOptAsync(id self, SEL _cmd, MTLRenderPipelineDescriptor *d, MTLPipelineOption options,
+                             MTLNewRenderPipelineStateWithReflectionCompletionHandler handler) {
+    if (!abDevice(self)) return abOrigRenderOptAsync(self, _cmd, d, options, handler);
+    abOrigRenderOptAsync(self, _cmd, d, options | kABReflection, ^(id<MTLRenderPipelineState> p, MTLRenderPipelineReflection *r, NSError *e) {
+        abAttach(p, r.vertexArguments, r.fragmentArguments, nil);
+        handler(p, r, e);
+    });
+}
+static void abRenderAsync(id self, SEL _cmd, MTLRenderPipelineDescriptor *d, MTLNewRenderPipelineStateCompletionHandler handler) {
+    ((void (*)(id, SEL, id, MTLPipelineOption, id))objc_msgSend)(
+        self, sel_registerName("newRenderPipelineStateWithDescriptor:options:completionHandler:"), d, MTLPipelineOptionNone,
+        ^(id<MTLRenderPipelineState> p, MTLRenderPipelineReflection *r, NSError *e) { handler(p, e); });
+}
+static id abComputeFnRefl(id self, SEL _cmd, id<MTLFunction> f, MTLPipelineOption options,
+                          MTLAutoreleasedComputePipelineReflection *reflection, NSError **error) __attribute__((ns_returns_retained));
+static id abComputeFnRefl(id self, SEL _cmd, id<MTLFunction> f, MTLPipelineOption options,
+                          MTLAutoreleasedComputePipelineReflection *reflection, NSError **error) {
+    if (!abDevice(self)) return abOrigComputeFnRefl(self, _cmd, f, options, reflection, error);
+    MTLAutoreleasedComputePipelineReflection r = nil;
+    id pipeline = abOrigComputeFnRefl(self, _cmd, f, options | kABReflection, &r, error);
+    abAttach(pipeline, nil, nil, r.arguments);
+    if (reflection) *reflection = r;
+    return pipeline;
+}
+static id abComputeFn(id self, SEL _cmd, id<MTLFunction> f, NSError **error) __attribute__((ns_returns_retained));
+static id abComputeFn(id self, SEL _cmd, id<MTLFunction> f, NSError **error) {
+    return ((id(*)(id, SEL, id, MTLPipelineOption, id *, NSError **))objc_msgSend)(
+        self, sel_registerName("newComputePipelineStateWithFunction:options:reflection:error:"), f, MTLPipelineOptionNone, NULL, error);
+}
+static id abComputeDescRefl(id self, SEL _cmd, MTLComputePipelineDescriptor *d, MTLPipelineOption options,
+                            MTLAutoreleasedComputePipelineReflection *reflection, NSError **error) __attribute__((ns_returns_retained));
+static id abComputeDescRefl(id self, SEL _cmd, MTLComputePipelineDescriptor *d, MTLPipelineOption options,
+                            MTLAutoreleasedComputePipelineReflection *reflection, NSError **error) {
+    if (!abDevice(self)) return abOrigComputeDescRefl(self, _cmd, d, options, reflection, error);
+    MTLAutoreleasedComputePipelineReflection r = nil;
+    id pipeline = abOrigComputeDescRefl(self, _cmd, d, options | kABReflection, &r, error);
+    abAttach(pipeline, nil, nil, r.arguments);
+    if (reflection) *reflection = r;
+    return pipeline;
+}
+static void abComputeFnOptAsync(id self, SEL _cmd, id<MTLFunction> f, MTLPipelineOption options,
+                                MTLNewComputePipelineStateWithReflectionCompletionHandler handler) {
+    if (!abDevice(self)) return abOrigComputeFnOptAsync(self, _cmd, f, options, handler);
+    abOrigComputeFnOptAsync(self, _cmd, f, options | kABReflection, ^(id<MTLComputePipelineState> p, MTLComputePipelineReflection *r, NSError *e) {
+        abAttach(p, nil, nil, r.arguments);
+        handler(p, r, e);
+    });
+}
+static void abComputeFnAsync(id self, SEL _cmd, id<MTLFunction> f, MTLNewComputePipelineStateCompletionHandler handler) {
+    ((void (*)(id, SEL, id, MTLPipelineOption, id))objc_msgSend)(
+        self, sel_registerName("newComputePipelineStateWithFunction:options:completionHandler:"), f, MTLPipelineOptionNone,
+        ^(id<MTLComputePipelineState> p, MTLComputePipelineReflection *r, NSError *e) { handler(p, e); });
+}
+static void abComputeDescOptAsync(id self, SEL _cmd, MTLComputePipelineDescriptor *d, MTLPipelineOption options,
+                                  MTLNewComputePipelineStateWithReflectionCompletionHandler handler) {
+    if (!abDevice(self)) return abOrigComputeDescOptAsync(self, _cmd, d, options, handler);
+    abOrigComputeDescOptAsync(self, _cmd, d, options | kABReflection, ^(id<MTLComputePipelineState> p, MTLComputePipelineReflection *r, NSError *e) {
+        abAttach(p, nil, nil, r.arguments);
+        handler(p, r, e);
+    });
+}
+
+// What an encoder has bound, per stage (0 vertex, 1 fragment, 2 compute), and its pipeline's hidden bindings.
+@interface MTLShimABState : NSObject {
+  @public
+    __strong id buffers[3][31];
+    NSUInteger offsets[3][31];
+    __strong NSData *bytes[3][31];
+    __strong NSData *bindings;
+}
+@end
+@implementation MTLShimABState
+@end
+static const void *kABStateKey = &kABStateKey;
+static MTLShimABState *abState(id encoder) {
+    MTLShimABState *s = objc_getAssociatedObject(encoder, kABStateKey);
+    if (!s) {
+        s = [MTLShimABState new];
+        objc_setAssociatedObject(encoder, kABStateKey, s, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    return s;
+}
+
+typedef void (*ABSetBufferIMP)(id, SEL, id, NSUInteger, NSUInteger);
+typedef void (*ABSetOffsetIMP)(id, SEL, NSUInteger, NSUInteger);
+typedef void (*ABSetBuffersIMP)(id, SEL, const id __unsafe_unretained *, const NSUInteger *, NSRange);
+typedef void (*ABSetBytesIMP)(id, SEL, const void *, NSUInteger, NSUInteger);
+typedef void (*ABSetPipelineIMP)(id, SEL, id);
+static ABSetBufferIMP abOrigSetBuffer[3];
+static ABSetOffsetIMP abOrigSetOffset[3];
+static ABSetBuffersIMP abOrigSetBuffers[3];
+static ABSetBytesIMP abOrigSetBytes[3];
+static ABSetPipelineIMP abOrigSetRenderPipeline, abOrigSetComputePipeline;
+static SEL abSetBufferSel[3], abSetBytesSel[3];
+
+static void abRecordBuffer(id encoder, int stage, id buffer, NSUInteger offset, NSUInteger index) {
+    if (index >= 31) return;
+    MTLShimABState *s = abState(encoder);
+    s->buffers[stage][index] = buffer;
+    s->offsets[stage][index] = offset;
+    s->bytes[stage][index] = nil;
+}
+#define AB_STAGE_HOOKS(name, stage)                                                                                     \
+    static void abSetBuffer##name(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInteger index) {                   \
+        abRecordBuffer(self, stage, buffer, offset, index);                                                              \
+        abOrigSetBuffer[stage](self, _cmd, buffer, offset, index);                                                       \
+    }                                                                                                                    \
+    static void abSetOffset##name(id self, SEL _cmd, NSUInteger offset, NSUInteger index) {                              \
+        if (index < 31) abState(self)->offsets[stage][index] = offset;                                                   \
+        abOrigSetOffset[stage](self, _cmd, offset, index);                                                               \
+    }                                                                                                                    \
+    static void abSetBuffers##name(id self, SEL _cmd, const id __unsafe_unretained *buffers, const NSUInteger *offsets,  \
+                                   NSRange range) {                                                                      \
+        for (NSUInteger i = 0; i < range.length; i++) abRecordBuffer(self, stage, buffers[i], offsets[i], range.location + i); \
+        abOrigSetBuffers[stage](self, _cmd, buffers, offsets, range);                                                    \
+    }                                                                                                                    \
+    static void abSetBytes##name(id self, SEL _cmd, const void *bytes, NSUInteger length, NSUInteger index) {            \
+        if (index < 31) {                                                                                                \
+            MTLShimABState *s = abState(self);                                                                           \
+            s->buffers[stage][index] = nil;                                                                              \
+            s->bytes[stage][index] = length <= 4096 ? [NSData dataWithBytes:bytes length:length] : nil;                   \
+        }                                                                                                                \
+        abOrigSetBytes[stage](self, _cmd, bytes, length, index);                                                         \
+    }
+AB_STAGE_HOOKS(Vertex, 0)
+AB_STAGE_HOOKS(Fragment, 1)
+AB_STAGE_HOOKS(Compute, 2)
+
+static void abSetRenderPipeline(id self, SEL _cmd, id pipeline) {
+    abState(self)->bindings = objc_getAssociatedObject(pipeline, kABBindingsKey);
+    abOrigSetRenderPipeline(self, _cmd, pipeline);
+}
+static void abSetComputePipeline(id self, SEL _cmd, id pipeline) {
+    abState(self)->bindings = objc_getAssociatedObject(pipeline, kABBindingsKey);
+    abOrigSetComputePipeline(self, _cmd, pipeline);
+}
+
+// Binds what the bound argument buffers point to (restore NO), or puts back what the app had bound there (YES).
+static void abBind(id encoder, BOOL restore) {
+    MTLShimABState *s = objc_getAssociatedObject(encoder, kABStateKey);
+    if (!s || !s->bindings) return;
+    const ABBinding *b = s->bindings.bytes;
+    for (NSUInteger k = 0; k < s->bindings.length / sizeof(ABBinding); k++) {
+        int st = b[k].stage;
+        if (restore) {
+            if (s->buffers[st][b[k].hidden])
+                abOrigSetBuffer[st](encoder, abSetBufferSel[st], s->buffers[st][b[k].hidden], s->offsets[st][b[k].hidden], b[k].hidden);
+            else if (s->bytes[st][b[k].hidden])
+                abOrigSetBytes[st](encoder, abSetBytesSel[st], s->bytes[st][b[k].hidden].bytes, s->bytes[st][b[k].hidden].length, b[k].hidden);
+            continue;
+        }
+        id argumentBuffer = s->buffers[st][b[k].argument];
+        const uint8_t *p = NULL;
+        NSUInteger length = 0, base = 0;
+        if (argumentBuffer) {
+            p = [argumentBuffer contents];
+            length = [argumentBuffer length];
+            base = s->offsets[st][b[k].argument];
+        } else if (s->bytes[st][b[k].argument]) {
+            p = s->bytes[st][b[k].argument].bytes;
+            length = s->bytes[st][b[k].argument].length;
+        }
+        if (!p || base + b[k].offset + 8 > length) continue;
+        uint64_t token;
+        memcpy(&token, p + base + b[k].offset, sizeof token);
+        id target = abBufferForId((uint32_t)(token >> 32));
+        if (target) abOrigSetBuffer[st](encoder, abSetBufferSel[st], target, (uint32_t)token, b[k].hidden);
+    }
+}
+
+#define AB_DRAW(name, params, args)                                                                                     \
+    typedef void (*ABDraw##name##IMP) params;                                                                            \
+    static ABDraw##name##IMP abOrigDraw##name;                                                                           \
+    static void abDraw##name params {                                                                                   \
+        abBind(self, NO);                                                                                                \
+        abOrigDraw##name args;                                                                                           \
+        abBind(self, YES);                                                                                               \
+    }
+AB_DRAW(P, (id self, SEL _cmd, NSUInteger t, NSUInteger s, NSUInteger c), (self, _cmd, t, s, c))
+AB_DRAW(PI, (id self, SEL _cmd, NSUInteger t, NSUInteger s, NSUInteger c, NSUInteger i), (self, _cmd, t, s, c, i))
+AB_DRAW(PIB, (id self, SEL _cmd, NSUInteger t, NSUInteger s, NSUInteger c, NSUInteger i, NSUInteger b), (self, _cmd, t, s, c, i, b))
+AB_DRAW(PInd, (id self, SEL _cmd, NSUInteger t, id ib, NSUInteger o), (self, _cmd, t, ib, o))
+AB_DRAW(X, (id self, SEL _cmd, NSUInteger t, NSUInteger c, NSUInteger it, id ib, NSUInteger io), (self, _cmd, t, c, it, ib, io))
+AB_DRAW(XI, (id self, SEL _cmd, NSUInteger t, NSUInteger c, NSUInteger it, id ib, NSUInteger io, NSUInteger i), (self, _cmd, t, c, it, ib, io, i))
+AB_DRAW(XIB, (id self, SEL _cmd, NSUInteger t, NSUInteger c, NSUInteger it, id ib, NSUInteger io, NSUInteger i, NSInteger bv, NSUInteger bi),
+        (self, _cmd, t, c, it, ib, io, i, bv, bi))
+AB_DRAW(XInd, (id self, SEL _cmd, NSUInteger t, NSUInteger it, id ib, NSUInteger io, id indirect, NSUInteger o), (self, _cmd, t, it, ib, io, indirect, o))
+AB_DRAW(DG, (id self, SEL _cmd, MTLSize g, MTLSize t), (self, _cmd, g, t))
+AB_DRAW(DT, (id self, SEL _cmd, MTLSize g, MTLSize t), (self, _cmd, g, t))
+AB_DRAW(DInd, (id self, SEL _cmd, id indirect, NSUInteger o, MTLSize t), (self, _cmd, indirect, o, t))
+
+static void installIvbArgumentBuffers(void) {
+    static BOOL done;
+    const char *setting = getenv("MTLSHIM_IVB_ARGUMENT_BUFFERS");
+    Class device = objc_getClass("MTLIGAccelDevice");
+    if (done || !device || (setting && !strcmp(setting, "0")) || definesMethod("MTLIGAccelDevice", "newArgumentEncoderWithLayout:") ||
+        definesMethod("MTLIGAccelDevice", "newIndirectArgumentBufferLayoutWithStructType:"))
+        return;  // not the Ivy Bridge driver (the 12.x driver has argument buffers of its own), or switched off
+    done = YES;
+    static const char *const kRender = "MTLIGAccelRenderCommandEncoder", *const kCompute = "MTLIGAccelComputeCommandEncoder";
+    const char *const stageClass[3] = {kRender, kRender, kCompute};
+    const char *const setBuffer[3] = {"setVertexBuffer:offset:atIndex:", "setFragmentBuffer:offset:atIndex:", "setBuffer:offset:atIndex:"};
+    const char *const setOffset[3] = {"setVertexBufferOffset:atIndex:", "setFragmentBufferOffset:atIndex:", "setBufferOffset:atIndex:"};
+    const char *const setBuffers[3] = {"setVertexBuffers:offsets:withRange:", "setFragmentBuffers:offsets:withRange:", "setBuffers:offsets:withRange:"};
+    const char *const setBytes[3] = {"setVertexBytes:length:atIndex:", "setFragmentBytes:length:atIndex:", "setBytes:length:atIndex:"};
+    for (int st = 0; st < 3; st++)
+        if (!definesMethod(stageClass[st], setBuffer[st]) || !definesMethod(stageClass[st], setOffset[st]) ||
+            !definesMethod(stageClass[st], setBuffers[st]) || !definesMethod(stageClass[st], setBytes[st]))
+            return;
+    if (!definesMethod(kRender, "setRenderPipelineState:") || !definesMethod(kCompute, "setComputePipelineState:")) return;
+    class_addMethod(device, sel_registerName("newIndirectArgumentBufferLayoutWithStructType:"), (IMP)ivbNewArgumentLayout, "@@:@");
+    class_addMethod(device, sel_registerName("newArgumentEncoderWithLayout:"), (IMP)ivbNewArgumentEncoder, "@@:@");
+    const IMP bufferHooks[3] = {(IMP)abSetBufferVertex, (IMP)abSetBufferFragment, (IMP)abSetBufferCompute};
+    const IMP offsetHooks[3] = {(IMP)abSetOffsetVertex, (IMP)abSetOffsetFragment, (IMP)abSetOffsetCompute};
+    const IMP buffersHooks[3] = {(IMP)abSetBuffersVertex, (IMP)abSetBuffersFragment, (IMP)abSetBuffersCompute};
+    const IMP bytesHooks[3] = {(IMP)abSetBytesVertex, (IMP)abSetBytesFragment, (IMP)abSetBytesCompute};
+    for (int st = 0; st < 3; st++) {
+        abSetBufferSel[st] = sel_registerName(setBuffer[st]);
+        abSetBytesSel[st] = sel_registerName(setBytes[st]);
+        abOrigSetBuffer[st] = (ABSetBufferIMP)swizzle(stageClass[st], setBuffer[st], bufferHooks[st]);
+        abOrigSetOffset[st] = (ABSetOffsetIMP)swizzle(stageClass[st], setOffset[st], offsetHooks[st]);
+        abOrigSetBuffers[st] = (ABSetBuffersIMP)swizzle(stageClass[st], setBuffers[st], buffersHooks[st]);
+        abOrigSetBytes[st] = (ABSetBytesIMP)swizzle(stageClass[st], setBytes[st], bytesHooks[st]);
+    }
+    abOrigSetRenderPipeline = (ABSetPipelineIMP)swizzle(kRender, "setRenderPipelineState:", (IMP)abSetRenderPipeline);
+    abOrigSetComputePipeline = (ABSetPipelineIMP)swizzle(kCompute, "setComputePipelineState:", (IMP)abSetComputePipeline);
+    const struct { const char *cls, *sel; IMP imp; IMP *orig; } draws[] = {
+        {kRender, "drawPrimitives:vertexStart:vertexCount:", (IMP)abDrawP, (IMP *)&abOrigDrawP},
+        {kRender, "drawPrimitives:vertexStart:vertexCount:instanceCount:", (IMP)abDrawPI, (IMP *)&abOrigDrawPI},
+        {kRender, "drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:", (IMP)abDrawPIB, (IMP *)&abOrigDrawPIB},
+        {kRender, "drawPrimitives:indirectBuffer:indirectBufferOffset:", (IMP)abDrawPInd, (IMP *)&abOrigDrawPInd},
+        {kRender, "drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:", (IMP)abDrawX, (IMP *)&abOrigDrawX},
+        {kRender, "drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:", (IMP)abDrawXI, (IMP *)&abOrigDrawXI},
+        {kRender, "drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:",
+         (IMP)abDrawXIB, (IMP *)&abOrigDrawXIB},
+        {kRender, "drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:", (IMP)abDrawXInd,
+         (IMP *)&abOrigDrawXInd},
+        {kCompute, "dispatchThreadgroups:threadsPerThreadgroup:", (IMP)abDrawDG, (IMP *)&abOrigDrawDG},
+        {kCompute, "dispatchThreads:threadsPerThreadgroup:", (IMP)abDrawDT, (IMP *)&abOrigDrawDT},
+        {kCompute, "dispatchThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerThreadgroup:", (IMP)abDrawDInd, (IMP *)&abOrigDrawDInd},
+    };
+    for (size_t i = 0; i < sizeof draws / sizeof *draws; i++)
+        if (definesMethod(draws[i].cls, draws[i].sel)) *draws[i].orig = swizzle(draws[i].cls, draws[i].sel, draws[i].imp);
+    const struct { const char *sel; IMP imp; IMP *orig; } pipelines[] = {
+        {"newRenderPipelineStateWithDescriptor:options:reflection:error:", (IMP)abRenderRefl, (IMP *)&abOrigRenderRefl},
+        {"newRenderPipelineStateWithDescriptor:options:completionHandler:", (IMP)abRenderOptAsync, (IMP *)&abOrigRenderOptAsync},
+        {"newComputePipelineStateWithFunction:options:reflection:error:", (IMP)abComputeFnRefl, (IMP *)&abOrigComputeFnRefl},
+        {"newComputePipelineStateWithDescriptor:options:reflection:error:", (IMP)abComputeDescRefl, (IMP *)&abOrigComputeDescRefl},
+        {"newComputePipelineStateWithFunction:options:completionHandler:", (IMP)abComputeFnOptAsync, (IMP *)&abOrigComputeFnOptAsync},
+        {"newComputePipelineStateWithDescriptor:options:completionHandler:", (IMP)abComputeDescOptAsync, (IMP *)&abOrigComputeDescOptAsync},
+    };
+    for (size_t i = 0; i < sizeof pipelines / sizeof *pipelines; i++)
+        if (definesMethod("_MTLDevice", pipelines[i].sel)) *pipelines[i].orig = swizzle("_MTLDevice", pipelines[i].sel, pipelines[i].imp);
+    // the variants without reflection go through the ones above (item 21 wraps the render ones first; those stay)
+    if (abOrigRenderRefl) {
+        swizzle("_MTLDevice", "newRenderPipelineStateWithDescriptor:error:", (IMP)abRender);
+        if (abOrigRenderOptAsync) swizzle("_MTLDevice", "newRenderPipelineStateWithDescriptor:completionHandler:", (IMP)abRenderAsync);
+    }
+    if (abOrigComputeFnRefl) {
+        swizzle("_MTLDevice", "newComputePipelineStateWithFunction:error:", (IMP)abComputeFn);
+        if (abOrigComputeFnOptAsync) swizzle("_MTLDevice", "newComputePipelineStateWithFunction:completionHandler:", (IMP)abComputeFnAsync);
+    }
+    ivbArgumentBuffersOn = YES;
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] argument buffers on the Ivy Bridge GPU: encoders and hidden bindings installed\n");
+}
+#pragma clang diagnostic pop
+
+// 48. Direct draws after an indirect draw on the Ivy Bridge driver: once a render encoder has drawn through an indirect
+// buffer, every later direct draw in it keeps that draw's base instance, and in vertex functions that read
+// [[vertex_id]] (the Intel adapter declares BASE_VERTEX_ID for them, i13) its base or start vertex too: [[instance_id]]
+// and [[vertex_id]] come out as the indirect draw's. Setting the pipeline again doesn't reset it; a new encoder does.
+// MoltenVK and WebGPU mix both kinds of draw in one pass. Indirect draws are right whatever came before, so once an
+// encoder has drawn indirectly, its direct draws go through an indirect buffer of the shim's own (20 bytes a draw, in
+// 4 KB shared buffers the command buffer keeps until it completes). Ivy Bridge driver only.
+// MTLSHIM_IVB_DRAW_PARAMETERS=0 turns it off. (i13)
+@interface MTLShimDrawArguments : NSObject {
+@public
+    id<MTLBuffer> buffer;
+    NSUInteger used;
+}
+@end
+@implementation MTLShimDrawArguments
+@end
+
+static const void *const kDrawArgumentsKey = &kDrawArgumentsKey;
+static BOOL ipIndirectSeen;  // any indirect draw yet: until then the direct draws don't look anything up
+typedef void (*IPDrawPIndIMP)(id, SEL, MTLPrimitiveType, id<MTLBuffer>, NSUInteger);
+typedef void (*IPDrawXIndIMP)(id, SEL, MTLPrimitiveType, MTLIndexType, id<MTLBuffer>, NSUInteger, id<MTLBuffer>, NSUInteger);
+typedef void (*IPDrawPIMP)(id, SEL, MTLPrimitiveType, NSUInteger, NSUInteger);
+typedef void (*IPDrawPIIMP)(id, SEL, MTLPrimitiveType, NSUInteger, NSUInteger, NSUInteger);
+typedef void (*IPDrawPIBIMP)(id, SEL, MTLPrimitiveType, NSUInteger, NSUInteger, NSUInteger, NSUInteger);
+typedef void (*IPDrawXIMP)(id, SEL, MTLPrimitiveType, NSUInteger, MTLIndexType, id<MTLBuffer>, NSUInteger);
+typedef void (*IPDrawXIIMP)(id, SEL, MTLPrimitiveType, NSUInteger, MTLIndexType, id<MTLBuffer>, NSUInteger, NSUInteger);
+typedef void (*IPDrawXIBIMP)(id, SEL, MTLPrimitiveType, NSUInteger, MTLIndexType, id<MTLBuffer>, NSUInteger, NSUInteger, NSInteger, NSUInteger);
+static IPDrawPIndIMP ipOrigDrawPInd;
+static IPDrawXIndIMP ipOrigDrawXInd;
+static IPDrawPIMP ipOrigDrawP;
+static IPDrawPIIMP ipOrigDrawPI;
+static IPDrawPIBIMP ipOrigDrawPIB;
+static IPDrawXIMP ipOrigDrawX;
+static IPDrawXIIMP ipOrigDrawXI;
+static IPDrawXIBIMP ipOrigDrawXIB;
+
+static void ipMarkIndirect(id encoder) {
+    if (objc_getAssociatedObject(encoder, kDrawArgumentsKey)) return;
+    objc_setAssociatedObject(encoder, kDrawArgumentsKey, [MTLShimDrawArguments new], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    ipIndirectSeen = YES;
+}
+
+// the arguments copied into this encoder's argument buffer, or nil while the encoder hasn't drawn indirectly
+static id<MTLBuffer> ipArguments(id encoder, const void *arguments, NSUInteger length, NSUInteger *offset) {
+    if (!ipIndirectSeen) return nil;
+    MTLShimDrawArguments *s = objc_getAssociatedObject(encoder, kDrawArgumentsKey);
+    if (!s) return nil;
+    if (!s->buffer || s->used + length > s->buffer.length) {
+        id<MTLCommandBuffer> commandBuffer = [encoder commandBuffer];
+        id<MTLBuffer> buffer = [[encoder device] newBufferWithLength:4096
+                                                            options:MTLResourceStorageModeShared | MTLResourceCPUCacheModeWriteCombined];
+        if (!buffer || !commandBuffer) return nil;
+        [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> done) { (void)buffer; }];  // kept until the GPU is done with it
+        s->buffer = buffer;
+        s->used = 0;
+    }
+    memcpy((char *)s->buffer.contents + s->used, arguments, length);
+    *offset = s->used;
+    s->used += (length + 3) & ~(NSUInteger)3;
+    return s->buffer;
+}
+
+static void ipDrawPInd(id self, SEL _cmd, MTLPrimitiveType type, id<MTLBuffer> indirect, NSUInteger offset) {
+    ipOrigDrawPInd(self, _cmd, type, indirect, offset);
+    ipMarkIndirect(self);
+}
+
+static void ipDrawXInd(id self, SEL _cmd, MTLPrimitiveType type, MTLIndexType indexType, id<MTLBuffer> indexBuffer,
+                       NSUInteger indexOffset, id<MTLBuffer> indirect, NSUInteger offset) {
+    ipOrigDrawXInd(self, _cmd, type, indexType, indexBuffer, indexOffset, indirect, offset);
+    ipMarkIndirect(self);
+}
+
+static BOOL ipDrawPrimitives(id self, MTLPrimitiveType type, NSUInteger start, NSUInteger count, NSUInteger instances, NSUInteger baseInstance) {
+    MTLDrawPrimitivesIndirectArguments a = {(uint32_t)count, (uint32_t)instances, (uint32_t)start, (uint32_t)baseInstance};
+    NSUInteger offset;
+    id<MTLBuffer> buffer = ipArguments(self, &a, sizeof a, &offset);
+    if (!buffer) return NO;
+    ipOrigDrawPInd(self, @selector(drawPrimitives:indirectBuffer:indirectBufferOffset:), type, buffer, offset);
+    return YES;
+}
+
+static BOOL ipDrawIndexed(id self, MTLPrimitiveType type, NSUInteger count, MTLIndexType indexType, id<MTLBuffer> indexBuffer,
+                          NSUInteger indexOffset, NSUInteger instances, NSInteger baseVertex, NSUInteger baseInstance) {
+    NSUInteger size = indexType == MTLIndexTypeUInt16 ? 2 : 4, first = 0;
+    if (indexOffset % size == 0) first = indexOffset / size, indexOffset = 0;
+    MTLDrawIndexedPrimitivesIndirectArguments a = {(uint32_t)count, (uint32_t)instances, (uint32_t)first, (int32_t)baseVertex, (uint32_t)baseInstance};
+    NSUInteger offset;
+    id<MTLBuffer> buffer = ipArguments(self, &a, sizeof a, &offset);
+    if (!buffer) return NO;
+    ipOrigDrawXInd(self, @selector(drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:),
+                   type, indexType, indexBuffer, indexOffset, buffer, offset);
+    return YES;
+}
+
+static void ipDrawP(id self, SEL _cmd, MTLPrimitiveType type, NSUInteger start, NSUInteger count) {
+    if (!ipDrawPrimitives(self, type, start, count, 1, 0)) ipOrigDrawP(self, _cmd, type, start, count);
+}
+
+static void ipDrawPI(id self, SEL _cmd, MTLPrimitiveType type, NSUInteger start, NSUInteger count, NSUInteger instances) {
+    if (!ipDrawPrimitives(self, type, start, count, instances, 0)) ipOrigDrawPI(self, _cmd, type, start, count, instances);
+}
+
+static void ipDrawPIB(id self, SEL _cmd, MTLPrimitiveType type, NSUInteger start, NSUInteger count, NSUInteger instances, NSUInteger baseInstance) {
+    if (!ipDrawPrimitives(self, type, start, count, instances, baseInstance)) ipOrigDrawPIB(self, _cmd, type, start, count, instances, baseInstance);
+}
+
+static void ipDrawX(id self, SEL _cmd, MTLPrimitiveType type, NSUInteger count, MTLIndexType indexType, id<MTLBuffer> indexBuffer, NSUInteger indexOffset) {
+    if (!ipDrawIndexed(self, type, count, indexType, indexBuffer, indexOffset, 1, 0, 0)) ipOrigDrawX(self, _cmd, type, count, indexType, indexBuffer, indexOffset);
+}
+
+static void ipDrawXI(id self, SEL _cmd, MTLPrimitiveType type, NSUInteger count, MTLIndexType indexType, id<MTLBuffer> indexBuffer,
+                     NSUInteger indexOffset, NSUInteger instances) {
+    if (!ipDrawIndexed(self, type, count, indexType, indexBuffer, indexOffset, instances, 0, 0))
+        ipOrigDrawXI(self, _cmd, type, count, indexType, indexBuffer, indexOffset, instances);
+}
+
+static void ipDrawXIB(id self, SEL _cmd, MTLPrimitiveType type, NSUInteger count, MTLIndexType indexType, id<MTLBuffer> indexBuffer,
+                      NSUInteger indexOffset, NSUInteger instances, NSInteger baseVertex, NSUInteger baseInstance) {
+    if (!ipDrawIndexed(self, type, count, indexType, indexBuffer, indexOffset, instances, baseVertex, baseInstance))
+        ipOrigDrawXIB(self, _cmd, type, count, indexType, indexBuffer, indexOffset, instances, baseVertex, baseInstance);
+}
+
+static void ivbDrawParameters(void) {
+    static BOOL done;
+    const char *setting = getenv("MTLSHIM_IVB_DRAW_PARAMETERS");
+    static const char *const kRender = "MTLIGAccelRenderCommandEncoder";
+    Class encoder = objc_getClass(kRender);
+    const char *image = encoder ? class_getImageName(encoder) : NULL;
+    if (done || !image || !strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") || (setting && !strcmp(setting, "0"))) return;
+    const struct { const char *sel; IMP imp; IMP *orig; } draws[] = {
+        {"drawPrimitives:indirectBuffer:indirectBufferOffset:", (IMP)ipDrawPInd, (IMP *)&ipOrigDrawPInd},
+        {"drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:", (IMP)ipDrawXInd, (IMP *)&ipOrigDrawXInd},
+        {"drawPrimitives:vertexStart:vertexCount:", (IMP)ipDrawP, (IMP *)&ipOrigDrawP},
+        {"drawPrimitives:vertexStart:vertexCount:instanceCount:", (IMP)ipDrawPI, (IMP *)&ipOrigDrawPI},
+        {"drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:", (IMP)ipDrawPIB, (IMP *)&ipOrigDrawPIB},
+        {"drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:", (IMP)ipDrawX, (IMP *)&ipOrigDrawX},
+        {"drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:", (IMP)ipDrawXI, (IMP *)&ipOrigDrawXI},
+        {"drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:", (IMP)ipDrawXIB,
+         (IMP *)&ipOrigDrawXIB},
+    };
+    for (size_t i = 0; i < sizeof draws / sizeof *draws; i++)
+        if (!definesMethod(kRender, draws[i].sel)) return;
+    done = YES;
+    for (size_t i = 0; i < sizeof draws / sizeof *draws; i++) *draws[i].orig = swizzle(kRender, draws[i].sel, draws[i].imp);
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Ivy Bridge: direct draws after an indirect draw go through an indirect buffer\n");
 }
 
 static BOOL patched;
@@ -785,6 +1571,7 @@ static void patchDeviceBase(void) {
     addNewerSDKAPI();
     ignoreMeshStageBindings();
     restoreArgumentEncoders();
+    guardArgumentEncoders();
     fillEmptyFragments();
     // Only methods the class defines itself: swizzling an inherited -init would change -[NSObject init].
     if (definesMethod("MTLCompileOptionsInternal", "setLanguageVersion:") && definesMethod("MTLCompileOptionsInternal", "init")) {
@@ -840,6 +1627,22 @@ static BOOL sameFunctions(id<MTLLibrary> a, id<MTLLibrary> b) {
 
 static id newLibraryData(id self, SEL _cmd, dispatch_data_t data, NSError **error) {
     id library = origNewLibraryData(self, _cmd, data, error);
+    if (getenv("MTLSHIM_VERBOSE")) {
+        Dl_info info;
+        const char *caller = dladdr(__builtin_return_address(0), &info) && info.dli_fname ? info.dli_fname : "?";
+        shimLog("[mtlshim] newLibraryWithData: %zu bytes from %s: %s, Chromium/WebKit caller %d, too new for this compiler %d\n",
+                dispatch_data_get_size(data), strrchr(caller, '/') ? strrchr(caller, '/') + 1 : caller, library ? "loaded" : "failed",
+                fromChromium(__builtin_return_address(0)), isTooNewANGLELibrary(data));
+        if (getenv("MTLSHIM_DUMP_SOURCES")) {
+            const void *bytes = NULL;
+            size_t size = 0;
+            dispatch_data_t map = dispatch_data_create_map(data, &bytes, &size);
+            NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"mtlshim-lib-%d-%zu.metallib", getpid(), size]];
+            [[NSData dataWithBytes:bytes length:size] writeToFile:path atomically:NO];
+            (void)map;
+            shimLog("[mtlshim] library written: %s\n", path.UTF8String);
+        }
+    }
     if (!library || !fromChromium(__builtin_return_address(0)) || !isTooNewANGLELibrary(data)) return library;
     NSError *failure = nil;
     id<MTLLibrary> compiled = [self newLibraryWithSource:@(kANGLEInternalShaders) options:[MTLCompileOptions new] error:&failure];
@@ -1178,7 +1981,8 @@ static ptrdiff_t igSurfaceStateOffset = -1;
 // 0 (WebGPU CTS textureGatherCompare in compute: 300 cases, textureSampleCompareLevel too). Constexpr samplers don't go
 // through it and were right; vertex and fragment functions are too. The function is wrapped (an inline hook on its
 // standard 12-byte prologue, the first 42 bytes checked against this driver's) to copy DW1 bits 3:1 from the sampler
-// object afterwards. MTLSHIM_COMPUTE_SAMPLER_COMPARE=0 turns it off. Test: s50.
+// object afterwards. The Ivy Bridge driver's build of the function (its own 40 bytes checked, a 17-byte prologue, the
+// packet's heap at 0x1f0) has the same template and the same bug. MTLSHIM_COMPUTE_SAMPLER_COMPARE=0 turns it off. Test: s50.
 // The same template has LOD PreClamp Enable (DW0 bit 28) clear, so the hardware chose between the min and mag filters
 // on the unclamped LOD: a level at or below 0 magnified (base level only) even with a lodMinClamp of 0.25, which should
 // have blended a quarter of level 1 in (WebGPU CTS textureSampleLevel lodClamp in compute, linear filter: 90 cases).
@@ -1187,12 +1991,13 @@ typedef void (*PatchSamplerObjectFn)(void *, const void *, const void *, void *,
 static PatchSamplerObjectFn origPatchSamplerObject;
 static ptrdiff_t igSamplerStateIvarOffset;
 static bool computeLodPreClamp;
+static ptrdiff_t chalPacketHeapOffset = 0x1d8;  // tagCHALCommandPacket's state heap: 0x1f0 in the Ivy Bridge driver
 
 static void computePatchSamplerObject(void *context, const void *patchInfo, const void *samplerArgument, void *packet,
                                       const void *textures) {
     origPatchSamplerObject(context, patchInfo, samplerArgument, packet, textures);
     char *sampler = samplerArgument ? *(char *const *)samplerArgument : NULL;
-    char *heap = packet ? *(char **)((char *)packet + 0x1d8) : NULL;
+    char *heap = packet ? *(char **)((char *)packet + chalPacketHeapOffset) : NULL;
     if (!sampler || !heap) return;
     uint32_t *hardware = (uint32_t *)(heap + *(const uint32_t *)((const char *)patchInfo + 0xc));
     const uint32_t *state = (const uint32_t *)(sampler + igSamplerStateIvarOffset);
@@ -1237,11 +2042,18 @@ static void computeSamplerCompare(void) {
     if (!state || !strstr(ivar_getTypeEncoding(state), "\"SamplerDisable\"b1\"CubeSurfaceControlMode\"b1\"ShadowFunction\"b3")) return;
     unsigned char *entry = dlsym(RTLD_DEFAULT, "_ZN10CHAL_INTEL11ChalContext18PatchSamplerObjectEPKNS_20tagArgumentPatchInfoERK16"
                                                "sSamplerArgumentPNS_20tagCHALCommandPacketEPK16sTextureArgument");
-    if (!entry || memcmp(entry, kExpected, sizeof kExpected)) return;
+    // the Ivy Bridge driver's: push rbp; mov rbp, rsp; push r15; push r14; push r12; push rbx; inc [rdi+0x664] (17 bytes)
+    static const unsigned char kExpectedIVB[40] = {
+        0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x53, 0xff, 0x87, 0x64, 0x06, 0x00, 0x00, 0x4c, 0x8b, 0x12,
+        0x4d, 0x85, 0xd2, 0x0f, 0x84, 0xf9, 0x03, 0x00, 0x00, 0x4c, 0x8b, 0x89, 0xf0, 0x01, 0x00, 0x00, 0x44, 0x8b, 0x5e, 0x0c};
+    BOOL ivb = entry && !memcmp(entry, kExpectedIVB, sizeof kExpectedIVB);
+    if (!entry || (!ivb && memcmp(entry, kExpected, sizeof kExpected))) return;
+    if (ivb) chalPacketHeapOffset = 0x1f0;
     igSamplerStateIvarOffset = ivar_getOffset(state);
     const char *preclamp = getenv("MTLSHIM_COMPUTE_LOD_PRECLAMP");
     computeLodPreClamp = !(preclamp && !strcmp(preclamp, "0")) && strstr(ivar_getTypeEncoding(state), "\"LODPreClampEnable\"b1\"TextureBorderColorMode\"b1\"\"b1\"SamplerDisable\"b1");
-    origPatchSamplerObject = (PatchSamplerObjectFn)hookStandardPrologue(entry, (void *)computePatchSamplerObject);
+    origPatchSamplerObject = (PatchSamplerObjectFn)(ivb ? hookPrologue(entry, 17, (void *)computePatchSamplerObject)
+                                                        : hookStandardPrologue(entry, (void *)computePatchSamplerObject));
     if (getenv("MTLSHIM_VERBOSE"))
         shimLog("[mtlshim] compute sampler compare functions: %s%s\n", origPatchSamplerObject ? "hooked" : "hook failed",
                 computeLodPreClamp ? ", LOD pre-clamp" : "");
@@ -1297,11 +2109,19 @@ static void stencilViewAlignment(void) {
         "\"CubeFaceEnablesNegativeZ\"b1\"CubeFaceEnablesPositiveY\"b1\"CubeFaceEnablesNegativeY\"b1\"CubeFaceEnablesPositiveX\"b1"
         "\"CubeFaceEnablesNegativeX\"b1\"MediaBoundaryPixelMode\"b2\"RenderCacheReadWriteMode\"b1\"\"b1\"SurfaceArraySpacing\"b1"
         "\"VerticalLineStrideOffset\"b1\"VerticalLineStride\"b1\"TileWalk\"b1\"TiledSurface\"b1\"SurfaceHorizontalAlignment\"b1";
+    // The Ivy Bridge driver's SGfxSurfaceState_Gen7: the same fields up to here and in dwords 0-5 (the fixes here use
+    // bits of dwords 0, 2, 4 and 5), 32 bytes, so hwSurfaceStateTarget follows at the same offset.
+    static const char kLayoutIVB[] = "{MTLIGAccelTextureInfo=\"hwSurfaceState\"{SGfxSurfaceState_Gen7=\"CubeFaceEnablesPositiveZ\"b1"
+        "\"CubeFaceEnablesNegativeZ\"b1\"CubeFaceEnablesPositiveY\"b1\"CubeFaceEnablesNegativeY\"b1\"CubeFaceEnablesPositiveX\"b1"
+        "\"CubeFaceEnablesNegativeX\"b1\"MediaBoundaryPixelMode\"b2\"RenderCacheReadWriteMode\"b1\"\"b1\"SurfaceArraySpacing\"b1"
+        "\"VerticalLineStrideOffset\"b1\"VerticalLineStride\"b1\"TileWalk\"b1\"TiledSurface\"b1\"SurfaceHorizontalAlignment\"b1";
     const char *setting = getenv("MTLSHIM_STENCIL_VIEW_ALIGN");
     Class texture = objc_getClass("MTLIGAccelTexture");
     Ivar info = texture ? class_getInstanceVariable(texture, "m_Info") : NULL;
-    if (origIGInitSurfaceState || (setting && !strcmp(setting, "0")) || !info || strncmp(ivar_getTypeEncoding(info), kLayout, sizeof kLayout - 1) ||
-        !strstr(ivar_getTypeEncoding(info), "}\"hwSurfaceStateTarget\"{SGfxSurfaceState=") ||
+    const char *encoding = info ? ivar_getTypeEncoding(info) : "";
+    BOOL haswell = !strncmp(encoding, kLayout, sizeof kLayout - 1) && strstr(encoding, "}\"hwSurfaceStateTarget\"{SGfxSurfaceState=");
+    BOOL ivyBridge = !strncmp(encoding, kLayoutIVB, sizeof kLayoutIVB - 1) && strstr(encoding, "}\"hwSurfaceStateTarget\"{SGfxSurfaceState_Gen7=");
+    if (origIGInitSurfaceState || (setting && !strcmp(setting, "0")) || !info || !(haswell || ivyBridge) ||
         !definesMethod("MTLIGAccelTexture", "initializeHWSurfaceState"))
         return;
     igSurfaceStateOffset = ivar_getOffset(info);
@@ -1465,7 +2285,9 @@ static IMP swizzle(const char *cls, const char *sel, IMP imp);
 // HiZ (item 22; 4x4 here, 8x8 and larger were right) after a render pass cleared it still tests as the cleared value. ANGLE copies stencil that way on Intel GPUs,
 // so glBlitFramebuffer lost it. When a blit encoder that wrote into such a texture (a single-sample render target) ends,
 // each region is read back into a buffer with a blit and written again by a render pass: depth by a fragment function's
-// depth output, stencil cleared and then set one bit per draw (these GPUs have no stencil output). Test: s32.
+// depth output, stencil cleared and then set one bit per draw (these GPUs have no stencil output). On the Ivy Bridge
+// driver, which keeps HiZ on depth textures with several levels or slices (item 22 can't create them without it there),
+// depth blitted into those is rewritten the same way. Tests: s32, s22 on the HD 4000.
 typedef id (*BlitEncoderIMP)(id, SEL);
 typedef void (*BufferToTextureIMP)(id, SEL, id, NSUInteger, NSUInteger, NSUInteger, MTLSize, id, NSUInteger, NSUInteger, MTLOrigin);
 typedef void (*BufferToTextureOptionsIMP)(id, SEL, id, NSUInteger, NSUInteger, NSUInteger, MTLSize, id, NSUInteger, NSUInteger, MTLOrigin,
@@ -1479,6 +2301,7 @@ static BufferToTextureIMP origIGBufferToTexture;
 static BufferToTextureOptionsIMP origIGBufferToTextureOptions;
 static TextureToTextureIMP origIGTextureToTexture;
 static TextureToTextureOptionsIMP origIGTextureToTextureOptions;
+
 // 37. Stencil copied between a buffer and mip level 1 or higher on the 12.x Intel driver, when the buffer offset or
 // bytesPerRow isn't a multiple of 256: some texels come from their left neighbour (at mip 2 of a 20x16 texture, the 5th
 // texel of each row reads or writes as the 4th), for Stencil8 and the stencil of depth/stencil formats alike. Dawn
@@ -1488,8 +2311,11 @@ static TextureToTextureOptionsIMP origIGTextureToTextureOptions;
 // writes nothing (wgpu's copy_unaligned_rows). Copies at level 0 / slice 0, and texture to texture copies at any level
 // and slice, are right. Such copies go through a level-0 temporary texture of the same format: out of
 // the level by a texture copy, then to the buffer; or into the temporary (filled from the level first, which keeps the
-// depth of a depth/stencil texture) and back by a texture copy, which item 27 sees. MTLSHIM_STENCIL_COPY=0 turns it off.
-// Tests: s41, s55.
+// depth of a depth/stencil texture) and back by a texture copy, which item 27 sees. The Ivy Bridge driver writes only
+// the first row of any stencil copy into a buffer whose bytesPerRow isn't the region's width, at every level and slice
+// (copies into textures, and depth, are right): WebGPU's bytesPerRow is a multiple of 256, so every stencil read-back
+// there lost all but its first row. There such a copy is made one row at a time, each row tight at its own offset.
+// MTLSHIM_STENCIL_COPY=0 turns both off. Tests: s41, s55, s62 on the HD 4000.
 typedef void (*TextureToBufferIMP)(id, SEL, id, NSUInteger, NSUInteger, MTLOrigin, MTLSize, id, NSUInteger, NSUInteger, NSUInteger);
 typedef void (*TextureToBufferOptionsIMP)(id, SEL, id, NSUInteger, NSUInteger, MTLOrigin, MTLSize, id, NSUInteger, NSUInteger, NSUInteger,
                                           MTLBlitOption);
@@ -1530,25 +2356,45 @@ static BOOL stencilCopyIn(id self, id buffer, NSUInteger offset, NSUInteger row,
     textureCopy(self, temporary, 0, 0, zero, size, t, slice, level, origin);
     return YES;
 }
+static BOOL ivbStencilRows;  // the Ivy Bridge driver: stencil copied into a buffer with bytesPerRow != width keeps its first row only
+// The driver's copy into a buffer; on Ivy Bridge a stencil region with padded rows goes one row at a time.
+static void textureToBuffer(id self, SEL _cmd, id<MTLTexture> t, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLSize size,
+                            id buffer, NSUInteger offset, NSUInteger row, NSUInteger image, MTLBlitOption options, BOOL withOptions) {
+    MTLPixelFormat f = t.pixelFormat;
+    BOOL stencil = f == MTLPixelFormatStencil8 || ((options & MTLBlitOptionStencilFromDepthStencil) &&
+                                                   (f == MTLPixelFormatDepth32Float_Stencil8 || f == MTLPixelFormatDepth24Unorm_Stencil8));
+    NSUInteger rows = ivbStencilRows && stencil && size.depth == 1 && size.height > 1 && row != size.width ? size.height : 1;
+    for (NSUInteger y = 0; y < rows; y++) {
+        MTLOrigin o = origin;
+        MTLSize s = size;
+        NSUInteger r = row, i = image;
+        if (rows > 1) o.y += y, s.height = 1, r = i = size.width;
+        if (withOptions) origIGTextureToBufferOptions(self, _cmd, t, slice, level, o, s, buffer, offset + y * row, r, i, options);
+        else origIGTextureToBuffer(self, _cmd, t, slice, level, o, s, buffer, offset + y * row, r, i);
+    }
+    if (rows > 1 && getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] stencil copied out in %lu rows (bytesPerRow %lu)\n", (unsigned long)rows, (unsigned long)row);
+}
 static void igTextureToBuffer(id self, SEL _cmd, id t, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLSize size, id buffer,
                               NSUInteger offset, NSUInteger row, NSUInteger image) {
     id<MTLTexture> temporary = stencilCopyTemporary(t, slice, level, offset, row, size, MTLBlitOptionNone);
-    if (!temporary) return origIGTextureToBuffer(self, _cmd, t, slice, level, origin, size, buffer, offset, row, image);
+    if (!temporary) return textureToBuffer(self, _cmd, t, slice, level, origin, size, buffer, offset, row, image, MTLBlitOptionNone, NO);
     textureCopy(self, t, slice, level, origin, size, temporary, 0, 0, MTLOriginMake(0, 0, 0));
-    origIGTextureToBuffer(self, _cmd, temporary, 0, 0, MTLOriginMake(0, 0, 0), size, buffer, offset, row, image);
+    textureToBuffer(self, _cmd, temporary, 0, 0, MTLOriginMake(0, 0, 0), size, buffer, offset, row, image, MTLBlitOptionNone, NO);
 }
 static void igTextureToBufferOptions(id self, SEL _cmd, id t, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLSize size, id buffer,
                                      NSUInteger offset, NSUInteger row, NSUInteger image, MTLBlitOption options) {
     id<MTLTexture> temporary = stencilCopyTemporary(t, slice, level, offset, row, size, options);
-    if (!temporary) return origIGTextureToBufferOptions(self, _cmd, t, slice, level, origin, size, buffer, offset, row, image, options);
+    if (!temporary) return textureToBuffer(self, _cmd, t, slice, level, origin, size, buffer, offset, row, image, options, YES);
     textureCopy(self, t, slice, level, origin, size, temporary, 0, 0, MTLOriginMake(0, 0, 0));
-    origIGTextureToBufferOptions(self, _cmd, temporary, 0, 0, MTLOriginMake(0, 0, 0), size, buffer, offset, row, image, options);
+    textureToBuffer(self, _cmd, temporary, 0, 0, MTLOriginMake(0, 0, 0), size, buffer, offset, row, image, options, YES);
 }
 static void stencilCopies(void) {
     static const char *const kTextureToBuffer =
         "copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:";
     char withOptions[256];
     if (origIGTextureToBuffer || !definesMethod("MTLIGAccelBlitCommandEncoder", kTextureToBuffer)) return;
+    const char *setting = getenv("MTLSHIM_STENCIL_COPY"), *image = class_getImageName(objc_getClass("MTLIGAccelBlitCommandEncoder"));
+    ivbStencilRows = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !(setting && !strcmp(setting, "0"));
     origIGTextureToBuffer = (TextureToBufferIMP)swizzle("MTLIGAccelBlitCommandEncoder", kTextureToBuffer, (IMP)igTextureToBuffer);
     snprintf(withOptions, sizeof withOptions, "%soptions:", kTextureToBuffer);
     if (definesMethod("MTLIGAccelBlitCommandEncoder", withOptions))
@@ -1558,8 +2404,11 @@ static void stencilCopies(void) {
 static const void *kBlitCommandBuffer = &kBlitCommandBuffer, *kPendingDepthStencil = &kPendingDepthStencil;
 enum { kRewriteDepth = 1, kRewriteStencil = 2 };
 
-static BOOL keepsHiZ(id<MTLTexture> t) {  // item 22 creates these depth textures without it
-    return !origIGNewTexture || (t.mipmapLevelCount == 1 && t.arrayLength == 1 && t.textureType == MTLTextureType2D);
+// Item 22 creates depth textures with several levels or slices without HiZ, where the driver has bHizDisable. The Ivy
+// Bridge driver has no such switch, so there they keep it, and blits into their levels and slices are rewritten here too
+// (s22 on the HD 4000: depth copied into level 2 failed every later depth test against it).
+static BOOL keepsHiZ(id<MTLTexture> t) {
+    return !origIGNewTexture || !igHizDisableOffset || (t.mipmapLevelCount == 1 && t.arrayLength == 1 && t.textureType == MTLTextureType2D);
 }
 
 // What a blit into `t` with `options` needs rewritten (kRewriteDepth | kRewriteStencil), 0 for nothing
@@ -1584,8 +2433,13 @@ static void noteDepthStencilWrite(id encoder, id<MTLTexture> t, NSUInteger slice
                                   MTLBlitOption options) {
     unsigned what = depthStencilRewrite(t, options);
     // Not for stencil textures with several levels or slices: render passes on those go through a temporary texture
-    // loaded by a blit (item 33), and the rewrite's own render passes there would break them.
-    if (t.mipmapLevelCount > 1 || t.arrayLength > 1) what &= ~kRewriteStencil;
+    // loaded by a blit (item 33), and the rewrite's own render passes there would break them. The depth of such a
+    // Depth32Float_Stencil8 texture goes through that temporary too, so it never meets the texture's own HiZ (and its
+    // rewrite would end in item 33's copy back, a blit into it again).
+    if (t.mipmapLevelCount > 1 || t.arrayLength > 1) {
+        what &= ~kRewriteStencil;
+        if (t.pixelFormat == MTLPixelFormatDepth32Float_Stencil8) what &= ~kRewriteDepth;
+    }
     if (!what || !size.width || !size.height || !objc_getAssociatedObject(encoder, kBlitCommandBuffer)) return;
     NSMutableArray *pending = objc_getAssociatedObject(encoder, kPendingDepthStencil);
     if (!pending) objc_setAssociatedObject(encoder, kPendingDepthStencil, pending = [NSMutableArray array], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -1869,12 +2723,15 @@ static void igInitSamplerState(id self, SEL _cmd, id descriptor) {
 }
 
 static void nearestCubeClamp(void) {
+    // the 12.x driver's sampler state, and the Ivy Bridge driver's, the same fields under another name
     static const char kLayout[] = "{SGfxSamplerState=\"AnisotropicAlgorithm\"b1\"TextureLODBias\"b13\"MinModeFilter\"b3\"MagModeFilter\"b3";
+    static const char kLayoutIVB[] = "{SGfxSamplerState_Gen7=\"AnisotropicAlgorithm\"b1\"TextureLODBias\"b13\"MinModeFilter\"b3\"MagModeFilter\"b3";
     const char *setting = getenv("MTLSHIM_NEAREST_CUBE_CLAMP");
     Class c = objc_getClass("MTLIGSampler");
     Ivar state = c ? class_getInstanceVariable(c, "samplerState") : NULL;
     if (origIGInitSamplerState || (setting && !strcmp(setting, "0")) || !state ||
-        strncmp(ivar_getTypeEncoding(state), kLayout, sizeof kLayout - 1) ||
+        (strncmp(ivar_getTypeEncoding(state), kLayout, sizeof kLayout - 1) &&
+         strncmp(ivar_getTypeEncoding(state), kLayoutIVB, sizeof kLayoutIVB - 1)) ||
         !strstr(ivar_getTypeEncoding(state), "\"SamplerDisable\"b1\"CubeSurfaceControlMode\"b1") || !definesMethod("MTLIGSampler", "initializeSamplerState:"))
         return;
     igSamplerStateOffset = ivar_getOffset(state);
@@ -2074,6 +2931,8 @@ static void compatSetSampleMask(id self, SEL _cmd, NSUInteger mask) {
 
 static void patchDriverClasses(void) {
     if (patched) restoreArgumentEncoders();  // item 14: after the wrapper's initializer
+    if (patched) ivbDrawParameters();  // item 48, under item 47's draw hooks
+    if (patched) installIvbArgumentBuffers();  // item 47: once the driver's classes are loaded
     static os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
     os_unfair_lock_lock(&lock);
     if (!origIGRenderEncoder && definesMethod("MTLIGAccelCommandBuffer", "renderCommandEncoderWithDescriptor:") &&
