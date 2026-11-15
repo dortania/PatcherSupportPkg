@@ -1096,8 +1096,16 @@ static unsigned narrowUnsignedDivides(std::string &s) {
 // source is itself a narrow AND (AND 0xFF over x & 3), iCBE keeps that source in a byte register and the SHL 24 lost it,
 // so the result was always 0 (VEC=1 seed 1111). It becomes i40's 32-bit form instead: (x | bit 31) & (mask | bit 31),
 // then bit 31 XORed away. INTEL_NARROW_MASK_FIX=0 turns it off with the above.
+// On Ivy Bridge, iCBE also gets there through an OR whose other operand it folds to 0 itself: in a ushort2 compare with
+// as_type<ushort2>(char4(c0, (char)mulhi(65536u, 210u), c2, (char)min3(x, 0u, 145u))), the y lane reached the back end
+// as AND 65535 of (c2 AND 255) | UMIN(UMIN(x, 0), 145) << 8, iCBE dropped the UMINs, the shift and the OR, and the
+// compare read 16 bits of c2's source (mslfuzz2 VEC seed 468 on an HD 4000; the stock compiler too, Haswell's is right).
+// There the search also follows both operands of OR, XOR and IADD, which iCBE can reduce to one. INTEL_IVB_MASK_OR_FIX=0
+// leaves Ivy Bridge at copies only.
+static bool onIvyBridge();
 static unsigned narrowMasksThroughCopies(std::string &s) {
     if (disabled("INTEL_NARROW_MASK_FIX")) return 0;
+    const bool throughOr = onIvyBridge() && !disabled("INTEL_IVB_MASK_OR_FIX");
     size_t temps = s.find("\tDCL_TEMPS r0..r");
     if (temps == std::string::npos) return 0;
     unsigned last = (unsigned)strtoul(s.c_str() + temps + 16, nullptr, 10);
@@ -1108,12 +1116,20 @@ static unsigned narrowMasksThroughCopies(std::string &s) {
         lines.push_back(s.substr(pos, eol - pos));
         pos = eol + 1;
     }
-    // every definition of rN.x: a MOV from rM.x (source M), an AND with an immediate (mask), or anything else
+    // every definition of rN.x: a MOV from rM.x (source M), an AND with an immediate (mask), or anything else; on Ivy
+    // Bridge an OR / XOR / IADD of registers counts as a copy of each register operand
     struct Def { int source; unsigned long mask; };
     std::map<unsigned, std::vector<Def>> defs;
     for (const std::string &l : lines) {
-        unsigned d, src;
-        char imm[32];
+        unsigned d, src, src2;
+        char imm[32], op[8];
+        int at = 0;
+        if (throughOr && sscanf(l.c_str(), "\t%7[A-Z] r%u.x, r%u.x, %n", op, &d, &src, &at) == 3 && at &&
+            (!strcmp(op, "OR") || !strcmp(op, "XOR") || !strcmp(op, "IADD"))) {
+            defs[d].push_back({(int)src, 0});
+            if (sscanf(l.c_str() + at, "r%u.x;", &src2) == 1) defs[d].push_back({(int)src2, 0});
+            continue;
+        }
         if (sscanf(l.c_str(), "\tMOV r%u.x, r%u.x;", &d, &src) == 2) defs[d].push_back({(int)src, 0});
         else if (sscanf(l.c_str(), "\tAND r%u.x, r%u.x, %31[0-9A-Fx];", &d, &src, imm) == 3) defs[d].push_back({-1, strtoul(imm, nullptr, 0)});
         else if (sscanf(l.c_str(), "\t%*[A-Z_] r%u.", &d) == 1) defs[d].push_back({-1, 0});
@@ -1413,6 +1429,7 @@ static unsigned redirectPassManager(const mach_header_64 *header, intptr_t slide
 static pthread_mutex_t installLock = PTHREAD_MUTEX_INITIALIZER;
 static bool textFixInstalled;
 static bool ivyBridgePlugin;  // OCLP's 11.7.10 AppleIntelHD4000GraphicsMTLDriver plugin
+static bool onIvyBridge() { return ivyBridgePlugin; }  // for the IGIL text fixes above
 static void installIntoPlugin(bool redirectImport) {
     static bool done;
     if (done) return;
