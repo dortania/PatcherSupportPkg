@@ -112,6 +112,7 @@
 //      buffer of their own, bound at the hidden index where the Kepler adapter makes the atomics global atomics
 //  59. visibility results on Kepler, which kept only the last draw's count (and left slots without draws as they were):
 //      each draw counts into a slot of its own, summed into the app's slot when the encoder ends
+//  60. new private buffers and counter sample buffers on Kepler, which came back with a freed buffer's contents: zero-filled
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -3652,6 +3653,7 @@ static void keplerTextureAtomics(void) {
 // (a slot a mode was set on without any draw gets 0, as Apple's GPUs write it; the driver leaves such slots as they were,
 // and WebGPU's empty occlusion queries read old values). MTLSHIM_NV_VISIBILITY_SUM=0 turns it off. Test: n08 on the GTX 770.
 enum { kVisSlots = 16384 };
+static id (*visDriverNewBuffer)(id, SEL, NSUInteger, MTLResourceOptions) RETURNS_RETAINED;  // set by item 60
 @interface MTLShimVisState : NSObject {
 @public
     id<MTLBuffer> app, slots;
@@ -3672,7 +3674,9 @@ static VisModeIMP visOrigMode;
 static id visRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor) {
     id<MTLBuffer> app = descriptor.visibilityResultBuffer;
     if (!app) return visOrigEncoder(self, _cmd, descriptor);
-    id<MTLBuffer> slots = [((id<MTLCommandBuffer>)self).device newBufferWithLength:kVisSlots * 8 options:MTLResourceStorageModePrivate];
+    id<MTLDevice> device = ((id<MTLCommandBuffer>)self).device;  // the driver's own method: every slot gets written, no zero fill (item 60)
+    id<MTLBuffer> slots = visDriverNewBuffer ? visDriverNewBuffer(device, @selector(newBufferWithLength:options:), kVisSlots * 8, MTLResourceStorageModePrivate)
+                                             : [device newBufferWithLength:kVisSlots * 8 options:MTLResourceStorageModePrivate];
     if (!slots) return visOrigEncoder(self, _cmd, descriptor);
     MTLRenderPassDescriptor *redirected = [descriptor copy];
     redirected.visibilityResultBuffer = slots;
@@ -3775,6 +3779,73 @@ static void visEndEncoding(id self, SEL _cmd) {
     [encoder dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
     [encoder endEncoding];
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] visibility results: %u draw(s) and empty slot(s) written\n", count);
+}
+// 60. New private buffers on the Kepler driver aren't zero-filled: a freed private buffer's memory comes back, as it was,
+// in the next private buffer of the same size (a 1 MB one read all 0xAB after one filled with 0xAB was released; fresh
+// sizes were 0). Metal documents newBufferWithLength:options: as clearing the buffer, and Dawn relies on it instead of
+// clearing WebGPU buffers itself: the WebGPU CTS read old values from unused query slots (queries, occlusionQuery
+// initial and timestampQuery unused_slots_are_zero), and a buffer could show data another part of the app had freed.
+// Every private buffer it makes is filled with zeros by a blit on a queue of the shim's, waited for before it is
+// returned (some 0.2-0.3 ms per buffer); so is a new counter sample buffer's result buffer (below). Heap buffers keep
+// their undefined contents, as Metal specifies.
+// MTLSHIM_NV_ZERO_BUFFERS=0 turns it off. Test: n09 on the GTX 770.
+typedef id (*NVNewBufferIMP)(id, SEL, NSUInteger, MTLResourceOptions) RETURNS_RETAINED;
+static NVNewBufferIMP origNVNewBuffer;
+static id<MTLCommandQueue> zeroQueue(id device) {  // the shim's own queue on the device, for the fills
+    static const void *const kQueueKey = &kQueueKey;
+    id<MTLCommandQueue> queue;
+    @synchronized(device) {
+        queue = objc_getAssociatedObject(device, kQueueKey);
+        if (!queue) {
+            queue = [(id<MTLDevice>)device newCommandQueue];
+            if (queue) objc_setAssociatedObject(device, kQueueKey, queue, OBJC_ASSOCIATION_RETAIN);
+        }
+    }
+    return queue;
+}
+static void zeroFill(id<MTLCommandQueue> queue, id<MTLBuffer> buffer, NSUInteger length) {  // waited for
+    NSUInteger size = MIN((length + 3) & ~(NSUInteger)3, MAX(buffer.allocatedSize, length));
+    id<MTLCommandBuffer> commandBuffer = [queue commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [commandBuffer blitCommandEncoder];
+    [blit fillBuffer:buffer range:NSMakeRange(0, size & ~(NSUInteger)3) value:0];
+    [blit endEncoding];
+    [commandBuffer commit];
+    [commandBuffer waitUntilCompleted];
+}
+static id nvNewBuffer(id self, SEL _cmd, NSUInteger length, MTLResourceOptions options) RETURNS_RETAINED;
+static id nvNewBuffer(id self, SEL _cmd, NSUInteger length, MTLResourceOptions options) {
+    id<MTLBuffer> buffer = origNVNewBuffer(self, _cmd, length, options);
+    if (!buffer || !length || (options & MTLResourceStorageModeMask) != MTLResourceStorageModePrivate) return buffer;
+    id<MTLCommandQueue> queue = zeroQueue(self);
+    if (!queue) return buffer;
+    zeroFill(queue, buffer, length);
+    return buffer;
+}
+// Counter sample buffers keep their samples in a private buffer the driver allocates itself (counterResultBuffer), and a
+// freed one's samples came back in the next one: unsampled slots resolved to old timestamps (Metal: an error value;
+// fresh ones here: 0), and the WebGPU CTS read them from unused timestamp query slots (unused_slots_are_zero).
+typedef id (*NVNewCounterBufferIMP)(id, SEL, id, NSError **) RETURNS_RETAINED;
+static NVNewCounterBufferIMP origNVNewCounterBuffer;
+static id nvNewCounterBuffer(id self, SEL _cmd, id descriptor, NSError **error) RETURNS_RETAINED;
+static id nvNewCounterBuffer(id self, SEL _cmd, id descriptor, NSError **error) {
+    id sampleBuffer = origNVNewCounterBuffer(self, _cmd, descriptor, error);
+    SEL resultSel = sel_registerName("counterResultBuffer");
+    if (!sampleBuffer || ![sampleBuffer respondsToSelector:resultSel]) return sampleBuffer;
+    id<MTLBuffer> results = ((id (*)(id, SEL))objc_msgSend)(sampleBuffer, resultSel);
+    id<MTLCommandQueue> queue = zeroQueue(self);
+    if (results && queue) zeroFill(queue, results, results.length);
+    return sampleBuffer;
+}
+static void keplerZeroBuffers(void) {
+    static BOOL done;
+    const char *setting = getenv("MTLSHIM_NV_ZERO_BUFFERS");
+    if (done || (setting && !strcmp(setting, "0")) || !definesMethod("NVMTLDevice", "newBufferWithLength:options:")) return;
+    done = YES;
+    origNVNewBuffer = (NVNewBufferIMP)swizzle("NVMTLDevice", "newBufferWithLength:options:", (IMP)nvNewBuffer);
+    visDriverNewBuffer = origNVNewBuffer;
+    if (definesMethod("NVMTLDevice", "newCounterSampleBufferWithDescriptor:error:"))
+        origNVNewCounterBuffer = (NVNewCounterBufferIMP)swizzle("NVMTLDevice", "newCounterSampleBufferWithDescriptor:error:", (IMP)nvNewCounterBuffer);
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Kepler private buffers: zero-filled at creation\n");
 }
 static void keplerVisibilitySums(void) {
     static BOOL done;
@@ -3915,6 +3986,7 @@ static void patchDriverClasses(void) {
     keplerViewsOfViews();  // item 56
     keplerTextureAtomics();  // item 58
     keplerVisibilitySums();  // item 59
+    keplerZeroBuffers();  // item 60
     mpsStatisticsWidth();
     stencilCopies();
     nvStencilUploadOrder();  // item 53
