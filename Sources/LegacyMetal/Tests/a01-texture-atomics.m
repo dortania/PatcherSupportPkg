@@ -30,6 +30,7 @@ int main(int argc, char **argv) {
         if (!ps) return FAIL(bug, "%s: pipeline: %s", dev.name.UTF8String, err.localizedDescription.UTF8String);
         MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR32Uint width:2 height:2 mipmapped:NO];
         td.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite; td.storageMode = MTLStorageModeManaged;
+        if (@available(macOS 14.0, *)) td.usage |= MTLTextureUsageShaderAtomic;  // what Metal asks of a texture for atomics
         id<MTLTexture> t = [dev newTextureWithDescriptor:td];
         uint32_t zero[4] = {0};
         [t replaceRegion:MTLRegionMake2D(0, 0, 2, 2) mipmapLevel:0 withBytes:zero bytesPerRow:8];

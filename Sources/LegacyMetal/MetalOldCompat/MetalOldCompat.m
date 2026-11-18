@@ -108,6 +108,8 @@
 //  56. views of texture views on the Kepler driver, which lost the first view's offset: made from the root texture
 //  57. MPSGraph's softmax over any axis but the last on Kepler, which came out wrong: done over the last axis between
 //      two transposes
+//  58. texture atomics on Kepler, which the compiler couldn't build: textures created for them are made linear in a
+//      buffer of their own, bound at the hidden index where the Kepler adapter makes the atomics global atomics
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -3200,6 +3202,428 @@ static void keplerViewsOfViews(void) {
     origNVNewViewRange = (NewViewRangeIMP)swizzle(kTexture, kView, (IMP)nvNewViewRange);
 }
 
+// 58. Texture atomics on the Kepler driver. MSL 3.1 texture atomics (atomic_fetch_add etc. on a read_write
+// texture2d<uint> / <int>) have no body in GeForceAIRPlugin's library, and the GPU's surface atomics can't be reached
+// from it: the compile crashed the compiler (a01; Blender assumes texture atomics on every macOS 14+ Mac). Kepler can
+// do them as global atomics if the texels are in a buffer: each R32Uint / R32Sint 2D texture of one level, one sample
+// and no render-target use that is created with MTLTextureUsageShaderAtomic (which Metal requires for texture atomics,
+// and which item 3 drops for the driver) is made a linear texture in a buffer of its own, after a 256-byte header
+// {magic, row pitch in words, width, height} (written by a blit for private storage). The Kepler adapter
+// (GeForceAIRCompat, NVAIR_TEXTURE_ATOMICS) turns each texture atomic into a global atomic on a hidden buffer
+// parameter; its index is worked out here the same way from the pipeline's reflection: each read_write
+// texture2d<uint> / <int> argument (not arrays), in order of its index, gets one, counted down from 30 over the buffer
+// indices the function doesn't use (vertex functions keep 0-16 for vertex buffers). Before each draw or dispatch with
+// such a pipeline, the buffer of the texture bound at that texture index (through views too) is bound at the hidden
+// index, or a dummy without the header for any other texture (the atomics then land on a word of the dummy, as they
+// do for coordinates outside the texture), and whatever the app had bound there is put back afterwards. 2D arrays, 3D
+// and 1D textures have no linear form on Kepler (supportsLinearTexture2DArray is NO) and textures from heaps aren't
+// covered: their atomics do nothing. The encoders keep track of their bindings only once a pipeline with such a texture
+// argument exists (until then the hooks cost a branch: tracking every bind cost ~100 ns a call): an encoder that was
+// already recording then can't know what it had bound before. MTLSHIM_NV_TEXTURE_ATOMICS=0 turns it off. Test: a01 and
+// n04 on the GTX 770.
+static BOOL ktaOn;
+static volatile BOOL ktaTracking;  // a pipeline with hidden bindings exists
+static const uint32_t kKTAMagic = 0x4154564E;  // "NVTA", as GeForceAIRCompat's kTexAtomicMagic
+static const void *kKTABufferKey = &kKTABufferKey, *kKTABindingsKey = &kKTABindingsKey, *kKTAStateKey = &kKTAStateKey,
+                  *kKTADummyKey = &kKTADummyKey, *kKTAQueueKey = &kKTAQueueKey;
+typedef struct { uint8_t stage, hidden; uint16_t texture; } KTABinding;  // stage: 0 vertex, 1 fragment, 2 compute
+
+static BOOL ktaDevice(id device) {
+    static Class nv;
+    if (!nv) nv = objc_getClass("NVMTLDevice");
+    return ktaOn && nv && [device isKindOfClass:nv];
+}
+static id ktaDeviceObject(id device, const void *key, id (^make)(void)) {  // one per device, made on first use
+    static os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
+    os_unfair_lock_lock(&lock);
+    id object = objc_getAssociatedObject(device, key);
+    if (!object) {
+        object = make();
+        if (object) objc_setAssociatedObject(device, key, object, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    os_unfair_lock_unlock(&lock);
+    return object;
+}
+static id<MTLBuffer> ktaBacking(id<MTLTexture> texture) {  // the buffer item 58 made for it, or for the texture it views
+    for (id<MTLTexture> t = texture; t; t = t.parentTexture) {
+        id<MTLBuffer> buffer = objc_getAssociatedObject(t, kKTABufferKey);
+        if (buffer) return buffer;
+    }
+    return nil;
+}
+
+typedef id (*KTANewTextureIMP)(id, SEL, MTLTextureDescriptor *) RETURNS_RETAINED;  // a new-family method: +1, as s42 checks
+static KTANewTextureIMP ktaOrigNewTexture;
+static id ktaNewTexture(id self, SEL _cmd, MTLTextureDescriptor *d) RETURNS_RETAINED;
+static id ktaNewTexture(id self, SEL _cmd, MTLTextureDescriptor *d) {
+    if (!ktaOn || !(d.usage & MTLTextureUsageShaderAtomic) || d.textureType != MTLTextureType2D || d.mipmapLevelCount != 1 ||
+        d.sampleCount != 1 || (d.usage & MTLTextureUsageRenderTarget) || !d.width || !d.height ||
+        (d.pixelFormat != MTLPixelFormatR32Uint && d.pixelFormat != MTLPixelFormatR32Sint))
+        return ktaOrigNewTexture(self, _cmd, d);
+    id<MTLDevice> device = self;
+    NSUInteger align = MAX([device minimumLinearTextureAlignmentForPixelFormat:d.pixelFormat], (NSUInteger)4);
+    NSUInteger row = (d.width * 4 + align - 1) / align * align, header = MAX(align, (NSUInteger)256);
+    MTLStorageMode mode = d.storageMode == MTLStorageModeMemoryless ? MTLStorageModePrivate : d.storageMode;
+    MTLResourceOptions options = (d.resourceOptions & ~MTLResourceStorageModeMask) | (mode << MTLResourceStorageModeShift);
+    id<MTLBuffer> buffer = [device newBufferWithLength:header + row * d.height options:options];
+    MTLTextureDescriptor *linear = [d copy];
+    linear.usage = (d.usage & ~MTLTextureUsageShaderAtomic) | MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+    linear.storageMode = mode;
+    id<MTLTexture> texture = buffer ? [buffer newTextureWithDescriptor:linear offset:header bytesPerRow:row] : nil;
+    const uint32_t words[4] = {kKTAMagic, (uint32_t)(row / 4), (uint32_t)d.width, (uint32_t)d.height};
+    BOOL written = NO;
+    if (texture && mode != MTLStorageModePrivate) {
+        memcpy(buffer.contents, words, sizeof words);
+        if (mode == MTLStorageModeManaged) [buffer didModifyRange:NSMakeRange(0, sizeof words)];
+        written = YES;
+    } else if (texture) {  // private: a blit from a shared copy, finished before the app can use the texture
+        id<MTLCommandQueue> queue = ktaDeviceObject(device, kKTAQueueKey, ^id { return [device newCommandQueue]; });
+        id<MTLBuffer> staging = [device newBufferWithBytes:words length:sizeof words options:MTLResourceStorageModeShared];
+        id<MTLCommandBuffer> cb = [queue commandBuffer];
+        id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+        [blit copyFromBuffer:staging sourceOffset:0 toBuffer:buffer destinationOffset:0 size:sizeof words];
+        [blit endEncoding];
+        [cb commit];
+        [cb waitUntilCompleted];
+        written = cb.status == MTLCommandBufferStatusCompleted;
+    }
+    if (!written) {
+        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] texture atomics: no linear texture for %lux%lu, a tiled one instead\n",
+                                               (unsigned long)d.width, (unsigned long)d.height);
+        return ktaOrigNewTexture(self, _cmd, d);
+    }
+    objc_setAssociatedObject(texture, kKTABufferKey, buffer, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] texture atomics: %lux%lu texture made linear (%lu bytes a row)\n",
+                                           (unsigned long)d.width, (unsigned long)d.height, (unsigned long)row);
+    return texture;
+}
+
+// The adapter's hidden indices for one stage, from its reflection arguments.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"  // MetalOld has only the macOS 12 reflection API (MTLArgument)
+static void ktaStageBindings(NSArray<MTLArgument *> *arguments, uint8_t stage, NSMutableData *out) {
+    BOOL used[31] = {NO};
+    NSMutableArray<MTLArgument *> *textures = [NSMutableArray array];
+    for (MTLArgument *a in arguments) {
+        if (a.type == MTLArgumentTypeBuffer) {
+            if (stage == 0 && [a.name hasPrefix:@"vertexBuffer."]) continue;  // the vertex descriptor's: not arguments to the adapter
+            for (NSUInteger k = 0; k < MAX(a.arrayLength, (NSUInteger)1); k++)
+                if (a.index + k < 31) used[a.index + k] = YES;
+        } else if (a.type == MTLArgumentTypeTexture && a.textureType == MTLTextureType2D && a.access == MTLArgumentAccessReadWrite &&
+                   (a.textureDataType == MTLDataTypeUInt || a.textureDataType == MTLDataTypeInt) && a.arrayLength <= 1 && a.index < 0x10000) {
+            [textures addObject:a];
+        }
+    }
+    [textures sortUsingComparator:^NSComparisonResult(MTLArgument *x, MTLArgument *y) {
+        return x.index < y.index ? NSOrderedAscending : x.index > y.index ? NSOrderedDescending : NSOrderedSame;
+    }];
+    NSMutableData *bindings = [NSMutableData data];
+    int next = 30, lowest = stage == 0 ? 17 : 0;
+    for (MTLArgument *t in textures) {
+        while (next >= lowest && used[next]) next--;
+        if (next < lowest) return;  // the adapter left this function alone
+        KTABinding b = {stage, (uint8_t)next--, (uint16_t)t.index};
+        [bindings appendBytes:&b length:sizeof b];
+    }
+    [out appendData:bindings];
+}
+static void ktaAttach(id pipeline, NSArray *vertex, NSArray *fragment, NSArray *compute) {
+    if (!pipeline) return;
+    NSMutableData *bindings = [NSMutableData data];
+    ktaStageBindings(vertex, 0, bindings);
+    ktaStageBindings(fragment, 1, bindings);
+    ktaStageBindings(compute, 2, bindings);
+    if (!bindings.length) return;
+    objc_setAssociatedObject(pipeline, kKTABindingsKey, bindings, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    ktaTracking = YES;
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] texture atomics: pipeline with %lu atomic-capable texture(s) at hidden buffer indices\n",
+                                           (unsigned long)(bindings.length / sizeof(KTABinding)));
+}
+
+static const MTLPipelineOption kKTAReflection = MTLPipelineOptionArgumentInfo;
+static ABRenderReflIMP ktaOrigRenderRefl;
+static ABRenderOptAsyncIMP ktaOrigRenderOptAsync;
+static ABComputeFnReflIMP ktaOrigComputeFnRefl;
+static ABComputeDescReflIMP ktaOrigComputeDescRefl;
+static ABComputeFnOptAsyncIMP ktaOrigComputeFnOptAsync;
+static ABComputeDescOptAsyncIMP ktaOrigComputeDescOptAsync;
+static id ktaRenderRefl(id self, SEL _cmd, MTLRenderPipelineDescriptor *d, MTLPipelineOption options,
+                        MTLAutoreleasedRenderPipelineReflection *reflection, NSError **error) RETURNS_RETAINED;
+static id ktaRenderRefl(id self, SEL _cmd, MTLRenderPipelineDescriptor *d, MTLPipelineOption options,
+                        MTLAutoreleasedRenderPipelineReflection *reflection, NSError **error) {
+    if (!ktaDevice(self)) return ktaOrigRenderRefl(self, _cmd, d, options, reflection, error);
+    MTLAutoreleasedRenderPipelineReflection r = nil;
+    id pipeline = ktaOrigRenderRefl(self, _cmd, d, options | kKTAReflection, &r, error);
+    ktaAttach(pipeline, r.vertexArguments, r.fragmentArguments, nil);
+    if (reflection) *reflection = r;
+    return pipeline;
+}
+static void ktaRenderOptAsync(id self, SEL _cmd, MTLRenderPipelineDescriptor *d, MTLPipelineOption options,
+                              MTLNewRenderPipelineStateWithReflectionCompletionHandler handler) {
+    if (!ktaDevice(self)) return ktaOrigRenderOptAsync(self, _cmd, d, options, handler);
+    ktaOrigRenderOptAsync(self, _cmd, d, options | kKTAReflection, ^(id<MTLRenderPipelineState> p, MTLRenderPipelineReflection *r, NSError *e) {
+        ktaAttach(p, r.vertexArguments, r.fragmentArguments, nil);
+        handler(p, r, e);
+    });
+}
+static id ktaComputeFnRefl(id self, SEL _cmd, id<MTLFunction> f, MTLPipelineOption options,
+                           MTLAutoreleasedComputePipelineReflection *reflection, NSError **error) RETURNS_RETAINED;
+static id ktaComputeFnRefl(id self, SEL _cmd, id<MTLFunction> f, MTLPipelineOption options,
+                           MTLAutoreleasedComputePipelineReflection *reflection, NSError **error) {
+    if (!ktaDevice(self)) return ktaOrigComputeFnRefl(self, _cmd, f, options, reflection, error);
+    MTLAutoreleasedComputePipelineReflection r = nil;
+    id pipeline = ktaOrigComputeFnRefl(self, _cmd, f, options | kKTAReflection, &r, error);
+    ktaAttach(pipeline, nil, nil, r.arguments);
+    if (reflection) *reflection = r;
+    return pipeline;
+}
+static id ktaComputeDescRefl(id self, SEL _cmd, MTLComputePipelineDescriptor *d, MTLPipelineOption options,
+                             MTLAutoreleasedComputePipelineReflection *reflection, NSError **error) RETURNS_RETAINED;
+static id ktaComputeDescRefl(id self, SEL _cmd, MTLComputePipelineDescriptor *d, MTLPipelineOption options,
+                             MTLAutoreleasedComputePipelineReflection *reflection, NSError **error) {
+    if (!ktaDevice(self)) return ktaOrigComputeDescRefl(self, _cmd, d, options, reflection, error);
+    MTLAutoreleasedComputePipelineReflection r = nil;
+    id pipeline = ktaOrigComputeDescRefl(self, _cmd, d, options | kKTAReflection, &r, error);
+    ktaAttach(pipeline, nil, nil, r.arguments);
+    if (reflection) *reflection = r;
+    return pipeline;
+}
+static void ktaComputeFnOptAsync(id self, SEL _cmd, id<MTLFunction> f, MTLPipelineOption options,
+                                 MTLNewComputePipelineStateWithReflectionCompletionHandler handler) {
+    if (!ktaDevice(self)) return ktaOrigComputeFnOptAsync(self, _cmd, f, options, handler);
+    ktaOrigComputeFnOptAsync(self, _cmd, f, options | kKTAReflection, ^(id<MTLComputePipelineState> p, MTLComputePipelineReflection *r, NSError *e) {
+        ktaAttach(p, nil, nil, r.arguments);
+        handler(p, r, e);
+    });
+}
+static void ktaComputeDescOptAsync(id self, SEL _cmd, MTLComputePipelineDescriptor *d, MTLPipelineOption options,
+                                   MTLNewComputePipelineStateWithReflectionCompletionHandler handler) {
+    if (!ktaDevice(self)) return ktaOrigComputeDescOptAsync(self, _cmd, d, options, handler);
+    ktaOrigComputeDescOptAsync(self, _cmd, d, options | kKTAReflection, ^(id<MTLComputePipelineState> p, MTLComputePipelineReflection *r, NSError *e) {
+        ktaAttach(p, nil, nil, r.arguments);
+        handler(p, r, e);
+    });
+}
+#pragma clang diagnostic pop
+
+// What a Kepler encoder has bound, per stage, and its pipeline's hidden bindings.
+enum { kKTATextures = 128 };
+@interface MTLShimKTAState : NSObject {
+  @public
+    __strong id buffers[3][31];
+    NSUInteger offsets[3][31];
+    __strong NSData *bytes[3][31];
+    __strong id textures[3][kKTATextures];
+    __strong NSData *bindings;
+}
+@end
+@implementation MTLShimKTAState
+@end
+static MTLShimKTAState *ktaState(__unsafe_unretained id encoder) {
+    MTLShimKTAState *s = objc_getAssociatedObject(encoder, kKTAStateKey);
+    if (!s) {
+        s = [MTLShimKTAState new];
+        objc_setAssociatedObject(encoder, kKTAStateKey, s, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    return s;
+}
+typedef void (*KTASetTextureIMP)(id, SEL, id, NSUInteger);
+typedef void (*KTASetTexturesIMP)(id, SEL, const id __unsafe_unretained *, NSRange);
+static ABSetBufferIMP ktaOrigSetBuffer[3];
+static ABSetOffsetIMP ktaOrigSetOffset[3];
+static ABSetBuffersIMP ktaOrigSetBuffers[3];
+static ABSetBytesIMP ktaOrigSetBytes[3];
+static KTASetTextureIMP ktaOrigSetTexture[3];
+static KTASetTexturesIMP ktaOrigSetTextures[3];
+static ABSetPipelineIMP ktaOrigSetRenderPipeline, ktaOrigSetComputePipeline;
+static SEL ktaSetBufferSel[3], ktaSetBytesSel[3];
+static void ktaRecordBuffer(__unsafe_unretained id encoder, int stage, __unsafe_unretained id buffer, NSUInteger offset, NSUInteger index) {
+    if (index >= 31) return;
+    MTLShimKTAState *s = ktaState(encoder);
+    s->buffers[stage][index] = buffer;
+    s->offsets[stage][index] = offset;
+    s->bytes[stage][index] = nil;
+}
+#define KTA_STAGE_HOOKS(name, stage)                                                                                    \
+    static void ktaSetBuffer##name(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id buffer, NSUInteger offset, NSUInteger index) {                  \
+        if (ktaTracking) ktaRecordBuffer(self, stage, buffer, offset, index);                                            \
+        ktaOrigSetBuffer[stage](self, _cmd, buffer, offset, index);                                                      \
+    }                                                                                                                    \
+    static void ktaSetOffset##name(__unsafe_unretained id self, SEL _cmd, NSUInteger offset, NSUInteger index) {                             \
+        if (ktaTracking && index < 31) ktaState(self)->offsets[stage][index] = offset;                                   \
+        ktaOrigSetOffset[stage](self, _cmd, offset, index);                                                              \
+    }                                                                                                                    \
+    static void ktaSetBuffers##name(__unsafe_unretained id self, SEL _cmd, const id __unsafe_unretained *buffers, const NSUInteger *offsets, \
+                                    NSRange range) {                                                                     \
+        for (NSUInteger i = 0; ktaTracking && i < range.length; i++)                                                     \
+            ktaRecordBuffer(self, stage, buffers[i], offsets[i], range.location + i);                                    \
+        ktaOrigSetBuffers[stage](self, _cmd, buffers, offsets, range);                                                   \
+    }                                                                                                                    \
+    static void ktaSetBytes##name(__unsafe_unretained id self, SEL _cmd, const void *bytes, NSUInteger length, NSUInteger index) {           \
+        if (ktaTracking && index < 31) {                                                                                 \
+            MTLShimKTAState *s = ktaState(self);                                                                         \
+            s->buffers[stage][index] = nil;                                                                              \
+            s->bytes[stage][index] = length <= 4096 ? [NSData dataWithBytes:bytes length:length] : nil;                   \
+        }                                                                                                                \
+        ktaOrigSetBytes[stage](self, _cmd, bytes, length, index);                                                        \
+    }                                                                                                                    \
+    static void ktaSetTexture##name(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id texture, NSUInteger index) {                                   \
+        if (ktaTracking && index < kKTATextures) ktaState(self)->textures[stage][index] = texture;                       \
+        ktaOrigSetTexture[stage](self, _cmd, texture, index);                                                            \
+    }                                                                                                                    \
+    static void ktaSetTextures##name(__unsafe_unretained id self, SEL _cmd, const id __unsafe_unretained *textures, NSRange range) {         \
+        MTLShimKTAState *s = ktaTracking ? ktaState(self) : nil;                                                         \
+        for (NSUInteger i = 0; s && i < range.length; i++)                                                               \
+            if (range.location + i < kKTATextures) s->textures[stage][range.location + i] = textures[i];                 \
+        ktaOrigSetTextures[stage](self, _cmd, textures, range);                                                          \
+    }
+KTA_STAGE_HOOKS(Vertex, 0)
+KTA_STAGE_HOOKS(Fragment, 1)
+KTA_STAGE_HOOKS(Compute, 2)
+static void ktaSetRenderPipeline(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id pipeline) {
+    if (!ktaTracking) return ktaOrigSetRenderPipeline(self, _cmd, pipeline);
+    NSData *bindings = objc_getAssociatedObject(pipeline, kKTABindingsKey);
+    MTLShimKTAState *s = bindings ? ktaState(self) : objc_getAssociatedObject(self, kKTAStateKey);
+    if (s) s->bindings = bindings;
+    ktaOrigSetRenderPipeline(self, _cmd, pipeline);
+}
+static void ktaSetComputePipeline(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id pipeline) {
+    if (!ktaTracking) return ktaOrigSetComputePipeline(self, _cmd, pipeline);
+    NSData *bindings = objc_getAssociatedObject(pipeline, kKTABindingsKey);
+    MTLShimKTAState *s = bindings ? ktaState(self) : objc_getAssociatedObject(self, kKTAStateKey);
+    if (s) s->bindings = bindings;
+    ktaOrigSetComputePipeline(self, _cmd, pipeline);
+}
+// Binds each atomic-capable texture's buffer at its hidden index (restore NO), or puts back what the app had bound there.
+static void ktaBind(__unsafe_unretained id encoder, BOOL restore) {
+    if (!ktaTracking) return;
+    MTLShimKTAState *s = objc_getAssociatedObject(encoder, kKTAStateKey);
+    if (!s || !s->bindings) return;
+    const KTABinding *b = s->bindings.bytes;
+    id<MTLBuffer> dummy = nil;
+    for (NSUInteger k = 0; k < s->bindings.length / sizeof(KTABinding); k++) {
+        int st = b[k].stage, h = b[k].hidden;
+        if (restore) {
+            if (s->buffers[st][h]) ktaOrigSetBuffer[st](encoder, ktaSetBufferSel[st], s->buffers[st][h], s->offsets[st][h], h);
+            else if (s->bytes[st][h]) ktaOrigSetBytes[st](encoder, ktaSetBytesSel[st], s->bytes[st][h].bytes, s->bytes[st][h].length, h);
+            continue;
+        }
+        id<MTLBuffer> buffer = b[k].texture < kKTATextures ? ktaBacking(s->textures[st][b[k].texture]) : nil;  // (beyond: not tracked)
+        if (!buffer) {
+            if (!dummy) {
+                id<MTLDevice> device = [encoder device];
+                dummy = ktaDeviceObject(device, kKTADummyKey, ^id {  // zeros: no magic
+                    id<MTLBuffer> d = [device newBufferWithLength:256 options:MTLResourceStorageModeManaged];
+                    memset(d.contents, 0, 256);
+                    [d didModifyRange:NSMakeRange(0, 256)];
+                    return d;
+                });
+            }
+            buffer = dummy;
+        }
+        if (buffer) ktaOrigSetBuffer[st](encoder, ktaSetBufferSel[st], buffer, 0, h);
+    }
+}
+#define KTA_DRAW(name, params, args)                                                                                    \
+    typedef void (*KTADraw##name##IMP) params;                                                                           \
+    static KTADraw##name##IMP ktaOrigDraw##name;                                                                         \
+    static void ktaDraw##name params {                                                                                  \
+        ktaBind(self, NO);                                                                                               \
+        ktaOrigDraw##name args;                                                                                          \
+        ktaBind(self, YES);                                                                                              \
+    }
+KTA_DRAW(P, (__unsafe_unretained id self, SEL _cmd, NSUInteger t, NSUInteger s, NSUInteger c), (self, _cmd, t, s, c))
+KTA_DRAW(PI, (__unsafe_unretained id self, SEL _cmd, NSUInteger t, NSUInteger s, NSUInteger c, NSUInteger i), (self, _cmd, t, s, c, i))
+KTA_DRAW(PIB, (__unsafe_unretained id self, SEL _cmd, NSUInteger t, NSUInteger s, NSUInteger c, NSUInteger i, NSUInteger b), (self, _cmd, t, s, c, i, b))
+KTA_DRAW(PInd, (__unsafe_unretained id self, SEL _cmd, NSUInteger t, __unsafe_unretained id ib, NSUInteger o), (self, _cmd, t, ib, o))
+KTA_DRAW(X, (__unsafe_unretained id self, SEL _cmd, NSUInteger t, NSUInteger c, NSUInteger it, __unsafe_unretained id ib, NSUInteger io), (self, _cmd, t, c, it, ib, io))
+KTA_DRAW(XI, (__unsafe_unretained id self, SEL _cmd, NSUInteger t, NSUInteger c, NSUInteger it, __unsafe_unretained id ib, NSUInteger io, NSUInteger i), (self, _cmd, t, c, it, ib, io, i))
+KTA_DRAW(XIB, (__unsafe_unretained id self, SEL _cmd, NSUInteger t, NSUInteger c, NSUInteger it, __unsafe_unretained id ib, NSUInteger io, NSUInteger i, NSInteger bv, NSUInteger bi),
+         (self, _cmd, t, c, it, ib, io, i, bv, bi))
+KTA_DRAW(XInd, (__unsafe_unretained id self, SEL _cmd, NSUInteger t, NSUInteger it, __unsafe_unretained id ib, NSUInteger io, __unsafe_unretained id indirect, NSUInteger o), (self, _cmd, t, it, ib, io, indirect, o))
+KTA_DRAW(DG, (__unsafe_unretained id self, SEL _cmd, MTLSize g, MTLSize t), (self, _cmd, g, t))
+KTA_DRAW(DT, (__unsafe_unretained id self, SEL _cmd, MTLSize g, MTLSize t), (self, _cmd, g, t))
+KTA_DRAW(DInd, (__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id indirect, NSUInteger o, MTLSize t), (self, _cmd, indirect, o, t))
+
+static void keplerTextureAtomics(void) {
+    static BOOL done;
+    static const char *const kDevice = "NVMTLDevice", *const kRender = "NVMTLRenderCommandEncoder_KEPLER_A",
+                             *const kCompute = "NVMTLComputeCommandEncoder_KEPLER_COMPUTE_A";
+    const char *setting = getenv("MTLSHIM_NV_TEXTURE_ATOMICS");
+    if (done || (setting && !strcmp(setting, "0")) || !definesMethod(kDevice, "newTextureWithDescriptor:")) return;
+    const char *const stageClass[3] = {kRender, kRender, kCompute};
+    const char *const setBuffer[3] = {"setVertexBuffer:offset:atIndex:", "setFragmentBuffer:offset:atIndex:", "setBuffer:offset:atIndex:"};
+    const char *const setOffset[3] = {"setVertexBufferOffset:atIndex:", "setFragmentBufferOffset:atIndex:", "setBufferOffset:atIndex:"};
+    const char *const setBuffers[3] = {"setVertexBuffers:offsets:withRange:", "setFragmentBuffers:offsets:withRange:", "setBuffers:offsets:withRange:"};
+    const char *const setBytes[3] = {"setVertexBytes:length:atIndex:", "setFragmentBytes:length:atIndex:", "setBytes:length:atIndex:"};
+    const char *const setTexture[3] = {"setVertexTexture:atIndex:", "setFragmentTexture:atIndex:", "setTexture:atIndex:"};
+    const char *const setTextures[3] = {"setVertexTextures:withRange:", "setFragmentTextures:withRange:", "setTextures:withRange:"};
+    for (int st = 0; st < 3; st++)
+        if (!definesMethod(stageClass[st], setBuffer[st]) || !definesMethod(stageClass[st], setOffset[st]) ||
+            !definesMethod(stageClass[st], setBuffers[st]) || !definesMethod(stageClass[st], setBytes[st]) ||
+            !definesMethod(stageClass[st], setTexture[st]) || !definesMethod(stageClass[st], setTextures[st]))
+            return;  // not the Kepler driver these hooks know
+    if (!definesMethod(kRender, "setRenderPipelineState:") || !definesMethod(kCompute, "setComputePipelineState:")) return;
+    done = YES;
+    const IMP bufferHooks[3] = {(IMP)ktaSetBufferVertex, (IMP)ktaSetBufferFragment, (IMP)ktaSetBufferCompute};
+    const IMP offsetHooks[3] = {(IMP)ktaSetOffsetVertex, (IMP)ktaSetOffsetFragment, (IMP)ktaSetOffsetCompute};
+    const IMP buffersHooks[3] = {(IMP)ktaSetBuffersVertex, (IMP)ktaSetBuffersFragment, (IMP)ktaSetBuffersCompute};
+    const IMP bytesHooks[3] = {(IMP)ktaSetBytesVertex, (IMP)ktaSetBytesFragment, (IMP)ktaSetBytesCompute};
+    const IMP textureHooks[3] = {(IMP)ktaSetTextureVertex, (IMP)ktaSetTextureFragment, (IMP)ktaSetTextureCompute};
+    const IMP texturesHooks[3] = {(IMP)ktaSetTexturesVertex, (IMP)ktaSetTexturesFragment, (IMP)ktaSetTexturesCompute};
+    for (int st = 0; st < 3; st++) {
+        ktaSetBufferSel[st] = sel_registerName(setBuffer[st]);
+        ktaSetBytesSel[st] = sel_registerName(setBytes[st]);
+        ktaOrigSetBuffer[st] = (ABSetBufferIMP)swizzle(stageClass[st], setBuffer[st], bufferHooks[st]);
+        ktaOrigSetOffset[st] = (ABSetOffsetIMP)swizzle(stageClass[st], setOffset[st], offsetHooks[st]);
+        ktaOrigSetBuffers[st] = (ABSetBuffersIMP)swizzle(stageClass[st], setBuffers[st], buffersHooks[st]);
+        ktaOrigSetBytes[st] = (ABSetBytesIMP)swizzle(stageClass[st], setBytes[st], bytesHooks[st]);
+        ktaOrigSetTexture[st] = (KTASetTextureIMP)swizzle(stageClass[st], setTexture[st], textureHooks[st]);
+        ktaOrigSetTextures[st] = (KTASetTexturesIMP)swizzle(stageClass[st], setTextures[st], texturesHooks[st]);
+    }
+    ktaOrigSetRenderPipeline = (ABSetPipelineIMP)swizzle(kRender, "setRenderPipelineState:", (IMP)ktaSetRenderPipeline);
+    ktaOrigSetComputePipeline = (ABSetPipelineIMP)swizzle(kCompute, "setComputePipelineState:", (IMP)ktaSetComputePipeline);
+    const struct { const char *cls, *sel; IMP imp; IMP *orig; } draws[] = {
+        {kRender, "drawPrimitives:vertexStart:vertexCount:", (IMP)ktaDrawP, (IMP *)&ktaOrigDrawP},
+        {kRender, "drawPrimitives:vertexStart:vertexCount:instanceCount:", (IMP)ktaDrawPI, (IMP *)&ktaOrigDrawPI},
+        {kRender, "drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:", (IMP)ktaDrawPIB, (IMP *)&ktaOrigDrawPIB},
+        {kRender, "drawPrimitives:indirectBuffer:indirectBufferOffset:", (IMP)ktaDrawPInd, (IMP *)&ktaOrigDrawPInd},
+        {kRender, "drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:", (IMP)ktaDrawX, (IMP *)&ktaOrigDrawX},
+        {kRender, "drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:", (IMP)ktaDrawXI, (IMP *)&ktaOrigDrawXI},
+        {kRender, "drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:",
+         (IMP)ktaDrawXIB, (IMP *)&ktaOrigDrawXIB},
+        {kRender, "drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:", (IMP)ktaDrawXInd,
+         (IMP *)&ktaOrigDrawXInd},
+        {kCompute, "dispatchThreadgroups:threadsPerThreadgroup:", (IMP)ktaDrawDG, (IMP *)&ktaOrigDrawDG},
+        {kCompute, "dispatchThreads:threadsPerThreadgroup:", (IMP)ktaDrawDT, (IMP *)&ktaOrigDrawDT},
+        {kCompute, "dispatchThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerThreadgroup:", (IMP)ktaDrawDInd, (IMP *)&ktaOrigDrawDInd},
+    };
+    for (size_t i = 0; i < sizeof draws / sizeof *draws; i++)
+        if (definesMethod(draws[i].cls, draws[i].sel)) *draws[i].orig = swizzle(draws[i].cls, draws[i].sel, draws[i].imp);
+    const struct { const char *sel; IMP imp; IMP *orig; } pipelines[] = {
+        {"newRenderPipelineStateWithDescriptor:options:reflection:error:", (IMP)ktaRenderRefl, (IMP *)&ktaOrigRenderRefl},
+        {"newRenderPipelineStateWithDescriptor:options:completionHandler:", (IMP)ktaRenderOptAsync, (IMP *)&ktaOrigRenderOptAsync},
+        {"newComputePipelineStateWithFunction:options:reflection:error:", (IMP)ktaComputeFnRefl, (IMP *)&ktaOrigComputeFnRefl},
+        {"newComputePipelineStateWithDescriptor:options:reflection:error:", (IMP)ktaComputeDescRefl, (IMP *)&ktaOrigComputeDescRefl},
+        {"newComputePipelineStateWithFunction:options:completionHandler:", (IMP)ktaComputeFnOptAsync, (IMP *)&ktaOrigComputeFnOptAsync},
+        {"newComputePipelineStateWithDescriptor:options:completionHandler:", (IMP)ktaComputeDescOptAsync, (IMP *)&ktaOrigComputeDescOptAsync},
+    };
+    for (size_t i = 0; i < sizeof pipelines / sizeof *pipelines; i++)
+        if (definesMethod("_MTLDevice", pipelines[i].sel)) *pipelines[i].orig = swizzle("_MTLDevice", pipelines[i].sel, pipelines[i].imp);
+    // the variants without reflection go through the ones above (item 47 does this already on a Mac with both drivers)
+    if (!ivbArgumentBuffersOn && ktaOrigRenderRefl) {
+        swizzle("_MTLDevice", "newRenderPipelineStateWithDescriptor:error:", (IMP)abRender);
+        if (ktaOrigRenderOptAsync) swizzle("_MTLDevice", "newRenderPipelineStateWithDescriptor:completionHandler:", (IMP)abRenderAsync);
+    }
+    if (!ivbArgumentBuffersOn && ktaOrigComputeFnRefl) {
+        swizzle("_MTLDevice", "newComputePipelineStateWithFunction:error:", (IMP)abComputeFn);
+        if (ktaOrigComputeFnOptAsync) swizzle("_MTLDevice", "newComputePipelineStateWithFunction:completionHandler:", (IMP)abComputeFnAsync);
+    }
+    ktaOrigNewTexture = (KTANewTextureIMP)swizzle(kDevice, "newTextureWithDescriptor:", (IMP)ktaNewTexture);
+    ktaOn = YES;
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] texture atomics on the Kepler GPU: linear textures and hidden bindings installed\n");
+}
+
 // 35. Metal Performance Shaders' image statistics (MPSImageStatisticsMinAndMax and MeanAndVariance; Core Image's
 // CIAreaMinMax and the filters built on it) finish with a compute_final_*_statistics kernel that reduces one value per
 // thread through threadgroup memory and always folds in tg[tid + 16], tg[tid + 8], ...: it assumes at least 32 threads.
@@ -3311,6 +3735,7 @@ static void patchDriverClasses(void) {
     keplerMissingMethods();  // item 54
     keplerResolveLevels();  // item 55
     keplerViewsOfViews();  // item 56
+    keplerTextureAtomics();  // item 58
     mpsStatisticsWidth();
     stencilCopies();
     nvStencilUploadOrder();  // item 53
