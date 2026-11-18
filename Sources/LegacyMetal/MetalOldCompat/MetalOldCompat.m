@@ -105,6 +105,8 @@
 //  55. MSAA resolves into mip level 1 or higher on the Kepler driver, which never arrived after a pass that draws: through a
 //      temporary texture copied to the level, as item 15 on Intel
 //  56. views of texture views on the Kepler driver, which lost the first view's offset: made from the root texture
+//  57. MPSGraph's softmax over any axis but the last on Kepler, which came out wrong: done over the last axis between
+//      two transposes
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -3501,11 +3503,13 @@ static void dropValidationLayers(void) {
 }
 
 static void installMPSMatmulFallback(void);  // item 43
+static void installMPSGraphSoftMax(void);  // item 57
 static void installMetalFXTemporalLimit(void);  // item 44
 
 static id<MTLDevice> compatCreateSystemDefaultDevice(void) {
     dropValidationLayers();
     installMPSMatmulFallback();
+    installMPSGraphSoftMax();
     installMetalFXTemporalLimit();
     id<MTLDevice> device = MTLCreateSystemDefaultDevice();
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MTLCreateSystemDefaultDevice from %s -> %s\n", callerImage(__builtin_return_address(0)), device.name.UTF8String);
@@ -3524,6 +3528,7 @@ static id<MTLDevice> compatCreateSystemDefaultDevice(void) {
 static CFArrayRef compatCopyAllDevices(void) {
     dropValidationLayers();
     installMPSMatmulFallback();
+    installMPSGraphSoftMax();
     installMetalFXTemporalLimit();
     CFArrayRef all = (__bridge_retained CFArrayRef)MTLCopyAllDevices();
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MTLCopyAllDevices from %s\n", callerImage(__builtin_return_address(0)));
@@ -3534,6 +3539,7 @@ static CFArrayRef compatCopyAllDevices(void) {
 static CFArrayRef compatCopyAllDevicesWithObserver(id<NSObject> __strong *observer, MTLDeviceNotificationHandler handler) {
     dropValidationLayers();
     installMPSMatmulFallback();
+    installMPSGraphSoftMax();
     installMetalFXTemporalLimit();
     CFArrayRef all = (__bridge_retained CFArrayRef)MTLCopyAllDevicesWithObserver(observer, handler);
     for (CFIndex i = 0; all && i < CFArrayGetCount(all); i++) pinDevice(CFArrayGetValueAtIndex(all, i));
@@ -4151,6 +4157,61 @@ static void encodeMatmulWithFallback(id self, SEL _cmd, void *encoder, void *com
     inheritedMPSEncode(self, _cmd, encoder, commandBuffer, sources, state, destination, dag);
 }
 
+// ---- 57. MPSGraph's softmax on Kepler --------------------------------------------------------------------------------
+// -[MPSGraph softMaxWithTensor:axis:name:] over any axis but the last came out wrong on the GTX 770: over axis 0 of a 100x16
+// tensor it wrote only element [0][0] and left the rest 0 (i71), over axes 0 and 1 of an 8x10x6 one every element was
+// wrong. Over the last axis it's right, and so is every operation a softmax is made of, alone and composed in separate
+// graphs; built from them in one graph, MPSGraph fuses them back into the same kernels (the same wrong values). So where a
+// Kepler device is present (GeForceMTLDriver's NVMTLDevice), a softmax over another axis of a tensor of static shape is
+// done over the last axis between two transposes, which MPSGraph keeps. MTLSHIM_MPSGRAPH_SOFTMAX=0 turns it off.
+// Test: i71 on the GTX 770.
+typedef id (*SoftMaxIMP)(id, SEL, id, NSInteger, id);
+static SoftMaxIMP origSoftMax;
+static BOOL anyKeplerDevice(void);
+static id compositeSoftMax(id self, SEL _cmd, id tensor, NSInteger axis, id name) {
+    if (!anyKeplerDevice()) return origSoftMax(self, _cmd, tensor, axis, name);  // decided at the first softmax, not at load
+    // the rank, from a static shape only
+    NSArray *shape = ((NSArray *(*)(id, SEL))objc_msgSend)(tensor, @selector(shape));
+    NSInteger rank = shape ? (NSInteger)shape.count : 0, last = rank - 1, a = axis < 0 ? axis + rank : axis;
+    if (rank < 2 || a < 0 || a >= last) return origSoftMax(self, _cmd, tensor, axis, name);
+    typedef id (*Transpose)(id, SEL, id, NSUInteger, NSUInteger, id);
+    SEL transpose = @selector(transposeTensor:dimension:withDimension:name:);
+    id moved = ((Transpose)objc_msgSend)(self, transpose, tensor, (NSUInteger)a, (NSUInteger)last, nil);
+    id soft = moved ? origSoftMax(self, _cmd, moved, last, nil) : nil;
+    if (!soft) return origSoftMax(self, _cmd, tensor, axis, name);
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MPSGraph softmax over axis %ld of %ld done over the last axis\n", (long)a, (long)rank);
+    return ((Transpose)objc_msgSend)(self, transpose, soft, (NSUInteger)a, (NSUInteger)last, name);
+}
+static BOOL anyKeplerDevice(void) {
+    static dispatch_once_t once;
+    static BOOL any;
+    dispatch_once(&once, ^{
+        for (id<MTLDevice> device in MTLCopyAllDevices())
+            if (!strncmp(object_getClassName(device), "NVMTL", 5)) any = YES;
+    });
+    return any;
+}
+static void installMPSGraphSoftMax(void) {
+    static os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
+    static BOOL done;
+    if (done) return;
+    os_unfair_lock_lock(&lock);
+    const char *setting = getenv("MTLSHIM_MPSGRAPH_SOFTMAX");
+    Class graph = objc_getClass("MPSGraph");
+    if (done || (setting && !strcmp(setting, "0"))) done = YES;
+    else if (graph) {
+        done = YES;  // one try once the class is there
+        Method m = class_getInstanceMethod(graph, @selector(softMaxWithTensor:axis:name:));
+        if (m && !strcmp(method_getTypeEncoding(m), "@40@0:8@16q24@32") &&
+            class_getInstanceMethod(graph, @selector(reductionMaximumWithTensor:axis:name:)) &&
+            class_getInstanceMethod(graph, @selector(reductionSumWithTensor:axis:name:))) {
+            origSoftMax = (SoftMaxIMP)method_setImplementation(m, (IMP)compositeSoftMax);
+            if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MPSGraph softmax hook installed (active where a Kepler GPU is)\n");
+        }
+    }
+    os_unfair_lock_unlock(&lock);
+}
+
 static void installMPSMatmulFallback(void) {
     static os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
     static BOOL done;
@@ -4260,12 +4321,13 @@ __attribute__((constructor)) static void init(void) {
     installReadSamplerRewrite();
     installWebKitRouting();
     keepPortraitLibraries();
-    if (onMetalOld()) installMPSMatmulFallback(), installMetalFXTemporalLimit(), installStitchingReflection();
+    if (onMetalOld()) installMPSMatmulFallback(), installMPSGraphSoftMax(), installMetalFXTemporalLimit(), installStitchingReflection();
 #else
     (void)dropValidationLayers;
     (void)keepPortraitLibraries;
     (void)installStitchingReflection;
     (void)installMPSMatmulFallback;
+    (void)installMPSGraphSoftMax;
     (void)installMetalFXTemporalLimit;
     (void)installWebKitRouting;
     (void)patchDeviceBase;
