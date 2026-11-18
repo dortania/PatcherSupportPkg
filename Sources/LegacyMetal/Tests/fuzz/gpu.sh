@@ -31,10 +31,18 @@ if [ -n "${BUILD:-}" ]; then
     ioreg -rc IntelAccelerator -d1 -w0 2>/dev/null | grep -q AppleIntelHD4000Graphics && ivb=-IVB
     cmp -s "$B/libMTLIntelCompilerPlugin$ivb.dylib" "$L/libMTLIntelCompilerPlugin.dylib" ||
         cp -p "$B/libMTLIntelCompilerPlugin$ivb.dylib" "$L/libMTLIntelCompilerPlugin.dylib"
+    # Kepler: the patched GeForceAIRPlugin (weak load of GeForceAIRCompat.dylib) in a copy of its bundle, which it opens
+    # its built-in library from (as in verify.sh)
+    K=$L/GeForceAIRPlugin.bundle/Contents S=/System/Library/Extensions/GeForceAIRPlugin.bundle/Contents
+    if [ -d "$S" ]; then
+        mkdir -p "$K/MacOS" "$K/Resources"
+        cp -p "$S/Info.plist" "$S/PkgInfo" "$S/version.plist" "$K/" && cp -p "$S/Resources/"* "$K/Resources/"
+        for f in GeForceAIRPlugin GeForceAIRCompat.dylib; do [ "$B/$f" -nt "$K/MacOS/$f" ] && cp -p "$B/$f" "$K/MacOS/$f"; done
+    fi
     inserted=$T/tools/localcc.dylib:$T/tools/bronzeload.dylib
     [ -f /System/Library/Frameworks/Metal.framework/Versions/A/MetalOld.dylib ] && inserted=$B/MetalOldCompat.dylib:$inserted
     unset MTL_USE_AIRNT_BA
-    run=(env AMD_BRONZE_COMPAT_PATH="$L/AMDBronzeCompat.dylib" DYLD_INSERT_LIBRARIES="$inserted" DYLD_LIBRARY_PATH="$L"
+    run=(env AMD_BRONZE_COMPAT_PATH="$L/AMDBronzeCompat.dylib" DYLD_INSERT_LIBRARIES="$inserted" DYLD_LIBRARY_PATH="$L:$L/GeForceAIRPlugin.bundle/Contents/MacOS"
         "${run[@]}")
 fi
 # Metal's shader cache is keyed on the kernel, not on the compiler or its settings: without this, a kernel run again

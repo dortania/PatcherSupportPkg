@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build.sh: builds MetalOldCompat, AMDTextureAtomics and IntelTextureAtomics from source and regenerates the patched
+# build.sh: builds MetalOldCompat, AMDTextureAtomics, IntelTextureAtomics and GeForceAIRCompat from source and regenerates the patched
 # payload files in Universal-Binaries/ from PatcherSupportPkg's stock copies:
 #   13.2.1-24 and 13.2.1-25 (Tahoe) Metal.framework/Versions/A/
 #                                           Metal (+ weak load of MetalOldCompat.dylib), MetalOldCompat.dylib
@@ -15,12 +15,14 @@
 #                                           the same, from OCLP's 11.7.10 plugin
 #   AMDMTLBronzeDriver.bundle/Contents/MacOS/ in 12.5, 12.5-24, 12.5-25 and 12.5-GCN-SKL-22..25:
 #                                           AMDMTLBronzeDriver (+ weak load of AMDBronzeCompat.dylib), AMDBronzeCompat.dylib
+#   11.0 Beta 3 GeForceAIRPlugin.bundle/Contents/MacOS/ (Kepler)
+#                                           GeForceAIRPlugin (+ weak load of GeForceAIRCompat.dylib), GeForceAIRCompat.dylib
 #   14.0 Beta 3-24 CoreImage.framework/Versions/A/
 #                                           CoreImageOld.dylib with reflect, kernelsWithString and its own sections back (tools/make_coreimage_fix.py)
 # The stock inputs come from git (STOCK_REF, default: the merge base with origin/HEAD, the upstream default branch), never from the patched files
 # in the working tree, so re-running it gives the same output. STOCK_DIR=<dir> takes them from a folder instead
 # (files: Metal Metal-25 MetalOld.dylib AMDShared libAMDIL902.dylib AMDShared-GCN-25 libAMDIL902-GCN-25.dylib
-# libMTLIntelCompilerPlugin.dylib AMDMTLBronzeDriver-<variant> CoreImageOld.dylib).
+# libMTLIntelCompilerPlugin.dylib AMDMTLBronzeDriver-<variant> GeForceAIRPlugin CoreImageOld.dylib).
 # Everything is ad-hoc signed; release signing happens as for the rest of the payload. Needs Xcode command-line tools.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -35,6 +37,7 @@ BRONZE_VARIANTS="12.5 12.5-24 12.5-25 12.5-GCN-SKL-22 12.5-GCN-SKL-23 12.5-GCN-S
 INTEL=12.5/System/Library/Extensions/AppleIntelHD5000GraphicsMTLDriver.bundle/Contents/MacOS
 IVB_VARIANTS="11.7.10 11.7.10-22" IVB=System/Library/Extensions/AppleIntelHD4000GraphicsMTLDriver.bundle/Contents/MacOS
 CI="14.0 Beta 3-24/System/Library/Frameworks/CoreImage.framework/Versions/A"
+KEPLER="11.0 Beta 3/System/Library/Extensions/GeForceAIRPlugin.bundle/Contents/MacOS"
 rm -rf "$B"; mkdir -p "$B/stock"
 stock() {  # <path under Universal-Binaries> <file name>
     if [ -n "${STOCK_DIR:-}" ]; then cp "$STOCK_DIR/$2" "$B/stock/$2"; return; fi
@@ -52,6 +55,7 @@ stock "$INTEL/libMTLIntelCompilerPlugin.dylib" libMTLIntelCompilerPlugin.dylib
 stock "11.7.10/$IVB/libMTLIntelCompilerPlugin.dylib" libMTLIntelCompilerPlugin-IVB.dylib  # the same file in 11.7.10-22
 for v in $BRONZE_VARIANTS; do stock "$v/$BRONZE/AMDMTLBronzeDriver" "AMDMTLBronzeDriver-$v"; done
 stock "$CI/CoreImageOld.dylib" CoreImageOld.dylib
+stock "$KEPLER/GeForceAIRPlugin" GeForceAIRPlugin
 
 # 1. MetalOldCompat, and the no-op build the tests use for "without the fix" (same load commands, does nothing)
 for variant in "" -noop; do
@@ -71,6 +75,14 @@ CXXINC=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1
 clang++ -arch x86_64 -mmacosx-version-min=13.0 -std=c++17 -dynamiclib -O2 -Wall -Wl,-no_warn_inits \
     -install_name /System/Library/Extensions/AppleIntelHD5000GraphicsMTLDriver.bundle/Contents/MacOS/IntelTextureAtomics.dylib \
     "$HERE/IntelAdapter/intelatomics.cpp" "$HERE/IntelAdapter/libLLVM3802.tbd" -o "$B/IntelTextureAtomics.dylib"
+# 3b. Kepler adapter, and its test build for DYLD_INSERT_LIBRARIES with Tests/tools/localcc.dylib (interposes PassManager::run)
+"$HERE/NVIDIAAdapter/make_tbd.sh"  # its libLLVM link stub, from the functions nvair.cpp uses
+for variant in "" -test; do
+    clang++ -arch x86_64 -mmacosx-version-min=13.0 -std=c++17 -dynamiclib -O2 -Wall -Wl,-no_warn_inits \
+        ${variant:+-DNVAIR_INTERPOSE -Wl,-not_for_dyld_shared_cache} \
+        -install_name /System/Library/Extensions/GeForceAIRPlugin.bundle/Contents/MacOS/GeForceAIRCompat.dylib \
+        "$HERE/NVIDIAAdapter/nvair.cpp" "$HERE/NVIDIAAdapter/libLLVM3802.tbd" -o "$B/GeForceAIRCompat$variant.dylib"
+done
 # 4. AMD driver fixes (the 12.5 driver is also installed on macOS 13 and 14)
 clang -arch x86_64 -mmacosx-version-min=13.0 -dynamiclib -fobjc-arc -O2 -Wall -Wl,-no_warn_inits \
     -install_name /System/Library/Extensions/AMDMTLBronzeDriver.bundle/Contents/MacOS/AMDBronzeCompat.dylib \
@@ -90,13 +102,14 @@ weak AMDShared-GCN-25 AMDShared-GCN-25 @loader_path/AMDTextureAtomics.dylib
 weak libMTLIntelCompilerPlugin.dylib libMTLIntelCompilerPlugin.dylib @loader_path/IntelTextureAtomics.dylib
 weak libMTLIntelCompilerPlugin-IVB.dylib libMTLIntelCompilerPlugin-IVB.dylib @loader_path/IntelTextureAtomics.dylib
 for v in $BRONZE_VARIANTS; do weak "AMDMTLBronzeDriver-$v" "AMDMTLBronzeDriver-$v" @loader_path/AMDBronzeCompat.dylib; done
+weak GeForceAIRPlugin GeForceAIRPlugin @loader_path/GeForceAIRCompat.dylib
 python3 -I "$HERE/tools/make_coreimage_fix.py" "$B/stock/CoreImageOld.dylib" "$B/CoreImageOld.dylib"
 cd "$B"
 codesign -f -s - MetalOldCompat.dylib MetalOldCompat-noop.dylib AMDTextureAtomics.dylib IntelTextureAtomics.dylib \
     libAMDIL902.dylib libAMDIL902-GCN-25.dylib Metal Metal-25 AMDShared AMDShared-GCN-25 libMTLIntelCompilerPlugin.dylib \
     libMTLIntelCompilerPlugin-IVB.dylib \
     2>/dev/null
-codesign -f -s - AMDBronzeCompat.dylib CoreImageOld.dylib 2>/dev/null
+codesign -f -s - AMDBronzeCompat.dylib CoreImageOld.dylib GeForceAIRCompat.dylib GeForceAIRCompat-test.dylib GeForceAIRPlugin 2>/dev/null
 for v in $BRONZE_VARIANTS; do codesign -f -s - "AMDMTLBronzeDriver-$v" 2>/dev/null; done
 # 6. into the payload
 cp Metal MetalOldCompat.dylib "$UB/$WRAPPER/"
@@ -117,7 +130,8 @@ for v in $BRONZE_VARIANTS; do
     cp AMDBronzeCompat.dylib "$UB/$v/$BRONZE/"
 done
 cp CoreImageOld.dylib "$UB/$CI/"
+cp GeForceAIRPlugin GeForceAIRCompat.dylib "$UB/$KEPLER/"
 [ -n "${STOCK_DIR:-}" ] || python3 -I "$HERE/tools/make_tahoe_compiler.py" "$ROOT" "${STOCK_REF:-$(git -C "$ROOT" merge-base HEAD origin/HEAD)}"
 shasum -a 256 MetalOldCompat.dylib AMDTextureAtomics.dylib IntelTextureAtomics.dylib AMDBronzeCompat.dylib libAMDIL902.dylib Metal \
     Metal-25 AMDShared libAMDIL902-GCN-25.dylib AMDShared-GCN-25 libMTLIntelCompilerPlugin.dylib libMTLIntelCompilerPlugin-IVB.dylib \
-    CoreImageOld.dylib
+    CoreImageOld.dylib GeForceAIRCompat.dylib GeForceAIRPlugin

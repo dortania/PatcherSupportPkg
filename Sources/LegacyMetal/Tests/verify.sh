@@ -76,6 +76,17 @@ cp "$B/libAMDIL902$V.dylib" "$FIXED/libAMDIL902.dylib"
 for d in "$NOADAPTER" "$STOCK" "$PATCH3" "$PATCH4" "$PATCH5"; do cp "$FIXED"/* "$d/"; done
 cp "$B/stock/AMDShared$V" "$NOADAPTER/AMDShared"
 cp "$B/stock/libMTLIntelCompilerPlugin$IVB.dylib" "$NOADAPTER/libMTLIntelCompilerPlugin.dylib"
+# Kepler: GeForceAIRPlugin, taken by leaf name like the others but from a copy of its bundle (it opens its built-in
+# library, Resources/metal_runtime.metallib, from there): the patched one (weak load of GeForceAIRCompat.dylib), or the
+# stock one for "without the adapter"
+keplerBundle() {  # <folder> <plugin>
+    local c=$1/GeForceAIRPlugin.bundle/Contents s=/System/Library/Extensions/GeForceAIRPlugin.bundle/Contents
+    mkdir -p "$c/MacOS" "$c/Resources"
+    [ -d "$s" ] && cp "$s/Info.plist" "$s/PkgInfo" "$s/version.plist" "$c/" && cp "$s/Resources/"* "$c/Resources/"
+    cp "$2" "$c/MacOS/GeForceAIRPlugin" && cp "$B/GeForceAIRCompat.dylib" "$c/MacOS/"
+}
+for d in "$FIXED" "$STOCK" "$PATCH3" "$PATCH4" "$PATCH5"; do keplerBundle "$d" "$B/GeForceAIRPlugin"; done
+keplerBundle "$NOADAPTER" "$B/stock/GeForceAIRPlugin"
 cp "$B/stock/libAMDIL902$V.dylib" "$STOCK/libAMDIL902.dylib"
 PARSERFIX_SKIP_GEP_SELECT=1 python3 -I ../libAMDIL902/make_parser_fix.py "$B/stock/libAMDIL902$V.dylib" \
     "$PATCH3/libAMDIL902.dylib" > /dev/null
@@ -129,7 +140,7 @@ run() {  # <test[@gpu]> <removed fix or "fixed">
     [ "$t" = s64-firefox-angle-display ] && env+=("DYLD_FALLBACK_LIBRARY_PATH=${S64_FIREFOX_APP:-/Applications/Firefox.app}/Contents/MacOS")
     rm -rf "$(getconf DARWIN_USER_CACHE_DIR)com.apple.metal" "$(getconf DARWIN_USER_CACHE_DIR)com.apple.metalfe"
     env ${env[@]+"${env[@]}"} AMD_BRONZE_COMPAT_PATH="$libs/AMDBronzeCompat.dylib" \
-        DYLD_INSERT_LIBRARIES="$inserted" DYLD_LIBRARY_PATH="$libs" ./build/"$t" ${gpu:+"$gpu"} 2>/dev/null |
+        DYLD_INSERT_LIBRARIES="$inserted" DYLD_LIBRARY_PATH="$libs:$libs/GeForceAIRPlugin.bundle/Contents/MacOS" ./build/"$t" ${gpu:+"$gpu"} 2>/dev/null |
         grep -E '^(PASS|FAIL|SKIP) ' | tail -1
 }
 
