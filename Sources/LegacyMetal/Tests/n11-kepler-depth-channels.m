@@ -5,6 +5,9 @@
 // fboinvalidate unbind_read_*). A fragment function shaped like ANGLE's (an ANGLE_angleUniforms argument at buffer 17)
 // samples a Depth32Float texture (cleared to 0.25), an RGBA8 texture and the X32_Stencil8 view of a Depth32Float_Stencil8
 // texture (stencil 7) through texture2d, into three render targets.
+// GPUs of family 2 have swizzled views, and ANGLE reads depth and stencil through one that gives (x, 0, 0, 1); what
+// such a read gives without one is undefined in Metal (an R9 M370X gives (d, d, d, d), an M3 Pro (d, d, d, 1)), so the
+// test SKIPs there.
 // Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
 #import "repro.h"
 
@@ -27,6 +30,8 @@ int main(int argc, char **argv) { @autoreleasepool {
     id<MTLDevice> dev = reproDevice(argc, argv, "NVIDIA");
     if (!dev) return SKIP(bug, "no such GPU");
     const char *name = dev.name.UTF8String;
+    if ([dev supportsFamily:MTLGPUFamilyMac2])
+        return SKIP(bug, "%s: family 2, where ANGLE reads depth and stencil through swizzled views (the other channels are undefined without one)", name);
     NSError *err = nil;
     id<MTLLibrary> lib = [dev newLibraryWithSource:[reproUniqueComment() stringByAppendingString:src] options:nil error:&err];
     if (!lib) return FAIL(bug, "compile: %s", err.localizedDescription.UTF8String);

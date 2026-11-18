@@ -7,6 +7,9 @@
 // does (Metal display with WebKit's feature list, WebGL compatibility, robust init, no client arrays, no implicit binds),
 // checks that GL_ARB_sync is there for both, and then that ANGLE's fences on this GPU work: glFenceSync waited with
 // glClientWaitSync, flushed and polled the way WebGL pages poll SYNC_STATUS, and EGL fences; none may time out.
+// Tahoe's WebKit ANGLE doesn't offer GL_ARB_sync at all, with its fences on (GL_OES_EGL_sync, GL_NV_fence and
+// EGL_KHR_fence_sync there; R9 M370X), and Tahoe's Safari makes WebGL contexts without it; what hasEvents off takes away is
+// all four, so a context fails only when the other three are missing too.
 // Stock OCLP on Kepler: FAIL (no GL_ARB_sync). Fixed: PASS. Other GPUs have hasEvents on already: PASS either way.
 // SKIP without WebKit's ANGLE.
 #import "repro.h"
@@ -59,6 +62,7 @@ int main(void) {
         EGL_BindAPI(0x30A0);
         P context = NULL;
         const char *renderer = "?";
+        int noARBSync = 0;
         for (int webgl = 1; webgl <= 2; webgl++) {
             // EGL_CONTEXT_CLIENT_VERSION, [EGL_CONTEXT_OPENGL_BACKWARDS_COMPATIBLE_ANGLE false,] WEBGL_COMPATIBILITY, ROBUST_RESOURCE_INITIALIZATION,
             // CLIENT_ARRAYS_ENABLED false, BIND_GENERATES_RESOURCE false: GraphicsContextGLCocoa::platformInitializeContext
@@ -69,9 +73,12 @@ int main(void) {
             if (!context || !EGL_MakeCurrent(display, NULL, NULL, context)) return FAIL(bug, "WebGL %d context: not created", webgl);
             renderer = GL_GetString(0x1F01) ?: "?";
             const char *extensions = GL_GetString(0x1F03), *requestable = GL_GetString(0x93A8);  // GL_REQUESTABLE_EXTENSIONS_ANGLE
-            if (!has(extensions, "GL_ARB_sync") && !has(requestable, "GL_ARB_sync"))
-                return FAIL(bug, "%s: WebGL %d context has no GL_ARB_sync, so WebKit fails every WebGL context (created lost)", renderer, webgl);
-            if (!has(extensions, "GL_ARB_sync")) GL_RequestExtensionANGLE("GL_ARB_sync");
+            if (!has(extensions, "GL_ARB_sync") && !has(requestable, "GL_ARB_sync")) {
+                if (!has(extensions, "GL_OES_EGL_sync") && !has(extensions, "GL_NV_fence") && !has(EGL_QueryString(display, 0x3055), "EGL_KHR_fence_sync"))
+                    return FAIL(bug, "%s: WebGL %d context has no GL_ARB_sync, so WebKit fails every WebGL context (created lost)", renderer, webgl);
+                noARBSync = 1;  // this ANGLE build doesn't offer it, fences on (Tahoe's WebKit)
+            }
+            if (!has(extensions, "GL_ARB_sync") && !noARBSync) GL_RequestExtensionANGLE("GL_ARB_sync");
         }
         // ANGLE's fences on this GPU: 2048x2048 clears, then a fence; even ones waited on, odd ones flushed and polled.
         U renderbuffer, framebuffer;
@@ -111,7 +118,7 @@ int main(void) {
             }
         if (timeouts || GL_GetError())
             return FAIL(bug, "%s: %d of ANGLE's fences never signaled (waited %d, polled %d, EGL %d)", renderer, timeouts, waited, polled, eglFences);
-        return PASS(bug, "%s: WebGL 1 and 2 contexts have GL_ARB_sync; 200 fences (%d waited, %d flushed and polled) and %d EGL fences signaled",
-                    renderer, waited, polled, eglFences);
+        return PASS(bug, "%s: WebGL 1 and 2 contexts have %s; 200 fences (%d waited, %d flushed and polled) and %d EGL fences signaled",
+                    renderer, noARBSync ? "ANGLE's fences (this WebKit's ANGLE offers no GL_ARB_sync)" : "GL_ARB_sync", waited, polled, eglFences);
     }
 }

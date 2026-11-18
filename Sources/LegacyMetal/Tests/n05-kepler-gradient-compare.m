@@ -7,6 +7,9 @@
 // (less) with the reference just below that depth must pass and one just above must fail: in a compute kernel through a
 // sampler argument, and in a fragment function through a constexpr sampler with screen-space gradients. Then 2D (a depth
 // per column, read with and without a constant texel offset), 2D-array (layer 1) and cube-array comparisons with gradients.
+// The R9 M370X's compiler has no gradient comparison either (SC: "a call to an undefined label"; fragment functions fail
+// too), and ANGLE doesn't use one there (deqp's textureGrad, textureGradOffset and textureProjGrad shadow cases pass in
+// Chrome and Firefox), so on AMD the test SKIPs (FIXES.md, known limitations).
 // Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
 #import "repro.h"
 
@@ -46,6 +49,8 @@ int main(int argc, char **argv) { @autoreleasepool {
     const char *bug = "n05-kepler-gradient-compare";
     id<MTLDevice> dev = reproDevice(argc, argv, "NVIDIA");
     if (!dev) return SKIP(bug, "no such GPU");
+    if ([dev.name containsString:@"AMD"])
+        return SKIP(bug, "%s: AMD's compiler has no depth comparison with gradients (a known limitation; ANGLE doesn't use one)", dev.name.UTF8String);
     NSError *err = nil;
     id<MTLLibrary> lib = [dev newLibraryWithSource:[reproUniqueComment() stringByAppendingString:src] options:nil error:&err];
     if (!lib) return FAIL(bug, "%s: compile: %s", dev.name.UTF8String, err.localizedDescription.UTF8String);
