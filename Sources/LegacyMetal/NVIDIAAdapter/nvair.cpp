@@ -48,6 +48,14 @@
 //
 // Cube array indices below 0 raised to 0, as AMDAdapter does. NVAIR_CUBE_ARRAY_FIX=0.
 //
+// Gradient samples of 3D textures and cubes in compute kernels (which broke the kernel) done at the level they pick.
+// NVAIR_GRADIENT_FIX=0.
+//
+// Depth comparisons at a computed level or bias (which returned the depth) done at level 0 / the implicit level.
+// NVAIR_COMPARE_LEVEL_FIX=0.
+//
+// Depth comparisons with gradients (no body: the pipeline failed) done at level 0. NVAIR_COMPARE_GRADIENT_FIX=0.
+//
 // Installed (planned): GeForceAIRPlugin.bundle/Contents/MacOS/GeForceAIRCompat.dylib, a weak dependency of
 // GeForceAIRPlugin. Test use: DYLD_INSERT_LIBRARIES=Tests/tools/localcc.dylib:build/GeForceAIRCompat-test.dylib
 //   NVAIR_LOG=1             log what is rewritten (NVAIR_LOG=/path: append to that file)
@@ -728,6 +736,345 @@ static unsigned clampCubeArrayIndices(LLVMModuleRef module, Gen &g) {
     return clamped;
 }
 
+// ---- gradient samples of 3D textures and cubes --------------------------------------------------------------------------
+// A sample of a 3D texture, cube or cube array with explicit gradients (gradient3d, gradientcube) in a compute kernel
+// broke the kernel on Kepler: its stores after the sample never happened (GTX 770; 2D and 2D-array gradients are right,
+// and so are all of them in fragment functions; a09's gradient read, i08's 3D integer one). The plugin lowers them to
+// llvm.nvvm.sample.tex.{3d,3d.offset,cube,cube.array}.grad; each becomes the .lod form with the level the texture
+// unit would pick (Vulkan's and OpenGL's formula, without anisotropy): 3D, lod = log2 of the longer of the two gradients
+// scaled by the size of level 0; cubes, the same on the derivatives of the face coordinates of the major axis,
+// (db * ma - b * dma) / (2 * ma^2) for the other two axes b, scaled by the face size. Sizes from llvm.nvvm.txq.*.
+// Compute modules only (!air.kernel): fragment functions keep the hardware's own level, with anisotropy.
+// NVAIR_GRADIENT_FIX=0 turns it off.
+extern "C" {
+LLVMValueRef LLVMBuildFMul(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildFAdd(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildFSub(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildFDiv(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildFNeg(LLVMBuilderRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildFCmp(LLVMBuilderRef, int, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildPointerCast(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
+LLVMValueRef LLVMConstReal(LLVMTypeRef, double);
+LLVMTypeRef LLVMFloatTypeInContext(LLVMContextRef);
+}
+enum { LLVMRealOGE = 3, LLVMRealOLT = 4 };
+
+struct FloatGen {
+    Gen &g;
+    LLVMBuilderRef b;
+    LLVMTypeRef f32;
+    LLVMValueRef c(double v) { return LLVMConstReal(f32, v); }
+    LLVMValueRef call1(const char *name, LLVMValueRef x) {
+        LLVMTypeRef p[1] = {f32};
+        LLVMValueRef args[1] = {x};
+        return LLVMBuildCall(b, g.intrinsic(name, f32, p, 1), args, 1, "");
+    }
+    LLVMValueRef max(LLVMValueRef x, LLVMValueRef y) {
+        LLVMTypeRef p[2] = {f32, f32};
+        LLVMValueRef args[2] = {x, y};
+        return LLVMBuildCall(b, g.intrinsic("llvm.nvvm.fmax.f", f32, p, 2), args, 2, "");
+    }
+    LLVMValueRef abs(LLVMValueRef x) { return call1("llvm.nvvm.fabs.f", x); }
+    LLVMValueRef mul(LLVMValueRef x, LLVMValueRef y) { return LLVMBuildFMul(b, x, y, ""); }
+    LLVMValueRef add(LLVMValueRef x, LLVMValueRef y) { return LLVMBuildFAdd(b, x, y, ""); }
+    LLVMValueRef sub(LLVMValueRef x, LLVMValueRef y) { return LLVMBuildFSub(b, x, y, ""); }
+    LLVMValueRef sq(LLVMValueRef x) { return mul(x, x); }
+    LLVMValueRef lane(LLVMValueRef v, unsigned i) { return LLVMBuildExtractElement(b, v, g.c32(i), ""); }
+    LLVMValueRef sel(LLVMValueRef c, LLVMValueRef x, LLVMValueRef y) { return LLVMBuildSelect(b, c, x, y, ""); }
+    // log2 of the length whose square is m (m kept above 0, so zero gradients give a very negative level: level 0)
+    LLVMValueRef lodOfSquare(LLVMValueRef m) { return mul(c(0.5), call1("llvm.nvvm.lg2.approx.f32", max(m, c(1e-30)))); }
+};
+
+// llvm.nvvm.txq.width/height/depth.<kind>.lod.p1i8(texture, 0) as a float
+static LLVMValueRef textureSize(FloatGen &fg, const char *what, const char *kind, LLVMValueRef texture) {
+    char name[96];
+    snprintf(name, sizeof name, "llvm.nvvm.txq.%s.%s.lod.p1i8", what, kind);
+    LLVMValueRef f = LLVMGetNamedFunction(fg.g.module, name);
+    if (!f) {
+        LLVMTypeRef p[2] = {LLVMTypeOf(texture), fg.g.i32};
+        f = LLVMAddFunction(fg.g.module, name, LLVMFunctionType(fg.g.i32, p, 2, 0));
+    }
+    LLVMTypeRef params[2];
+    LLVMGetParamTypes(LLVMGetElementType(LLVMTypeOf(f)), params);
+    LLVMValueRef args[2] = {LLVMBuildPointerCast(fg.b, texture, params[0], ""), fg.g.c32(0)};
+    LLVMValueRef size = LLVMBuildCall(fg.b, f, args, 2, "");
+    LLVMTypeRef p1[1] = {fg.g.i32};
+    LLVMValueRef cvtArgs[1] = {size};
+    return LLVMBuildCall(fg.b, fg.g.intrinsic("llvm.nvvm.cvt.f.f32.u.i32.rte", fg.f32, p1, 1), cvtArgs, 1, "");
+}
+
+// The level for gradients dx, dy at coordinate p of a cube face size w: on the major axis' face coordinates.
+static LLVMValueRef cubeLod(FloatGen &fg, LLVMValueRef p, LLVMValueRef dx, LLVMValueRef dy, LLVMValueRef w) {
+    LLVMValueRef x = fg.lane(p, 0), y = fg.lane(p, 1), z = fg.lane(p, 2);
+    LLVMValueRef ax = fg.abs(x), ay = fg.abs(y), az = fg.abs(z);
+    LLVMBuilderRef b = fg.b;
+    LLVMValueRef isX = LLVMBuildAnd(b, LLVMBuildFCmp(b, LLVMRealOGE, ax, ay, ""), LLVMBuildFCmp(b, LLVMRealOGE, ax, az, ""), "");
+    LLVMValueRef isY = LLVMBuildAnd(b, LLVMBuildNot(b, isX, ""), LLVMBuildFCmp(b, LLVMRealOGE, ay, az, ""), "");
+    // major axis a, others u and v: X -> (y, z), Y -> (x, z), Z -> (x, y)
+    auto pick = [&](LLVMValueRef vx, LLVMValueRef vy, LLVMValueRef vz) { return fg.sel(isX, vx, fg.sel(isY, vy, vz)); };
+    LLVMValueRef pa = pick(x, y, z), pu = pick(y, x, x), pv = pick(z, z, y), ma = fg.abs(pa);
+    LLVMValueRef negative = LLVMBuildFCmp(b, LLVMRealOLT, pa, fg.c(0), "");
+    auto spread = [&](LLVMValueRef d) {  // (du * ma - u * dma)^2 + (dv * ma - v * dma)^2
+        LLVMValueRef dx_ = fg.lane(d, 0), dy_ = fg.lane(d, 1), dz_ = fg.lane(d, 2);
+        LLVMValueRef da = pick(dx_, dy_, dz_), du = pick(dy_, dx_, dx_), dv = pick(dz_, dz_, dy_);
+        LLVMValueRef dma = fg.sel(negative, LLVMBuildFNeg(b, da, ""), da);
+        return fg.add(fg.sq(fg.sub(fg.mul(du, ma), fg.mul(pu, dma))), fg.sq(fg.sub(fg.mul(dv, ma), fg.mul(pv, dma))));
+    };
+    LLVMValueRef ma2 = fg.sq(ma), scale = fg.mul(fg.c(0.25), fg.sq(w));
+    LLVMValueRef m = LLVMBuildFDiv(b, fg.mul(scale, fg.max(spread(dx), spread(dy))), fg.max(fg.sq(ma2), fg.c(1e-30)), "");
+    return fg.lodOfSquare(m);
+}
+
+static unsigned fixGradientSamples(LLVMModuleRef module, Gen &g) {
+    static const struct { const char *kind; const char *size; bool cube; } kKinds[] = {
+        {"3d.grad.", "3d", false}, {"3d.offset.grad.", "3d", false}, {"cube.grad.", "cube", true}, {"cube.array.grad.", "cube.array", true},
+    };
+    static const char kPrefix[] = "llvm.nvvm.sample.tex.";
+    if (!LLVMGetNamedMetadataNumOperands(module, "air.kernel")) return 0;  // fragment and vertex functions are right
+    std::vector<LLVMValueRef> functions;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        if (!strncmp(LLVMGetValueName(f), kPrefix, sizeof kPrefix - 1) && strstr(LLVMGetValueName(f), ".grad.") && LLVMGetFirstUse(f))
+            functions.push_back(f);
+    unsigned fixed = 0;
+    LLVMBuilderRef b = nullptr;
+    for (LLVMValueRef f : functions) {
+        const char *rest = LLVMGetValueName(f) + sizeof kPrefix - 1;
+        int k = -1;
+        for (unsigned i = 0; i < sizeof kKinds / sizeof *kKinds && k < 0; i++)
+            if (!strncmp(rest, kKinds[i].kind, strlen(kKinds[i].kind))) k = (int)i;
+        if (k < 0) continue;
+        // the .lod form: the same parameters with the two gradients replaced by one float level
+        std::string name = LLVMGetValueName(f);
+        name.replace(name.find(".grad."), 6, ".lod.");
+        LLVMTypeRef type = LLVMGetElementType(LLVMTypeOf(f));
+        unsigned count = LLVMCountParamTypes(type);
+        if (count < 5 || count > 8) continue;
+        LLVMTypeRef params[8];
+        LLVMGetParamTypes(type, params);
+        LLVMTypeRef f32 = LLVMFloatTypeInContext(g.context);
+        auto floatVector = [&](LLVMTypeRef t) {  // the coordinate and the gradients: float vectors of 3 or more lanes
+            return LLVMGetTypeKind(t) == LLVMVectorTypeKind && LLVMGetElementType(t) == f32 && LLVMGetVectorSize(t) >= 3;
+        };
+        if (!floatVector(params[2]) || !floatVector(params[count - 2]) || !floatVector(params[count - 1])) continue;
+        params[count - 2] = f32;
+        LLVMValueRef lodForm = LLVMGetNamedFunction(module, name.c_str());
+        LLVMTypeRef lodType = LLVMFunctionType(LLVMGetReturnType(type), params, count - 1, 0);
+        if (!lodForm) lodForm = LLVMAddFunction(module, name.c_str(), lodType);
+        else if (LLVMGetElementType(LLVMTypeOf(lodForm)) != lodType) continue;
+        std::vector<LLVMValueRef> calls;
+        for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u))
+            if (LLVMValueRef call = LLVMIsACallInst(LLVMGetUser(u)))
+                if (LLVMGetNumOperands(call) == (int)count + 1 && LLVMGetOperand(call, count) == f) calls.push_back(call);
+        if (!b) b = LLVMCreateBuilderInContext(g.context);
+        for (LLVMValueRef call : calls) {
+            LLVMPositionBuilderBefore(b, call);
+            FloatGen fg{g, b, f32};
+            LLVMValueRef texture = LLVMGetOperand(call, 0), p = LLVMGetOperand(call, 2);
+            LLVMValueRef dx = LLVMGetOperand(call, count - 2), dy = LLVMGetOperand(call, count - 1), lod;
+            LLVMValueRef w = textureSize(fg, "width", kKinds[k].size, texture);
+            if (kKinds[k].cube) {
+                lod = cubeLod(fg, p, dx, dy, w);
+            } else {
+                LLVMValueRef h = textureSize(fg, "height", "3d", texture), d = textureSize(fg, "depth", "3d", texture);
+                auto spread = [&](LLVMValueRef v) {
+                    return fg.add(fg.add(fg.sq(fg.mul(fg.lane(v, 0), w)), fg.sq(fg.mul(fg.lane(v, 1), h))), fg.sq(fg.mul(fg.lane(v, 2), d)));
+                };
+                lod = fg.lodOfSquare(fg.max(spread(dx), spread(dy)));
+            }
+            LLVMValueRef args[8];
+            for (unsigned i = 0; i < count - 2; i++) args[i] = LLVMGetOperand(call, i);
+            args[count - 2] = lod;
+            LLVMValueRef sample = LLVMBuildCall(b, lodForm, args, count - 1, "");
+            LLVMReplaceAllUsesWith(call, sample);
+            LLVMInstructionEraseFromParent(call);
+            fixed++;
+        }
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
+// ---- depth comparisons at a level other than a constant 0 -----------------------------------------------------------------
+// On Kepler a depth comparison (sample_compare) with an explicit level or a bias that isn't a constant 0 returns the
+// texel's depth instead of the comparison: level(1.0), level(0.4), level(-1.0) and bias(5.0) all did, on a one-level
+// texture too, while the implicit level, level(0.0) and bias(0.0) compare (GTX 770, fragment function; i03, ANGLE's
+// texture(sampler2DShadow, coord, bias)). Gradient comparisons have no body at all. There is no form that compares at a
+// level above 0, so: a .lod comparison is done at level 0 (exact for shadow maps with one level, which every level
+// clamps to; a mipmapped one compares at level 0), and in fragment functions a .bias one at the implicit level, as
+// IntelAdapter does for Intel's compiler. NVAIR_COMPARE_LEVEL_FIX=0 turns it off.
+static unsigned fixDepthCompareLevels(LLVMModuleRef module, Gen &g) {
+    static const char kPrefix[] = "llvm.nvvm.sample.compare.tex.";
+    bool compute = LLVMGetNamedMetadataNumOperands(module, "air.kernel") != 0;
+    std::vector<LLVMValueRef> functions;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
+        const char *name = LLVMGetValueName(f);
+        if (!strncmp(name, kPrefix, sizeof kPrefix - 1) && (strstr(name, ".lod.") || (!compute && strstr(name, ".bias."))) && LLVMGetFirstUse(f))
+            functions.push_back(f);
+    }
+    LLVMTypeRef f32 = LLVMFloatTypeInContext(g.context);
+    LLVMValueRef zero = LLVMConstReal(f32, 0.0);
+    unsigned fixed = 0;
+    LLVMBuilderRef b = nullptr;
+    for (LLVMValueRef f : functions) {
+        LLVMTypeRef type = LLVMGetElementType(LLVMTypeOf(f));
+        unsigned count = LLVMCountParamTypes(type);
+        if (count < 5 || count > 8) continue;
+        LLVMTypeRef params[8];
+        LLVMGetParamTypes(type, params);
+        if (params[count - 1] != f32) continue;
+        bool bias = strstr(LLVMGetValueName(f), ".bias.") != nullptr;
+        LLVMValueRef implicit = nullptr;
+        if (bias) {  // the same name without .bias, and without its last parameter
+            std::string name = LLVMGetValueName(f);
+            name.replace(name.find(".bias."), 6, ".");
+            LLVMTypeRef implicitType = LLVMFunctionType(LLVMGetReturnType(type), params, count - 1, 0);
+            implicit = LLVMGetNamedFunction(module, name.c_str());
+            if (!implicit) implicit = LLVMAddFunction(module, name.c_str(), implicitType);
+            else if (LLVMGetElementType(LLVMTypeOf(implicit)) != implicitType) continue;
+        }
+        std::vector<LLVMValueRef> calls;
+        for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u))
+            if (LLVMValueRef call = LLVMIsACallInst(LLVMGetUser(u)))
+                if (LLVMGetNumOperands(call) == (int)count + 1 && LLVMGetOperand(call, count) == f) calls.push_back(call);
+        for (LLVMValueRef call : calls) {
+            LLVMValueRef level = LLVMGetOperand(call, count - 1);
+            if (level == zero) continue;  // compares already
+            if (!bias) {
+                LLVMSetOperand(call, count - 1, zero);
+            } else {
+                if (!b) b = LLVMCreateBuilderInContext(g.context);
+                LLVMPositionBuilderBefore(b, call);
+                LLVMValueRef args[8];
+                for (unsigned i = 0; i < count - 1; i++) args[i] = LLVMGetOperand(call, i);
+                LLVMValueRef sample = LLVMBuildCall(b, implicit, args, count - 1, "");
+                LLVMReplaceAllUsesWith(call, sample);
+                LLVMInstructionEraseFromParent(call);
+            }
+            fixed++;
+        }
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
+// ---- depth comparisons with gradients (no body in the plugin) ---------------------------------------------------------
+// The plugin's library has sample_compare on 2D, 2D-array, cube and cube-array depth textures at a level or with a bias,
+// and no gradient form: a comparison with gradient2d(...) or gradientcube(...) stayed a bare declaration, which
+// instruction selection fails on ("Unhandled constant"). Kepler compares only at level 0 anyway (see the next fix), so
+// such a comparison is made at level 0 through the intrinsic the library's own level form calls
+// (llvm.nvvm.sample.compare.tex.<shape>[.offset].lod): exact for shadow maps of one level, level 0 of a mipmapped one.
+// A 2D comparison with a texel offset keeps it when the offset is a constant (the hardware takes it as an immediate);
+// one with a computed offset is left as it is. The newer front ends' { float, i8 } result gets the comparison in the
+// float. NVAIR_COMPARE_GRADIENT_FIX=0 turns it off.
+extern "C" {
+LLVMValueRef LLVMBuildInsertValue(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, unsigned, const char *);
+LLVMTypeRef LLVMVectorType(LLVMTypeRef, unsigned);
+LLVMTypeRef LLVMPointerType(LLVMTypeRef, unsigned);
+LLVMValueRef LLVMGetCalledValue(LLVMValueRef);
+LLVMValueRef LLVMBuildBitCast(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
+LLVMValueRef LLVMConstNull(LLVMTypeRef);
+LLVMTypeRef LLVMStructGetTypeAtIndex(LLVMTypeRef, unsigned);
+unsigned LLVMCountStructElementTypes(LLVMTypeRef);
+LLVMValueRef LLVMIsAConstantAggregateZero(LLVMValueRef);
+LLVMValueRef LLVMIsAConstantDataVector(LLVMValueRef);
+LLVMValueRef LLVMIsAConstantVector(LLVMValueRef);
+}
+static unsigned fixGradientCompares(LLVMModuleRef module, Gen &g) {
+    enum { kStructKind = 10, kPointerKind = 12 };
+    LLVMTypeRef f32 = LLVMFloatTypeInContext(g.context), v2 = LLVMVectorType(f32, 2), v3 = LLVMVectorType(f32, 3), v4 = LLVMVectorType(f32, 4);
+    LLVMTypeRef v2i = LLVMVectorType(g.i32, 2), i8 = LLVMInt8TypeInContext(g.context);
+    // (texture, sampler, i32, coord, [i32 layer,] float reference, dPdx, dPdy, [float min LOD clamp,] [i1 offset?, int2 offset,] i32):
+    // the 3802 runtime compiler's forms have no clamp, the newer front ends' have
+    static const struct { const char *air, *shape; bool cube, array; } kForms[] = {
+        {"air.sample_compare_depth_2d_grad.f32", "2d", false, false},
+        {"air.sample_compare_depth_2d_array_grad.f32", "2d.array", false, true},
+        {"air.sample_compare_depth_cube_grad.f32", "cube", true, false},
+        {"air.sample_compare_depth_cube_array_grad.f32", "cube.array", true, true},
+    };
+    unsigned fixed = 0;
+    LLVMBuilderRef b = nullptr;
+    for (const auto &form : kForms) {
+        LLVMValueRef f = LLVMGetNamedFunction(module, form.air);
+        if (!f || !LLVMIsDeclaration(f) || !LLVMGetFirstUse(f)) continue;
+        LLVMTypeRef type = LLVMGetElementType(LLVMTypeOf(f));
+        unsigned count = LLVMCountParamTypes(type), c = 3, r = form.array ? 5 : 4, dx = r + 1, after = r + 3;
+        LLVMTypeRef params[12];
+        if (count > 12 || count < after + 1) continue;
+        LLVMGetParamTypes(type, params);
+        LLVMTypeRef coordType = form.cube ? v3 : v2;
+        if (LLVMGetTypeKind(params[0]) != kPointerKind || LLVMGetTypeKind(params[1]) != kPointerKind || params[c] != coordType ||
+            params[r] != f32 || params[dx] != coordType || params[dx + 1] != coordType || (form.array && !isInt(params[4], 32)))
+            continue;
+        unsigned next = after + (params[after] == f32 ? 1 : 0);  // past the clamp, if any
+        int hasOffset = -1;
+        if (!form.cube) {  // i1 has-offset, int2 offset, i32
+            if (count != next + 3 || !isInt(params[next], 1) || params[next + 1] != v2i || !isInt(params[next + 2], 32)) continue;
+            hasOffset = (int)next;
+        } else if (count != next + 1 || !isInt(params[next], 32)) {
+            continue;
+        }
+        LLVMTypeRef result = LLVMGetReturnType(type);
+        bool pair = LLVMGetTypeKind(result) == kStructKind;
+        if (!pair && result != f32) continue;
+        if (pair && (LLVMCountStructElementTypes(result) < 1 || LLVMStructGetTypeAtIndex(result, 0) != f32)) continue;
+        unsigned samplerSpace = LLVMGetPointerAddressSpace(params[1]);
+        LLVMTypeRef texturePointer = LLVMPointerType(i8, 1), samplerPointer = LLVMPointerType(i8, samplerSpace);
+        std::vector<LLVMValueRef> calls;
+        for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u))
+            if (LLVMValueRef call = LLVMIsACallInst(LLVMGetUser(u)))
+                if (LLVMGetCalledValue(call) == f) calls.push_back(call);
+        for (LLVMValueRef call : calls) {
+            bool offset = false;
+            if (hasOffset >= 0) {
+                LLVMValueRef flag = LLVMGetOperand(call, hasOffset), value = LLVMGetOperand(call, hasOffset + 1);
+                if (!LLVMIsAConstantInt(flag)) continue;  // computed: left as it is
+                offset = LLVMConstIntGetZExtValue(flag) && !LLVMIsAConstantAggregateZero(value);
+                if (offset && !LLVMIsAConstantDataVector(value) && !LLVMIsAConstantVector(value)) continue;
+            }
+            char name[112];
+            snprintf(name, sizeof name, "llvm.nvvm.sample.compare.tex.%s%s.lod.v4f32.p1i8.p%ui8", form.shape, offset ? ".offset" : "", samplerSpace);
+            LLVMTypeRef lodParams[7];
+            unsigned n = 0;
+            lodParams[n++] = texturePointer, lodParams[n++] = samplerPointer, lodParams[n++] = form.cube ? v4 : v2;
+            if (form.array) lodParams[n++] = g.i32;
+            lodParams[n++] = f32;
+            if (offset) lodParams[n++] = v2i;
+            lodParams[n++] = f32;
+            LLVMValueRef lod = g.intrinsic(name, v4, lodParams, n);
+            if (!b) b = LLVMCreateBuilderInContext(g.context);
+            LLVMPositionBuilderBefore(b, call);
+            LLVMValueRef coord = LLVMGetOperand(call, c);
+            if (form.cube) {
+                LLVMValueRef packed = LLVMConstNull(v4);
+                for (unsigned k = 0; k < 3; k++)
+                    packed = LLVMBuildInsertElement(b, packed, LLVMBuildExtractElement(b, coord, g.c32(k), ""), g.c32(k), "");
+                coord = packed;
+            }
+            LLVMValueRef args[7];
+            unsigned a = 0;
+            args[a++] = LLVMBuildBitCast(b, LLVMGetOperand(call, 0), texturePointer, "");
+            args[a++] = LLVMBuildBitCast(b, LLVMGetOperand(call, 1), samplerPointer, "");
+            args[a++] = coord;
+            if (form.array) args[a++] = LLVMGetOperand(call, 4);
+            args[a++] = LLVMGetOperand(call, r);
+            if (offset) args[a++] = LLVMGetOperand(call, hasOffset + 1);
+            args[a++] = LLVMConstReal(f32, 0.0);
+            LLVMValueRef value = LLVMBuildExtractElement(b, LLVMBuildCall(b, lod, args, a, ""), g.c32(0), "");
+            if (pair) {
+                LLVMValueRef whole = LLVMBuildInsertValue(b, LLVMGetUndef(result), value, 0, "");
+                if (LLVMCountStructElementTypes(result) > 1 && isInt(LLVMStructGetTypeAtIndex(result, 1), 8))
+                    whole = LLVMBuildInsertValue(b, whole, LLVMConstInt(LLVMStructGetTypeAtIndex(result, 1), 1, 0), 1, "");  // resident
+                value = whole;
+            }
+            LLVMReplaceAllUsesWith(call, value);
+            LLVMInstructionEraseFromParent(call);
+            fixed++;
+        }
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
 static void logBareIntrinsics(LLVMModuleRef module) {
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
         const char *name = LLVMGetValueName(f);
@@ -762,6 +1109,12 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (bools && logging()) fprintf(stderr, "[nvair] %u threadgroup bool(s) widened to i8\n", bools);
         unsigned cubes = disabled("NVAIR_CUBE_ARRAY_FIX") ? 0 : clampCubeArrayIndices(module, g);
         if (cubes && logging()) fprintf(stderr, "[nvair] %u cube array index(es) raised to 0\n", cubes);
+        unsigned gradients = disabled("NVAIR_GRADIENT_FIX") ? 0 : fixGradientSamples(module, g);
+        if (gradients && logging()) fprintf(stderr, "[nvair] %u 3D / cube gradient sample(s) done at their level\n", gradients);
+        unsigned gradients2 = disabled("NVAIR_COMPARE_GRADIENT_FIX") ? 0 : fixGradientCompares(module, g);
+        if (gradients2 && logging()) fprintf(stderr, "[nvair] %u gradient comparison(s) made at level 0\n", gradients2);
+        unsigned compares = disabled("NVAIR_COMPARE_LEVEL_FIX") ? 0 : fixDepthCompareLevels(module, g);
+        if (compares && logging()) fprintf(stderr, "[nvair] %u depth comparison(s) moved to a level that compares\n", compares);
         if (samplers && logging()) fprintf(stderr, "[nvair] %u constexpr sampler(s) in the [2 x i64] form rewritten as i64\n", samplers);
         if (defined || fixed) inlineBodies(module);
         if (logging() && (defined || fixed)) fprintf(stderr, "[nvair] %u intrinsic(s) given bodies, %u 64-bit instruction(s) rewritten\n", defined, fixed);
