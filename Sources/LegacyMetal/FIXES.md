@@ -229,6 +229,8 @@ Weak-loaded by GeForceAIRPlugin (`11.0 Beta 3`), the Kepler (GTX 600/700) back e
 `NVAIR_LOG=1` logs what is rewritten and any AIR intrinsic still without a body; `NVAIR_INTRINSICS=0`, `NVAIR_I64_FIX=0` and `NVAIR_SAMPLER_STATE_FIX=0` turn the parts off. The plugin opens its built-in library (`Resources/metal_runtime.metallib`) from its own bundle, so a copy loaded by leaf name (verify.sh) needs the bundle around it. Test use: `DYLD_INSERT_LIBRARIES=build/MetalOldCompat.dylib:Tests/tools/localcc.dylib:build/GeForceAIRCompat-test.dylib`.
 
 ## Known limitations
+
+- Kepler (GTX 770) converts a fragment color of exactly 0.5 to 127 in an 8-bit unorm target, where Apple's GPUs give 128: 127.5 is a tie, and the MSL specification (8.7.1.2) asks for round-to-nearest-even (128). It's within the 0.6 ULP D3D allows, and Kepler's color output does the conversion in fixed function after the shader, so the compiler can't round for it (it doesn't know the target's format or blending). s61 checks that tie on its own and expects 127 on Kepler (its argument-buffer checks use values that aren't ties).
 - On Kepler a depth comparison can't use a level above 0: a mipmapped shadow map sampled at a higher level, with a bias or with gradients compares against level 0.
 
 - Metal's validation layers don't run on this stack (item 41 switches them off): API and shader validation need the OS's own Metal runtime and compiler.

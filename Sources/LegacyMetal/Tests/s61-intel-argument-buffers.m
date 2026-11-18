@@ -4,7 +4,10 @@
 // encoders (item 46). WebKit's ANGLE puts every WebGL 2 uniform block in an argument buffer. This program encodes two
 // buffer pointers and a constant with the argument encoder of a fragment function, draws with it and reads a pixel back,
 // does the same in a kernel (with two arrays of pointers, the second at id 4), then runs a kernel that reads a buffer the app bound at
-// buffer index 30, which the first kernel's hidden bindings used, to check that the app's binding was put back.
+// buffer index 30, which the first kernel's hidden bindings used, to check that the app's binding was put back. The values
+// avoid rounding ties in the 8-bit target (0.375 -> 96); a second pass writes 0.5, an exact tie that Metal rounds to even
+// (128). Kepler (GTX 600/700) writes 127 there, a known deviation in its fixed-function output (FIXES.md, known
+// limitations), so on Kepler that check expects 127 and reports it.
 // Stock OCLP on an HD 4000: FAIL (the encoder aborts, s60; with only item 46, no encoder). Fixed: PASS. Other GPUs have
 // argument buffers of their own and pass either way. Argument: GPU name substring (default: Intel).
 #import "repro.h"
@@ -22,6 +25,7 @@ int main(int argc, char **argv) {
             "struct VOut { float4 pos [[position]]; };\n"
             "vertex VOut vs(uint vid [[vertex_id]]) { float2 p[3] = {float2(-1, -1), float2(3, -1), float2(-1, 3)}; VOut o; o.pos = float4(p[vid], 0, 1); return o; }\n"
             "fragment float4 fs(constant Blocks &b [[buffer(25)]]) { return b.u0->c + b.u1->c + b.k; }\n"
+            "fragment float4 tie() { return float4(0.5); }\n"
             "kernel void many(constant Many &m [[buffer(20)]], device float4 *out [[buffer(0)]]) { out[0] = m.u[0]->c + m.u[2]->c + m.k; out[2] = m.w[1]->c; }\n"
             "kernel void plain(constant float4 *v [[buffer(30)]], device float4 *out [[buffer(0)]]) { out[1] = v[0]; }\n"
             options:nil error:&err];
@@ -38,7 +42,7 @@ int main(int argc, char **argv) {
         id<MTLComputePipelineState> cpPlain = [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"plain"] error:&err];
         id<MTLArgumentEncoder> fenc = [fs newArgumentEncoderWithBufferIndex:25], menc = [many newArgumentEncoderWithBufferIndex:20];
         if (!fenc || !menc) return FAIL(bug, "%s: no argument encoder", dev.name.UTF8String);
-        float v0[4] = {0.25f, 0, 0, 0}, v1[4] = {0, 0.5f, 0, 0}, v2[4] = {0, 0, 0.125f, 0}, mine[4] = {7, 8, 9, 10};
+        float v0[4] = {0.25f, 0, 0, 0}, v1[4] = {0, 0.375f, 0, 0}, v2[4] = {0, 0, 0.125f, 0}, mine[4] = {7, 8, 9, 10};
         id<MTLBuffer> b0 = [dev newBufferWithBytes:v0 length:16 options:0], b1 = [dev newBufferWithBytes:v1 length:16 options:0];
         id<MTLBuffer> b2 = [dev newBufferWithBytes:v2 length:16 options:0], b3 = [dev newBufferWithBytes:mine length:16 options:0];
         id<MTLBuffer> fargs = [dev newBufferWithLength:fenc.encodedLength options:0], margs = [dev newBufferWithLength:menc.encodedLength options:0];
@@ -94,19 +98,43 @@ int main(int argc, char **argv) {
         uint8_t px[4];
         [rt getBytes:px bytesPerRow:16 fromRegion:MTLRegionMake2D(1, 1, 1, 1) mipmapLevel:0];
         const float *o = out.contents;
-        if (px[0] != 64 || px[1] != 128 || px[2] != 191 || px[3] != 255)
-            return FAIL(bug, "%s: fragment function reading two blocks through an argument buffer: pixel %u %u %u %u, want 64 128 191 255",
+        if (px[0] != 64 || px[1] != 96 || px[2] != 191 || px[3] != 255)
+            return FAIL(bug, "%s: fragment function reading two blocks through an argument buffer: pixel %u %u %u %u, want 64 96 191 255",
                         dev.name.UTF8String, px[0], px[1], px[2], px[3]);
         if (o[0] != 0.25f || o[1] != 0.5f || o[2] != 0.125f || o[3] != 1)
             return FAIL(bug, "%s: kernel reading an array of pointers in an argument buffer: %g %g %g %g, want 0.25 0.5 0.125 1",
                         dev.name.UTF8String, o[0], o[1], o[2], o[3]);
-        if (o[8] != 0 || o[9] != 0.5f || o[10] != 0 || o[11] != 0)
-            return FAIL(bug, "%s: element 1 of a second array of pointers (ids 4-5) in an argument buffer: %g %g %g %g, want 0 0.5 0 0",
+        if (o[8] != 0 || o[9] != 0.375f || o[10] != 0 || o[11] != 0)
+            return FAIL(bug, "%s: element 1 of a second array of pointers (ids 4-5) in an argument buffer: %g %g %g %g, want 0 0.375 0 0",
                         dev.name.UTF8String, o[8], o[9], o[10], o[11]);
         if (o[4] != 7 || o[5] != 8 || o[6] != 9 || o[7] != 10)
             return FAIL(bug, "%s: the app's buffer at index 30 after an argument-buffer dispatch: %g %g %g %g, want 7 8 9 10",
                         dev.name.UTF8String, o[4], o[5], o[6], o[7]);
-        return PASS(bug, "%s: argument buffers encoded, drawn and dispatched with (pointers, two arrays of pointers, constants)",
-                    dev.name.UTF8String);
+        // 0.5 in an 8-bit unorm target: an exact tie, which Metal rounds to even (128); Kepler's color output writes 127
+        pd.fragmentFunction = [lib newFunctionWithName:@"tie"];
+        id<MTLRenderPipelineState> tp = [dev newRenderPipelineStateWithDescriptor:pd error:&err];
+        if (!tp) return FAIL(bug, "%s: render pipeline writing 0.5: %s", dev.name.UTF8String, err.localizedDescription.UTF8String);
+        id<MTLTexture> tt = [dev newTextureWithDescriptor:td];
+        cb = [[dev newCommandQueue] commandBuffer];
+        rpd.colorAttachments[0].texture = tt;
+        re = [cb renderCommandEncoderWithDescriptor:rpd];
+        [re setRenderPipelineState:tp];
+        [re drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+        [re endEncoding];
+        be = [cb blitCommandEncoder];
+        [be synchronizeResource:tt];
+        [be endEncoding];
+        [cb commit];
+        [cb waitUntilCompleted];
+        uint8_t tie[4];
+        [tt getBytes:tie bytesPerRow:16 fromRegion:MTLRegionMake2D(1, 1, 1, 1) mipmapLevel:0];
+        BOOL kepler = [NSStringFromClass([dev class]) hasPrefix:@"NVMTL"];
+        BOOL even = tie[0] == 128 && tie[1] == 128 && tie[2] == 128 && tie[3] == 128;
+        BOOL keplerTie = kepler && tie[0] == 127 && tie[1] == 127 && tie[2] == 127 && tie[3] == 127;  // the known deviation
+        if (!even && !keplerTie)
+            return FAIL(bug, "%s: 0.5 written to an 8-bit unorm target came out %u %u %u %u, want 128 (round to even)%s", dev.name.UTF8String,
+                        tie[0], tie[1], tie[2], tie[3], kepler ? " or Kepler's 127" : "");
+        return PASS(bug, "%s: argument buffers encoded, drawn and dispatched with (pointers, two arrays of pointers, constants); 0.5 in "
+                    "an 8-bit target: %u%s", dev.name.UTF8String, tie[0], keplerTie ? " (Kepler's known deviation from round-to-even, expected)" : "");
     }
 }
