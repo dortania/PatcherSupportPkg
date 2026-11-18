@@ -71,6 +71,9 @@
 // 32-bit products of 16-bit factors, and products an or uses, hidden from the optimizer behind an opaque min (it took
 // bits of products for clear). NVAIR_NARROW_MULTIPLY_FIX=0.
 //
+// Constant-length copies (llvm.memcpy) of 64 bytes or more made word loops (the back end's time was cubic in their size:
+// a WebGPU CTS kernel kept the compiler busy for minutes). NVAIR_LARGE_COPY_LOOP=0.
+//
 // Depth and stencil textures sampled through texture2d in ANGLE's shaders made (x, 0, 0, 1) from a mask MetalOldCompat
 // item 62 binds (the sampler gave (x, x, x, x)). NVAIR_DEPTH_CHANNELS=0.
 //
@@ -1833,6 +1836,81 @@ static unsigned fixDepthChannels(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
+// ---- large copies as loops ---------------------------------------------------------------------------------------------
+// The plugin's back end takes time about cubic in the size of a constant-length llvm.memcpy (it lowers each to one load
+// and store a word): a pipeline copying a 168-byte struct between device buffers took 14 s to build, 232 bytes 37 s, and
+// a WebGPU CTS kernel copying a few such structs (shader,execution,expression,call,user,ptr_aliasing) kept the compiler
+// service busy for over 13 minutes (the page never got its pipeline). A memcpy of 64 bytes or more, word-aligned and a
+// whole number of words, becomes a loop of word loads and stores (nvair.copy.<dst>.<src>, always-inline), its trip count
+// behind the plugin's opaque llvm.nvvm.min.u.i32 so the optimizer can't unroll it back. NVAIR_LARGE_COPY_LOOP=0.
+static LLVMValueRef copyHelper(Gen &g, unsigned dstSpace, unsigned srcSpace) {
+    char name[64];
+    snprintf(name, sizeof name, "nvair.copy.%u.%u", dstSpace, srcSpace);
+    if (LLVMValueRef f = LLVMGetNamedFunction(g.module, name)) return f;
+    LLVMTypeRef i8 = LLVMInt8TypeInContext(g.context);
+    LLVMTypeRef params[3] = {LLVMPointerType(i8, dstSpace), LLVMPointerType(i8, srcSpace), g.i32};
+    LLVMValueRef f = LLVMAddFunction(g.module, name, LLVMFunctionType(LLVMVoidTypeInContext(g.context), params, 3, 0));
+    markInline(g.context, f);
+    LLVMBuilderRef b = LLVMCreateBuilderInContext(g.context);
+    LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(g.context, f, ""), loop = LLVMAppendBasicBlockInContext(g.context, f, ""),
+                      done = LLVMAppendBasicBlockInContext(g.context, f, "");
+    LLVMPositionBuilderAtEnd(b, entry);
+    LLVMValueRef dst = LLVMBuildBitCast(b, LLVMGetParam(f, 0), LLVMPointerType(g.i32, dstSpace), "");
+    LLVMValueRef src = LLVMBuildBitCast(b, LLVMGetParam(f, 1), LLVMPointerType(g.i32, srcSpace), "");
+    LLVMTypeRef two[2] = {g.i32, g.i32};
+    LLVMValueRef minArgs[2] = {LLVMGetParam(f, 2), g.c32(~0u)};
+    LLVMValueRef count = LLVMBuildCall(b, g.intrinsic("llvm.nvvm.min.u.i32", g.i32, two, 2), minArgs, 2, "");
+    LLVMBuildBr(b, loop);
+    LLVMPositionBuilderAtEnd(b, loop);
+    LLVMValueRef i = LLVMBuildPhi(b, g.i32, "");
+    LLVMValueRef from = LLVMBuildGEP(b, src, &i, 1, ""), to = LLVMBuildGEP(b, dst, &i, 1, "");
+    LLVMValueRef word = LLVMBuildLoad(b, from, "");
+    LLVMSetAlignment(word, 4);
+    LLVMSetAlignment(LLVMBuildStore(b, word, to), 4);
+    LLVMValueRef next = LLVMBuildAdd(b, i, g.c32(1), "");
+    LLVMValueRef zero = g.c32(0);
+    LLVMBasicBlockRef from0 = entry, fromLoop = loop;
+    LLVMAddIncoming(i, &zero, &from0, 1);
+    LLVMAddIncoming(i, &next, &fromLoop, 1);
+    LLVMBuildCondBr(b, LLVMBuildICmp(b, LLVMIntULT, next, count, ""), loop, done);
+    LLVMPositionBuilderAtEnd(b, done);
+    LLVMBuildRetVoid(b);
+    LLVMDisposeBuilder(b);
+    return f;
+}
+static unsigned loopLargeCopies(LLVMModuleRef module, Gen &g) {
+    std::vector<LLVMValueRef> copies;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
+        const char *fname = LLVMGetValueName(f);
+        if (LLVMIsDeclaration(f) || startsWith(fname, "nvair.")) continue;
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                if (!LLVMIsACallInst(inst)) continue;
+                LLVMValueRef callee = calledFunction(inst);
+                if (!callee || !startsWith(LLVMGetValueName(callee), "llvm.memcpy.") || LLVMGetNumArgOperands(inst) != 5) continue;
+                LLVMValueRef length = LLVMGetOperand(inst, 2), align = LLVMGetOperand(inst, 3), isVolatile = LLVMGetOperand(inst, 4);
+                if (!LLVMIsAConstantInt(length) || !LLVMIsAConstantInt(align) || !LLVMIsAConstantInt(isVolatile)) continue;
+                unsigned long long bytes = LLVMConstIntGetZExtValue(length);
+                if (bytes < 64 || bytes % 4 || bytes / 4 > 0x7fffffffull || LLVMConstIntGetZExtValue(align) < 4 || LLVMConstIntGetZExtValue(isVolatile))
+                    continue;
+                copies.push_back(inst);
+            }
+    }
+    if (copies.empty()) return 0;
+    LLVMBuilderRef b = LLVMCreateBuilderInContext(g.context);
+    for (LLVMValueRef copy : copies) {
+        LLVMValueRef dst = LLVMGetOperand(copy, 0), src = LLVMGetOperand(copy, 1);
+        LLVMTypeRef dt = LLVMTypeOf(dst), st = LLVMTypeOf(src);
+        LLVMValueRef helper = copyHelper(g, LLVMGetPointerAddressSpace(dt), LLVMGetPointerAddressSpace(st));
+        LLVMPositionBuilderBefore(b, copy);
+        LLVMValueRef args[3] = {dst, src, g.c32((unsigned)(LLVMConstIntGetZExtValue(LLVMGetOperand(copy, 2)) / 4))};
+        LLVMBuildCall(b, helper, args, 3, "");
+        LLVMInstructionEraseFromParent(copy);
+    }
+    LLVMDisposeBuilder(b);
+    return (unsigned)copies.size();
+}
+
 static void logBareIntrinsics(LLVMModuleRef module) {
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
         const char *name = LLVMGetValueName(f);
@@ -1878,6 +1956,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         unsigned guarded = disabled("NVAIR_FRAGMENT_LOAD_GUARD") ? 0 : guardFragmentLoads(module, g);
         if (guarded && logging()) fprintf(stderr, "[nvair] %u fragment device load(s) kept from a negative index\n", guarded);
         unsigned demoted = disabled("NVAIR_DEMOTE_DISCARD") ? 0 : demoteDiscards(module, g);
+        unsigned copies = disabled("NVAIR_LARGE_COPY_LOOP") ? 0 : loopLargeCopies(module, g);
+        if (copies && logging()) fprintf(stderr, "[nvair] %u large copy(ies) made word loops\n", copies);
         unsigned narrow = disabled("NVAIR_NARROW_PRIVATE_ARRAY_FIX") ? 0 : widenNarrowPrivateArrays(module, g);
         if (narrow && logging()) fprintf(stderr, "[nvair] %u private byte / halfword array(s) done on 32-bit words\n", narrow);
         unsigned counts = disabled("NVAIR_COUNT_ZERO_FIX") ? 0 : defineCountOfZero(module, g);
@@ -1887,7 +1967,7 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         unsigned compares = disabled("NVAIR_COMPARE_LEVEL_FIX") ? 0 : fixDepthCompareLevels(module, g);
         if (compares && logging()) fprintf(stderr, "[nvair] %u depth comparison(s) moved to a level that compares\n", compares);
         if (samplers && logging()) fprintf(stderr, "[nvair] %u constexpr sampler(s) in the [2 x i64] form rewritten as i64\n", samplers);
-        if (defined || fixed || demoted) inlineBodies(module);
+        if (defined || fixed || demoted || copies) inlineBodies(module);
         if (logging() && (defined || fixed)) fprintf(stderr, "[nvair] %u intrinsic(s) given bodies, %u 64-bit instruction(s) rewritten\n", defined, fixed);
         if (logging()) logBareIntrinsics(module);
     }
