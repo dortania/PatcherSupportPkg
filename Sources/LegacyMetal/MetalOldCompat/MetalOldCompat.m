@@ -1724,6 +1724,14 @@ static id newLibraryData(id self, SEL _cmd, dispatch_data_t data, NSError **erro
 // takes its own fallbacks. On Kepler (GTX 600/700, family 1 too) ANGLE also refuses the GPU by vendor
 // (disableMetalOnNvidia: "the Metal display didn't initialize", no WebGL in Firefox or Safari), so that feature goes on
 // the same list. MTLSHIM_ANGLE_MAC2=0 turns this part off.
+// ANGLE also turns its MTLSharedEvent syncs (feature hasEvents) off on NVIDIA ("Fence sync is flaky on Nvidia",
+// crbug.com/1136673), which takes GL_ARB_sync, GL_OES_EGL_sync, GL_NV_fence and EGL_KHR_fence_sync away. Safari 18's WebKit
+// requires GL_ARB_sync for every WebGL context (GraphicsContextGLCocoa::platformInitializeExtensions), so on Kepler every
+// WebGL and WebGL 2 context was created lost: getContext returned a context whose isContextLost() was already true
+// (CONTEXT_LOST_WEBGL), with nothing logged. On this stack Kepler's shared events and ANGLE's fences on them work (s69:
+// hundreds of glFenceSync/glClientWaitSync, flush-and-poll and EGL fences, none timed out), so when WebKit (WebCore,
+// WebKit or its libANGLE-shared.dylib) is the caller, hasEvents goes on ANGLE_FEATURE_OVERRIDES_ENABLED (a no-op on Intel,
+// where it's on already). Chromium and Firefox keep ANGLE's choice. MTLSHIM_ANGLE_EVENTS=0 turns this part off.
 typedef void (*EndEncodingIMP)(id, SEL);
 
 // 15. MSAA resolves on the 12.x Intel driver (Haswell / Ivy Bridge): IGRenderPass::generateResolveOptions always resolves
@@ -3862,6 +3870,26 @@ static void disableFeaturesFamilyOneLacks(void) {
     });
 }
 
+// Item 11: WebKit's ANGLE gets its MTLSharedEvent fences (hasEvents) back on NVIDIA; Safari's WebGL needs GL_ARB_sync.
+// ANGLE reads ANGLE_FEATURE_OVERRIDES_ENABLED when a display sets up its features (WebKit's build at every display, other
+// builds may read it once), and WebCore asks supportsFamily:Mac2 before each display, so it's set before the first one.
+static void enableEventsForWebKit(const void *returnAddress) {
+    static dispatch_once_t once;
+    const char *image = callerImage(returnAddress);
+    if (strcmp(image, "libANGLE-shared.dylib") && strcmp(image, "WebCore") && strcmp(image, "WebKit")) return;
+    dispatch_once(&once, ^{
+        const char *setting = getenv("MTLSHIM_ANGLE_EVENTS");
+        if (setting && !strcmp(setting, "0")) return;
+        const char *set = getenv("ANGLE_FEATURE_OVERRIDES_ENABLED");
+        char *value = NULL;
+        if (set && *set && asprintf(&value, "%s:hasEvents", set) < 0) value = NULL;
+        setenv("ANGLE_FEATURE_OVERRIDES_ENABLED", value ? value : "hasEvents", 1);
+        free(value);
+        if (getenv("MTLSHIM_VERBOSE"))
+            shimLog("[mtlshim] WebKit's ANGLE on a family-1 GPU: ANGLE_FEATURE_OVERRIDES_ENABLED=%s\n", getenv("ANGLE_FEATURE_OVERRIDES_ENABLED"));
+    });
+}
+
 // Dawn (Chromium's WebGPU) asks `supportsFamily:Apple6 || supportsFamily:Mac2` before it offers the subgroups feature, which
 // these GPUs' compiler can't build (simd_sum, simd_ballot and the like abort MTLCompilerService, and Chrome's GPU process
 // went down with it during the WebGPU CTS subgroup tests). Right after that it asks Apple7 from the same function, then
@@ -3898,6 +3926,7 @@ static BOOL compatSupportsFamily(id self, SEL _cmd, NSInteger family) {
         return real;
     }
     disableFeaturesFamilyOneLacks();
+    enableEventsForWebKit(__builtin_return_address(0));
     return YES;
 }
 
@@ -3911,7 +3940,10 @@ static CFTypeRef compatRegistryEntryCreateCFProperty(io_registry_entry_t entry, 
     if (IOObjectGetClass(entry, cls) != KERN_SUCCESS || strcmp(cls, "IOPlatformExpertDevice") || !fromChromium(__builtin_return_address(0)) ||
         (!anyFamilyTwo() && !familyOneAsTwo()))
         return value;
-    if (familyOneAsTwo()) disableFeaturesFamilyOneLacks();
+    if (familyOneAsTwo()) {
+        disableFeaturesFamilyOneLacks();
+        enableEventsForWebKit(__builtin_return_address(0));
+    }
     static const char model[] = "MacBookPro13,3";  // past ANGLE's gate (MacBookPro >= 13,1)
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Chromium: IOPlatformExpertDevice model -> %s\n", model);
     CFRelease(value);

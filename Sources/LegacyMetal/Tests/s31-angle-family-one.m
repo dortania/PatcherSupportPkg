@@ -40,6 +40,7 @@ enum {
 static const char *const kANGLEPaths[] = {
     "/System/Cryptexes/App/System/Library/StagedFrameworks/Safari/libANGLE-shared.dylib",  // Safari's own (Sequoia)
     "/System/Library/Frameworks/WebKit.framework/Versions/A/Frameworks/libANGLE-shared.dylib",
+    "/System/Library/Frameworks/WebKit.framework/Versions/A/Frameworks/WebCore.framework/Versions/A/Frameworks/libANGLE-shared.dylib",  // Sequoia 15.8 (s63's)
     "/System/Library/PrivateFrameworks/WebCore.framework/Versions/A/Frameworks/libANGLE-shared.dylib",
 };
 
