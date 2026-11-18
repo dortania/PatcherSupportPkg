@@ -98,6 +98,8 @@
 //      and stitchable Core Image kernels load again (Microsoft Office's picture corrections), and with its own
 //      sections found again, kernels from Metal source (kernelsWithMetalString:, which aborted) and from kernel-language
 //      source, which now take Core Image's Metal path, reflect too
+//  53. small stencil uploads on the Kepler driver (GeForceMTLDriver), which weren't ordered before the blit encoder's next
+//      command: a later copy out of the same texture could read it before the upload landed (zeros)
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -2538,6 +2540,53 @@ static void igTextureToBufferOptions(id self, SEL _cmd, id t, NSUInteger slice, 
     textureCopy(self, t, slice, level, origin, size, temporary, 0, 0, MTLOriginMake(0, 0, 0));
     textureToBuffer(self, _cmd, temporary, 0, 0, MTLOriginMake(0, 0, 0), size, buffer, offset, row, image, options, YES);
 }
+// 53. Small stencil uploads on the Kepler driver: a copy from a buffer into Stencil8, or into the stencil of a depth/stencil
+// texture (MTLBlitOptionStencilFromDepthStencil), of at most 16 KB isn't ordered before the blit encoder's next command,
+// so a copy out of the same texture right after it can run first and read the old contents (zeros in a new texture).
+// Measured on a GTX 770 (Sequoia, OCLP's 11.0 Beta 3 GeForceMTLDriver), 30 runs per size, read-back in the same encoder:
+// 4x3 to 128x128 fail 10% to 83% of runs, 256x256 and up never; colour and Depth32Float uploads never. Any command in
+// between orders it (a new encoder too): after every stencil upload a 4-byte fillBuffer into a scratch buffer of the
+// device follows, which made all sizes 30 of 30. MTLSHIM_NV_STENCIL_ORDER=0 turns it off. Test: s62 on the GTX 770.
+static BufferToTextureIMP origNVBufferToTexture;
+static BufferToTextureOptionsIMP origNVBufferToTextureOptions;
+static const void *kNVOrderScratch = &kNVOrderScratch;
+static void nvOrderStencilUpload(id encoder, id<MTLTexture> t, MTLBlitOption options) {
+    MTLPixelFormat f = t.pixelFormat;
+    BOOL stencil = f == MTLPixelFormatStencil8 || ((options & MTLBlitOptionStencilFromDepthStencil) &&
+                                                   (f == MTLPixelFormatDepth32Float_Stencil8 || f == MTLPixelFormatDepth24Unorm_Stencil8 ||
+                                                    f == MTLPixelFormatX32_Stencil8 || f == MTLPixelFormatX24_Stencil8));
+    if (!stencil) return;
+    id<MTLDevice> device = t.device;
+    id<MTLBuffer> scratch = objc_getAssociatedObject(device, kNVOrderScratch);
+    if (!scratch) {
+        scratch = [device newBufferWithLength:4 options:MTLResourceStorageModePrivate];
+        if (!scratch) return;
+        objc_setAssociatedObject(device, kNVOrderScratch, scratch, OBJC_ASSOCIATION_RETAIN);
+    }
+    [(id<MTLBlitCommandEncoder>)encoder fillBuffer:scratch range:NSMakeRange(0, 4) value:0];
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] stencil upload ordered (format %lu)\n", (unsigned long)f);
+}
+static void nvBufferToTexture(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInteger row, NSUInteger image, MTLSize size, id t,
+                              NSUInteger slice, NSUInteger level, MTLOrigin origin) {
+    origNVBufferToTexture(self, _cmd, buffer, offset, row, image, size, t, slice, level, origin);
+    nvOrderStencilUpload(self, t, MTLBlitOptionNone);
+}
+static void nvBufferToTextureOptions(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInteger row, NSUInteger image, MTLSize size, id t,
+                                     NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLBlitOption options) {
+    origNVBufferToTextureOptions(self, _cmd, buffer, offset, row, image, size, t, slice, level, origin, options);
+    nvOrderStencilUpload(self, t, options);
+}
+static void nvStencilUploadOrder(void) {
+    static const char *const kEncoder = "NVMTLBlitCommandEncoder_KEPLER_A", *const kBufferToTexture =
+        "copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:";
+    char withOptions[256];
+    const char *setting = getenv("MTLSHIM_NV_STENCIL_ORDER");
+    if (origNVBufferToTexture || (setting && !strcmp(setting, "0")) || !definesMethod(kEncoder, kBufferToTexture)) return;
+    origNVBufferToTexture = (BufferToTextureIMP)swizzle(kEncoder, kBufferToTexture, (IMP)nvBufferToTexture);
+    snprintf(withOptions, sizeof withOptions, "%soptions:", kBufferToTexture);
+    if (definesMethod(kEncoder, withOptions))
+        origNVBufferToTextureOptions = (BufferToTextureOptionsIMP)swizzle(kEncoder, withOptions, (IMP)nvBufferToTextureOptions);
+}
 static void stencilCopies(void) {
     static const char *const kTextureToBuffer =
         "copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:";
@@ -3127,6 +3176,7 @@ static void patchDriverClasses(void) {
     swizzledViews();
     mpsStatisticsWidth();
     stencilCopies();
+    nvStencilUploadOrder();  // item 53
     stencilViewAlignment();
     computeSamplerCompare();
     // item 29, once the Intel driver is in (WebKit's processes are named by then)
