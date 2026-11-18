@@ -39,6 +39,15 @@
 //                           line division code, a signed one came out unsigned (i67: long >> s, 102 of 256 pixels).
 // Vectors of them (ulong2 / ulong2) one lane at a time. NVAIR_I64_FIX=0 turns these off, NVAIR_SHIFT_FIX=0 the shifts only.
 //
+// Constexpr samplers from newer front ends: a library built with Xcode 16.3+ (AIR 2.7, iMovie 10.4.4's viewer shader)
+// stores each as a [2 x i64] constant where the plugin reads the one i64 the 3802 runtime compiler writes (the same
+// word, bit 63 set; the macOS 14 form). On the array the plugin traps ("Compiler encountered an internal error").
+// Rewritten to the one-word form, as IntelAdapter does for Intel's back end. NVAIR_SAMPLER_STATE_FIX=0 turns it off.
+//
+// Threadgroup bools (i1 globals in threadgroup memory) widened to i8, as IntelAdapter does. NVAIR_THREADGROUP_BOOL_FIX=0.
+//
+// Cube array indices below 0 raised to 0, as AMDAdapter does. NVAIR_CUBE_ARRAY_FIX=0.
+//
 // Installed (planned): GeForceAIRPlugin.bundle/Contents/MacOS/GeForceAIRCompat.dylib, a weak dependency of
 // GeForceAIRPlugin. Test use: DYLD_INSERT_LIBRARIES=Tests/tools/localcc.dylib:build/GeForceAIRCompat-test.dylib
 //   NVAIR_LOG=1             log what is rewritten (NVAIR_LOG=/path: append to that file)
@@ -531,6 +540,194 @@ static unsigned fixWideInstructions(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
+// ---- constexpr samplers from newer front ends ([2 x i64] -> i64 with bit 63 set; IntelAdapter's fixSamplerStateWords) ----
+extern "C" {
+unsigned LLVMGetNamedMetadataNumOperands(LLVMModuleRef, const char *);
+void LLVMGetNamedMetadataOperands(LLVMModuleRef, const char *, LLVMValueRef *);
+LLVMValueRef LLVMIsAMDNode(LLVMValueRef);
+LLVMValueRef LLVMIsAMDString(LLVMValueRef);
+unsigned LLVMGetMDNodeNumOperands(LLVMValueRef);
+void LLVMGetMDNodeOperands(LLVMValueRef, LLVMValueRef *);
+const char *LLVMGetMDString(LLVMValueRef, unsigned *);
+LLVMValueRef LLVMIsAGlobalVariable(LLVMValueRef);
+LLVMValueRef LLVMGetInitializer(LLVMValueRef);
+void LLVMSetInitializer(LLVMValueRef, LLVMValueRef);
+LLVMValueRef LLVMIsAConstantDataArray(LLVMValueRef);
+LLVMValueRef LLVMIsAConstantAggregateZero(LLVMValueRef);
+LLVMValueRef LLVMGetElementAsConstant(LLVMValueRef, unsigned);
+unsigned long long LLVMConstIntGetZExtValue(LLVMValueRef);
+unsigned LLVMGetArrayLength(LLVMTypeRef);
+LLVMValueRef LLVMAddGlobalInAddressSpace(LLVMModuleRef, LLVMTypeRef, const char *, unsigned);
+void LLVMSetGlobalConstant(LLVMValueRef, int);
+int LLVMGetLinkage(LLVMValueRef);
+void LLVMSetAlignment(LLVMValueRef, unsigned);
+unsigned LLVMGetPointerAddressSpace(LLVMTypeRef);
+LLVMValueRef LLVMConstBitCast(LLVMValueRef, LLVMTypeRef);
+void LLVMSetValueName(LLVMValueRef, const char *);
+}
+extern "C" void mdNodeReplaceOperand(void *node, unsigned index, void *replacement) asm("__ZN4llvm6MDNode18replaceOperandWithEjPNS_8MetadataE");
+extern "C" void *valueAsMetadata(LLVMValueRef value) asm("__ZN4llvm15ValueAsMetadata3getEPNS_5ValueE");
+
+static std::vector<LLVMValueRef> metadataOperands(LLVMValueRef node) {
+    std::vector<LLVMValueRef> out(node && LLVMIsAMDNode(node) ? LLVMGetMDNodeNumOperands(node) : 0);
+    if (!out.empty()) LLVMGetMDNodeOperands(node, out.data());
+    return out;
+}
+static void *metadataOf(LLVMValueRef value) {  // MetadataAsValue::MD: +0x20 in this LLVM, as LLVMGetMDNodeNumOperands reads it
+    if (!value || !LLVMIsAMDNode(value)) return nullptr;
+    void *md = *(void **)((char *)value + 0x20);
+    return md && *(unsigned *)((char *)md + 8) == LLVMGetMDNodeNumOperands(value) ? md : nullptr;
+}
+static bool isString(LLVMValueRef value, const char *text) {
+    unsigned length = 0;
+    const char *s = value && LLVMIsAMDString(value) ? LLVMGetMDString(value, &length) : nullptr;
+    return s && length == strlen(text) && !memcmp(s, text, length);
+}
+
+static unsigned fixSamplerStateWords(LLVMModuleRef module, Gen &g) {
+    enum { kArrayKind = 11 };  // LLVMTypeKind
+    std::vector<LLVMValueRef> states(LLVMGetNamedMetadataNumOperands(module, "air.sampler_states"));
+    if (states.empty()) return 0;
+    LLVMGetNamedMetadataOperands(module, "air.sampler_states", states.data());
+    unsigned fixed = 0;
+    for (LLVMValueRef state : states) {  // !{!"air.sampler_state", [2 x i64] addrspace(2)* @__air_sampler_state}
+        std::vector<LLVMValueRef> parts = metadataOperands(state);
+        void *node = metadataOf(state);
+        if (parts.size() != 2 || !isString(parts[0], "air.sampler_state") || !node) continue;
+        LLVMValueRef global = parts[1] ? LLVMIsAGlobalVariable(parts[1]) : nullptr;
+        LLVMValueRef words = global ? LLVMGetInitializer(global) : nullptr;
+        LLVMTypeRef type = words ? LLVMTypeOf(words) : nullptr;
+        bool zero = words && LLVMIsAConstantAggregateZero(words);  // a state with every field 0 is a zeroinitializer
+        if (!type || LLVMGetTypeKind(type) != kArrayKind || LLVMGetArrayLength(type) != 2 || LLVMGetElementType(type) != g.i64 ||
+            !(zero || LLVMIsAConstantDataArray(words)))
+            continue;
+        unsigned long long first = zero ? 0 : LLVMConstIntGetZExtValue(LLVMGetElementAsConstant(words, 0));
+        unsigned long long second = zero ? 0 : LLVMConstIntGetZExtValue(LLVMGetElementAsConstant(words, 1));
+        if (second && logging()) fprintf(stderr, "[nvair] sampler state: second word 0x%llx not representable, dropped\n", second);
+        std::string name = LLVMGetValueName(global);
+        LLVMValueRef word = LLVMAddGlobalInAddressSpace(module, g.i64, (name + ".word").c_str(), LLVMGetPointerAddressSpace(LLVMTypeOf(global)));
+        LLVMSetInitializer(word, LLVMConstInt(g.i64, first | 1ull << 63, 0));
+        LLVMSetGlobalConstant(word, 1);
+        LLVMSetLinkage(word, LLVMGetLinkage(global));
+        LLVMSetAlignment(word, 8);
+        mdNodeReplaceOperand(node, 1, valueAsMetadata(word));
+        LLVMReplaceAllUsesWith(global, LLVMConstBitCast(word, LLVMTypeOf(global)));
+        LLVMSetValueName(global, "nvair.unused_sampler_state");  // kept, unused, as everything the plugin made
+        LLVMSetValueName(word, name.c_str());
+        fixed++;
+    }
+    return fixed;
+}
+
+// ---- threadgroup bools (IntelAdapter's widenThreadgroupBools) ---------------------------------------------------------
+// LLVM shrinks a threadgroup bool to an i1 global; on Kepler a value stored to it and read back never arrived (a10:
+// the output keeps its fill, WebKit's WebGPU workgroupUniformLoad on bool). Such globals become i8: loads compare with
+// 0 (a truncation is turned back into an i1 load), stores zero-extend, both volatile so the optimizer doesn't shrink
+// the global again. The i1 global stays, unused and renamed (the plugin keeps pointers to the module's objects across
+// the run, as with its declarations). NVAIR_THREADGROUP_BOOL_FIX=0 turns it off.
+extern "C" {
+LLVMValueRef LLVMGetFirstGlobal(LLVMModuleRef);
+LLVMValueRef LLVMGetNextGlobal(LLVMValueRef);
+LLVMValueRef LLVMIsALoadInst(LLVMValueRef);
+LLVMValueRef LLVMIsAStoreInst(LLVMValueRef);
+LLVMTypeRef LLVMInt8TypeInContext(LLVMContextRef);
+void LLVMSetVolatile(LLVMValueRef, int);
+LLVMUseRef LLVMGetNextUse(LLVMUseRef);
+LLVMValueRef LLVMGetUser(LLVMUseRef);
+LLVMValueRef LLVMBuildLoad(LLVMBuilderRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildStore(LLVMBuilderRef, LLVMValueRef, LLVMValueRef);
+}
+
+static unsigned widenThreadgroupBools(LLVMModuleRef module, Gen &g) {
+    LLVMTypeRef i8 = LLVMInt8TypeInContext(g.context);
+    std::vector<LLVMValueRef> globals;
+    for (LLVMValueRef v = LLVMGetFirstGlobal(module); v; v = LLVMGetNextGlobal(v))
+        if (LLVMGetPointerAddressSpace(LLVMTypeOf(v)) == 3 && LLVMGetElementType(LLVMTypeOf(v)) == g.i1 && LLVMGetFirstUse(v)) globals.push_back(v);
+    LLVMBuilderRef b = nullptr;
+    unsigned fixed = 0;
+    for (LLVMValueRef v : globals) {
+        std::vector<LLVMValueRef> users;
+        bool plain = true;  // only loads from it and stores to it
+        for (LLVMUseRef u = LLVMGetFirstUse(v); u; u = LLVMGetNextUse(u)) {
+            LLVMValueRef user = LLVMGetUser(u);
+            if (LLVMIsALoadInst(user) || (LLVMIsAStoreInst(user) && LLVMGetOperand(user, 1) == v && LLVMGetOperand(user, 0) != v)) users.push_back(user);
+            else plain = false;
+        }
+        if (!plain) continue;
+        std::string name = LLVMGetValueName(v);
+        LLVMValueRef wide = LLVMAddGlobalInAddressSpace(module, i8, (name + ".i8").c_str(), 3);
+        LLVMValueRef init = LLVMGetInitializer(v);
+        LLVMSetInitializer(wide, init && LLVMIsAConstantInt(init) ? LLVMConstInt(i8, LLVMConstIntGetZExtValue(init), 0) : LLVMGetUndef(i8));
+        LLVMSetLinkage(wide, LLVMGetLinkage(v));
+        LLVMSetAlignment(wide, 1);
+        if (!b) b = LLVMCreateBuilderInContext(g.context);
+        for (LLVMValueRef user : users) {
+            LLVMPositionBuilderBefore(b, user);
+            if (LLVMIsALoadInst(user)) {
+                LLVMValueRef load = LLVMBuildLoad(b, wide, "");
+                LLVMSetVolatile(load, 1);
+                LLVMReplaceAllUsesWith(user, LLVMBuildICmp(b, LLVMIntNE, load, LLVMConstInt(i8, 0, 0), ""));
+            } else {
+                LLVMSetVolatile(LLVMBuildStore(b, LLVMBuildZExt(b, LLVMGetOperand(user, 0), i8, ""), wide), 1);
+            }
+            LLVMInstructionEraseFromParent(user);
+        }
+        LLVMSetValueName(v, (name + ".unused").c_str());
+        LLVMSetValueName(wide, name.c_str());
+        fixed++;
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
+// ---- cube array indices below 0 (AMDAdapter's clampCubeArrayIndices) -----------------------------------------------------
+// A cube array sample, gather or compare with an index below 0 read another cube than the first (a09, WebGPU CTS cube
+// array cases with negative indices, which ask for the nearest layer): the index is raised to 0 first, with a compare
+// and select (a new air.max declaration would be one the plugin has no body for). NVAIR_CUBE_ARRAY_FIX=0 turns it off.
+extern "C" {
+void LLVMSetOperand(LLVMValueRef, unsigned, LLVMValueRef);
+LLVMValueRef LLVMIsACallInst(LLVMValueRef);
+LLVMValueRef LLVMIsASelectInst(LLVMValueRef);
+int LLVMGetNumOperands(LLVMValueRef);
+}
+
+static unsigned clampCubeArrayIndices(LLVMModuleRef module, Gen &g) {
+    static const struct { const char *prefix; unsigned index; } kForms[] = {
+        {"air.sample_texture_cube_array.", 3}, {"air.sample_texture_cube_array_grad.", 3}, {"air.gather_texture_cube_array.", 3},
+        {"air.sample_depth_cube_array.", 4}, {"air.sample_compare_depth_cube_array.", 4}, {"air.gather_depth_cube_array.", 4},
+        {"air.gather_compare_depth_cube_array.", 4},
+    };
+    unsigned clamped = 0;
+    LLVMBuilderRef b = nullptr;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
+        const char *name = LLVMGetValueName(f);
+        int form = -1;
+        for (unsigned i = 0; i < sizeof kForms / sizeof *kForms && form < 0; i++)
+            if (!strncmp(name, kForms[i].prefix, strlen(kForms[i].prefix))) form = (int)i;
+        if (form < 0) continue;
+        unsigned index = kForms[form].index;
+        std::vector<LLVMValueRef> calls;
+        for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u)) {
+            LLVMValueRef call = LLVMIsACallInst(LLVMGetUser(u));
+            if (call && LLVMGetNumOperands(call) > (int)index + 1 && LLVMGetOperand(call, LLVMGetNumOperands(call) - 1) == f &&
+                isInt(LLVMTypeOf(LLVMGetOperand(call, index)), 32))
+                calls.push_back(call);
+        }
+        for (LLVMValueRef call : calls) {
+            LLVMValueRef value = LLVMGetOperand(call, index);
+            if (LLVMIsAConstantInt(value) && (long long)LLVMConstIntGetZExtValue(value) >= 0 && LLVMConstIntGetZExtValue(value) < 0x80000000ull) continue;
+            if (LLVMIsASelectInst(value) && LLVMGetOperand(value, 1) == g.c32(0)) continue;  // clamped in an earlier run
+            if (!b) b = LLVMCreateBuilderInContext(g.context);
+            LLVMPositionBuilderBefore(b, call);
+            LLVMValueRef zero = g.c32(0);
+            LLVMSetOperand(call, index, LLVMBuildSelect(b, LLVMBuildICmp(b, LLVMIntSLT, value, zero, ""), zero, value, ""));
+            clamped++;
+        }
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return clamped;
+}
+
 static void logBareIntrinsics(LLVMModuleRef module) {
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
         const char *name = LLVMGetValueName(f);
@@ -560,6 +757,12 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         Gen g = makeGen(module);
         unsigned defined = disabled("NVAIR_INTRINSICS") ? 0 : defineMissingIntrinsics(g);
         unsigned fixed = disabled("NVAIR_I64_FIX") ? 0 : fixWideInstructions(module, g);
+        unsigned samplers = disabled("NVAIR_SAMPLER_STATE_FIX") ? 0 : fixSamplerStateWords(module, g);
+        unsigned bools = disabled("NVAIR_THREADGROUP_BOOL_FIX") ? 0 : widenThreadgroupBools(module, g);
+        if (bools && logging()) fprintf(stderr, "[nvair] %u threadgroup bool(s) widened to i8\n", bools);
+        unsigned cubes = disabled("NVAIR_CUBE_ARRAY_FIX") ? 0 : clampCubeArrayIndices(module, g);
+        if (cubes && logging()) fprintf(stderr, "[nvair] %u cube array index(es) raised to 0\n", cubes);
+        if (samplers && logging()) fprintf(stderr, "[nvair] %u constexpr sampler(s) in the [2 x i64] form rewritten as i64\n", samplers);
         if (defined || fixed) inlineBodies(module);
         if (logging() && (defined || fixed)) fprintf(stderr, "[nvair] %u intrinsic(s) given bodies, %u 64-bit instruction(s) rewritten\n", defined, fixed);
         if (logging()) logBareIntrinsics(module);
