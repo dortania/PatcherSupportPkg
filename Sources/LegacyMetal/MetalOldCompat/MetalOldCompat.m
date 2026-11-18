@@ -110,6 +110,8 @@
 //      two transposes
 //  58. texture atomics on Kepler, which the compiler couldn't build: textures created for them are made linear in a
 //      buffer of their own, bound at the hidden index where the Kepler adapter makes the atomics global atomics
+//  59. visibility results on Kepler, which kept only the last draw's count (and left slots without draws as they were):
+//      each draw counts into a slot of its own, summed into the app's slot when the encoder ends
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -3640,6 +3642,166 @@ static void keplerTextureAtomics(void) {
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] texture atomics on the Kepler GPU: linear textures and hidden bindings installed\n");
 }
 
+// 59. Visibility results on the Kepler driver (GeForceMTLDriver): each draw made while a visibility result mode is set
+// writes its own sample count (0 included) to the slot, replacing what the slot held, so the slot ends up with the LAST
+// draw's count, not the sum over the pass's draws that Metal specifies (two draws, the second outside the scissor or
+// behind earlier depth: 0, on a GTX 770). WebGL occlusion queries in Chrome reported visible targets invisible (Khronos
+// WebGL 2.0.1 deqp occlusionquery_strict / _conservative: two target draws per query). A render pass with a visibility
+// result buffer gets a private buffer of the shim's instead: while a mode is set, every draw gets a slot of its own
+// there, and when the encoder ends, a compute pass on the same command buffer writes each app slot the sum of its draws
+// (a slot a mode was set on without any draw gets 0, as Apple's GPUs write it; the driver leaves such slots as they were,
+// and WebGPU's empty occlusion queries read old values). MTLSHIM_NV_VISIBILITY_SUM=0 turns it off. Test: n08 on the GTX 770.
+enum { kVisSlots = 16384 };
+@interface MTLShimVisState : NSObject {
+@public
+    id<MTLBuffer> app, slots;
+    id commandBuffer;
+    MTLVisibilityResultMode mode;
+    NSUInteger appOffset, used;
+    NSMutableData *records;  // uint32_t pairs: app slot index, draw slot index (~0: no draw, the app slot just gets 0)
+    NSMutableIndexSet *touched, *drawn;  // app slots a mode was set on / that got a draw
+}
+@end
+@implementation MTLShimVisState
+@end
+static const void *const kVisStateKey = &kVisStateKey;
+static RenderEncoderIMP visOrigEncoder;
+static EndEncodingIMP visOrigEndEncoding;
+typedef void (*VisModeIMP)(id, SEL, MTLVisibilityResultMode, NSUInteger);
+static VisModeIMP visOrigMode;
+static id visRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor) {
+    id<MTLBuffer> app = descriptor.visibilityResultBuffer;
+    if (!app) return visOrigEncoder(self, _cmd, descriptor);
+    id<MTLBuffer> slots = [((id<MTLCommandBuffer>)self).device newBufferWithLength:kVisSlots * 8 options:MTLResourceStorageModePrivate];
+    if (!slots) return visOrigEncoder(self, _cmd, descriptor);
+    MTLRenderPassDescriptor *redirected = [descriptor copy];
+    redirected.visibilityResultBuffer = slots;
+    id encoder = visOrigEncoder(self, _cmd, redirected);
+    if (encoder) {
+        MTLShimVisState *state = [MTLShimVisState new];
+        state->app = app;
+        state->slots = slots;
+        state->commandBuffer = self;
+        state->mode = MTLVisibilityResultModeDisabled;
+        state->records = [NSMutableData data];
+        state->touched = [NSMutableIndexSet indexSet];
+        state->drawn = [NSMutableIndexSet indexSet];
+        objc_setAssociatedObject(encoder, kVisStateKey, state, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    return encoder;
+}
+static void visSetMode(__unsafe_unretained id self, SEL _cmd, MTLVisibilityResultMode mode, NSUInteger offset) {
+    MTLShimVisState *state = objc_getAssociatedObject(self, kVisStateKey);
+    if (!state) { visOrigMode(self, _cmd, mode, offset); return; }
+    state->mode = mode;
+    state->appOffset = offset;
+    if (mode == MTLVisibilityResultModeDisabled) visOrigMode(self, _cmd, mode, 0);  // the draws set their slots
+    else [state->touched addIndex:offset / 8];
+}
+static inline void visBeforeDraw(__unsafe_unretained id self) {
+    MTLShimVisState *state = objc_getAssociatedObject(self, kVisStateKey);
+    if (!state || state->mode == MTLVisibilityResultModeDisabled) return;
+    NSUInteger slot = state->used < kVisSlots ? state->used++ : kVisSlots - 1;
+    visOrigMode(self, @selector(setVisibilityResultMode:offset:), state->mode, slot * 8);
+    uint32_t record[2] = {(uint32_t)(state->appOffset / 8), (uint32_t)slot};
+    [state->records appendBytes:record length:sizeof record];
+    [state->drawn addIndex:state->appOffset / 8];
+}
+#define VIS_DRAW(name, params, args)                                                                                    \
+    typedef void (*VisDraw##name##IMP) params;                                                                           \
+    static VisDraw##name##IMP visOrigDraw##name;                                                                         \
+    static void visDraw##name params {                                                                                  \
+        visBeforeDraw(self);                                                                                             \
+        visOrigDraw##name args;                                                                                          \
+    }
+VIS_DRAW(P, (__unsafe_unretained id self, SEL _cmd, NSUInteger t, NSUInteger s, NSUInteger c), (self, _cmd, t, s, c))
+VIS_DRAW(PI, (__unsafe_unretained id self, SEL _cmd, NSUInteger t, NSUInteger s, NSUInteger c, NSUInteger i), (self, _cmd, t, s, c, i))
+VIS_DRAW(PIB, (__unsafe_unretained id self, SEL _cmd, NSUInteger t, NSUInteger s, NSUInteger c, NSUInteger i, NSUInteger b), (self, _cmd, t, s, c, i, b))
+VIS_DRAW(PInd, (__unsafe_unretained id self, SEL _cmd, NSUInteger t, __unsafe_unretained id ib, NSUInteger o), (self, _cmd, t, ib, o))
+VIS_DRAW(X, (__unsafe_unretained id self, SEL _cmd, NSUInteger t, NSUInteger c, NSUInteger it, __unsafe_unretained id ib, NSUInteger io), (self, _cmd, t, c, it, ib, io))
+VIS_DRAW(XI, (__unsafe_unretained id self, SEL _cmd, NSUInteger t, NSUInteger c, NSUInteger it, __unsafe_unretained id ib, NSUInteger io, NSUInteger i), (self, _cmd, t, c, it, ib, io, i))
+VIS_DRAW(XIB, (__unsafe_unretained id self, SEL _cmd, NSUInteger t, NSUInteger c, NSUInteger it, __unsafe_unretained id ib, NSUInteger io, NSUInteger i, NSInteger bv, NSUInteger bi),
+         (self, _cmd, t, c, it, ib, io, i, bv, bi))
+VIS_DRAW(XInd, (__unsafe_unretained id self, SEL _cmd, NSUInteger t, NSUInteger it, __unsafe_unretained id ib, NSUInteger io, __unsafe_unretained id indirect, NSUInteger o), (self, _cmd, t, it, ib, io, indirect, o))
+static NSString *const kVisSumSource = @
+    "#include <metal_stdlib>\n"
+    "using namespace metal;\n"
+    // 64-bit values as uint2 (low, high): app slots first set to 0, then each draw slot added to its app slot
+    "kernel void shimVisibilitySum(device const uint2 *slots [[buffer(0)]], device const uint2 *records [[buffer(1)]],\n"
+    "                              device uint2 *app [[buffer(2)]], constant uint &count [[buffer(3)]], uint i [[thread_position_in_grid]]) {\n"
+    "    if (i != 0) return;\n"
+    "    for (uint r = 0; r < count; r++) app[records[r].x] = uint2(0);\n"
+    "    for (uint r = 0; r < count; r++) {\n"
+    "        if (records[r].y == 0xffffffffu) continue;\n"
+    "        uint2 a = app[records[r].x], b = slots[records[r].y];\n"
+    "        uint lo = a.x + b.x;\n"
+    "        app[records[r].x] = uint2(lo, a.y + b.y + (lo < a.x ? 1u : 0u));\n"
+    "    }\n"
+    "}\n";
+static id<MTLComputePipelineState> visSumPipeline(id<MTLDevice> device) {
+    static const void *const kKey = &kKey;
+    id<MTLComputePipelineState> pipeline = objc_getAssociatedObject(device, kKey);
+    if (pipeline) return pipeline;
+    NSError *error = nil;
+    id<MTLLibrary> library = [device newLibraryWithSource:kVisSumSource options:nil error:&error];
+    id<MTLFunction> function = [library newFunctionWithName:@"shimVisibilitySum"];
+    pipeline = function ? [device newComputePipelineStateWithFunction:function error:&error] : nil;
+    if (pipeline) objc_setAssociatedObject(device, kKey, pipeline, OBJC_ASSOCIATION_RETAIN);
+    else if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] visibility sums: no pipeline (%s)\n", error.localizedDescription.UTF8String);
+    return pipeline;
+}
+static void visEndEncoding(id self, SEL _cmd) {
+    MTLShimVisState *state = objc_getAssociatedObject(self, kVisStateKey);
+    visOrigEndEncoding(self, _cmd);
+    if (!state) return;
+    objc_setAssociatedObject(self, kVisStateKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [state->touched removeIndexes:state->drawn];
+    [state->touched enumerateIndexesUsingBlock:^(NSUInteger appSlot, BOOL *stop) {
+        uint32_t record[2] = {(uint32_t)appSlot, 0xffffffffu};
+        [state->records appendBytes:record length:sizeof record];
+    }];
+    uint32_t count = (uint32_t)(state->records.length / 8);
+    if (!count) return;
+    id<MTLCommandBuffer> commandBuffer = state->commandBuffer;
+    id<MTLComputePipelineState> pipeline = visSumPipeline(commandBuffer.device);
+    if (!pipeline) return;
+    id<MTLBuffer> records = [commandBuffer.device newBufferWithBytes:state->records.bytes length:state->records.length options:MTLResourceStorageModeShared];
+    id<MTLComputeCommandEncoder> encoder = [commandBuffer computeCommandEncoder];
+    [encoder setComputePipelineState:pipeline];
+    [encoder setBuffer:state->slots offset:0 atIndex:0];
+    [encoder setBuffer:records offset:0 atIndex:1];
+    [encoder setBuffer:state->app offset:0 atIndex:2];
+    [encoder setBytes:&count length:sizeof count atIndex:3];
+    [encoder dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+    [encoder endEncoding];
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] visibility results: %u draw(s) and empty slot(s) written\n", count);
+}
+static void keplerVisibilitySums(void) {
+    static BOOL done;
+    static const char *const kBuffer = "NVMTLCommandBuffer", *const kRender = "NVMTLRenderCommandEncoder_KEPLER_A";
+    const char *setting = getenv("MTLSHIM_NV_VISIBILITY_SUM");
+    if (done || (setting && !strcmp(setting, "0")) || !definesMethod(kBuffer, "renderCommandEncoderWithDescriptor:") ||
+        !definesMethod(kRender, "endEncoding") || !definesMethod(kRender, "setVisibilityResultMode:offset:"))
+        return;
+    done = YES;
+    struct { const char *sel; IMP hook; IMP *orig; } draws[] = {
+        {"drawPrimitives:vertexStart:vertexCount:", (IMP)visDrawP, (IMP *)&visOrigDrawP},
+        {"drawPrimitives:vertexStart:vertexCount:instanceCount:", (IMP)visDrawPI, (IMP *)&visOrigDrawPI},
+        {"drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:", (IMP)visDrawPIB, (IMP *)&visOrigDrawPIB},
+        {"drawPrimitives:indirectBuffer:indirectBufferOffset:", (IMP)visDrawPInd, (IMP *)&visOrigDrawPInd},
+        {"drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:", (IMP)visDrawX, (IMP *)&visOrigDrawX},
+        {"drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:", (IMP)visDrawXI, (IMP *)&visOrigDrawXI},
+        {"drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:", (IMP)visDrawXIB, (IMP *)&visOrigDrawXIB},
+        {"drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:", (IMP)visDrawXInd, (IMP *)&visOrigDrawXInd},
+    };
+    for (unsigned i = 0; i < sizeof draws / sizeof *draws; i++)
+        if (definesMethod(kRender, draws[i].sel)) *draws[i].orig = swizzle(kRender, draws[i].sel, draws[i].hook);
+    visOrigMode = (VisModeIMP)swizzle(kRender, "setVisibilityResultMode:offset:", (IMP)visSetMode);
+    visOrigEndEncoding = (EndEncodingIMP)swizzle(kRender, "endEncoding", (IMP)visEndEncoding);
+    visOrigEncoder = (RenderEncoderIMP)swizzle(kBuffer, "renderCommandEncoderWithDescriptor:", (IMP)visRenderEncoder);
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Kepler visibility results: per-draw slots summed at the end of each pass\n");
+}
+
 // 35. Metal Performance Shaders' image statistics (MPSImageStatisticsMinAndMax and MeanAndVariance; Core Image's
 // CIAreaMinMax and the filters built on it) finish with a compute_final_*_statistics kernel that reduces one value per
 // thread through threadgroup memory and always folds in tg[tid + 16], tg[tid + 8], ...: it assumes at least 32 threads.
@@ -3752,6 +3914,7 @@ static void patchDriverClasses(void) {
     keplerResolveLevels();  // item 55
     keplerViewsOfViews();  // item 56
     keplerTextureAtomics();  // item 58
+    keplerVisibilitySums();  // item 59
     mpsStatisticsWidth();
     stencilCopies();
     nvStencilUploadOrder();  // item 53
