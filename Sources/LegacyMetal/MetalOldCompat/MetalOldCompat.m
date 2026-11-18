@@ -100,6 +100,8 @@
 //      source, which now take Core Image's Metal path, reflect too
 //  53. small stencil uploads on the Kepler driver (GeForceMTLDriver), which weren't ordered before the blit encoder's next
 //      command: a later copy out of the same texture could read it before the upload landed (zeros)
+//  54. methods the Kepler driver lacks (swizzled texture views, indirect command buffers), which threw "unrecognized
+//      selector": a view without a swizzle that changes nothing a shader can see, nil otherwise (as item 32); no ICB (nil)
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -3042,16 +3044,18 @@ static BOOL swizzleIs(MTLTextureSwizzleChannels s, MTLTextureSwizzle r, MTLTextu
     return s.red == r && s.green == g && s.blue == b && s.alpha == a;
 }
 static id igSwizzleView(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices, MTLTextureSwizzleChannels swizzle) RETURNS_RETAINED;
+static BOOL swizzleChangesNothing(MTLPixelFormat format, MTLTextureSwizzleChannels swizzle) {  // items 32 and 54
+    int channels = channelCount(format);
+    BOOL r001 = swizzleIs(swizzle, MTLTextureSwizzleRed, MTLTextureSwizzleZero, MTLTextureSwizzleZero, MTLTextureSwizzleOne);
+    return swizzleIs(swizzle, MTLTextureSwizzleRed, MTLTextureSwizzleGreen, MTLTextureSwizzleBlue, MTLTextureSwizzleAlpha) ||
+           (r001 && (channels == 1 || depthOrStencil(format))) ||
+           (channels == 2 && swizzleIs(swizzle, MTLTextureSwizzleRed, MTLTextureSwizzleGreen, MTLTextureSwizzleZero, MTLTextureSwizzleOne));
+}
 static id igSwizzleView(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices, MTLTextureSwizzleChannels swizzle) {
     format = sampleableStencilView(self, format);  // item 36
     id view = origIGSwizzleView(self, _cmd, format, type, levels, slices, swizzle);
     if (view) return view;
-    int channels = channelCount(format);
-    BOOL r001 = swizzleIs(swizzle, MTLTextureSwizzleRed, MTLTextureSwizzleZero, MTLTextureSwizzleZero, MTLTextureSwizzleOne);
-    BOOL harmless = swizzleIs(swizzle, MTLTextureSwizzleRed, MTLTextureSwizzleGreen, MTLTextureSwizzleBlue, MTLTextureSwizzleAlpha) ||
-                    (r001 && (channels == 1 || depthOrStencil(format))) ||
-                    (channels == 2 && swizzleIs(swizzle, MTLTextureSwizzleRed, MTLTextureSwizzleGreen, MTLTextureSwizzleZero, MTLTextureSwizzleOne));
-    if (!harmless) return nil;
+    if (!swizzleChangesNothing(format, swizzle)) return nil;
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] swizzled texture view: made without the swizzle\n");
     return ((NewViewRangeIMP)objc_msgSend)(
         self, @selector(newTextureViewWithPixelFormat:textureType:levels:slices:), format, type, levels, slices);
@@ -3064,6 +3068,46 @@ static void swizzledViews(void) {
         return;
     origIGSwizzleView = (SwizzleViewIMP)swizzle("MTLIGAccelTexture", "newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:",
                                                 (IMP)igSwizzleView);
+}
+
+// 54. Methods the Kepler driver (GeForceMTLDriver) lacks, which MetalOld's classes don't provide either, so calling them threw
+// "unrecognized selector" and aborted the process:
+//   - -[NVMTLTexture newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:]. Kepler is family 1 (no swizzle), but
+//     on a Mac whose only GPU it is, item 11 makes it family 2 for Chromium, whose Dawn makes its depth/stencil views with
+//     the swizzle (R, 0, 0, 1). As item 32 on Intel: a swizzle that changes nothing a shader can see makes the view without
+//     it, any other gets nil (what a driver without swizzle returns).
+//   - -[NVMTLDevice newIndirectCommandBufferWithDescriptor:maxCount:options:], which MetalOld's
+//     newIndirectCommandBufferWithDescriptor:maxCommandCount:options: calls for every driver. Kepler has no indirect command
+//     buffers (not Mac2): nil, as for other GPUs without them (wgpu asks for one on any GPU).
+// MTLSHIM_KEPLER_METHODS=0 turns it off. Tests: s36, s42 and s54 on the GTX 770.
+static id nvSwizzleView(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices, MTLTextureSwizzleChannels swizzle) RETURNS_RETAINED;
+static id nvSwizzleView(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices, MTLTextureSwizzleChannels swizzle) {
+    if (!swizzleChangesNothing(format, swizzle)) {
+        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] swizzled texture view on Kepler: swizzle not supported, nil\n");
+        return nil;
+    }
+    return ((NewViewRangeIMP)objc_msgSend)(
+        self, @selector(newTextureViewWithPixelFormat:textureType:levels:slices:), format, type, levels, slices);
+}
+static id nvNoIndirectCommandBuffer(id self, SEL _cmd, id descriptor, NSUInteger count, MTLResourceOptions options) RETURNS_RETAINED;
+static id nvNoIndirectCommandBuffer(id self, SEL _cmd, id descriptor, NSUInteger count, MTLResourceOptions options) {
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] indirect command buffer on Kepler: not supported, nil\n");
+    return nil;
+}
+static void keplerMissingMethods(void) {
+    static BOOL done;
+    const char *setting = getenv("MTLSHIM_KEPLER_METHODS");
+    Class texture = objc_getClass("NVMTLTexture"), device = objc_getClass("NVMTLDevice");
+    if (done || (setting && !strcmp(setting, "0")) || !texture || !device ||
+        !class_respondsToSelector(texture, @selector(newTextureViewWithPixelFormat:textureType:levels:slices:)))
+        return;
+    done = YES;
+    struct objc_method_description view = protocol_getMethodDescription(
+        @protocol(MTLTexture), @selector(newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:), YES, YES);
+    MethodEntry viewMethod[] = {{"newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:", (IMP)nvSwizzleView, view.types}};
+    MethodEntry icbMethod[] = {{"newIndirectCommandBufferWithDescriptor:maxCount:options:", (IMP)nvNoIndirectCommandBuffer, "@@:@QQ"}};
+    if (view.types) addMethods(texture, "Kepler texture", viewMethod, 1);
+    addMethods(device, "Kepler device", icbMethod, 1);
 }
 
 // 35. Metal Performance Shaders' image statistics (MPSImageStatisticsMinAndMax and MeanAndVariance; Core Image's
@@ -3174,6 +3218,7 @@ static void patchDriverClasses(void) {
     nearestCubeClamp();
     encoderLodClamps();
     swizzledViews();
+    keplerMissingMethods();  // item 54
     mpsStatisticsWidth();
     stencilCopies();
     nvStencilUploadOrder();  // item 53
