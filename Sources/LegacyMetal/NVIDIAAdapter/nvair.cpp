@@ -56,6 +56,9 @@
 //
 // Depth comparisons with gradients (no body: the pipeline failed) done at level 0. NVAIR_COMPARE_GRADIENT_FIX=0.
 //
+// clz and ctz asked for the defined result at 0 (the library's undefined one folds to garbage for a constant 0).
+// NVAIR_COUNT_ZERO_FIX=0.
+//
 // Installed (planned): GeForceAIRPlugin.bundle/Contents/MacOS/GeForceAIRCompat.dylib, a weak dependency of
 // GeForceAIRPlugin. Test use: DYLD_INSERT_LIBRARIES=Tests/tools/localcc.dylib:build/GeForceAIRCompat-test.dylib
 //   NVAIR_LOG=1             log what is rewritten (NVAIR_LOG=/path: append to that file)
@@ -1075,6 +1078,28 @@ static unsigned fixGradientCompares(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
+// ---- clz and ctz of a constant 0 ----------------------------------------------------------------------------------------
+// The plugin's built-in library writes air.clz.i32 as llvm.ctlz.i32(x, true): "the result for 0 is undefined". At run
+// time the GPU gives 32 for 0 anyway, but where the optimizer sees a constant 0 it folds the count to undef, and Metal's
+// clz(0) is the width: madhi(v, clz(0u), 0) came out as garbage on Kepler (fuzz seed 758, plain kernels). Every
+// llvm.ctlz / llvm.cttz call asks for the defined result instead (false), which the hardware gives at no cost.
+// NVAIR_COUNT_ZERO_FIX=0 turns it off.
+static unsigned defineCountOfZero(LLVMModuleRef module, Gen &g) {
+    unsigned fixed = 0;
+    LLVMValueRef yes = LLVMConstInt(g.i1, 1, 0), no = LLVMConstInt(g.i1, 0, 0);
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
+        const char *name = LLVMGetValueName(f);
+        if (strncmp(name, "llvm.ctlz.", 10) && strncmp(name, "llvm.cttz.", 10)) continue;
+        for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u)) {
+            LLVMValueRef call = LLVMIsACallInst(LLVMGetUser(u));
+            if (!call || LLVMGetNumOperands(call) != 3 || LLVMGetOperand(call, 2) != f || LLVMGetOperand(call, 1) != yes) continue;
+            LLVMSetOperand(call, 1, no);
+            fixed++;
+        }
+    }
+    return fixed;
+}
+
 static void logBareIntrinsics(LLVMModuleRef module) {
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
         const char *name = LLVMGetValueName(f);
@@ -1111,6 +1136,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (cubes && logging()) fprintf(stderr, "[nvair] %u cube array index(es) raised to 0\n", cubes);
         unsigned gradients = disabled("NVAIR_GRADIENT_FIX") ? 0 : fixGradientSamples(module, g);
         if (gradients && logging()) fprintf(stderr, "[nvair] %u 3D / cube gradient sample(s) done at their level\n", gradients);
+        unsigned counts = disabled("NVAIR_COUNT_ZERO_FIX") ? 0 : defineCountOfZero(module, g);
+        if (counts && logging()) fprintf(stderr, "[nvair] %u clz/ctz call(s) made defined for 0\n", counts);
         unsigned gradients2 = disabled("NVAIR_COMPARE_GRADIENT_FIX") ? 0 : fixGradientCompares(module, g);
         if (gradients2 && logging()) fprintf(stderr, "[nvair] %u gradient comparison(s) made at level 0\n", gradients2);
         unsigned compares = disabled("NVAIR_COMPARE_LEVEL_FIX") ? 0 : fixDepthCompareLevels(module, g);
