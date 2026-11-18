@@ -59,6 +59,9 @@
 // clz and ctz asked for the defined result at 0 (the library's undefined one folds to garbage for a constant 0).
 // NVAIR_COUNT_ZERO_FIX=0.
 //
+// Private arrays of bytes and halfwords done on 32-bit words (a stored word reached their loads unmasked).
+// NVAIR_NARROW_PRIVATE_ARRAY_FIX=0.
+//
 // Installed (planned): GeForceAIRPlugin.bundle/Contents/MacOS/GeForceAIRCompat.dylib, a weak dependency of
 // GeForceAIRPlugin. Test use: DYLD_INSERT_LIBRARIES=Tests/tools/localcc.dylib:build/GeForceAIRCompat-test.dylib
 //   NVAIR_LOG=1             log what is rewritten (NVAIR_LOG=/path: append to that file)
@@ -1100,6 +1103,89 @@ static unsigned defineCountOfZero(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
+// ---- private arrays of bytes and halfwords done on 32-bit words (IntelAdapter's widenNarrowPrivateArrays) ---------------
+// A private uchar / ushort array (uchar pc[8]) is stored with truncating stores and read with extending loads, and Kepler's
+// back end forwarded a stored 32-bit value to such a load without masking it: pc[i] kept the bits above its byte where a
+// 64-bit product and compare used it (mslfuzz2 LONG=1 seeds 575 and 770, reduced: with a uint array, or the byte from a
+// register, right). The same bug as Intel's i47. An array of 8- or 16-bit integers that only GEPs into its elements reach,
+// with only loads and stores of the element type behind them, becomes an array of i32: stores zero-extend, loads
+// truncate. NVAIR_NARROW_PRIVATE_ARRAY_FIX=0 turns it off.
+// Known limit: with the word array, a store and a later load at a variable index inside a loop, with enough other code
+// around them, can give the load the slot's old value (mslfuzz2 VEC=1 seeds 1413 and 1523; right with the byte array or
+// with a statement or two less). Not fixable from here, as far as tried: reaching every element at a constant index
+// (selects or masks) lets the array become registers, where LLVM narrows it to bytes again and the stale upper bits
+// come back (seed 126, and 575's kind); volatile word accesses don't help either. The widening alone has fewer wrong
+// kernels (VEC 1-2000: these two) than any of those.
+extern "C" {
+LLVMValueRef LLVMIsAAllocaInst(LLVMValueRef);
+LLVMTypeRef LLVMGetAllocatedType(LLVMValueRef);
+LLVMValueRef LLVMIsAGetElementPtrInst(LLVMValueRef);
+LLVMValueRef LLVMBuildAlloca(LLVMBuilderRef, LLVMTypeRef, const char *);
+LLVMTypeRef LLVMArrayType(LLVMTypeRef, unsigned);
+LLVMValueRef LLVMBuildGEP(LLVMBuilderRef, LLVMValueRef, LLVMValueRef *, unsigned, const char *);
+}
+
+static unsigned widenNarrowPrivateArrays(LLVMModuleRef module, Gen &g) {
+    enum { kArrayKind = 11 };
+    std::vector<LLVMValueRef> allocas;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst))
+                if (LLVMIsAAllocaInst(inst)) allocas.push_back(inst);
+    LLVMBuilderRef b = nullptr;
+    unsigned fixed = 0;
+    for (LLVMValueRef alloca : allocas) {
+        LLVMTypeRef array = LLVMGetAllocatedType(alloca);
+        if (LLVMGetTypeKind(array) != kArrayKind) continue;
+        LLVMTypeRef element = LLVMGetElementType(array);
+        if (LLVMGetTypeKind(element) != LLVMIntegerTypeKind) continue;
+        unsigned width = LLVMGetIntTypeWidth(element), length = LLVMGetArrayLength(array);
+        if ((width != 8 && width != 16) || length < 1 || length > 64) continue;
+        // every use: GEP alloca, 0, i (two indices, the first 0) whose users are loads / stores of the element type
+        std::vector<LLVMValueRef> geps;
+        bool plain = true;
+        for (LLVMUseRef u = LLVMGetFirstUse(alloca); u && plain; u = LLVMGetNextUse(u)) {
+            LLVMValueRef gep = LLVMGetUser(u);
+            if (!LLVMIsAGetElementPtrInst(gep) || LLVMGetOperand(gep, 0) != alloca || LLVMGetNumOperands(gep) != 3 ||
+                !LLVMIsAConstantInt(LLVMGetOperand(gep, 1)) || LLVMConstIntGetZExtValue(LLVMGetOperand(gep, 1)) != 0) { plain = false; break; }
+            for (LLVMUseRef v = LLVMGetFirstUse(gep); v && plain; v = LLVMGetNextUse(v)) {
+                LLVMValueRef user = LLVMGetUser(v);
+                if (LLVMIsALoadInst(user)) plain = LLVMTypeOf(user) == element;
+                else if (LLVMIsAStoreInst(user)) plain = LLVMGetOperand(user, 1) == gep && LLVMTypeOf(LLVMGetOperand(user, 0)) == element;
+                else plain = false;
+            }
+            geps.push_back(gep);
+        }
+        if (!plain || geps.empty()) continue;
+        if (!b) b = LLVMCreateBuilderInContext(g.context);
+        LLVMPositionBuilderBefore(b, alloca);
+        LLVMValueRef wide = LLVMBuildAlloca(b, LLVMArrayType(g.i32, length), "");
+        LLVMSetAlignment(wide, 4);
+        for (LLVMValueRef gep : geps) {
+            LLVMPositionBuilderBefore(b, gep);
+            LLVMValueRef indices[2] = {LLVMGetOperand(gep, 1), LLVMGetOperand(gep, 2)};
+            LLVMValueRef slot = LLVMBuildGEP(b, wide, indices, 2, "");
+            std::vector<LLVMValueRef> users;
+            for (LLVMUseRef v = LLVMGetFirstUse(gep); v; v = LLVMGetNextUse(v)) users.push_back(LLVMGetUser(v));
+            for (LLVMValueRef user : users) {
+                LLVMPositionBuilderBefore(b, user);
+                if (LLVMIsALoadInst(user)) {
+                    LLVMValueRef word = LLVMBuildLoad(b, slot, "");
+                    LLVMReplaceAllUsesWith(user, LLVMBuildTrunc(b, word, element, ""));
+                } else {
+                    LLVMBuildStore(b, LLVMBuildZExt(b, LLVMGetOperand(user, 0), g.i32, ""), slot);
+                }
+                LLVMInstructionEraseFromParent(user);
+            }
+            LLVMInstructionEraseFromParent(gep);
+        }
+        LLVMInstructionEraseFromParent(alloca);
+        fixed++;
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
 static void logBareIntrinsics(LLVMModuleRef module) {
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
         const char *name = LLVMGetValueName(f);
@@ -1136,6 +1222,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (cubes && logging()) fprintf(stderr, "[nvair] %u cube array index(es) raised to 0\n", cubes);
         unsigned gradients = disabled("NVAIR_GRADIENT_FIX") ? 0 : fixGradientSamples(module, g);
         if (gradients && logging()) fprintf(stderr, "[nvair] %u 3D / cube gradient sample(s) done at their level\n", gradients);
+        unsigned narrow = disabled("NVAIR_NARROW_PRIVATE_ARRAY_FIX") ? 0 : widenNarrowPrivateArrays(module, g);
+        if (narrow && logging()) fprintf(stderr, "[nvair] %u private byte / halfword array(s) done on 32-bit words\n", narrow);
         unsigned counts = disabled("NVAIR_COUNT_ZERO_FIX") ? 0 : defineCountOfZero(module, g);
         if (counts && logging()) fprintf(stderr, "[nvair] %u clz/ctz call(s) made defined for 0\n", counts);
         unsigned gradients2 = disabled("NVAIR_COMPARE_GRADIENT_FIX") ? 0 : fixGradientCompares(module, g);
