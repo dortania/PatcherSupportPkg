@@ -5698,6 +5698,209 @@ static unsigned returnFromEndlessLoops(LLVMModuleRef module) {
     return n;
 }
 
+// ---- Kepler's three: half constants, gradient compares, struct copies ------------------------------------------------
+// Three tests written for the Kepler adapter (n05, n12, n13) fail on Intel too, Ivy Bridge and Haswell alike, with the
+// stock compiler as well; the same three rewrites as GeForceAIRCompat (NVIDIAAdapter/nvair.cpp) fix them here.
+extern "C" {
+LLVMValueRef LLVMConstArray(LLVMTypeRef, LLVMValueRef *, unsigned);
+LLVMValueRef LLVMConstNamedStruct(LLVMTypeRef, LLVMValueRef *, unsigned);
+LLVMValueRef LLVMConstStructInContext(LLVMContextRef, LLVMValueRef *, unsigned, int);
+int LLVMIsPackedStruct(LLVMTypeRef);
+LLVMValueRef LLVMIsAConstantDataVector(LLVMValueRef);
+unsigned LLVMGetNumArgOperands(LLVMValueRef);
+LLVMValueRef LLVMIsAConstantStruct(LLVMValueRef);
+LLVMValueRef LLVMIsAConstantArray(LLVMValueRef);
+const char *LLVMGetStructName(LLVMTypeRef);
+LLVMValueRef LLVMGetFirstGlobal(LLVMModuleRef);
+LLVMValueRef LLVMGetNextGlobal(LLVMValueRef);
+LLVMValueRef LLVMGetInitializer(LLVMValueRef);
+void LLVMSetInitializer(LLVMValueRef, LLVMValueRef);
+}
+
+// Half vectors spelled as bitcasts in constants: a constant array of half2x2 (WGSL `const` f16 matrices: WebGPU CTS
+// shader,execution,expression,constructor) reaches the plugin with each half2 column as a constant expression,
+// bitcast (<1 x i32> <i32 bits> to <2 x half>), and IGILTargetLowering::processGlobalData recursed on it until the compiler
+// crashed ("Compiler encountered an internal error"). In global initializers, each such bitcast becomes the plain half
+// vector it stands for. INTEL_HALF_CONSTANT_FIX=0 turns it off. Test: n13.
+static double halfBitsValue(unsigned h) {
+    int sign = (h >> 15) & 1, exponent = (h >> 10) & 31;
+    unsigned mantissa = h & 1023;
+    double v;
+    if (exponent == 0) v = std::ldexp((double)mantissa, -24);
+    else if (exponent == 31) v = mantissa ? NAN : INFINITY;
+    else v = std::ldexp((double)(mantissa | 1024), exponent - 25);
+    return sign ? -v : v;
+}
+static bool constantIntBytes(LLVMValueRef c, std::vector<uint8_t> &bytes) {  // low element first
+    auto add = [&](LLVMValueRef v) {
+        if (!v || !LLVMIsAConstantInt(v)) return false;
+        unsigned width = LLVMGetIntTypeWidth(LLVMTypeOf(v));
+        if (width % 8 || width > 64) return false;
+        unsigned long long x = LLVMConstIntGetZExtValue(v);
+        for (unsigned k = 0; k < width / 8; k++) bytes.push_back((uint8_t)(x >> (8 * k)));
+        return true;
+    };
+    LLVMTypeRef t = LLVMTypeOf(c);
+    if (LLVMGetTypeKind(t) == kTypeKindInteger) return add(c);
+    if (LLVMGetTypeKind(t) != kTypeKindVector) return false;
+    for (unsigned i = 0; i < LLVMGetVectorSize(t); i++)
+        if (!add(LLVMIsAConstantDataVector(c) ? LLVMGetElementAsConstant(c, i) : LLVMIsAConstantVector(c) ? LLVMGetOperand(c, i) : nullptr))
+            return false;
+    return true;
+}
+static LLVMValueRef foldHalfBitcasts(LLVMContextRef context, LLVMValueRef c, bool &changed, int depth = 0) {
+    enum { kOpBitCast = 41 };
+    if (!c || depth > 16) return c;
+    LLVMTypeRef t = LLVMTypeOf(c), half = LLVMHalfTypeInContext(context);
+    if (LLVMIsAConstantExpr(c) && LLVMGetConstOpcode(c) == kOpBitCast && LLVMGetTypeKind(t) == kTypeKindVector && LLVMGetElementType(t) == half) {
+        std::vector<uint8_t> bytes;
+        unsigned n = LLVMGetVectorSize(t);
+        if (!constantIntBytes(LLVMGetOperand(c, 0), bytes) || bytes.size() != 2 * n) return c;
+        std::vector<LLVMValueRef> halves;
+        for (unsigned i = 0; i < n; i++) halves.push_back(LLVMConstReal(half, halfBitsValue(bytes[2 * i] | bytes[2 * i + 1] << 8)));
+        changed = true;
+        return LLVMConstVector(halves.data(), n);
+    }
+    bool isStruct = LLVMIsAConstantStruct(c), isArray = LLVMIsAConstantArray(c), isVector = LLVMIsAConstantVector(c);
+    if (!isStruct && !isArray && !isVector) return c;
+    unsigned n = (unsigned)LLVMGetNumOperands(c);
+    std::vector<LLVMValueRef> elements(n);
+    bool inner = false;
+    for (unsigned i = 0; i < n; i++) elements[i] = foldHalfBitcasts(context, LLVMGetOperand(c, i), inner, depth + 1);
+    if (!inner) return c;
+    changed = true;
+    if (isArray) return LLVMConstArray(LLVMGetElementType(t), elements.data(), n);
+    if (isVector) return LLVMConstVector(elements.data(), n);
+    return LLVMGetStructName(t) ? LLVMConstNamedStruct(t, elements.data(), n)
+                                : LLVMConstStructInContext(context, elements.data(), n, LLVMIsPackedStruct(t));
+}
+static unsigned foldHalfVectorBitcasts(LLVMModuleRef module) {
+    if (disabled("INTEL_HALF_CONSTANT_FIX")) return 0;
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    unsigned fixed = 0;
+    for (LLVMValueRef v = LLVMGetFirstGlobal(module); v; v = LLVMGetNextGlobal(v)) {
+        LLVMValueRef init = LLVMIsDeclaration(v) ? nullptr : LLVMGetInitializer(v);
+        if (!init) continue;
+        bool changed = false;
+        LLVMValueRef folded = foldHalfBitcasts(context, init, changed);
+        if (changed) LLVMSetInitializer(v, folded), fixed++;
+    }
+    return fixed;
+}
+
+// Depth comparisons with gradients (sample_compare(s, coord, ref, gradient2d(...)) and its 2D-array, cube and cube-array
+// forms): instruction selection gave up on them (SelectionDAGISel::CannotYetSelect: "Compiler encountered an internal
+// error", or a crash in the in-process compiler), in kernels and fragment functions. ANGLE already avoids them on these
+// GPUs (MetalOldCompat item 11, allowSamplerCompareGradient). Each becomes the same comparison at level 0, in the level form
+// of the same AIR function, which the plugin compiles (i24): exact for shadow maps of one level, level 0 of a mipmapped
+// one, as on Kepler. The 3802 runtime compiler's forms only (a float result, no LOD clamp); others are left as they are.
+// INTEL_COMPARE_GRADIENT_FIX=0 turns it off. Test: n05.
+static unsigned fixGradientCompares(LLVMModuleRef module) {
+    if (disabled("INTEL_COMPARE_GRADIENT_FIX")) return 0;
+    enum { kPointerKind = 12 };
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMTypeRef f32 = LLVMFloatTypeInContext(context), i1 = LLVMInt1TypeInContext(context), i32 = LLVMInt32TypeInContext(context);
+    LLVMTypeRef v2 = LLVMVectorType(f32, 2), v3 = LLVMVectorType(f32, 3), v2i = LLVMVectorType(i32, 2);
+    // gradient form: (texture, sampler, i32, coord, [i32 layer,] float reference, dPdx, dPdy, [i1 has offset, int2 offset,] i32)
+    // level form:    (texture, sampler, i32, coord, [i32 layer,] float reference, [i1 has offset, int2 offset,] i1 1, float 0, i32)
+    static const struct { const char *grad, *level; bool cube, array; } kForms[] = {
+        {"air.sample_compare_depth_2d_grad.f32", "air.sample_compare_depth_2d.f32", false, false},
+        {"air.sample_compare_depth_2d_array_grad.f32", "air.sample_compare_depth_2d_array.f32", false, true},
+        {"air.sample_compare_depth_cube_grad.f32", "air.sample_compare_depth_cube.f32", true, false},
+        {"air.sample_compare_depth_cube_array_grad.f32", "air.sample_compare_depth_cube_array.f32", true, true},
+    };
+    unsigned fixed = 0;
+    LLVMBuilderRef b = nullptr;
+    for (const auto &form : kForms) {
+        LLVMValueRef f = LLVMGetNamedFunction(module, form.grad);
+        if (!f || !LLVMIsDeclaration(f) || !LLVMGetFirstUse(f)) continue;
+        LLVMTypeRef type = LLVMGetElementType(LLVMTypeOf(f)), params[12];
+        unsigned count = LLVMCountParamTypes(type), r = form.array ? 5 : 4;
+        if (count != (form.cube ? r + 4 : r + 6) || count > 12 || LLVMGetReturnType(type) != f32) continue;
+        LLVMGetParamTypes(type, params);
+        LLVMTypeRef coord = form.cube ? v3 : v2;
+        if (LLVMGetTypeKind(params[0]) != kPointerKind || LLVMGetTypeKind(params[1]) != kPointerKind || params[2] != i32 || params[3] != coord ||
+            (form.array && params[4] != i32) || params[r] != f32 || params[r + 1] != coord || params[r + 2] != coord)
+            continue;
+        if (!form.cube && (params[r + 3] != i1 || params[r + 4] != v2i || params[r + 5] != i32)) continue;
+        if (form.cube && params[r + 3] != i32) continue;
+        LLVMTypeRef levelParams[12];
+        unsigned n = 0;
+        for (unsigned k = 0; k <= r; k++) levelParams[n++] = params[k];
+        if (!form.cube) levelParams[n++] = i1, levelParams[n++] = v2i;
+        levelParams[n++] = i1, levelParams[n++] = f32, levelParams[n++] = i32;
+        LLVMValueRef level = LLVMGetNamedFunction(module, form.level);
+        if (!level) level = LLVMAddFunction(module, form.level, LLVMFunctionType(f32, levelParams, n, 0));
+        else if (LLVMCountParamTypes(LLVMGetElementType(LLVMTypeOf(level))) != n) continue;
+        std::vector<LLVMValueRef> calls;
+        for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u))
+            if (LLVMValueRef call = LLVMIsACallInst(LLVMGetUser(u)))
+                if (LLVMGetCalledValue(call) == f) calls.push_back(call);
+        for (LLVMValueRef call : calls) {
+            if (!b) b = LLVMCreateBuilderInContext(context);
+            LLVMPositionBuilderBefore(b, call);
+            LLVMValueRef args[12];
+            unsigned a = 0;
+            for (unsigned k = 0; k <= r; k++) args[a++] = LLVMGetOperand(call, k);
+            if (!form.cube) args[a++] = LLVMGetOperand(call, r + 3), args[a++] = LLVMGetOperand(call, r + 4);
+            args[a++] = LLVMConstInt(i1, 1, 0), args[a++] = LLVMConstReal(f32, 0.0), args[a++] = LLVMGetOperand(call, count - 1);
+            LLVMReplaceAllUsesWith(call, LLVMBuildCall(b, level, args, a, ""));
+            LLVMInstructionEraseFromParent(call);
+            fixed++;
+        }
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
+// Struct copies (llvm.memcpy of a constant length): the back end let a copy's loads move above an earlier store that may
+// alias its source. In n12, after a swap of a field through pointers (A->x = ..., B->x = ...), the copy output->a = *A read
+// A before the store to A->x, so both outputs came out unswapped (1000 / 1406, want 1406 / 1000), on the Iris Pro and the
+// HD 4000, with the stock compiler too, for 44- and 232-byte structs alike. The IR is right and its alias scopes say the
+// two may alias; dropping !alias.scope / !noalias didn't help, making the copy volatile did, but a volatile copy into
+// private memory lost values before (i16). Each word-aligned copy of a whole number of words, up to 1 KiB, becomes that
+// many 32-bit loads and stores, volatile on the device-memory side: on the Iris Pro the plain words were enough, on the
+// HD 4000 the compiler still read A first until the device accesses were volatile. After volatilizePunnedAccesses, which
+// would otherwise take the new i32 views for punning. INTEL_COPY_EXPAND_FIX=0 turns it off. Test: n12.
+static unsigned expandConstantCopies(LLVMModuleRef module) {
+    if (disabled("INTEL_COPY_EXPAND_FIX")) return 0;
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    std::vector<LLVMValueRef> copies;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                LLVMValueRef callee = LLVMIsACallInst(inst) ? LLVMGetCalledValue(inst) : nullptr;
+                if (!callee || strncmp(LLVMGetValueName(callee), "llvm.memcpy.", 12) || LLVMGetNumArgOperands(inst) != 5) continue;
+                LLVMValueRef length = LLVMGetOperand(inst, 2), align = LLVMGetOperand(inst, 3), isVolatile = LLVMGetOperand(inst, 4);
+                if (!LLVMIsAConstantInt(length) || !LLVMIsAConstantInt(align) || !LLVMIsAConstantInt(isVolatile)) continue;
+                unsigned long long bytes = LLVMConstIntGetZExtValue(length);
+                if (bytes < 4 || bytes > 1024 || bytes % 4 || LLVMConstIntGetZExtValue(align) < 4 || LLVMConstIntGetZExtValue(isVolatile)) continue;
+                copies.push_back(inst);
+            }
+    if (copies.empty()) return 0;
+    LLVMBuilderRef b = LLVMCreateBuilderInContext(context);
+    for (LLVMValueRef copy : copies) {
+        LLVMPositionBuilderBefore(b, copy);
+        LLVMValueRef dst = LLVMGetOperand(copy, 0), src = LLVMGetOperand(copy, 1);
+        dst = LLVMBuildBitCast(b, dst, LLVMPointerType(i32, LLVMGetPointerAddressSpace(LLVMTypeOf(dst))), "");
+        src = LLVMBuildBitCast(b, src, LLVMPointerType(i32, LLVMGetPointerAddressSpace(LLVMTypeOf(src))), "");
+        unsigned words = (unsigned)(LLVMConstIntGetZExtValue(LLVMGetOperand(copy, 2)) / 4);
+        for (unsigned k = 0; k < words; k++) {
+            LLVMValueRef index = LLVMConstInt(i32, k, 0);
+            LLVMValueRef word = LLVMBuildLoad(b, LLVMBuildGEP(b, src, &index, 1, ""), "");
+            LLVMSetAlignment(word, 4);
+            LLVMValueRef store = LLVMBuildStore(b, word, LLVMBuildGEP(b, dst, &index, 1, ""));
+            LLVMSetAlignment(store, 4);
+            if (LLVMGetPointerAddressSpace(LLVMTypeOf(src)) == 1) LLVMSetVolatile(word, 1);  // device memory: see above
+            if (LLVMGetPointerAddressSpace(LLVMTypeOf(dst)) == 1) LLVMSetVolatile(store, 1);
+        }
+        LLVMInstructionEraseFromParent(copy);
+    }
+    LLVMDisposeBuilder(b);
+    return (unsigned)copies.size();
+}
+
 static int hookedRun(void *self, LLVMModuleRef module) {
     pthread_mutex_lock(&installLock);
     installIntoPlugin(false);  // test process: the plugin was dlopened after we were inserted
@@ -5729,6 +5932,10 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] %u texture/sampler load(s) through escaped pointers re-indexed into the argument\n", n);
         n = fixVertexSignedSubwords(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u signed i8/i16 conversion(s) in a vertex function done on the 32-bit word\n", n);
+        n = fixGradientCompares(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u depth comparison(s) with gradients done at level 0\n", n);
+        n = foldHalfVectorBitcasts(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u constant(s) with half vectors spelled as bitcasts rewritten\n", n);
         n = dropSampleCompareBias(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u depth comparison(s) with an LOD bias: bias dropped\n", n);
         n = lowerIntegerGradients(module);
@@ -5779,6 +5986,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] %u variable-index private array access(es) done at constant indices\n", n);
         n = volatilizePunnedAccesses(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u access(es) to a buffer viewed as different types made volatile\n", n);
+        n = expandConstantCopies(module);  // after volatilizePunnedAccesses (see there)
+        if (n && logging()) fprintf(stderr, "[inteltex] %u constant-length copie(s) done as 32-bit loads and stores\n", n);
         unsigned flattened = flattenBranchChains(module);
         if (flattened && logging()) fprintf(stderr, "[inteltex] %u short branch(es) folded into selects\n", flattened);
         n = selectBufferIndices(module);  // after flattenBranchChains, whose selects can pick pointers

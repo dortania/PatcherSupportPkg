@@ -4,6 +4,8 @@
 // ptr_aliasing) kept the compiler service busy for over 13 minutes while the page waited for its pipeline. A kernel copies
 // two 232-byte structs from an input buffer to two device buffers, swaps a field through pointers, and copies both to the
 // output; the pipeline must build in under 10 s and every output word be right.
+// Intel (Ivy Bridge, Haswell): the copy output->a = *A read A before the swap's store, so the outputs came out unswapped;
+// the Intel adapter writes such copies as 32-bit loads and stores (INTEL_COPY_EXPAND_FIX).
 // Stock OCLP on Kepler: FAIL (slow build). Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
 #import "repro.h"
 #include <mach/mach_time.h>

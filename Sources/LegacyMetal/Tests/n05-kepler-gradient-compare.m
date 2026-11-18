@@ -10,6 +10,8 @@
 // The R9 M370X's compiler has no gradient comparison either (SC: "a call to an undefined label"; fragment functions fail
 // too), and ANGLE doesn't use one there (deqp's textureGrad, textureGradOffset and textureProjGrad shadow cases pass in
 // Chrome and Firefox), so on AMD the test SKIPs (FIXES.md, known limitations).
+// Intel (Ivy Bridge, Haswell): instruction selection failed on the same forms; the Intel adapter makes them at level 0 too
+// (INTEL_COMPARE_GRADIENT_FIX).
 // Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
 #import "repro.h"
 
