@@ -4,7 +4,8 @@
 // (64x64, 4 levels), a 2D-array (layer 1) and a cube (32x32, 3 levels) Depth32Float texture is cleared to its own depth
 // (0.2, 0.4, 0.6, 0.8); for each level k, gradients of 2^k texels (cube: of the face coordinates) must select level k: a
 // comparison (less) with a reference just below that level's depth passes and one just above fails. Level 0 for every
-// gradient, as on Kepler, passes only k = 0.
+// gradient, as on Kepler, passes only k = 0. SKIPs on AMD (no gradient comparisons) and Kepler (level 0 only): both are
+// known limitations.
 // Stock OCLP: FAIL (the compiler fails). Fixed: PASS. Argument: GPU name substring (default: Intel).
 #import "repro.h"
 
@@ -57,6 +58,10 @@ int main(int argc, char **argv) { @autoreleasepool {
     id<MTLDevice> dev = reproDevice(argc, argv, "Intel");
     if (!dev) return SKIP(bug, "no such GPU");
     const char *name = dev.name.UTF8String;
+    if ([dev.name containsString:@"AMD"])
+        return SKIP(bug, "%s: AMD's compiler has no depth comparison with gradients (a known limitation; ANGLE doesn't use one)", name);
+    if ([dev.name containsString:@"NVIDIA"] || [dev.name containsString:@"GeForce"])
+        return SKIP(bug, "%s: Kepler compares depth at level 0 only (a known limitation)", name);
     NSError *err = nil;
     id<MTLLibrary> lib = [dev newLibraryWithSource:[reproUniqueComment() stringByAppendingString:src] options:nil error:&err];
     if (!lib) return FAIL(bug, "%s: compile: %s", name, err.localizedDescription.UTF8String);
