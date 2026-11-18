@@ -113,6 +113,8 @@
 //  59. visibility results on Kepler, which kept only the last draw's count (and left slots without draws as they were):
 //      each draw counts into a slot of its own, summed into the app's slot when the encoder ends
 //  60. new private buffers and counter sample buffers on Kepler, which came back with a freed buffer's contents: zero-filled
+//  61. counter resolves on Kepler, which read a result buffer nothing made resident (GPU fault, device lost): the result
+//      buffer is put in the command buffer's resources first
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -3847,6 +3849,44 @@ static void keplerZeroBuffers(void) {
         origNVNewCounterBuffer = (NVNewCounterBufferIMP)swizzle("NVMTLDevice", "newCounterSampleBufferWithDescriptor:error:", (IMP)nvNewCounterBuffer);
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Kepler private buffers: zero-filled at creation\n");
 }
+// 61. The Kepler driver's -resolveCounters:inRange:destinationBuffer:destinationOffset: reads the samples from the sample
+// buffer's own result buffer (counterResultBuffer, 16 bytes a sample) but leaves it out of the command buffer's resources,
+// so nothing makes it resident: when its pages aren't mapped the GPU faults (kernel log: "Access Violation Error (MMU
+// Error 2)", FAULT_PTE) and the driver kills the context, failing the next command buffer with
+// kIOAccelCommandBufferCallbackErrorInvalidResource. WebGPU's resolveQuerySet of timestamp queries hit it in Chrome
+// (device lost in the CTS's timestampQuery resolve_unused_slots); whether a process faults depends on its allocations.
+// Each resolve first copies 4 bytes of the result buffer to a small buffer of the shim's in the same encoder, which puts
+// the result buffer in the command buffer's resources. MTLSHIM_NV_RESOLVE_RESIDENCY=0 turns it off.
+typedef void (*NVResolveCountersIMP)(id, SEL, id, NSRange, id, NSUInteger);
+static NVResolveCountersIMP origNVResolveCounters;
+static void nvResolveCounters(id self, SEL _cmd, id sampleBuffer, NSRange range, id destination, NSUInteger offset) {
+    SEL resultSel = sel_registerName("counterResultBuffer");
+    if ([sampleBuffer respondsToSelector:resultSel]) {
+        id<MTLBuffer> results = ((id (*)(id, SEL))objc_msgSend)(sampleBuffer, resultSel);
+        id<MTLDevice> device = results.device;
+        static const void *const kScratchKey = &kScratchKey;
+        id<MTLBuffer> scratch = nil;
+        if (device) @synchronized(device) {
+            scratch = objc_getAssociatedObject(device, kScratchKey);
+            if (!scratch) {
+                scratch = [device newBufferWithLength:16 options:MTLResourceStorageModePrivate | MTLResourceHazardTrackingModeUntracked];
+                if (scratch) objc_setAssociatedObject(device, kScratchKey, scratch, OBJC_ASSOCIATION_RETAIN);
+            }
+        }
+        if (results.length >= 4 && scratch)
+            [(id<MTLBlitCommandEncoder>)self copyFromBuffer:results sourceOffset:0 toBuffer:scratch destinationOffset:0 size:4];
+    }
+    origNVResolveCounters(self, _cmd, sampleBuffer, range, destination, offset);
+}
+static void keplerResolveResidency(void) {
+    static BOOL done;
+    const char *setting = getenv("MTLSHIM_NV_RESOLVE_RESIDENCY");
+    static const char *const kClass = "NVMTLBlitCommandEncoder_KEPLER_A", *const kSel = "resolveCounters:inRange:destinationBuffer:destinationOffset:";
+    if (done || (setting && !strcmp(setting, "0")) || !definesMethod(kClass, kSel)) return;
+    done = YES;
+    origNVResolveCounters = (NVResolveCountersIMP)swizzle(kClass, kSel, (IMP)nvResolveCounters);
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Kepler counter resolves: result buffer made resident\n");
+}
 static void keplerVisibilitySums(void) {
     static BOOL done;
     static const char *const kBuffer = "NVMTLCommandBuffer", *const kRender = "NVMTLRenderCommandEncoder_KEPLER_A";
@@ -3987,6 +4027,7 @@ static void patchDriverClasses(void) {
     keplerTextureAtomics();  // item 58
     keplerVisibilitySums();  // item 59
     keplerZeroBuffers();  // item 60
+    keplerResolveResidency();  // item 61
     mpsStatisticsWidth();
     stencilCopies();
     nvStencilUploadOrder();  // item 53
