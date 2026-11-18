@@ -543,6 +543,61 @@ static unsigned sampleLodOperands(std::string &s) {
     return n;
 }
 
+// ---- cube-array comparisons at a level ----------------------------------------------------------------------------------
+// A cube array's IGIL comparison at an explicit level, SAMPLE_LC rD, rC(...), ..., ref, CUBEARRAY, has its coordinates in
+// rC.xyz and the array index in rC.w, and iCBE takes the LOD from rC.w too: a compute kernel compared layer n at level n
+// whatever level it asked for (the stock compiler too, Ivy Bridge and Haswell; the IGIL writer puts the LOD in rD.w,
+// which iCBE doesn't read). iCBE's projective form, SAMPLE_PLC rD, rC(...), ..., lod, ref, CUBEARRAY, takes the LOD as an
+// operand and the array index from rC.w, but divides the coordinates and the reference by rC.w. So the coordinates and
+// the reference are multiplied by w' = max(index, 2^-8) first, which the division undoes and the sampler still rounds to
+// the same index. For layer 0 (w' = 2^-8) and layers that are powers of two the values come back exactly; for the others
+// the reference can come back one ulp off (FIXES.md, known limitations), where the level was wrong before. Two registers
+// past DCL_TEMPS hold the products. INTEL_CUBE_ARRAY_LEVEL_FIX=0 turns it off.
+static unsigned cubeArrayCompareLevels(std::string &s) {
+    if (disabled("INTEL_CUBE_ARRAY_LEVEL_FIX") || s.find(", CUBEARRAY;") == std::string::npos) return 0;
+    size_t decl = s.find("\tDCL_TEMPS r0..r");
+    unsigned last = 0;
+    int declLen = 0;
+    if (decl == std::string::npos || sscanf(s.c_str() + decl, "\tDCL_TEMPS r0..r%u;%n", &last, &declLen) != 1 || !declLen) return 0;
+    unsigned a = last + 1, b = last + 2, n = 0;
+    size_t previous = std::string::npos;
+    for (size_t pos = 0; pos < s.size();) {
+        size_t eol = s.find('\n', pos);
+        if (eol == std::string::npos) eol = s.size();
+        unsigned d, c, d2;
+        int at = 0;
+        if (eol > pos && previous != std::string::npos && eol - pos >= 12 &&
+            sscanf(s.c_str() + pos, "\tSAMPLE_LC r%u, r%u(%n", &d, &c, &at) == 2 && at &&
+            !s.compare(eol - 12, 12, ", CUBEARRAY;") && sscanf(s.c_str() + previous, "\tMOV r%u.w, ", &d2) == 1 && d2 == d) {
+            // "(OFFSETS), tT, sS, REF, CUBEARRAY;" after "rC("
+            std::string tail = s.substr(pos + at, eol - (pos + at));
+            size_t close = tail.find("), ");
+            size_t refEnd = tail.rfind(", CUBEARRAY;");
+            size_t refStart = refEnd == std::string::npos ? std::string::npos : tail.rfind(", ", refEnd - 1);
+            if (close != std::string::npos && refStart != std::string::npos && refStart > close) {
+                std::string offsets = tail.substr(0, close), resources = tail.substr(close + 3, refStart - (close + 3));
+                std::string ref = tail.substr(refStart + 2, refEnd - (refStart + 2));
+                auto r = [](unsigned k) { return "r" + std::to_string(k); };
+                std::string rest = "\tFMAX " + r(a) + ".w, " + r(c) + ".wwww, 0x3B800000;\n\tFMUL " + r(a) + ".xyz, " + r(c) + ".xyzx, " + r(a) +
+                                   ".wwww;\n\tFMUL " + r(b) + ".x, " + ref + ", " + r(a) + ".w;\n\tSAMPLE_PLC " + r(d) + ", " + r(a) + "(" + offsets +
+                                   "), " + resources + ", " + r(d) + ".w, " + r(b) + ".x, CUBEARRAY;";
+                s.replace(pos, eol - pos, rest);
+                eol = s.find('\n', pos + rest.size() - 1);
+                if (eol == std::string::npos) eol = s.size();
+                n++;
+            }
+        }
+        previous = eol > pos ? pos : std::string::npos;
+        pos = eol + 1;
+    }
+    if (n) {
+        char newDecl[64];
+        snprintf(newDecl, sizeof newDecl, "\tDCL_TEMPS r0..r%u;", b);
+        s.replace(decl, declLen, newDecl);
+    }
+    return n;
+}
+
 // ---- a narrow mask after a narrower one --------------------------------------------------------------------------------
 // The IGIL writer re-truncates a 16-bit value after an operation (AND rC, rB, 0xFFFF), also right after an AND that
 // already left it narrower (AND rB, rA, 255 for a uchar lane). iCBE takes AND 0xFFFF for a zero-extension from 16 bits,
@@ -1235,6 +1290,7 @@ extern "C" void intelatomicsFixIGIL(std::string *text) {
     if (unsigned n = signTestsOfSums(s); n && logging()) fprintf(stderr, "[inteltex] %u signed compare(s) of a sum with zero done on its sign bit\n", n);
     if (unsigned n = signExtensions(s); n && logging()) fprintf(stderr, "[inteltex] %u STOI / BTOI done as shift pairs\n", n);
     if (unsigned n = sampleLodOperands(s); n && logging()) fprintf(stderr, "[inteltex] %u explicit-LOD sample(s) given the register holding the LOD\n", n);
+    if (unsigned n = cubeArrayCompareLevels(s); n && logging()) fprintf(stderr, "[inteltex] %u cube-array comparison(s) at a level made projective\n", n);
     pixelDivideInBranch = divideInBranch(s);
     if (pixelDivideInBranch && logging()) fprintf(stderr, "[inteltex] pixel shader with an integer divide in a branch: SIMD8 only\n");
     if (getenv("INTELTEX_DUMP")) {  // debugging: the IGIL text after the fixes above
