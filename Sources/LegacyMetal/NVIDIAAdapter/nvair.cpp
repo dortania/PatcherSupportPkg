@@ -62,6 +62,9 @@
 // Private arrays of bytes and halfwords done on 32-bit words (a stored word reached their loads unmasked).
 // NVAIR_NARROW_PRIVATE_ARRAY_FIX=0.
 //
+// 32-bit products of 16-bit factors, and products an or uses, hidden from the optimizer behind an opaque min (it took
+// bits of products for clear). NVAIR_NARROW_MULTIPLY_FIX=0.
+//
 // Installed (planned): GeForceAIRPlugin.bundle/Contents/MacOS/GeForceAIRCompat.dylib, a weak dependency of
 // GeForceAIRPlugin. Test use: DYLD_INSERT_LIBRARIES=Tests/tools/localcc.dylib:build/GeForceAIRCompat-test.dylib
 //   NVAIR_LOG=1             log what is rewritten (NVAIR_LOG=/path: append to that file)
@@ -1186,6 +1189,78 @@ static unsigned widenNarrowPrivateArrays(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
+// ---- 32-bit products of 16-bit factors -----------------------------------------------------------------------------------
+// When both factors of a 32-bit multiply are known to fit in 16 bits (zero-extended bytes / halfwords, masked with
+// 0xffff or less, or such values or'ed together), Kepler's compiler took the product's top bit for clear, though 0xffff * 0xffff = 0xfffe0001: with it,
+// -(int)(~(ushort(a) * ushort(b)) & 0x7fffffff), which is (product | 0x80000000) + 1, came out as product + 0x80000001,
+// wrong by 2^31 for about half of all inputs (mslfuzz2 FRAG=1 seed 111, reduced; in kernels too; a full 32-bit product
+// is right). One factor goes through llvm.nvvm.min.u.i32(x, ~0u), the value unchanged but its range hidden from the
+// optimizer. The same wrong knowledge of a product made x % (((b | 1) * c) | 1) off by one in 17% of cases (the or taken
+// for an add: mslfuzz GEN=mslfuzz.py seed 645, reduced; a divisor that isn't a product is right): an or that uses a
+// 32-bit product gets it through the same opaque min. NVAIR_NARROW_MULTIPLY_FIX=0 turns both off.
+enum { LLVMMul = 12, LLVMAnd = 23, LLVMOr = 24, LLVMXor = 25, LLVMSelect = 46 };
+// Known to fit in 16 bits: a constant up to 0xffff, a zero-extended byte or halfword, an and with such a value, an or / xor
+// / select of two such values, a shift right by 16 or more (what LLVM leaves of ushort casts, masks and | 0x8000).
+static bool narrowFactor(LLVMValueRef v, int depth = 0) {
+    if (LLVMIsAConstantInt(v)) return LLVMConstIntGetZExtValue(v) <= 0xffffu;
+    if (depth > 4 || !LLVMIsAInstruction(v)) return false;
+    switch (LLVMGetInstructionOpcode(v)) {
+        case LLVMZExt: {
+            LLVMTypeRef from = LLVMTypeOf(LLVMGetOperand(v, 0));
+            return LLVMGetTypeKind(from) == LLVMIntegerTypeKind && LLVMGetIntTypeWidth(from) <= 16;
+        }
+        case LLVMAnd: return narrowFactor(LLVMGetOperand(v, 0), depth + 1) || narrowFactor(LLVMGetOperand(v, 1), depth + 1);
+        case LLVMOr: case LLVMXor: return narrowFactor(LLVMGetOperand(v, 0), depth + 1) && narrowFactor(LLVMGetOperand(v, 1), depth + 1);
+        case LLVMSelect: return narrowFactor(LLVMGetOperand(v, 1), depth + 1) && narrowFactor(LLVMGetOperand(v, 2), depth + 1);
+        case LLVMLShr: {
+            LLVMValueRef amount = LLVMGetOperand(v, 1);
+            return isInt(LLVMTypeOf(v), 32) && LLVMIsAConstantInt(amount) && LLVMConstIntGetZExtValue(amount) >= 16;
+        }
+        default: return false;
+    }
+}
+static unsigned hideNarrowProducts(LLVMModuleRef module, Gen &g) {
+    unsigned fixed = 0;
+    LLVMBuilderRef b = nullptr;
+    LLVMTypeRef params[2] = {g.i32, g.i32};
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
+        if (LLVMIsDeclaration(f) || !strncmp(LLVMGetValueName(f), "nvair.", 6)) continue;
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                if (LLVMGetInstructionOpcode(inst) != LLVMMul || !isInt(LLVMTypeOf(inst), 32)) continue;
+                // a product an or uses: the or gets it through the opaque min (its bits can't be taken for disjoint)
+                std::vector<LLVMValueRef> ors;
+                for (LLVMUseRef u = LLVMGetFirstUse(inst); u; u = LLVMGetNextUse(u)) {
+                    LLVMValueRef user = LLVMGetUser(u);
+                    if (LLVMIsAInstruction(user) && LLVMGetInstructionOpcode(user) == LLVMOr) ors.push_back(user);
+                }
+                if (!ors.empty()) {
+                    if (!b) b = LLVMCreateBuilderInContext(g.context);
+                    LLVMValueRef next = LLVMGetNextInstruction(inst);
+                    if (next) LLVMPositionBuilderBefore(b, next);
+                    LLVMValueRef args[2] = {inst, g.c32(~0u)};
+                    LLVMValueRef hidden = LLVMBuildCall(b, g.intrinsic("llvm.nvvm.min.u.i32", g.i32, params, 2), args, 2, "");
+                    for (LLVMValueRef user : ors)
+                        for (unsigned i = 0; i < 2; i++)
+                            if (LLVMGetOperand(user, i) == inst) LLVMSetOperand(user, i, hidden);
+                    fixed++;
+                    inst = hidden;  // continue after it
+                    continue;
+                }
+                LLVMValueRef x = LLVMGetOperand(inst, 0), y = LLVMGetOperand(inst, 1);
+                if (!narrowFactor(x) || !narrowFactor(y) || LLVMIsAConstantInt(x)) continue;
+                if (!b) b = LLVMCreateBuilderInContext(g.context);
+                LLVMPositionBuilderBefore(b, inst);
+                LLVMValueRef args[2] = {x, g.c32(~0u)};
+                LLVMValueRef hidden = LLVMBuildCall(b, g.intrinsic("llvm.nvvm.min.u.i32", g.i32, params, 2), args, 2, "");
+                LLVMSetOperand(inst, 0, hidden);
+                fixed++;
+            }
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
 static void logBareIntrinsics(LLVMModuleRef module) {
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
         const char *name = LLVMGetValueName(f);
@@ -1222,6 +1297,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (cubes && logging()) fprintf(stderr, "[nvair] %u cube array index(es) raised to 0\n", cubes);
         unsigned gradients = disabled("NVAIR_GRADIENT_FIX") ? 0 : fixGradientSamples(module, g);
         if (gradients && logging()) fprintf(stderr, "[nvair] %u 3D / cube gradient sample(s) done at their level\n", gradients);
+        unsigned products = disabled("NVAIR_NARROW_MULTIPLY_FIX") ? 0 : hideNarrowProducts(module, g);
+        if (products && logging()) fprintf(stderr, "[nvair] %u product(s) of 16-bit factors given an opaque factor\n", products);
         unsigned narrow = disabled("NVAIR_NARROW_PRIVATE_ARRAY_FIX") ? 0 : widenNarrowPrivateArrays(module, g);
         if (narrow && logging()) fprintf(stderr, "[nvair] %u private byte / halfword array(s) done on 32-bit words\n", narrow);
         unsigned counts = disabled("NVAIR_COUNT_ZERO_FIX") ? 0 : defineCountOfZero(module, g);
