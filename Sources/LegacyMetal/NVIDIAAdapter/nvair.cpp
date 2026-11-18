@@ -71,6 +71,9 @@
 // 32-bit products of 16-bit factors, and products an or uses, hidden from the optimizer behind an opaque min (it took
 // bits of products for clear). NVAIR_NARROW_MULTIPLY_FIX=0.
 //
+// Depth and stencil textures sampled through texture2d in ANGLE's shaders made (x, 0, 0, 1) from a mask MetalOldCompat
+// item 62 binds (the sampler gave (x, x, x, x)). NVAIR_DEPTH_CHANNELS=0.
+//
 // Texture atomics on read_write texture2d<uint/int> (no body in the plugin: the compiler crashed) made global atomics on
 // the linear buffer MetalOldCompat item 58 gives such textures, bound at a hidden buffer index. NVAIR_TEXTURE_ATOMICS=0.
 //
@@ -1702,6 +1705,134 @@ static unsigned lowerTextureAtomics(LLVMModuleRef module, Gen &g) {
     return lowered;
 }
 
+// ---- depth / stencil textures' channels in ANGLE's shaders (MetalOldCompat item 62) ------------------------------------
+// Kepler's sampler returns a depth texture's depth in all four channels, (d, d, d, d), and a stencil view's value as
+// (s, s, s, s), through texture2d<float> / <uint>; OpenGL ES wants (d, 0, 0, 1) and (s, 0, 0, 1), and ANGLE gets that from
+// swizzled views this driver doesn't make. In an ANGLE vertex or fragment function (an ANGLE_angleUniforms argument) with a
+// texture argument that isn't a depth texture, each sample or read of a texture argument comes out (x, 0, 0, 1) when bit
+// n (its [[texture(n)]]) of a mask is set: a constant uint array at a hidden buffer index (__nvds), the next free one
+// counted down from 30 after the texture atomics' (vertex functions keep 0-16), which item 62 works out the same way from
+// the pipeline's reflection and fills before each draw from the textures bound. NVAIR_DEPTH_CHANNELS=0 turns it off.
+static bool depthTextureArgument(const std::vector<LLVMValueRef> &f) {
+    for (size_t k = 0; k + 1 < f.size(); k++)
+        if (isString(f[k], "air.arg_type_name")) {
+            unsigned length = 0;
+            const char *t = LLVMIsAMDString(f[k + 1]) ? LLVMGetMDString(f[k + 1], &length) : nullptr;
+            return t && length >= 5 && !strncmp(t, "depth", 5);
+        }
+    return false;
+}
+static bool argumentNamed(const std::vector<LLVMValueRef> &f, const char *name) {
+    for (size_t k = 0; k + 1 < f.size(); k++)
+        if (isString(f[k], "air.arg_name") && isString(f[k + 1], name)) return true;
+    return false;
+}
+static unsigned fixDepthChannels(LLVMModuleRef module, Gen &g) {
+    unsigned fixed = 0;
+    LLVMBuilderRef b = nullptr;
+    for (const char *list : {"air.fragment", "air.vertex"}) {
+        std::vector<LLVMValueRef> entries(LLVMGetNamedMetadataNumOperands(module, list));
+        if (entries.empty()) continue;
+        LLVMGetNamedMetadataOperands(module, list, entries.data());
+        for (LLVMValueRef entry : entries) {
+            std::vector<LLVMValueRef> parts = metadataOperands(entry);
+            void *node = metadataOf(entry);
+            if (parts.size() < 3 || !parts[0] || !node || LLVMIsDeclaration(parts[0])) continue;
+            LLVMValueRef function = parts[0];
+            std::vector<LLVMValueRef> args = metadataOperands(parts[2]);
+            bool used[31] = {false}, angle = false;
+            std::vector<std::pair<long, long>> textures;  // (binding, parameter)
+            for (LLVMValueRef arg : args) {
+                std::vector<LLVMValueRef> f = metadataOperands(arg);
+                if (f.size() < 2 || !LLVMIsAConstantInt(f[0])) continue;
+                if (isString(f[1], "air.buffer") || isString(f[1], "air.indirect_buffer")) {
+                    long index = metadataFieldAfter(f, "air.location_index"), count = metadataFieldAfter(f, "air.location_index", 2);
+                    for (long k = 0; index >= 0 && k < (count > 0 ? count : 1); k++)
+                        if (index + k < 31) used[index + k] = true;
+                    angle |= argumentNamed(f, "ANGLE_angleUniforms");
+                } else if (isString(f[1], "air.texture") && !depthTextureArgument(f)) {
+                    textures.push_back({metadataFieldAfter(f, "air.location_index"), (long)LLVMConstIntGetZExtValue(f[0])});
+                }
+            }
+            if (!angle || textures.empty()) continue;
+            int hidden = 30, lowest = !strcmp(list, "air.vertex") ? 17 : 0;
+            while (hidden >= lowest && used[hidden]) hidden--;
+            if (hidden < lowest) continue;
+            // the samples and reads of a texture argument, with its binding
+            std::vector<std::pair<LLVMValueRef, long>> calls;
+            for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(function); bb; bb = LLVMGetNextBasicBlock(bb))
+                for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                    if (!LLVMIsACallInst(inst)) continue;
+                    LLVMValueRef callee = calledFunction(inst);
+                    const char *name = callee ? LLVMGetValueName(callee) : "";
+                    if (!startsWith(name, "air.sample_texture_") && !startsWith(name, "air.read_texture_")) continue;
+                    LLVMTypeRef rt = LLVMTypeOf(inst);
+                    if (LLVMGetTypeKind(rt) != LLVMVectorTypeKind || LLVMGetVectorSize(rt) != 4) continue;
+                    LLVMValueRef texture = LLVMGetOperand(inst, 0);
+                    for (auto &t : textures)
+                        if (t.first >= 0 && t.first < 128 && texture == LLVMGetParam(function, (unsigned)t.second)) calls.push_back({inst, t.first});
+                }
+            if (calls.empty()) continue;
+            // the function again, with the mask parameter last; the body moves over
+            LLVMTypeRef type = LLVMGetElementType(LLVMTypeOf(function)), mask = LLVMPointerType(g.i32, 2);
+            unsigned params = LLVMCountParams(function);
+            std::vector<LLVMTypeRef> types(LLVMCountParamTypes(type));
+            LLVMGetParamTypes(type, types.data());
+            types.push_back(mask);
+            std::string name = LLVMGetValueName(function);
+            LLVMSetValueName(function, (name + ".nvds").c_str());
+            LLVMValueRef rebuilt = LLVMAddFunction(module, name.c_str(),
+                LLVMFunctionType(LLVMGetReturnType(type), types.data(), (unsigned)types.size(), LLVMIsFunctionVarArg(type)));
+            LLVMSetLinkage(rebuilt, LLVMGetLinkage(function));
+            functionCopyAttributesFrom(rebuilt, function);
+            for (unsigned p = 0; p < params; p++) {
+                LLVMSetValueName(LLVMGetParam(rebuilt, p), LLVMGetValueName(LLVMGetParam(function, p)));
+                LLVMReplaceAllUsesWith(LLVMGetParam(function, p), LLVMGetParam(rebuilt, p));
+            }
+            while (LLVMBasicBlockRef block = LLVMGetFirstBasicBlock(function)) {
+                LLVMRemoveBasicBlockFromParent(block);
+                basicBlockInsertInto(block, rebuilt, nullptr);
+            }
+            LLVMValueRef base = LLVMGetParam(rebuilt, params);
+            LLVMSetValueName(base, "__nvds");
+            auto str = [&](const char *t) { return LLVMMDStringInContext(g.context, t, (unsigned)strlen(t)); };
+            LLVMValueRef f[] = {g.c32(params), str("air.buffer"), str("air.location_index"), g.c32(hidden), g.c32(1), str("air.read"),
+                                str("air.arg_type_size"), g.c32(4), str("air.arg_type_align_size"), g.c32(4),
+                                str("air.arg_type_name"), str("uint"), str("air.arg_name"), str("__nvds")};
+            std::vector<LLVMValueRef> newArgs = args;
+            newArgs.push_back(LLVMMDNodeInContext(g.context, f, sizeof f / sizeof *f));
+            void *argList = metadataOf(LLVMMDNodeInContext(g.context, newArgs.data(), (unsigned)newArgs.size()));
+            if (!argList) continue;
+            mdNodeReplaceOperand(node, 0, valueAsMetadata(rebuilt));
+            mdNodeReplaceOperand(node, 2, argList);
+            if (!b) b = LLVMCreateBuilderInContext(g.context);
+            for (auto &c : calls) {
+                LLVMValueRef call = c.first;
+                LLVMPositionBuilderBefore(b, LLVMGetNextInstruction(call));
+                LLVMValueRef index = g.c32((unsigned)(c.second / 32));
+                LLVMValueRef word = LLVMBuildLoad(b, LLVMBuildGEP(b, base, &index, 1, ""), "");
+                LLVMValueRef bit = LLVMBuildAnd(b, LLVMBuildLShr(b, word, g.c32((unsigned)(c.second % 32)), ""), g.c32(1), "");
+                LLVMValueRef isDepth = LLVMBuildICmp(b, LLVMIntNE, bit, g.c32(0), "");
+                LLVMTypeRef element = LLVMGetElementType(LLVMTypeOf(call));
+                bool integer = LLVMGetTypeKind(element) == LLVMIntegerTypeKind;
+                LLVMValueRef zero = LLVMConstNull(element), one = integer ? LLVMConstInt(element, 1, 0) : LLVMConstReal(element, 1.0);
+                LLVMValueRef v1 = LLVMBuildInsertElement(b, call, zero, g.c32(1), "");
+                LLVMValueRef v2 = LLVMBuildInsertElement(b, v1, zero, g.c32(2), "");
+                LLVMValueRef v3 = LLVMBuildInsertElement(b, v2, one, g.c32(3), "");
+                LLVMValueRef result = LLVMBuildSelect(b, isDepth, v3, call, "");
+                LLVMReplaceAllUsesWith(call, result);
+                LLVMSetOperand(v1, 0, call);
+                LLVMSetOperand(result, 2, call);
+                fixed++;
+            }
+            if (logging())
+                fprintf(stderr, "[nvair] %s: %zu texture sample(s) / read(s) given depth channels, mask at buffer %d\n", name.c_str(), calls.size(), hidden);
+        }
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
 static void logBareIntrinsics(LLVMModuleRef module) {
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
         const char *name = LLVMGetValueName(f);
@@ -1731,6 +1862,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         Gen g = makeGen(module);
         unsigned atomics = disabled("NVAIR_TEXTURE_ATOMICS") ? 0 : lowerTextureAtomics(module, g);
         if (atomics && logging()) fprintf(stderr, "[nvair] %u texture atomic(s) made global atomics on linear texture buffers\n", atomics);
+        unsigned depthChannels = disabled("NVAIR_DEPTH_CHANNELS") ? 0 : fixDepthChannels(module, g);
+        (void)depthChannels;
         unsigned defined = disabled("NVAIR_INTRINSICS") ? 0 : defineMissingIntrinsics(g);
         unsigned fixed = disabled("NVAIR_I64_FIX") ? 0 : fixWideInstructions(module, g);
         unsigned samplers = disabled("NVAIR_SAMPLER_STATE_FIX") ? 0 : fixSamplerStateWords(module, g);

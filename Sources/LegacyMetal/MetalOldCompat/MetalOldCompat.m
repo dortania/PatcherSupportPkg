@@ -115,6 +115,8 @@
 //  60. new private buffers and counter sample buffers on Kepler, which came back with a freed buffer's contents: zero-filled
 //  61. counter resolves on Kepler, which read a result buffer nothing made resident (GPU fault, device lost): the result
 //      buffer is put in the command buffer's resources first
+//  62. depth and stencil textures sampled through texture2d in ANGLE's shaders on Kepler, which gave (d, d, d, d): a mask of
+//      depth / stencil bindings at the hidden index where the Kepler adapter makes them (d, 0, 0, 1)
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -3248,6 +3250,8 @@ static const uint32_t kKTAMagic = 0x4154564E;  // "NVTA", as GeForceAIRCompat's 
 static const void *kKTABufferKey = &kKTABufferKey, *kKTABindingsKey = &kKTABindingsKey, *kKTAStateKey = &kKTAStateKey,
                   *kKTADummyKey = &kKTADummyKey, *kKTAQueueKey = &kKTAQueueKey;
 typedef struct { uint8_t stage, hidden; uint16_t texture; } KTABinding;  // stage: 0 vertex, 1 fragment, 2 compute
+enum { kKTADepthMask = 0xFFFF };  // KTABinding.texture of item 62's depth / stencil mask
+static BOOL ktaDepthChannels;      // item 62 on
 
 static BOOL ktaDevice(id device) {
     static Class nv;
@@ -3345,6 +3349,20 @@ static void ktaStageBindings(NSArray<MTLArgument *> *arguments, uint8_t stage, N
         if (next < lowest) return;  // the adapter left this function alone
         KTABinding b = {stage, (uint8_t)next--, (uint16_t)t.index};
         [bindings appendBytes:&b length:sizeof b];
+    }
+    // item 62: an ANGLE function (its ANGLE_angleUniforms argument) with a texture argument that isn't a depth texture
+    // gets the depth / stencil mask at the next index, as the adapter (NVAIR_DEPTH_CHANNELS) works it out
+    if (ktaDepthChannels && stage < 2) {
+        BOOL angle = NO, texture = NO;
+        for (MTLArgument *a in arguments) {
+            angle |= a.type == MTLArgumentTypeBuffer && [a.name isEqualToString:@"ANGLE_angleUniforms"];
+            texture |= a.type == MTLArgumentTypeTexture && !a.isDepthTexture;
+        }
+        while (angle && texture && next >= lowest && used[next]) next--;
+        if (angle && texture && next >= lowest) {
+            KTABinding b = {stage, (uint8_t)next--, kKTADepthMask};
+            [bindings appendBytes:&b length:sizeof b];
+        }
     }
     [out appendData:bindings];
 }
@@ -3515,6 +3533,14 @@ static void ktaSetComputePipeline(__unsafe_unretained id self, SEL _cmd, __unsaf
     if (s) s->bindings = bindings;
     ktaOrigSetComputePipeline(self, _cmd, pipeline);
 }
+static BOOL ktaDepthOrStencil(MTLPixelFormat f) {
+    switch (f) {
+        case MTLPixelFormatDepth16Unorm: case MTLPixelFormatDepth32Float: case MTLPixelFormatStencil8:
+        case MTLPixelFormatDepth24Unorm_Stencil8: case MTLPixelFormatDepth32Float_Stencil8:
+        case MTLPixelFormatX32_Stencil8: case MTLPixelFormatX24_Stencil8: return YES;
+        default: return NO;
+    }
+}
 // Binds each atomic-capable texture's buffer at its hidden index (restore NO), or puts back what the app had bound there.
 static void ktaBind(__unsafe_unretained id encoder, BOOL restore) {
     if (!ktaTracking) return;
@@ -3527,6 +3553,13 @@ static void ktaBind(__unsafe_unretained id encoder, BOOL restore) {
         if (restore) {
             if (s->buffers[st][h]) ktaOrigSetBuffer[st](encoder, ktaSetBufferSel[st], s->buffers[st][h], s->offsets[st][h], h);
             else if (s->bytes[st][h]) ktaOrigSetBytes[st](encoder, ktaSetBytesSel[st], s->bytes[st][h].bytes, s->bytes[st][h].length, h);
+            continue;
+        }
+        if (b[k].texture == kKTADepthMask) {  // item 62: bit n set when texture n has a depth or stencil format
+            uint32_t mask[kKTATextures / 32] = {0};
+            for (int t = 0; t < kKTATextures; t++)
+                if (s->textures[st][t] && ktaDepthOrStencil([(id<MTLTexture>)s->textures[st][t] pixelFormat])) mask[t / 32] |= 1u << (t % 32);
+            ktaOrigSetBytes[st](encoder, ktaSetBytesSel[st], mask, sizeof mask, h);
             continue;
         }
         id<MTLBuffer> buffer = b[k].texture < kKTATextures ? ktaBacking(s->textures[st][b[k].texture]) : nil;  // (beyond: not tracked)
@@ -3566,6 +3599,16 @@ KTA_DRAW(DG, (__unsafe_unretained id self, SEL _cmd, MTLSize g, MTLSize t), (sel
 KTA_DRAW(DT, (__unsafe_unretained id self, SEL _cmd, MTLSize g, MTLSize t), (self, _cmd, g, t))
 KTA_DRAW(DInd, (__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id indirect, NSUInteger o, MTLSize t), (self, _cmd, indirect, o, t))
 
+// 62. Kepler's sampler returns a depth texture's depth in all four channels, (d, d, d, d), and a stencil view's value as
+// (s, s, s, s), sampling and reading through texture2d<float> / <uint>, where OpenGL ES wants (d, 0, 0, 1) and (s, 0, 0, 1).
+// Metal leaves those channels undefined, and ANGLE puts them right with swizzled views, which it only makes on GPU
+// family Mac2 (and this driver's swizzled views come out empty): WebGL's depth texture tests failed in Chrome and
+// Firefox (Khronos WebGL 2.0.1: depth texture formats, fboinvalidate unbind_read_*, about 12 pages). In ANGLE's shaders
+// (the functions with an ANGLE_angleUniforms argument), the Kepler adapter (NVAIR_DEPTH_CHANNELS) makes each sample or read
+// of a texture argument (x, 0, 0, 1) when bit n of a mask at a hidden buffer index is set; the index is the next one
+// after item 58's, worked out here from the pipeline's reflection the same way, and before each draw the mask gets a bit
+// for each depth or stencil texture bound (item 58's bindings and tracking). MTLSHIM_NV_DEPTH_CHANNELS=0 turns it off.
+// Test: n11 on the GTX 770.
 static void keplerTextureAtomics(void) {
     static BOOL done;
     static const char *const kDevice = "NVMTLDevice", *const kRender = "NVMTLRenderCommandEncoder_KEPLER_A",
@@ -3586,6 +3629,8 @@ static void keplerTextureAtomics(void) {
             return;  // not the Kepler driver these hooks know
     if (!definesMethod(kRender, "setRenderPipelineState:") || !definesMethod(kCompute, "setComputePipelineState:")) return;
     done = YES;
+    const char *depth = getenv("MTLSHIM_NV_DEPTH_CHANNELS");
+    ktaDepthChannels = !(depth && !strcmp(depth, "0"));  // item 62 rides on these hooks
     const IMP bufferHooks[3] = {(IMP)ktaSetBufferVertex, (IMP)ktaSetBufferFragment, (IMP)ktaSetBufferCompute};
     const IMP offsetHooks[3] = {(IMP)ktaSetOffsetVertex, (IMP)ktaSetOffsetFragment, (IMP)ktaSetOffsetCompute};
     const IMP buffersHooks[3] = {(IMP)ktaSetBuffersVertex, (IMP)ktaSetBuffersFragment, (IMP)ktaSetBuffersCompute};
