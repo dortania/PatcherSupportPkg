@@ -2364,6 +2364,9 @@ static void stencilViewAlignment(void) {
     origIGInitSurfaceState = (InitSurfaceStateIMP)swizzle("MTLIGAccelTexture", "initializeHWSurfaceState", (IMP)igInitSurfaceState);
 }
 
+typedef void (^BlitCommand)(id<MTLBlitCommandEncoder>);
+static BOOL deferBlit(id encoder, BlitCommand command);  // item 63: YES if `command` waits for the encoder's end
+
 // 20. Buffer fills on the 12.x Intel driver: -[MTLIGAccelBlitCommandEncoder fillBuffer:range:value:] fills the wrong
 // bytes when the length is exactly 8 and the offset is 4 mod 8: it fills the 8-aligned bytes below (offset 4 -> 0..7).
 // Other lengths and offsets are right. wgpu (Firefox's WebGPU) zero-fills buffer tails this way: a 4-byte copy into
@@ -2373,6 +2376,7 @@ typedef void (*FillBufferIMP)(id, SEL, id, NSRange, uint8_t);
 static FillBufferIMP origIGFillBuffer;
 
 static void igFillBuffer(id self, SEL _cmd, id buffer, NSRange range, uint8_t value) {
+    if (deferBlit(self, ^(id<MTLBlitCommandEncoder> e) { [e fillBuffer:buffer range:range value:value]; })) return;  // item 63
     if (range.length != 8 || (range.location & 7) != 4) {
         origIGFillBuffer(self, _cmd, buffer, range, value);
         return;
@@ -2603,6 +2607,12 @@ static BOOL stencilCopyIn(id self, id buffer, NSUInteger offset, NSUInteger row,
     return YES;
 }
 static BOOL ivbStencilRows;  // the Ivy Bridge driver: stencil copied into a buffer with bytesPerRow != width keeps its first row only
+static BOOL depthLevelCopyOut(id encoder, id<MTLTexture> t, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLSize size, id<MTLBuffer> buffer,
+                              NSUInteger offset, NSUInteger bytesPerRow, MTLBlitOption options);  // item 63
+static BOOL depthLevelCopyIn(id encoder, id<MTLBuffer> buffer, NSUInteger offset, NSUInteger bytesPerRow, MTLSize size, id<MTLTexture> t,
+                             NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLBlitOption options);
+static BOOL depthLevelCopyBetween(id encoder, id<MTLTexture> from, NSUInteger fromSlice, NSUInteger fromLevel, MTLOrigin fromOrigin, MTLSize size,
+                                  id<MTLTexture> to, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLBlitOption options);
 // The driver's copy into a buffer; on Ivy Bridge a stencil region with padded rows goes one row at a time.
 static void textureToBuffer(id self, SEL _cmd, id<MTLTexture> t, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLSize size,
                             id buffer, NSUInteger offset, NSUInteger row, NSUInteger image, MTLBlitOption options, BOOL withOptions) {
@@ -2622,17 +2632,33 @@ static void textureToBuffer(id self, SEL _cmd, id<MTLTexture> t, NSUInteger slic
 }
 static void igTextureToBuffer(id self, SEL _cmd, id t, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLSize size, id buffer,
                               NSUInteger offset, NSUInteger row, NSUInteger image) {
+    if (deferBlit(self, ^(id<MTLBlitCommandEncoder> e) {
+            [e copyFromTexture:t sourceSlice:slice sourceLevel:level sourceOrigin:origin sourceSize:size toBuffer:buffer destinationOffset:offset
+                destinationBytesPerRow:row destinationBytesPerImage:image];
+        }))
+        return;
     t = viewBlitTarget(t, &slice, &level);  // item 49
     id<MTLTexture> temporary = stencilCopyTemporary(t, slice, level, offset, row, size, MTLBlitOptionNone);
-    if (!temporary) return textureToBuffer(self, _cmd, t, slice, level, origin, size, buffer, offset, row, image, MTLBlitOptionNone, NO);
+    if (!temporary) {
+        if (depthLevelCopyOut(self, t, slice, level, origin, size, buffer, offset, row, MTLBlitOptionNone)) return;  // item 63
+        return textureToBuffer(self, _cmd, t, slice, level, origin, size, buffer, offset, row, image, MTLBlitOptionNone, NO);
+    }
     textureCopy(self, t, slice, level, origin, size, temporary, 0, 0, MTLOriginMake(0, 0, 0));
     textureToBuffer(self, _cmd, temporary, 0, 0, MTLOriginMake(0, 0, 0), size, buffer, offset, row, image, MTLBlitOptionNone, NO);
 }
 static void igTextureToBufferOptions(id self, SEL _cmd, id t, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLSize size, id buffer,
                                      NSUInteger offset, NSUInteger row, NSUInteger image, MTLBlitOption options) {
+    if (deferBlit(self, ^(id<MTLBlitCommandEncoder> e) {
+            [e copyFromTexture:t sourceSlice:slice sourceLevel:level sourceOrigin:origin sourceSize:size toBuffer:buffer destinationOffset:offset
+                destinationBytesPerRow:row destinationBytesPerImage:image options:options];
+        }))
+        return;
     t = viewBlitTarget(t, &slice, &level);  // item 49
     id<MTLTexture> temporary = stencilCopyTemporary(t, slice, level, offset, row, size, options);
-    if (!temporary) return textureToBuffer(self, _cmd, t, slice, level, origin, size, buffer, offset, row, image, options, YES);
+    if (!temporary) {
+        if (depthLevelCopyOut(self, t, slice, level, origin, size, buffer, offset, row, options)) return;  // item 63
+        return textureToBuffer(self, _cmd, t, slice, level, origin, size, buffer, offset, row, image, options, YES);
+    }
     textureCopy(self, t, slice, level, origin, size, temporary, 0, 0, MTLOriginMake(0, 0, 0));
     textureToBuffer(self, _cmd, temporary, 0, 0, MTLOriginMake(0, 0, 0), size, buffer, offset, row, image, options, YES);
 }
@@ -2697,6 +2723,7 @@ static void stencilCopies(void) {
 }
 
 static const void *kBlitCommandBuffer = &kBlitCommandBuffer, *kPendingDepthStencil = &kPendingDepthStencil;
+static const void *kDeferRest = &kDeferRest;  // item 63: later commands of the encoder wait for its end
 enum { kRewriteDepth = 1, kRewriteStencil = 2 };
 
 // Item 22 creates depth textures with several levels or slices without HiZ, where the driver has bHizDisable. The Ivy
@@ -2738,7 +2765,7 @@ static void noteDepthStencilWrite(id encoder, id<MTLTexture> t, NSUInteger slice
     if (!what || !size.width || !size.height || !objc_getAssociatedObject(encoder, kBlitCommandBuffer)) return;
     NSMutableArray *pending = objc_getAssociatedObject(encoder, kPendingDepthStencil);
     if (!pending) objc_setAssociatedObject(encoder, kPendingDepthStencil, pending = [NSMutableArray array], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    NSArray *last = pending.lastObject;  // the driver's variant without options may call the one with them
+    NSArray *last = [pending.lastObject isKindOfClass:[NSArray class]] ? pending.lastObject : nil;  // the driver's variant without options may call the one with them
     MTLOrigin lastOrigin;
     MTLSize lastSize;
     if (last) [last[3] getValue:&lastOrigin], [last[4] getValue:&lastSize];
@@ -2758,29 +2785,53 @@ static id igBlitEncoder(id self, SEL _cmd) {
 }
 static void igBufferToTexture(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInteger row, NSUInteger image, MTLSize size, id t,
                               NSUInteger slice, NSUInteger level, MTLOrigin origin) {
+    if (deferBlit(self, ^(id<MTLBlitCommandEncoder> e) {
+            [e copyFromBuffer:buffer sourceOffset:offset sourceBytesPerRow:row sourceBytesPerImage:image sourceSize:size toTexture:t
+                destinationSlice:slice destinationLevel:level destinationOrigin:origin];
+        }))
+        return;
     t = viewBlitTarget(t, &slice, &level);  // item 49
     if (stencilCopyIn(self, buffer, offset, row, image, size, t, slice, level, origin, MTLBlitOptionNone, NO)) return;  // item 37
+    if (depthLevelCopyIn(self, buffer, offset, row, size, t, slice, level, origin, MTLBlitOptionNone)) return;  // item 63
     origIGBufferToTexture(self, _cmd, buffer, offset, row, image, size, t, slice, level, origin);
     noteDepthStencilWrite(self, t, slice, level, origin, size, MTLBlitOptionNone);
 }
 static void igBufferToTextureOptions(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInteger row, NSUInteger image, MTLSize size, id t,
                                      NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLBlitOption options) {
+    if (deferBlit(self, ^(id<MTLBlitCommandEncoder> e) {
+            [e copyFromBuffer:buffer sourceOffset:offset sourceBytesPerRow:row sourceBytesPerImage:image sourceSize:size toTexture:t
+                destinationSlice:slice destinationLevel:level destinationOrigin:origin options:options];
+        }))
+        return;
     t = viewBlitTarget(t, &slice, &level);  // item 49
     if (stencilCopyIn(self, buffer, offset, row, image, size, t, slice, level, origin, options, YES)) return;  // item 37
+    if (depthLevelCopyIn(self, buffer, offset, row, size, t, slice, level, origin, options)) return;  // item 63
     origIGBufferToTextureOptions(self, _cmd, buffer, offset, row, image, size, t, slice, level, origin, options);
     noteDepthStencilWrite(self, t, slice, level, origin, size, options);
 }
 static void igTextureToTexture(id self, SEL _cmd, id source, NSUInteger sourceSlice, NSUInteger sourceLevel, MTLOrigin sourceOrigin, MTLSize size,
                                id t, NSUInteger slice, NSUInteger level, MTLOrigin origin) {
+    if (deferBlit(self, ^(id<MTLBlitCommandEncoder> e) {
+            [e copyFromTexture:source sourceSlice:sourceSlice sourceLevel:sourceLevel sourceOrigin:sourceOrigin sourceSize:size toTexture:t
+              destinationSlice:slice destinationLevel:level destinationOrigin:origin];
+        }))
+        return;
     source = viewBlitTarget(source, &sourceSlice, &sourceLevel);  // item 49
     t = viewBlitTarget(t, &slice, &level);
+    if (depthLevelCopyBetween(self, source, sourceSlice, sourceLevel, sourceOrigin, size, t, slice, level, origin, MTLBlitOptionNone)) return;  // item 63
     origIGTextureToTexture(self, _cmd, source, sourceSlice, sourceLevel, sourceOrigin, size, t, slice, level, origin);
     noteDepthStencilWrite(self, t, slice, level, origin, size, MTLBlitOptionNone);
 }
 static void igTextureToTextureOptions(id self, SEL _cmd, id source, NSUInteger sourceSlice, NSUInteger sourceLevel, MTLOrigin sourceOrigin,
                                       MTLSize size, id t, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLBlitOption options) {
+    if (deferBlit(self, ^(id<MTLBlitCommandEncoder> e) {
+            ((void (*)(id, SEL, id, NSUInteger, NSUInteger, MTLOrigin, MTLSize, id, NSUInteger, NSUInteger, MTLOrigin, MTLBlitOption))objc_msgSend)(
+                e, _cmd, source, sourceSlice, sourceLevel, sourceOrigin, size, t, slice, level, origin, options);
+        }))
+        return;
     source = viewBlitTarget(source, &sourceSlice, &sourceLevel);  // item 49
     t = viewBlitTarget(t, &slice, &level);
+    if (depthLevelCopyBetween(self, source, sourceSlice, sourceLevel, sourceOrigin, size, t, slice, level, origin, options)) return;  // item 63
     origIGTextureToTextureOptions(self, _cmd, source, sourceSlice, sourceLevel, sourceOrigin, size, t, slice, level, origin, options);
     noteDepthStencilWrite(self, t, slice, level, origin, size, options);
 }
@@ -2839,8 +2890,276 @@ static id<MTLDepthStencilState> depthStencilWriteState(id<MTLDevice> device, BOO
     return [device newDepthStencilStateWithDescriptor:descriptor];
 }
 
+// 63. Blits at levels 1+ of mipmapped depth arrays on Ivy Bridge. Any blit that reads or writes level 1 or higher of a
+// Depth16Unorm or Depth32Float 2D-array, cube or cube-array texture with several levels (into or out of a buffer or another
+// texture, even 4x4 texels) left bands of the whole texture wrong: rows of other slices zeroed or overwritten with another
+// level's (in a 2-layer, 3-level 64x64 cube array, a copy out of level 1 face 0 broke parts of 13 other slices), and the copy
+// itself read or wrote the same wrong layout. Shader reads before the blit were right, and blits at level 0 change nothing
+// (Ivy Bridge only: the Iris Pro and the R9 read every slice right). Such textures keep HiZ on Ivy Bridge (item 22), and
+// the driver's resolve for a blit at a lower level seems to use a layout of its own. These copies no longer reach the
+// driver: when the blit encoder ends, in order with item 22's rewrites, a compute pass reads the texels with read() (into
+// the destination buffer, or into a temporary one), and texels for the texture are written by item 22's render pass from a
+// temporary buffer, filled in place by a buffer copy (or by the driver's copy out of a texture the bug doesn't touch). The
+// encoder's later commands (copies, buffer copies, fills, synchronizes, mipmap generation) then wait too and run after it
+// in order, so a copy of the destination or a synchronize of a managed buffer sees the result. Copies of
+// Depth32Float_Stencil8 go this way only with MTLBlitOptionDepthFromDepthStencil. MTLSHIM_DEPTH_LEVEL_BLITS=0 turns it off.
+// Test: s70 on the HD 4000.
+static BOOL ivbDepthLevelBlits;
+static NSString *const kDepthCopy = @"depth copy";
+
+static BOOL depthLevelBlit(id<MTLTexture> t, NSUInteger level, MTLBlitOption options) {
+    if (!ivbDepthLevelBlits || !level || !t || t.parentTexture || t.sampleCount > 1 || t.mipmapLevelCount < 2) return NO;
+    MTLTextureType type = t.textureType;
+    if (type != MTLTextureType2DArray && type != MTLTextureTypeCube && type != MTLTextureTypeCubeArray) return NO;
+    switch (t.pixelFormat) {
+        case MTLPixelFormatDepth16Unorm:
+        case MTLPixelFormatDepth32Float:
+            return YES;
+        case MTLPixelFormatDepth32Float_Stencil8:
+            return (options & MTLBlitOptionDepthFromDepthStencil) != 0;
+        default:
+            return NO;
+    }
+}
+static NSUInteger depthBytes(id<MTLTexture> t) { return t.pixelFormat == MTLPixelFormatDepth16Unorm ? 2 : 4; }
+
+// Queues a copy for the encoder's end. From texture `from` (slice, level, origin) or from `data`, a tight buffer already
+// filled (rows of size.width texels); to `buffer` at offset/bytesPerRow, or to texture `to` at toSlice, toLevel, toOrigin.
+static BOOL queueDepthCopy(id encoder, id<MTLTexture> from, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLSize size,
+                           id<MTLBuffer> data, id<MTLBuffer> buffer, NSUInteger offset, NSUInteger bytesPerRow, id<MTLTexture> to,
+                           NSUInteger toSlice, NSUInteger toLevel, MTLOrigin toOrigin) {
+    if (!objc_getAssociatedObject(encoder, kBlitCommandBuffer)) return NO;
+    NSMutableArray *pending = objc_getAssociatedObject(encoder, kPendingDepthStencil);
+    if (!pending) objc_setAssociatedObject(encoder, kPendingDepthStencil, pending = [NSMutableArray array], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(encoder, kDeferRest, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    // [0] marker, [1] slice, [2] level, [3] origin, [4] size (as item 22's entries, whose dedup reads [3] and [4]), then the rest
+    [pending addObject:@[kDepthCopy, @(slice), @(level), [NSValue valueWithBytes:&origin objCType:@encode(MTLOrigin)],
+                         [NSValue valueWithBytes:&size objCType:@encode(MTLSize)], from ?: (id)NSNull.null, data ?: (id)NSNull.null,
+                         buffer ?: (id)NSNull.null, @(offset), @(bytesPerRow), to ?: (id)NSNull.null, @(toSlice), @(toLevel),
+                         [NSValue valueWithBytes:&toOrigin objCType:@encode(MTLOrigin)]]];
+    return YES;
+}
+
+// The hooks' entry points; YES if the copy was taken over.
+static BOOL depthLevelCopyOut(id encoder, id<MTLTexture> t, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLSize size, id<MTLBuffer> buffer,
+                              NSUInteger offset, NSUInteger bytesPerRow, MTLBlitOption options) {
+    if (!depthLevelBlit(t, level, options) || size.depth != 1 || !size.width || !size.height) return NO;
+    return queueDepthCopy(encoder, t, slice, level, origin, size, nil, buffer, offset, bytesPerRow, nil, 0, 0, MTLOriginMake(0, 0, 0));
+}
+static id<MTLBuffer> tightCopy(id encoder, id<MTLBuffer> buffer, NSUInteger offset, NSUInteger bytesPerRow, MTLSize size, NSUInteger bpp) {
+    NSUInteger row = size.width * bpp;
+    id<MTLBuffer> data = [buffer.device newBufferWithLength:row * size.height options:MTLResourceStorageModePrivate];
+    if (!data) return nil;
+    if (bytesPerRow == row)
+        [(id<MTLBlitCommandEncoder>)encoder copyFromBuffer:buffer sourceOffset:offset toBuffer:data destinationOffset:0 size:row * size.height];
+    else
+        for (NSUInteger y = 0; y < size.height; y++)
+            [(id<MTLBlitCommandEncoder>)encoder copyFromBuffer:buffer sourceOffset:offset + y * bytesPerRow toBuffer:data destinationOffset:y * row size:row];
+    return data;
+}
+static BOOL depthLevelCopyIn(id encoder, id<MTLBuffer> buffer, NSUInteger offset, NSUInteger bytesPerRow, MTLSize size, id<MTLTexture> t,
+                             NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLBlitOption options) {
+    if (!depthLevelBlit(t, level, options) || size.depth != 1 || !size.width || !size.height || !objc_getAssociatedObject(encoder, kBlitCommandBuffer))
+        return NO;
+    id<MTLBuffer> data = tightCopy(encoder, buffer, offset, bytesPerRow, size, depthBytes(t));
+    return data && queueDepthCopy(encoder, nil, 0, 0, MTLOriginMake(0, 0, 0), size, data, nil, 0, 0, t, slice, level, origin);
+}
+static BOOL depthLevelCopyBetween(id encoder, id<MTLTexture> from, NSUInteger fromSlice, NSUInteger fromLevel, MTLOrigin fromOrigin, MTLSize size,
+                                  id<MTLTexture> to, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLBlitOption options) {
+    BOOL out = depthLevelBlit(from, fromLevel, options), in = depthLevelBlit(to, level, options);
+    if ((!out && !in) || size.depth != 1 || !size.width || !size.height || !objc_getAssociatedObject(encoder, kBlitCommandBuffer)) return NO;
+    if (out) return queueDepthCopy(encoder, from, fromSlice, fromLevel, fromOrigin, size, nil, nil, 0, 0, to, slice, level, origin);
+    // into such a level from a texture the bug doesn't touch: its texels into a tight buffer now, with the driver's copy
+    NSUInteger bpp = depthBytes(to), row = size.width * bpp;
+    id<MTLBuffer> data = [to.device newBufferWithLength:row * size.height options:MTLResourceStorageModePrivate];
+    if (!data) return NO;
+    BOOL combined = from.pixelFormat == MTLPixelFormatDepth32Float_Stencil8;
+    [(id<MTLBlitCommandEncoder>)encoder copyFromTexture:from sourceSlice:fromSlice sourceLevel:fromLevel sourceOrigin:fromOrigin sourceSize:size
+                                               toBuffer:data destinationOffset:0 destinationBytesPerRow:row destinationBytesPerImage:row * size.height
+                                                options:combined ? MTLBlitOptionDepthFromDepthStencil : MTLBlitOptionNone];
+    return queueDepthCopy(encoder, nil, 0, 0, MTLOriginMake(0, 0, 0), size, data, nil, 0, 0, to, slice, level, origin);
+}
+
+// Compute pipelines reading depth from a 2D-array / cube / cube-array texture into a float or ushort buffer region
+static id<MTLComputePipelineState> depthReader(id<MTLDevice> device, MTLTextureType type, BOOL sixteen) {
+    static NSMutableDictionary *pipelines;
+    static os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
+    NSString *key = [NSString stringWithFormat:@"%p-%lu-%d", device, (unsigned long)type, sixteen];
+    os_unfair_lock_lock(&lock);
+    if (!pipelines) pipelines = [NSMutableDictionary dictionary];
+    id<MTLComputePipelineState> pipeline = pipelines[key];
+    os_unfair_lock_unlock(&lock);
+    if (pipeline) return pipeline;
+    static NSString *const source = @"#include <metal_stdlib>\nusing namespace metal;\n"
+        "struct Copy { uint x, y, width, height, slice, level, offset, bytesPerRow; };\n"
+        "static void put(device uchar *o, constant Copy &c, uint2 g, float v, bool sixteen) {\n"
+        "    device uchar *at = o + c.offset + g.y * c.bytesPerRow;\n"
+        "    if (sixteen) ((device ushort *)at)[g.x] = ushort(rint(v * 65535.0f));\n"
+        "    else ((device float *)at)[g.x] = v;\n"
+        "}\n"
+        "#define READER(name, T, READ, sixteen) \\\n"
+        "kernel void name(T t [[texture(0)]], device uchar *o [[buffer(0)]], constant Copy &c [[buffer(1)]], uint2 g [[thread_position_in_grid]]) { \\\n"
+        "    if (g.x >= c.width || g.y >= c.height) return; \\\n"
+        "    uint2 p = uint2(c.x + g.x, c.y + g.y); \\\n"
+        "    put(o, c, g, READ, sixteen); \\\n"
+        "}\n"
+        "READER(array32, depth2d_array<float>, t.read(p, c.slice, c.level), false)\n"
+        "READER(array16, depth2d_array<float>, t.read(p, c.slice, c.level), true)\n"
+        "READER(cube32, depthcube<float>, t.read(p, c.slice, c.level), false)\n"
+        "READER(cube16, depthcube<float>, t.read(p, c.slice, c.level), true)\n"
+        "READER(cubeArray32, depthcube_array<float>, t.read(p, c.slice % 6u, c.slice / 6u, c.level), false)\n"
+        "READER(cubeArray16, depthcube_array<float>, t.read(p, c.slice % 6u, c.slice / 6u, c.level), true)\n";
+    NSError *error = nil;
+    id<MTLLibrary> library = [device newLibraryWithSource:source options:nil error:&error];
+    NSString *name = [NSString stringWithFormat:@"%@%d", type == MTLTextureTypeCube ? @"cube" : type == MTLTextureTypeCubeArray ? @"cubeArray" : @"array",
+                      sixteen ? 16 : 32];
+    id<MTLFunction> function = [library newFunctionWithName:name];
+    pipeline = function ? [device newComputePipelineStateWithFunction:function error:&error] : nil;
+    if (!pipeline && getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] depth level copy pipeline: %s\n", error.localizedDescription.UTF8String);
+    os_unfair_lock_lock(&lock);
+    if (pipeline) pipelines[key] = pipeline;
+    os_unfair_lock_unlock(&lock);
+    return pipeline;
+}
+
+static id<MTLRenderPipelineState> depthStencilWriter(id<MTLDevice> device, MTLPixelFormat format, int kind);
+static id<MTLDepthStencilState> depthStencilWriteState(id<MTLDevice> device, BOOL depth, uint32_t stencilMask);
+
+// Writes depth from a tight buffer (rows of size.width texels) into a region of `t`, with item 22's render pass
+static void writeDepthRegion(id<MTLCommandBuffer> commandBuffer, id<MTLTexture> t, NSUInteger slice, NSUInteger level, MTLOrigin origin,
+                             MTLSize size, id<MTLBuffer> data) {
+    id<MTLRenderPipelineState> pipeline = depthStencilWriter(t.device, t.pixelFormat, kRewriteDepth);
+    if (!pipeline) return;
+    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+    pass.depthAttachment.texture = t;
+    pass.depthAttachment.level = level;
+    pass.depthAttachment.slice = slice;
+    pass.depthAttachment.loadAction = MTLLoadActionLoad;
+    pass.depthAttachment.storeAction = MTLStoreActionStore;
+    if (t.pixelFormat == MTLPixelFormatDepth32Float_Stencil8) {
+        pass.stencilAttachment.texture = t;
+        pass.stencilAttachment.level = level;
+        pass.stencilAttachment.slice = slice;
+        pass.stencilAttachment.loadAction = MTLLoadActionLoad;
+        pass.stencilAttachment.storeAction = MTLStoreActionStore;
+    }
+    id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:pass];
+    const uint32_t region[3] = {(uint32_t)origin.x, (uint32_t)origin.y, (uint32_t)size.width};
+    [encoder setScissorRect:(MTLScissorRect){origin.x, origin.y, size.width, size.height}];
+    [encoder setFragmentBytes:region length:sizeof region atIndex:0];
+    [encoder setRenderPipelineState:pipeline];
+    [encoder setDepthStencilState:depthStencilWriteState(t.device, YES, 0)];
+    [encoder setFragmentBuffer:data offset:0 atIndex:1];
+    [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [encoder endEncoding];
+}
+
+static void runDepthCopy(id<MTLCommandBuffer> commandBuffer, NSArray *entry) {
+    NSUInteger slice = [entry[1] unsignedIntegerValue], level = [entry[2] unsignedIntegerValue];
+    MTLOrigin origin, toOrigin;
+    MTLSize size;
+    [entry[3] getValue:&origin];
+    [entry[4] getValue:&size];
+    [entry[13] getValue:&toOrigin];
+    id<MTLTexture> from = entry[5] == NSNull.null ? nil : entry[5], to = entry[10] == NSNull.null ? nil : entry[10];
+    id<MTLBuffer> data = entry[6] == NSNull.null ? nil : entry[6], buffer = entry[7] == NSNull.null ? nil : entry[7];
+    NSUInteger toSlice = [entry[11] unsignedIntegerValue], toLevel = [entry[12] unsignedIntegerValue];
+    if (from) {  // read with the sampler, into the destination buffer or a tight temporary
+        BOOL sixteen = from.pixelFormat == MTLPixelFormatDepth16Unorm;
+        NSUInteger offset = [entry[8] unsignedIntegerValue], bytesPerRow = [entry[9] unsignedIntegerValue];
+        id<MTLComputePipelineState> pipeline = depthReader(from.device, from.textureType, sixteen);
+        if (!pipeline) return;
+        if (!buffer) {
+            buffer = data = [from.device newBufferWithLength:size.width * size.height * depthBytes(from) options:MTLResourceStorageModePrivate];
+            offset = 0, bytesPerRow = size.width * depthBytes(from);
+            if (!buffer) return;
+        }
+        const uint32_t copy[8] = {(uint32_t)origin.x, (uint32_t)origin.y, (uint32_t)size.width, (uint32_t)size.height, (uint32_t)slice,
+                                  (uint32_t)level, (uint32_t)offset, (uint32_t)bytesPerRow};
+        id<MTLComputeCommandEncoder> encoder = [commandBuffer computeCommandEncoder];
+        [encoder setComputePipelineState:pipeline];
+        [encoder setTexture:from atIndex:0];
+        [encoder setBuffer:buffer offset:0 atIndex:0];
+        [encoder setBytes:copy length:sizeof copy atIndex:1];
+        [encoder dispatchThreadgroups:MTLSizeMake((size.width + 7) / 8, (size.height + 7) / 8, 1) threadsPerThreadgroup:MTLSizeMake(8, 8, 1)];
+        [encoder endEncoding];
+    }
+    if (to && data) {
+        if (depthLevelBlit(to, toLevel, MTLBlitOptionDepthFromDepthStencil)) writeDepthRegion(commandBuffer, to, toSlice, toLevel, toOrigin, size, data);
+        else {  // a destination the bug doesn't touch: a blit, which goes through the hooks (item 22 rewrites it where needed)
+            NSUInteger row = size.width * depthBytes(to);
+            id<MTLBlitCommandEncoder> blit = [commandBuffer blitCommandEncoder];
+            [blit copyFromBuffer:data sourceOffset:0 sourceBytesPerRow:row sourceBytesPerImage:row * size.height sourceSize:size toTexture:to
+                destinationSlice:toSlice destinationLevel:toLevel destinationOrigin:toOrigin
+                         options:to.pixelFormat == MTLPixelFormatDepth32Float_Stencil8 ? MTLBlitOptionDepthFromDepthStencil : MTLBlitOptionNone];
+            [blit endEncoding];
+        }
+    }
+    if (getenv("MTLSHIM_VERBOSE"))
+        shimLog("[mtlshim] depth copy %s level %lu (%lux%lu) done with %s\n", from ? "out of" : "into", (unsigned long)(from ? level : toLevel),
+                (unsigned long)size.width, (unsigned long)size.height, from ? "a compute pass" : "a render pass");
+}
+
+// Once an encoder has a copy queued for its end, every later command of it waits too and runs then, in order, on a blit
+// encoder of the shim's own (whose copies go through these hooks again): a copy out of the destination, a synchronize of
+// a managed buffer or a fill must see the queued copy done.
+static BOOL deferBlit(id encoder, BlitCommand command) {
+    if (!objc_getAssociatedObject(encoder, kDeferRest)) return NO;
+    NSMutableArray *pending = objc_getAssociatedObject(encoder, kPendingDepthStencil);
+    if (!pending) return NO;
+    [pending addObject:[command copy]];
+    return YES;
+}
+typedef void (*BufferToBufferIMP)(id, SEL, id, NSUInteger, id, NSUInteger, NSUInteger);
+static BufferToBufferIMP origIGBufferToBuffer;
+static void igBufferToBuffer(id self, SEL _cmd, id from, NSUInteger fromOffset, id to, NSUInteger toOffset, NSUInteger size) {
+    if (deferBlit(self, ^(id<MTLBlitCommandEncoder> e) { [e copyFromBuffer:from sourceOffset:fromOffset toBuffer:to destinationOffset:toOffset size:size]; }))
+        return;
+    origIGBufferToBuffer(self, _cmd, from, fromOffset, to, toOffset, size);
+}
+// The other commands, by signature; each hook finds the driver's method by selector.
+enum { kWaitingMax = 16 };
+static struct { SEL selector; IMP original; } waitingOriginals[kWaitingMax];
+static IMP waitingOriginal(SEL selector) {
+    for (int k = 0; k < kWaitingMax && waitingOriginals[k].selector; k++)
+        if (waitingOriginals[k].selector == selector) return waitingOriginals[k].original;
+    return NULL;
+}
+static void igWaitingObject(id self, SEL _cmd, id a) {  // synchronizeResource:, updateFence:, waitForFence:, ...
+    if (deferBlit(self, ^(id<MTLBlitCommandEncoder> e) { ((void (*)(id, SEL, id))objc_msgSend)(e, _cmd, a); })) return;
+    ((void (*)(id, SEL, id))waitingOriginal(_cmd))(self, _cmd, a);
+}
+static void igWaitingSliceLevel(id self, SEL _cmd, id a, NSUInteger slice, NSUInteger level) {  // synchronizeTexture:slice:level:, ...
+    if (deferBlit(self, ^(id<MTLBlitCommandEncoder> e) { ((void (*)(id, SEL, id, NSUInteger, NSUInteger))objc_msgSend)(e, _cmd, a, slice, level); })) return;
+    ((void (*)(id, SEL, id, NSUInteger, NSUInteger))waitingOriginal(_cmd))(self, _cmd, a, slice, level);
+}
+static void igWaitingRange(id self, SEL _cmd, id a, NSRange range) {  // resetCommandsInBuffer:withRange:, ...
+    if (deferBlit(self, ^(id<MTLBlitCommandEncoder> e) { ((void (*)(id, SEL, id, NSRange))objc_msgSend)(e, _cmd, a, range); })) return;
+    ((void (*)(id, SEL, id, NSRange))waitingOriginal(_cmd))(self, _cmd, a, range);
+}
+static void igWaitingSample(id self, SEL _cmd, id a, NSUInteger index, BOOL barrier) {  // sampleCountersInBuffer:atSampleIndex:withBarrier:
+    if (deferBlit(self, ^(id<MTLBlitCommandEncoder> e) { ((void (*)(id, SEL, id, NSUInteger, BOOL))objc_msgSend)(e, _cmd, a, index, barrier); })) return;
+    ((void (*)(id, SEL, id, NSUInteger, BOOL))waitingOriginal(_cmd))(self, _cmd, a, index, barrier);
+}
+static void igWaitingRangeTo(id self, SEL _cmd, id a, NSRange range, id b, NSUInteger index) {  // resolveCounters:..., copyIndirectCommandBuffer:...
+    if (deferBlit(self, ^(id<MTLBlitCommandEncoder> e) { ((void (*)(id, SEL, id, NSRange, id, NSUInteger))objc_msgSend)(e, _cmd, a, range, b, index); }))
+        return;
+    ((void (*)(id, SEL, id, NSRange, id, NSUInteger))waitingOriginal(_cmd))(self, _cmd, a, range, b, index);
+}
+
 static void rewriteDepthStencil(id<MTLCommandBuffer> commandBuffer, NSArray *pending) {
+    id<MTLBlitCommandEncoder> replay = nil;  // item 63: commands that waited, run in a row on one encoder
     for (NSArray *entry in pending) {
+        if (![entry isKindOfClass:[NSArray class]]) {
+            if (!replay) replay = [commandBuffer blitCommandEncoder];
+            ((BlitCommand)entry)(replay);
+            continue;
+        }
+        if (replay) [replay endEncoding], replay = nil;
+        if (entry[0] == kDepthCopy) {  // item 63
+            runDepthCopy(commandBuffer, entry);
+            continue;
+        }
         id<MTLTexture> t = entry[0];
         NSUInteger slice = [entry[1] unsignedIntegerValue], level = [entry[2] unsignedIntegerValue];
         MTLOrigin origin;
@@ -2907,6 +3226,7 @@ static void rewriteDepthStencil(id<MTLCommandBuffer> commandBuffer, NSArray *pen
                     what == (kRewriteDepth | kRewriteStencil) ? "depth and stencil" : what == kRewriteDepth ? "depth" : "stencil",
                     (unsigned long)size.width, (unsigned long)size.height);
     }
+    if (replay) [replay endEncoding];
 }
 
 static void igBlitEndEncoding(id self, SEL _cmd) {
@@ -2914,6 +3234,7 @@ static void igBlitEndEncoding(id self, SEL _cmd) {
     id<MTLCommandBuffer> commandBuffer = objc_getAssociatedObject(self, kBlitCommandBuffer);
     origIGBlitEndEncoding(self, _cmd);
     objc_setAssociatedObject(self, kBlitCommandBuffer, nil, OBJC_ASSOCIATION_ASSIGN);
+    objc_setAssociatedObject(self, kDeferRest, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     if (!pending) return;
     objc_setAssociatedObject(self, kPendingDepthStencil, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     if (commandBuffer) rewriteDepthStencil(commandBuffer, pending);
@@ -2926,6 +3247,8 @@ static void blitsIntoDepthStencil(void) {
         "copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:";
     const char *views = getenv("MTLSHIM_VIEW_BLITS"), *image = class_getImageName(objc_getClass("MTLIGAccelBlitCommandEncoder"));
     ivbViewBlits = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !(views && !strcmp(views, "0"));  // item 49
+    const char *levelBlits = getenv("MTLSHIM_DEPTH_LEVEL_BLITS");
+    ivbDepthLevelBlits = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !(levelBlits && !strcmp(levelBlits, "0"));  // item 63
     char withOptions[256];
     const char *setting = getenv("MTLSHIM_DEPTH_STENCIL_BLITS");
     if (origIGBlitEndEncoding || (setting && !strcmp(setting, "0"))) return;
@@ -2942,6 +3265,32 @@ static void blitsIntoDepthStencil(void) {
     snprintf(withOptions, sizeof withOptions, "%soptions:", kTextureToTexture);
     if (definesMethod("MTLIGAccelBlitCommandEncoder", withOptions))
         origIGTextureToTextureOptions = (TextureToTextureOptionsIMP)swizzle("MTLIGAccelBlitCommandEncoder", withOptions, (IMP)igTextureToTextureOptions);
+    // item 63: the commands that wait behind a queued copy (fillBuffer: waits in item 20's hook)
+    if (definesMethod("MTLIGAccelBlitCommandEncoder", "copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:"))
+        origIGBufferToBuffer = (BufferToBufferIMP)swizzle("MTLIGAccelBlitCommandEncoder", "copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:",
+                                                          (IMP)igBufferToBuffer);
+    static const struct { const char *selector; IMP replacement; } waiting[] = {
+        {"synchronizeResource:", (IMP)igWaitingObject},
+        {"generateMipmapsForTexture:", (IMP)igWaitingObject},
+        {"updateFence:", (IMP)igWaitingObject},
+        {"waitForFence:", (IMP)igWaitingObject},
+        {"optimizeContentsForGPUAccess:", (IMP)igWaitingObject},
+        {"optimizeContentsForCPUAccess:", (IMP)igWaitingObject},
+        {"synchronizeTexture:slice:level:", (IMP)igWaitingSliceLevel},
+        {"optimizeContentsForGPUAccess:slice:level:", (IMP)igWaitingSliceLevel},
+        {"optimizeContentsForCPUAccess:slice:level:", (IMP)igWaitingSliceLevel},
+        {"resetCommandsInBuffer:withRange:", (IMP)igWaitingRange},
+        {"optimizeIndirectCommandBuffer:withRange:", (IMP)igWaitingRange},
+        {"sampleCountersInBuffer:atSampleIndex:withBarrier:", (IMP)igWaitingSample},
+        {"resolveCounters:inRange:destinationBuffer:destinationOffset:", (IMP)igWaitingRangeTo},
+        {"copyIndirectCommandBuffer:sourceRange:destination:destinationIndex:", (IMP)igWaitingRangeTo}};
+    int used = 0;
+    for (size_t k = 0; k < sizeof waiting / sizeof *waiting && used < kWaitingMax; k++)
+        if (definesMethod("MTLIGAccelBlitCommandEncoder", waiting[k].selector)) {
+            SEL selector = sel_registerName(waiting[k].selector);
+            waitingOriginals[used].original = swizzle("MTLIGAccelBlitCommandEncoder", waiting[k].selector, waiting[k].replacement);
+            waitingOriginals[used++].selector = selector;
+        }
 }
 
 // 28. Argument buffers on the 12.x Intel driver are emulated (tier 1), and the emulated encoder's
