@@ -11,7 +11,8 @@
 //      qualifiers rewritten to their 3.1 equivalents)
 //  10. Metal devices pinned against over-release (Chromium's GPU process)
 //  11. ANGLE (Chromium, Safari's WebKit): past ANGLE's pre-2016-Mac gate, and only family-2 GPUs (the AMD dGPU) for it;
-//      on Macs whose only GPU is family 1, that GPU as family 2, with ANGLE's fallbacks for what it lacks
+//      on Macs whose only GPU is family 1, that GPU as family 2, with ANGLE's fallbacks for what it lacks (and past
+//      ANGLE's refusal of NVIDIA GPUs, for Kepler)
 //  13. Safari's ANGLE: its prebuilt internal-shader metallib (too new for this stack) replaced by the same shaders
 //      compiled from source
 //  14. argument encoders in Safari's processes (OCLP's wrapper stubs them out; WebGL 2 uniform blocks need them)
@@ -1710,7 +1711,9 @@ static id newLibraryData(id self, SEL _cmd, dispatch_data_t data, NSError **erro
 // gradients (sample_compare(..., gradient2d(...)) aborts MTLCompilerService), which ANGLE uses for textureGrad on shadow
 // samplers. Before ANGLE sets up its features, all four are added to ANGLE_FEATURE_OVERRIDES_DISABLED (hasTextureSwizzle,
 // hasStencilAutoResolve, allowRenderpassWithoutAttachment, allowSamplerCompareGradient), which ANGLE reads once, so it
-// takes its own fallbacks. MTLSHIM_ANGLE_MAC2=0 turns this part off.
+// takes its own fallbacks. On Kepler (GTX 600/700, family 1 too) ANGLE also refuses the GPU by vendor
+// (disableMetalOnNvidia: "the Metal display didn't initialize", no WebGL in Firefox or Safari), so that feature goes on
+// the same list. MTLSHIM_ANGLE_MAC2=0 turns this part off.
 typedef void (*EndEncodingIMP)(id, SEL);
 
 // 15. MSAA resolves on the 12.x Intel driver (Haswell / Ivy Bridge): IGRenderPass::generateResolveOptions always resolves
@@ -3411,7 +3414,11 @@ static BOOL familyOneAsTwo(void) {
 static void disableFeaturesFamilyOneLacks(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        static const char kLacking[] = "hasTextureSwizzle:hasStencilAutoResolve:allowRenderpassWithoutAttachment:allowSamplerCompareGradient";
+        // disableMetalOnNvidia: ANGLE turns its Metal display off on NVIDIA GPUs (upstream had none to test on), and on this
+        // stack there is no other backend for WebGL in Firefox and Safari; Kepler (GTX 770) passes s63 and s64 with it off.
+        // ANGLE only reads it for NVIDIA GPUs.
+        static const char kLacking[] = "hasTextureSwizzle:hasStencilAutoResolve:allowRenderpassWithoutAttachment:allowSamplerCompareGradient:"
+                                       "disableMetalOnNvidia";
         const char *set = getenv("ANGLE_FEATURE_OVERRIDES_DISABLED");
         char *value = NULL;
         if (set && *set && asprintf(&value, "%s:%s", set, kLacking) < 0) value = NULL;
