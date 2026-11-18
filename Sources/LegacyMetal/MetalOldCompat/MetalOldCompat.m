@@ -73,9 +73,9 @@
 //  43. Metal Performance Shaders' NDArray matrix multiplication on the Haswell / Ivy Bridge GPUs, which encoded nothing
 //      (MPSNDArrayMatrixMultiplication and MPSGraph's matmul left their results at 0): it gets the classic
 //      MPSMatrixMultiplication it uses on the AMD GPU
-//  44. MetalFX's temporal scaler on the Haswell / Ivy Bridge GPUs, which said it was supported but whose pass needs
-//      quad-group functions these family-1 GPUs don't have (its kernel failed to compile and the first encode crashed
-//      the app): reported unsupported there, and not created
+//  44. MetalFX's temporal scaler on the Haswell / Ivy Bridge and Kepler GPUs, which said it was supported but whose pass
+//      needs quad-group functions these family-1 GPUs don't have (its kernel failed to compile and the first encode
+//      crashed the app): reported unsupported there, and not created
 //  45. texture reads through Metal 4's read sampler (Xcode 26: every read of a Metal 4.0 library, and SceneKit's, VFX's
 //      and CoreComposite's depth, cube and 1D reads on macOS 26) on Tahoe's compiler, which crashed on those with ushort
 //      coordinates (SceneKit's temporal antialiasing) and passed the rest to back ends that can't build them: rebuilt in
@@ -4237,14 +4237,15 @@ static void installMPSMatmulFallback(void) {
     os_unfair_lock_unlock(&lock);
 }
 
-// ---- 44. MetalFX's temporal scaler on the Intel GPU ----------------------------------------------------------------
+// ---- 44. MetalFX's temporal scaler on the Intel and Kepler GPUs --------------------------------------------------------
 // +[MTLFXTemporalScalerDescriptor supportsDevice:] says yes for the Haswell / Ivy Bridge GPUs, but the temporal pass
 // (unified_pass_tile / unified_pass_kern) uses quad_shuffle_xor and quad_sum, which these family-1 GPUs don't have: the
 // IGIL back end's built-in inliner aborts on them (the stock compiler too), MetalFX keeps going without the pipeline
 // and the first -encodeToCommandBuffer: crashes the app in the driver's setKernel. Emulating quad operations would need
 // threadgroup memory and barriers at every use, which is only safe in uniform control flow. So on the 12.x Intel
 // driver's devices the temporal scaler is reported unsupported and not created (nil, as for any unsupported device),
-// and apps take their path without it; the spatial scaler works there. MTLSHIM_METALFX_TEMPORAL=0 turns this off. Test: s58.
+// and apps take their path without it; the spatial scaler works there. The same on Kepler (below).
+// MTLSHIM_METALFX_TEMPORAL=0 turns this off. Test: s58.
 typedef BOOL (*SupportsDeviceIMP)(id, SEL, id);
 typedef id (*NewTemporalIMP)(id, SEL, id) RETURNS_RETAINED;
 typedef id (*NewTemporalCompilerIMP)(id, SEL, id, id) RETURNS_RETAINED;
@@ -4252,20 +4253,26 @@ static SupportsDeviceIMP origTemporalSupportsDevice;
 static NewTemporalIMP origNewTemporalScaler;
 static NewTemporalCompilerIMP origNewTemporalScalerCompiler;
 
-static BOOL legacyIntelDevice(id device) { return device && !strncmp(object_getClassName(device), "MTLIGAccel", 10); }
+// The 12.x Intel driver's devices, and Kepler's (GeForceMTLDriver): its back end, GeForceAIRPlugin, fails quad_shuffle_xor,
+// quad_sum and simd_sum with "Unhandled constant" (simd_shuffle_xor compiles), and MetalFX's first encode segfaulted in
+// the driver.
+static BOOL noQuadGroupDevice(id device) {
+    const char *name = device ? object_getClassName(device) : "";
+    return !strncmp(name, "MTLIGAccel", 10) || !strncmp(name, "NVMTL", 5);
+}
 
 static BOOL temporalSupportsDevice(id self, SEL _cmd, id device) {
-    return legacyIntelDevice(device) ? NO : origTemporalSupportsDevice(self, _cmd, device);
+    return noQuadGroupDevice(device) ? NO : origTemporalSupportsDevice(self, _cmd, device);
 }
 static id newTemporalScaler(id self, SEL _cmd, id device) RETURNS_RETAINED;
 static id newTemporalScaler(id self, SEL _cmd, id device) {
-    if (!legacyIntelDevice(device)) return origNewTemporalScaler(self, _cmd, device);
+    if (!noQuadGroupDevice(device)) return origNewTemporalScaler(self, _cmd, device);
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MetalFX temporal scaler: not on this GPU (no quad-group functions)\n");
     return nil;
 }
 static id newTemporalScalerCompiler(id self, SEL _cmd, id device, id compiler) RETURNS_RETAINED;
 static id newTemporalScalerCompiler(id self, SEL _cmd, id device, id compiler) {
-    return legacyIntelDevice(device) ? nil : origNewTemporalScalerCompiler(self, _cmd, device, compiler);
+    return noQuadGroupDevice(device) ? nil : origNewTemporalScalerCompiler(self, _cmd, device, compiler);
 }
 
 static void installMetalFXTemporalLimit(void) {
