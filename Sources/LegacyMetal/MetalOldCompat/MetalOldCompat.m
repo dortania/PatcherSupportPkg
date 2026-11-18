@@ -104,6 +104,7 @@
 //      selector": a view without a swizzle that changes nothing a shader can see, nil otherwise (as item 32); no ICB (nil)
 //  55. MSAA resolves into mip level 1 or higher on the Kepler driver, which never arrived after a pass that draws: through a
 //      temporary texture copied to the level, as item 15 on Intel
+//  56. views of texture views on the Kepler driver, which lost the first view's offset: made from the root texture
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -3173,6 +3174,27 @@ static void keplerMissingMethods(void) {
     addMethods(device, "Kepler device", icbMethod, 1);
 }
 
+// 56. Views of views on the Kepler driver: a view made from a texture view of levels 1+ and slices 1+ dropped the first
+// view's offset into its parent (a stencil view of a depth-stencil view of level 2, slice 2 read level 1's or slice 1's
+// texels: s46; Dawn reads WebGPU's stencil8 through such views). Views of the texture itself are right. A view of a view
+// is made from the root texture with the offsets added, which is what Metal defines it as. MTLSHIM_NV_VIEW_OF_VIEW=0 turns
+// it off. Test: s46 on the GTX 770.
+static NewViewRangeIMP origNVNewViewRange;
+static id nvNewViewRange(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices) RETURNS_RETAINED;
+static id nvNewViewRange(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices) {
+    if (!((id<MTLTexture>)self).parentTexture) return origNVNewViewRange(self, _cmd, format, type, levels, slices);
+    NSUInteger level = levels.location, slice = slices.location;
+    id<MTLTexture> root = rootTexture(self, &level, &slice);
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] view of a view made from the root texture (level %lu, slice %lu)\n", (unsigned long)level, (unsigned long)slice);
+    return origNVNewViewRange(root, _cmd, format, type, NSMakeRange(level, levels.length), NSMakeRange(slice, slices.length));
+}
+static void keplerViewsOfViews(void) {
+    static const char *const kTexture = "NVMTLTexture", *const kView = "newTextureViewWithPixelFormat:textureType:levels:slices:";
+    const char *setting = getenv("MTLSHIM_NV_VIEW_OF_VIEW");
+    if (origNVNewViewRange || (setting && !strcmp(setting, "0")) || !definesMethod(kTexture, kView)) return;
+    origNVNewViewRange = (NewViewRangeIMP)swizzle(kTexture, kView, (IMP)nvNewViewRange);
+}
+
 // 35. Metal Performance Shaders' image statistics (MPSImageStatisticsMinAndMax and MeanAndVariance; Core Image's
 // CIAreaMinMax and the filters built on it) finish with a compute_final_*_statistics kernel that reduces one value per
 // thread through threadgroup memory and always folds in tg[tid + 16], tg[tid + 8], ...: it assumes at least 32 threads.
@@ -3283,6 +3305,7 @@ static void patchDriverClasses(void) {
     swizzledViews();
     keplerMissingMethods();  // item 54
     keplerResolveLevels();  // item 55
+    keplerViewsOfViews();  // item 56
     mpsStatisticsWidth();
     stencilCopies();
     nvStencilUploadOrder();  // item 53
