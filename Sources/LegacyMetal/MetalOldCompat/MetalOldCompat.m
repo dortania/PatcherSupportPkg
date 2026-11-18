@@ -253,9 +253,13 @@ static BOOL compilerUsesNewVertexDescriptorFormat(id compiler) {
     return [plugin isKindOfClass:[NSString class]] && [plugin containsString:@"AMDShared.bundle"];
 }
 
-typedef id (*VertexStageIMP)(id, SEL, void *, id, id, dispatch_data_t, id, id, NSUInteger, void *, id, id, id, void *, id);
+// MetalOld's createVertexStage... hands back its pipeline retained (a +1 it doesn't autorelease, though "create" isn't an ARC
+// family): taken for +0, every render pipeline was retained and autoreleased once more here, and lived until a pool drained.
+typedef id (*VertexStageIMP)(id, SEL, void *, id, id, dispatch_data_t, id, id, NSUInteger, void *, id, id, id, void *, id) RETURNS_RETAINED;
 static VertexStageIMP origVertexStage;
 
+static id vertexStage(id self, SEL _cmd, void *fragment, id fragmentVariant, id vertexFunction, dispatch_data_t vertexDesc, id descriptor,
+                      id archive, NSUInteger options, void *reflection, id stats, id fragmentTimeData, id archiverId, void *error, id handler) RETURNS_RETAINED;
 static id vertexStage(id self, SEL _cmd, void *fragment, id fragmentVariant, id vertexFunction, dispatch_data_t vertexDesc, id descriptor,
                       id archive, NSUInteger options, void *reflection, id stats, id fragmentTimeData, id archiverId, void *error, id handler) {
     if (getenv("MTLSHIM_VERBOSE")) {
@@ -976,10 +980,11 @@ static BOOL abDevice(id device) {
 }
 static const MTLPipelineOption kABReflection = MTLPipelineOptionArgumentInfo | MTLPipelineOptionBufferTypeInfo;
 
-typedef id (*ABRenderReflIMP)(id, SEL, MTLRenderPipelineDescriptor *, MTLPipelineOption, MTLAutoreleasedRenderPipelineReflection *, NSError **);
+typedef id (*ABReflMsgIMP)(id, SEL, id, MTLPipelineOption, id *, NSError **) RETURNS_RETAINED;  // the reflection variants, by message
+typedef id (*ABRenderReflIMP)(id, SEL, MTLRenderPipelineDescriptor *, MTLPipelineOption, MTLAutoreleasedRenderPipelineReflection *, NSError **) RETURNS_RETAINED;
 typedef void (*ABRenderOptAsyncIMP)(id, SEL, MTLRenderPipelineDescriptor *, MTLPipelineOption, MTLNewRenderPipelineStateWithReflectionCompletionHandler);
-typedef id (*ABComputeFnReflIMP)(id, SEL, id<MTLFunction>, MTLPipelineOption, MTLAutoreleasedComputePipelineReflection *, NSError **);
-typedef id (*ABComputeDescReflIMP)(id, SEL, MTLComputePipelineDescriptor *, MTLPipelineOption, MTLAutoreleasedComputePipelineReflection *, NSError **);
+typedef id (*ABComputeFnReflIMP)(id, SEL, id<MTLFunction>, MTLPipelineOption, MTLAutoreleasedComputePipelineReflection *, NSError **) RETURNS_RETAINED;
+typedef id (*ABComputeDescReflIMP)(id, SEL, MTLComputePipelineDescriptor *, MTLPipelineOption, MTLAutoreleasedComputePipelineReflection *, NSError **) RETURNS_RETAINED;
 typedef void (*ABComputeFnOptAsyncIMP)(id, SEL, id<MTLFunction>, MTLPipelineOption, MTLNewComputePipelineStateWithReflectionCompletionHandler);
 typedef void (*ABComputeDescOptAsyncIMP)(id, SEL, MTLComputePipelineDescriptor *, MTLPipelineOption, MTLNewComputePipelineStateWithReflectionCompletionHandler);
 static ABRenderReflIMP abOrigRenderRefl;
@@ -1007,7 +1012,7 @@ static id abRenderRefl(id self, SEL _cmd, MTLRenderPipelineDescriptor *d, MTLPip
 }
 static id abRender(id self, SEL _cmd, MTLRenderPipelineDescriptor *d, NSError **error) __attribute__((ns_returns_retained));
 static id abRender(id self, SEL _cmd, MTLRenderPipelineDescriptor *d, NSError **error) {
-    return ((id(*)(id, SEL, id, MTLPipelineOption, id *, NSError **))objc_msgSend)(
+    return ((ABReflMsgIMP)objc_msgSend)(
         self, sel_registerName("newRenderPipelineStateWithDescriptor:options:reflection:error:"), d, MTLPipelineOptionNone, NULL, error);
 }
 static void abRenderOptAsync(id self, SEL _cmd, MTLRenderPipelineDescriptor *d, MTLPipelineOption options,
@@ -1036,7 +1041,7 @@ static id abComputeFnRefl(id self, SEL _cmd, id<MTLFunction> f, MTLPipelineOptio
 }
 static id abComputeFn(id self, SEL _cmd, id<MTLFunction> f, NSError **error) __attribute__((ns_returns_retained));
 static id abComputeFn(id self, SEL _cmd, id<MTLFunction> f, NSError **error) {
-    return ((id(*)(id, SEL, id, MTLPipelineOption, id *, NSError **))objc_msgSend)(
+    return ((ABReflMsgIMP)objc_msgSend)(
         self, sel_registerName("newComputePipelineStateWithFunction:options:reflection:error:"), f, MTLPipelineOptionNone, NULL, error);
 }
 static id abComputeDescRefl(id self, SEL _cmd, MTLComputePipelineDescriptor *d, MTLPipelineOption options,
@@ -1434,9 +1439,9 @@ static BOOL patched;
 // fragment function, no color attachments and a depth or stencil attachment gets one (compiled once per device).
 // Pipelines with color attachments are left as they are.
 static const void *kEmptyFragmentKey = &kEmptyFragmentKey;
-typedef id (*NewRenderPipelineIMP)(id, SEL, MTLRenderPipelineDescriptor *, NSError **);
+typedef id (*NewRenderPipelineIMP)(id, SEL, MTLRenderPipelineDescriptor *, NSError **) RETURNS_RETAINED;
 typedef id (*NewRenderPipelineReflIMP)(id, SEL, MTLRenderPipelineDescriptor *, MTLPipelineOption,
-                                       MTLAutoreleasedRenderPipelineReflection *, NSError **);
+                                       MTLAutoreleasedRenderPipelineReflection *, NSError **) RETURNS_RETAINED;
 typedef void (*NewRenderPipelineAsyncIMP)(id, SEL, MTLRenderPipelineDescriptor *, id);
 typedef void (*NewRenderPipelineOptAsyncIMP)(id, SEL, MTLRenderPipelineDescriptor *, MTLPipelineOption, id);
 static NewRenderPipelineIMP origNewRenderPipeline;
@@ -1520,10 +1525,13 @@ static MTLRenderPipelineDescriptor *adjustedPipeline(id<MTLDevice> device, MTLRe
     return withCoverageWrite(device, withEmptyFragment(device, descriptor));  // items 21 and 34
 }
 
+static id newRenderPipeline(id self, SEL _cmd, MTLRenderPipelineDescriptor *descriptor, NSError **error) RETURNS_RETAINED;
 static id newRenderPipeline(id self, SEL _cmd, MTLRenderPipelineDescriptor *descriptor, NSError **error) {
     return origNewRenderPipeline(self, _cmd, adjustedPipeline(self, descriptor), error);
 }
 
+static id newRenderPipelineRefl(id self, SEL _cmd, MTLRenderPipelineDescriptor *descriptor, MTLPipelineOption options,
+                                MTLAutoreleasedRenderPipelineReflection *reflection, NSError **error) RETURNS_RETAINED;
 static id newRenderPipelineRefl(id self, SEL _cmd, MTLRenderPipelineDescriptor *descriptor, MTLPipelineOption options,
                                 MTLAutoreleasedRenderPipelineReflection *reflection, NSError **error) {
     return origNewRenderPipelineRefl(self, _cmd, adjustedPipeline(self, descriptor), options, reflection, error);
@@ -1745,7 +1753,7 @@ static const void *kDepthAddedForStencil = &kDepthAddedForStencil;
 static const void *kDepthStencilDescriptor = &kDepthStencilDescriptor;
 static const void *kWithoutDepthTest = &kWithoutDepthTest;
 static BOOL ivbStencilWithDepth;
-typedef id (*NewDepthStencilStateIMP)(id, SEL, MTLDepthStencilDescriptor *);
+typedef id (*NewDepthStencilStateIMP)(id, SEL, MTLDepthStencilDescriptor *) RETURNS_RETAINED;
 typedef void (*SetDepthStencilStateIMP)(id, SEL, id);
 static NewDepthStencilStateIMP origIGNewDepthStencilState;
 static SetDepthStencilStateIMP origIGSetDepthStencilState;
