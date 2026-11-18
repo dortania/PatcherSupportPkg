@@ -62,6 +62,9 @@
 // Private arrays of bytes and halfwords done on 32-bit words (a stored word reached their loads unmasked).
 // NVAIR_NARROW_PRIVATE_ARRAY_FIX=0.
 //
+// discard_fragment in fragment functions with derivatives made a demote to a helper lane (the lane ended there, and its
+// quad's later derivatives were 0). NVAIR_DEMOTE_DISCARD=0.
+//
 // Device loads in fragment functions at a 32-bit index with its top bit set read element 0 (helper lanes' wrapped
 // indexes faulted the driver, which failed a later command buffer: ANGLE's PBO uploads). NVAIR_FRAGMENT_LOAD_GUARD=0.
 //
@@ -1243,6 +1246,165 @@ static unsigned guardFragmentLoads(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
+// ---- discard_fragment as demote-to-helper ---------------------------------------------------------------------------
+// The plugin's library defines air.discard_fragment as llvm.nvvm.discard_fragment + llvm.nvvm.exit: the lane ends there,
+// and every derivative its 2x2 quad takes after that is 0, on all of the quad's lanes (dfdx of a value computed before
+// the discard too; before the discard they're right). Metal 2.3 and WGSL make a discarded fragment a helper that runs on
+// for its quad's derivatives, and front ends rely on it (Tint emits discard_fragment() and takes dpdx after it): the WebGPU
+// CTS statement,discard:derivatives read 0 where it wants +/-3, and an implicit-LOD sample after an alpha-test discard
+// picks level 0 in the quads at the cut-out's edge. In a fragment function that calls air.discard_fragment itself, where
+// a derivative, texture sample or quad / SIMD operation can run after a discard, each call sets a private flag, the lane
+// runs on, and it is discarded where the function returns; its device stores, atomics and texture writes after the
+// flag is set are skipped (each through an always-inline nvair.guard: the inliner splits the blocks). A function that only
+// reaches discard_fragment through a call keeps it as it was. NVAIR_DEMOTE_DISCARD=0 turns it off.
+static bool startsWith(const char *s, const char *prefix) { return !strncmp(s, prefix, strlen(prefix)); }
+static LLVMValueRef calledFunction(LLVMValueRef call) {
+    LLVMValueRef callee = LLVMGetCalledValue(call);
+    return callee && LLVMIsAConstant(callee) && LLVMGetValueName(callee) ? callee : nullptr;
+}
+static bool needsHelpers(const char *name) {
+    return startsWith(name, "air.dfdx") || startsWith(name, "air.dfdy") || startsWith(name, "air.fwidth") ||
+           startsWith(name, "air.sample_texture") || startsWith(name, "air.quad_") || startsWith(name, "air.simd_");
+}
+static bool sideEffect(LLVMValueRef inst) {
+    if (LLVMIsAStoreInst(inst)) {
+        LLVMTypeRef pt = LLVMTypeOf(LLVMGetOperand(inst, 1));
+        return LLVMGetTypeKind(pt) == kPointerKind && LLVMGetPointerAddressSpace(pt) == 1 && !LLVMGetVolatile(inst);
+    }
+    if (!LLVMIsACallInst(inst)) return false;
+    LLVMValueRef f = calledFunction(inst);
+    const char *name = f ? LLVMGetValueName(f) : "";
+    return (startsWith(name, "air.atomic.") && !strstr(name, "fence")) || startsWith(name, "air.write_texture");
+}
+// Whether code that needs the quad's other lanes (helpersNeeded) can run after this discard: the rest of its block and every
+// block reachable from there.
+static bool helpersAfter(LLVMValueRef discardCall) {
+    auto needs = [](LLVMValueRef inst) {
+        if (!LLVMIsACallInst(inst)) return false;
+        LLVMValueRef callee = calledFunction(inst);
+        return callee && needsHelpers(LLVMGetValueName(callee));
+    };
+    for (LLVMValueRef inst = LLVMGetNextInstruction(discardCall); inst; inst = LLVMGetNextInstruction(inst))
+        if (needs(inst)) return true;
+    std::vector<LLVMBasicBlockRef> work, seen;
+    auto push = [&](LLVMBasicBlockRef bb) {
+        if (LLVMValueRef term = LLVMGetBasicBlockTerminator(bb))
+            for (unsigned i = 0, n = LLVMGetNumSuccessors(term); i < n; i++) {
+                LLVMBasicBlockRef next = LLVMGetSuccessor(term, i);
+                if (std::find(seen.begin(), seen.end(), next) == seen.end()) seen.push_back(next), work.push_back(next);
+            }
+    };
+    push(LLVMGetInstructionParent(discardCall));
+    while (!work.empty()) {
+        LLVMBasicBlockRef bb = work.back();
+        work.pop_back();
+        for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst))
+            if (needs(inst)) return true;
+        push(bb);
+    }
+    return false;
+}
+// nvair.guard(i1 demoted, operands...): the store or call when demoted is false (undef / nothing otherwise)
+static void guardInstruction(Gen &g, LLVMBuilderRef b, LLVMValueRef inst, LLVMValueRef flag) {
+    bool store = LLVMIsAStoreInst(inst);
+    unsigned n = store ? 2 : LLVMGetNumArgOperands(inst);
+    std::vector<LLVMTypeRef> types(1, g.i1);
+    std::vector<LLVMValueRef> args;
+    LLVMPositionBuilderBefore(b, inst);
+    args.push_back(LLVMBuildLoad(b, flag, ""));
+    for (unsigned i = 0; i < n; i++) types.push_back(LLVMTypeOf(LLVMGetOperand(inst, i))), args.push_back(LLVMGetOperand(inst, i));
+    LLVMTypeRef ret = store ? LLVMVoidTypeInContext(g.context) : LLVMTypeOf(inst);
+    LLVMValueRef f = LLVMAddFunction(g.module, "nvair.guard", LLVMFunctionType(ret, types.data(), (unsigned)types.size(), 0));
+    markInline(g.context, f);
+    LLVMBuilderRef fb = LLVMCreateBuilderInContext(g.context);
+    LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(g.context, f, ""), run = LLVMAppendBasicBlockInContext(g.context, f, ""),
+                      skip = LLVMAppendBasicBlockInContext(g.context, f, "");
+    LLVMPositionBuilderAtEnd(fb, entry);
+    LLVMBuildCondBr(fb, LLVMGetParam(f, 0), skip, run);
+    LLVMPositionBuilderAtEnd(fb, run);
+    bool isVoid = LLVMGetTypeKind(ret) == 0;  // LLVMVoidTypeKind
+    if (store) {
+        LLVMValueRef st = LLVMBuildStore(fb, LLVMGetParam(f, 1), LLVMGetParam(f, 2));
+        if (unsigned align = LLVMGetAlignment(inst)) LLVMSetAlignment(st, align);
+        LLVMBuildRetVoid(fb);
+    } else {
+        std::vector<LLVMValueRef> params;
+        for (unsigned i = 0; i < n; i++) params.push_back(LLVMGetParam(f, i + 1));
+        LLVMValueRef r = LLVMBuildCall(fb, LLVMGetCalledValue(inst), params.data(), n, "");
+        if (isVoid) LLVMBuildRetVoid(fb); else LLVMBuildRet(fb, r);
+    }
+    LLVMPositionBuilderAtEnd(fb, skip);
+    if (isVoid) LLVMBuildRetVoid(fb); else LLVMBuildRet(fb, LLVMGetUndef(ret));
+    LLVMDisposeBuilder(fb);
+    LLVMValueRef call = LLVMBuildCall(b, f, args.data(), (unsigned)args.size(), "");
+    if (!isVoid) LLVMReplaceAllUsesWith(inst, call);
+    LLVMInstructionEraseFromParent(inst);
+}
+static unsigned demoteDiscards(LLVMModuleRef module, Gen &g) {
+    LLVMValueRef discard = LLVMGetNamedFunction(module, "air.discard_fragment");
+    if (!discard || !LLVMGetNamedMetadataNumOperands(module, "air.fragment")) return 0;
+    unsigned demoted = 0;
+    LLVMValueRef exitHelper = nullptr;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
+        const char *fname = LLVMGetValueName(f);
+        if (LLVMIsDeclaration(f) || startsWith(fname, "air.") || startsWith(fname, "nvair.")) continue;
+        std::vector<LLVMValueRef> discards, effects, returns;
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                if (LLVMIsAReturnInst(inst)) returns.push_back(inst);
+                else if (sideEffect(inst)) effects.push_back(inst);
+                else if (LLVMIsACallInst(inst)) {
+                    LLVMValueRef callee = calledFunction(inst);
+                    if (callee == discard) discards.push_back(inst);
+                }
+            }
+        if (discards.empty() || returns.empty()) continue;
+        bool helpers = false, killing = false;  // killing: a front end that ends the lane itself (unreachable after the call)
+        for (LLVMValueRef d : discards) {
+            LLVMValueRef next = LLVMGetNextInstruction(d);
+            killing |= next && LLVMIsAUnreachableInst(next);
+            helpers = helpers || helpersAfter(d);
+        }
+        if (!helpers || killing) continue;
+        if (!exitHelper) {  // nvair.demote_exit(i1 demoted): discard_fragment (the lane ends) when demoted
+            LLVMTypeRef params[1] = {g.i1};
+            exitHelper = LLVMAddFunction(module, "nvair.demote_exit", LLVMFunctionType(LLVMVoidTypeInContext(g.context), params, 1, 0));
+            markInline(g.context, exitHelper);
+            LLVMBuilderRef fb = LLVMCreateBuilderInContext(g.context);
+            LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(g.context, exitHelper, ""),
+                              kill = LLVMAppendBasicBlockInContext(g.context, exitHelper, ""),
+                              done = LLVMAppendBasicBlockInContext(g.context, exitHelper, "");
+            LLVMPositionBuilderAtEnd(fb, entry);
+            LLVMBuildCondBr(fb, LLVMGetParam(exitHelper, 0), kill, done);
+            LLVMPositionBuilderAtEnd(fb, kill);
+            LLVMBuildCall(fb, discard, nullptr, 0, "");
+            LLVMBuildUnreachable(fb);
+            LLVMPositionBuilderAtEnd(fb, done);
+            LLVMBuildRetVoid(fb);
+            LLVMDisposeBuilder(fb);
+        }
+        LLVMBuilderRef b = LLVMCreateBuilderInContext(g.context);
+        LLVMPositionBuilderBefore(b, LLVMGetFirstInstruction(LLVMGetEntryBasicBlock(f)));
+        LLVMValueRef flag = LLVMBuildAlloca(b, g.i1, "nvair.demoted");
+        LLVMBuildStore(b, LLVMConstInt(g.i1, 0, 0), flag);
+        for (LLVMValueRef d : discards) {
+            LLVMPositionBuilderBefore(b, d);
+            LLVMBuildStore(b, LLVMConstInt(g.i1, 1, 0), flag);
+            LLVMInstructionEraseFromParent(d);
+        }
+        for (LLVMValueRef e : effects) guardInstruction(g, b, e, flag);
+        for (LLVMValueRef r : returns) {
+            LLVMPositionBuilderBefore(b, r);
+            LLVMValueRef args[1] = {LLVMBuildLoad(b, flag, "")};
+            LLVMBuildCall(b, exitHelper, args, 1, "");
+        }
+        LLVMDisposeBuilder(b);
+        demoted += (unsigned)discards.size();
+        if (logging()) fprintf(stderr, "[nvair] %s: %zu discard(s) demoted to helpers, %zu side effect(s) guarded\n", fname, discards.size(), effects.size());
+    }
+    return demoted;
+}
+
 // ---- 32-bit products of 16-bit factors -----------------------------------------------------------------------------------
 // When both factors of a 32-bit multiply are known to fit in 16 bits (zero-extended bytes / halfwords, masked with
 // 0xffff or less, or such values or'ed together), Kepler's compiler took the product's top bit for clear, though 0xffff * 0xffff = 0xfffe0001: with it,
@@ -1582,6 +1744,7 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (products && logging()) fprintf(stderr, "[nvair] %u product(s) of 16-bit factors given an opaque factor\n", products);
         unsigned guarded = disabled("NVAIR_FRAGMENT_LOAD_GUARD") ? 0 : guardFragmentLoads(module, g);
         if (guarded && logging()) fprintf(stderr, "[nvair] %u fragment device load(s) kept from a negative index\n", guarded);
+        unsigned demoted = disabled("NVAIR_DEMOTE_DISCARD") ? 0 : demoteDiscards(module, g);
         unsigned narrow = disabled("NVAIR_NARROW_PRIVATE_ARRAY_FIX") ? 0 : widenNarrowPrivateArrays(module, g);
         if (narrow && logging()) fprintf(stderr, "[nvair] %u private byte / halfword array(s) done on 32-bit words\n", narrow);
         unsigned counts = disabled("NVAIR_COUNT_ZERO_FIX") ? 0 : defineCountOfZero(module, g);
@@ -1591,7 +1754,7 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         unsigned compares = disabled("NVAIR_COMPARE_LEVEL_FIX") ? 0 : fixDepthCompareLevels(module, g);
         if (compares && logging()) fprintf(stderr, "[nvair] %u depth comparison(s) moved to a level that compares\n", compares);
         if (samplers && logging()) fprintf(stderr, "[nvair] %u constexpr sampler(s) in the [2 x i64] form rewritten as i64\n", samplers);
-        if (defined || fixed) inlineBodies(module);
+        if (defined || fixed || demoted) inlineBodies(module);
         if (logging() && (defined || fixed)) fprintf(stderr, "[nvair] %u intrinsic(s) given bodies, %u 64-bit instruction(s) rewritten\n", defined, fixed);
         if (logging()) logBareIntrinsics(module);
     }
