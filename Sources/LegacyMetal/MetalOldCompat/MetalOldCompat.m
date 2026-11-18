@@ -102,6 +102,8 @@
 //      command: a later copy out of the same texture could read it before the upload landed (zeros)
 //  54. methods the Kepler driver lacks (swizzled texture views, indirect command buffers), which threw "unrecognized
 //      selector": a view without a swizzle that changes nothing a shader can see, nil otherwise (as item 32); no ICB (nil)
+//  55. MSAA resolves into mip level 1 or higher on the Kepler driver, which never arrived after a pass that draws: through a
+//      temporary texture copied to the level, as item 15 on Intel
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -2050,6 +2052,19 @@ static void touchMultisampledDepth(id<MTLCommandBuffer> commandBuffer, id<MTLTex
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] cleared multisampled depth resolved by a compute read\n");
 }
 
+// Copies each {temporary, destination, level, slice, depth plane} of an encoder's pending list to its destination (items 15, 55).
+static void copyOutOfTemporaries(NSArray *pending) {
+    id<MTLBlitCommandEncoder> blit = [(id<MTLCommandBuffer>)pending[0] blitCommandEncoder];
+    for (NSArray *copy in pending[1]) {
+        id<MTLTexture> temporary = copy[0], target = copy[1];
+        NSUInteger level = [copy[2] unsignedIntegerValue], slice = [copy[3] unsignedIntegerValue], plane = [copy[4] unsignedIntegerValue];
+        [blit copyFromTexture:temporary sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0)
+                   sourceSize:MTLSizeMake(temporary.width, temporary.height, 1) toTexture:target destinationSlice:slice
+             destinationLevel:level destinationOrigin:MTLOriginMake(0, 0, plane)];
+    }
+    [blit endEncoding];
+}
+
 static void igRenderEndEncoding(id self, SEL _cmd) {
     NSArray *pending = objc_getAssociatedObject(self, kPendingResolveCopies);
     NSArray *touch = objc_getAssociatedObject(self, kPendingDepthTouch);
@@ -2060,15 +2075,63 @@ static void igRenderEndEncoding(id self, SEL _cmd) {
     }
     if (!pending) return;
     objc_setAssociatedObject(self, kPendingResolveCopies, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    id<MTLBlitCommandEncoder> blit = [(id<MTLCommandBuffer>)pending[0] blitCommandEncoder];
-    for (NSArray *copy in pending[1]) {
-        id<MTLTexture> temporary = copy[0], target = copy[1];
-        NSUInteger level = [copy[2] unsignedIntegerValue], slice = [copy[3] unsignedIntegerValue], plane = [copy[4] unsignedIntegerValue];
-        [blit copyFromTexture:temporary sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0)
-                   sourceSize:MTLSizeMake(temporary.width, temporary.height, 1) toTexture:target destinationSlice:slice
-             destinationLevel:level destinationOrigin:MTLOriginMake(0, 0, plane)];
+    copyOutOfTemporaries(pending);
+}
+
+// 55. MSAA resolves into mip level 1 or higher on the Kepler driver (GeForceMTLDriver): after a pass that draws, nothing
+// reaches the level (any slice, RGBA8 and sRGB alike; the target keeps what it held); level 0, every slice, and a pass
+// that only clears are right (GTX 770; s25's level 1 resolve read 255 from an uninitialized texture). As item 15 does on
+// Intel, such a color attachment resolves into a temporary 2D texture of the level's size, which a blit copies to the
+// level and slice when the encoder ends. Store actions unknown at encoder creation and parallel render encoders are
+// not changed. MTLSHIM_NV_RESOLVE_LEVEL=0 turns it off. Test: s25 on the GTX 770.
+static RenderEncoderIMP origNVRenderEncoder;
+static EndEncodingIMP origNVRenderEndEncoding;
+static id nvRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor) {
+    MTLRenderPassDescriptor *redirected = nil;
+    NSMutableArray *copies = nil;  // {temporary, destination, level, slice, depth plane}
+    for (NSUInteger i = 0; descriptor && i < 8; i++) {
+        MTLRenderPassColorAttachmentDescriptor *a = descriptor.colorAttachments[i];
+        id<MTLTexture> resolve = a.resolveTexture;
+        if (!resolve || (a.storeAction != MTLStoreActionMultisampleResolve && a.storeAction != MTLStoreActionStoreAndMultisampleResolve))
+            continue;
+        NSUInteger level = a.resolveLevel, slice = a.resolveSlice;
+        id<MTLTexture> target = rootTexture(resolve, &level, &slice);
+        if (!level) continue;
+        MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:resolve.pixelFormat
+            width:MAX(target.width >> level, 1) height:MAX(target.height >> level, 1) mipmapped:NO];
+        td.usage = MTLTextureUsageRenderTarget;
+        td.storageMode = MTLStorageModePrivate;
+        id<MTLTexture> temporary = [((id<MTLCommandBuffer>)self).device newTextureWithDescriptor:td];
+        if (!temporary) continue;
+        if (!redirected) {
+            redirected = [descriptor copy];
+            copies = [NSMutableArray array];
+        }
+        MTLRenderPassColorAttachmentDescriptor *r = redirected.colorAttachments[i];
+        r.resolveTexture = temporary;
+        r.resolveLevel = r.resolveSlice = r.resolveDepthPlane = 0;
+        [copies addObject:@[temporary, target, @(level), @(slice), @(a.resolveDepthPlane)]];
+        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] resolve into level %lu slice %lu through a temporary texture\n", (unsigned long)level, (unsigned long)slice);
     }
-    [blit endEncoding];
+    id encoder = origNVRenderEncoder(self, _cmd, redirected ?: descriptor);
+    if (encoder && copies.count) objc_setAssociatedObject(encoder, kPendingResolveCopies, @[self, copies], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return encoder;
+}
+static void nvRenderEndEncoding(id self, SEL _cmd) {
+    NSArray *pending = objc_getAssociatedObject(self, kPendingResolveCopies);
+    origNVRenderEndEncoding(self, _cmd);
+    if (!pending) return;
+    objc_setAssociatedObject(self, kPendingResolveCopies, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    copyOutOfTemporaries(pending);
+}
+static void keplerResolveLevels(void) {
+    static const char *const kBuffer = "NVMTLCommandBuffer", *const kEncoder = "NVMTLRenderCommandEncoder_KEPLER_A";
+    const char *setting = getenv("MTLSHIM_NV_RESOLVE_LEVEL");
+    if (origNVRenderEncoder || (setting && !strcmp(setting, "0")) || !definesMethod(kBuffer, "renderCommandEncoderWithDescriptor:") ||
+        !definesMethod(kEncoder, "endEncoding"))
+        return;
+    origNVRenderEndEncoding = (EndEncodingIMP)swizzle(kEncoder, "endEncoding", (IMP)nvRenderEndEncoding);
+    origNVRenderEncoder = (RenderEncoderIMP)swizzle(kBuffer, "renderCommandEncoderWithDescriptor:", (IMP)nvRenderEncoder);
 }
 
 // 16. 2D-array texture views on the 12.x Intel driver: a view whose first slice isn't 0 can only reach slices below its
@@ -3219,6 +3282,7 @@ static void patchDriverClasses(void) {
     encoderLodClamps();
     swizzledViews();
     keplerMissingMethods();  // item 54
+    keplerResolveLevels();  // item 55
     mpsStatisticsWidth();
     stencilCopies();
     nvStencilUploadOrder();  // item 53
