@@ -25,6 +25,20 @@
 // butterfly of shuffles is only right when all 32 lanes are active. Any AIR intrinsic still bare after this is logged
 // (NVAIR_LOG), and the compile fails as before.
 //
+// Two 64-bit instructions the plugin compiles but gets wrong (a 64-bit value is a pair of 32-bit registers, and both
+// lowerings leave the high one unset or wrong), measured on a GTX 770 against the CPU over 4096 random pairs each:
+//   zext / sext i1 -> i64   (o = a < b ? 1 : 0 for ulongs: all 4096 had garbage high words) -> 0 or 1 through
+//                           llvm.nvvm.min.u.i32 and a zext from 32 bits (a select of 1 and 0, the obvious form, is
+//                           folded back into the zext by the plugin's optimizer), negated for sext
+//   udiv, urem, sdiv, srem i64 (94% of quotients wrong; with a constant divisor too, which becomes a 64-bit
+//                           multiply-high that is also wrong) -> nvair.udiv64 / nvair.urem64: 64 unrolled steps of
+//                           shift, compare, select and subtract (straight-line: a branch and loop there let the
+//                           plugin misorder private-array accesses), signed through the magnitudes. Division by 0
+//                           gives all ones (Metal leaves it undefined).
+//   shl, lshr, ashr i64 by a variable amount: from 32-bit shifts of the halves. In a fragment function next to straight-
+//                           line division code, a signed one came out unsigned (i67: long >> s, 102 of 256 pixels).
+// Vectors of them (ulong2 / ulong2) one lane at a time. NVAIR_I64_FIX=0 turns these off, NVAIR_SHIFT_FIX=0 the shifts only.
+//
 // Installed (planned): GeForceAIRPlugin.bundle/Contents/MacOS/GeForceAIRCompat.dylib, a weak dependency of
 // GeForceAIRPlugin. Test use: DYLD_INSERT_LIBRARIES=Tests/tools/localcc.dylib:build/GeForceAIRCompat-test.dylib
 //   NVAIR_LOG=1             log what is rewritten (NVAIR_LOG=/path: append to that file)
@@ -378,6 +392,145 @@ static void inlineBodies(LLVMModuleRef module) {
     LLVMDisposePassManager(pm);
 }
 
+// ---- 64-bit instructions the plugin gets wrong -----------------------------------------------------------------------
+static void markInline(LLVMContextRef context, LLVMValueRef f) {
+    static const unsigned alwaysInline = LLVMGetEnumAttributeKindForName("alwaysinline", 12);
+    LLVMSetLinkage(f, LLVMInternalLinkage);
+    LLVMAddAttributeAtIndex(f, LLVMAttributeFunctionIndex, LLVMCreateEnumAttribute(context, alwaysInline, 0));
+}
+
+// nvair.udiv64 / nvair.urem64 (i64 a, i64 b): restoring division, one quotient bit per step from the top, unrolled into
+// straight-line code (64 steps of shift, compare, select and subtract). The first version took a 32-bit division when
+// both operands fit and looped otherwise; with its branch and loop inlined, Kepler's compiler got a private-array load
+// and store around two such divisions in the wrong order (pc[a / b] = (uchar)(c / (d | pc[i])) read the stored byte:
+// mslfuzz2 LONG=1 seed 770, reduced), and the straight-line form compiles right. The quotient's bits are collected in two
+// 32-bit halves: widening a bool to 64 bits is what the plugin gets wrong. Division by 0 gives all ones (remainder: a).
+static LLVMValueRef divisionHelper(Gen &g, bool remainder) {
+    const char *name = remainder ? "nvair.urem64" : "nvair.udiv64";
+    if (LLVMValueRef f = LLVMGetNamedFunction(g.module, name)) return f;
+    LLVMTypeRef params[2] = {g.i64, g.i64};
+    LLVMValueRef f = LLVMAddFunction(g.module, name, LLVMFunctionType(g.i64, params, 2, 0));
+    LLVMValueRef a = LLVMGetParam(f, 0), d = LLVMGetParam(f, 1);
+    LLVMBuilderRef b = LLVMCreateBuilderInContext(g.context);
+    LLVMPositionBuilderAtEnd(b, LLVMAppendBasicBlockInContext(g.context, f, "entry"));
+    LLVMValueRef r = g.c64(0), halves[2] = {g.c32(0), g.c32(0)};  // the quotient's high and low 32 bits
+    for (int i = 63; i >= 0; i--) {
+        LLVMValueRef bit = i ? LLVMBuildAnd(b, LLVMBuildLShr(b, a, g.c64((unsigned)i), ""), g.c64(1), "") : LLVMBuildAnd(b, a, g.c64(1), "");
+        LLVMValueRef r1 = LLVMBuildOr(b, LLVMBuildShl(b, r, g.c64(1), ""), bit, "");
+        LLVMValueRef ge = LLVMBuildICmp(b, LLVMIntUGE, r1, d, "");
+        r = LLVMBuildSelect(b, ge, LLVMBuildSub(b, r1, d, ""), r1, "");
+        LLVMValueRef &half = halves[i >= 32 ? 0 : 1];
+        half = LLVMBuildOr(b, LLVMBuildShl(b, half, g.c32(1), ""), LLVMBuildZExt(b, ge, g.i32, ""), "");
+    }
+    LLVMValueRef q = LLVMBuildOr(b, LLVMBuildShl(b, LLVMBuildZExt(b, halves[0], g.i64, ""), g.c64(32), ""), LLVMBuildZExt(b, halves[1], g.i64, ""), "");
+    LLVMBuildRet(b, remainder ? r : q);
+    LLVMDisposeBuilder(b);
+    markInline(g.context, f);
+    return f;
+}
+
+// Lanes of an integer type (1 for a scalar) if its elements are `width` bits, else 0.
+static unsigned intLanes(LLVMTypeRef t, unsigned width) {
+    if (LLVMGetTypeKind(t) == LLVMVectorTypeKind) return isInt(LLVMGetElementType(t), width) ? LLVMGetVectorSize(t) : 0;
+    return isInt(t, width) ? 1 : 0;
+}
+
+// One lane of an i64 division or remainder (x, y: i64), through nvair.udiv64 / nvair.urem64.
+static LLVMValueRef divideLane(Gen &g, LLVMBuilderRef b, int op, LLVMValueRef x, LLVMValueRef y) {
+    bool isSigned = op == LLVMSDiv || op == LLVMSRem, remainder = op == LLVMURem || op == LLVMSRem;
+    LLVMValueRef zero = g.c64(0), xNeg = nullptr, yNeg = nullptr;
+    if (isSigned) {  // on the magnitudes; the quotient is negative if the signs differ, the remainder if x is
+        xNeg = LLVMBuildICmp(b, LLVMIntSLT, x, zero, ""), yNeg = LLVMBuildICmp(b, LLVMIntSLT, y, zero, "");
+        x = LLVMBuildSelect(b, xNeg, LLVMBuildNeg(b, x, ""), x, "");
+        y = LLVMBuildSelect(b, yNeg, LLVMBuildNeg(b, y, ""), y, "");
+    }
+    LLVMValueRef args[2] = {x, y};
+    LLVMValueRef result = LLVMBuildCall(b, divisionHelper(g, remainder), args, 2, "");
+    if (isSigned) {
+        LLVMValueRef negate = remainder ? xNeg : LLVMBuildICmp(b, LLVMIntNE, xNeg, yNeg, "");
+        result = LLVMBuildSelect(b, negate, LLVMBuildNeg(b, result, ""), result, "");
+    }
+    return result;
+}
+
+// One lane of an i64 shift by a variable amount, from 32-bit shifts of the halves, without selects: the < 32 and >= 32
+// results are combined through a mask (all ones below 32), the bits that cross over come from a double shift that is 0
+// for an amount of 0, and the amount goes through llvm.nvvm.min.u.i32 so the optimizer can't bound it. A first version
+// chose with selects; where the optimizer could tell the amount was 0 or 1 it turned them into predicates and a widened
+// i1, which Kepler's code generation got wrong next to a threadgroup load after a barrier (the shift's result came out
+// 0: LONG fuzz seeds 1295 and 1853, reduced), though the IR was right. Every 32-bit shift amount is masked into 0-31, so
+// nothing is poison.
+extern "C" LLVMValueRef LLVMBuildXor(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+static LLVMValueRef shiftLane(Gen &g, LLVMBuilderRef b, int op, LLVMValueRef x, LLVMValueRef amount) {
+    LLVMTypeRef params[2] = {g.i32, g.i32};
+    LLVMValueRef minArgs[2] = {LLVMBuildAnd(b, LLVMBuildTrunc(b, amount, g.i32, ""), g.c32(63), ""), g.c32(63)};
+    LLVMValueRef s = LLVMBuildCall(b, g.intrinsic("llvm.nvvm.min.u.i32", g.i32, params, 2), minArgs, 2, "");
+    LLVMValueRef s5 = LLVMBuildAnd(b, s, g.c32(31), ""), rest = LLVMBuildSub(b, g.c32(31), s5, "");
+    LLVMValueRef m = LLVMBuildSub(b, g.c32(0), LLVMBuildXor(b, LLVMBuildLShr(b, s, g.c32(5), ""), g.c32(1), ""), ""), nm = LLVMBuildNot(b, m, "");
+    LLVMValueRef lo = LLVMBuildTrunc(b, x, g.i32, ""), hi = LLVMBuildTrunc(b, LLVMBuildLShr(b, x, g.c64(32), ""), g.i32, ""), newLo, newHi;
+    if (op == LLVMShl) {
+        LLVMValueRef carry = LLVMBuildLShr(b, LLVMBuildLShr(b, lo, g.c32(1), ""), rest, "");  // lo >> (32 - s); 0 for s = 0
+        LLVMValueRef loShifted = LLVMBuildShl(b, lo, s5, "");
+        newLo = LLVMBuildAnd(b, loShifted, m, "");
+        newHi = LLVMBuildOr(b, LLVMBuildAnd(b, LLVMBuildOr(b, LLVMBuildShl(b, hi, s5, ""), carry, ""), m, ""), LLVMBuildAnd(b, loShifted, nm, ""), "");
+    } else {
+        bool arithmetic = op == LLVMAShr;
+        LLVMValueRef carry = LLVMBuildShl(b, LLVMBuildShl(b, hi, g.c32(1), ""), rest, "");  // hi << (32 - s); 0 for s = 0
+        LLVMValueRef hiShifted = arithmetic ? LLVMBuildAShr(b, hi, s5, "") : LLVMBuildLShr(b, hi, s5, "");
+        LLVMValueRef fill = arithmetic ? LLVMBuildAShr(b, hi, g.c32(31), "") : g.c32(0);
+        newLo = LLVMBuildOr(b, LLVMBuildAnd(b, LLVMBuildOr(b, LLVMBuildLShr(b, lo, s5, ""), carry, ""), m, ""), LLVMBuildAnd(b, hiShifted, nm, ""), "");
+        newHi = LLVMBuildOr(b, LLVMBuildAnd(b, hiShifted, m, ""), LLVMBuildAnd(b, fill, nm, ""), "");
+    }
+    return LLVMBuildOr(b, LLVMBuildShl(b, LLVMBuildZExt(b, newHi, g.i64, ""), g.c64(32), ""), LLVMBuildZExt(b, newLo, g.i64, ""), "");
+}
+
+static unsigned fixWideInstructions(LLVMModuleRef module, Gen &g) {
+    unsigned fixed = 0;
+    LLVMBuilderRef b = LLVMCreateBuilderInContext(g.context);
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
+        if (LLVMIsDeclaration(f) || !strncmp(LLVMGetValueName(f), "nvair.", 6)) continue;
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb)) {
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb), next; inst; inst = next) {
+                next = LLVMGetNextInstruction(inst);
+                int op = LLVMGetInstructionOpcode(inst);
+                LLVMTypeRef type = LLVMTypeOf(inst);
+                unsigned lanes = intLanes(type, 64);
+                bool widen = (op == LLVMZExt || op == LLVMSExt) && lanes && intLanes(LLVMTypeOf(LLVMGetOperand(inst, 0)), 1) == lanes;
+                bool divide = (op == LLVMUDiv || op == LLVMURem || op == LLVMSDiv || op == LLVMSRem) && lanes;
+                static const bool shiftFix = !disabled("NVAIR_SHIFT_FIX");
+                bool shift = shiftFix && (op == LLVMShl || op == LLVMLShr || op == LLVMAShr) && lanes && !LLVMIsAConstantInt(LLVMGetOperand(inst, 1)) &&
+                             !(LLVMGetTypeKind(type) == LLVMVectorTypeKind && LLVMIsAConstant(LLVMGetOperand(inst, 1)));
+                if (!widen && !divide && !shift) continue;
+                LLVMPositionBuilderBefore(b, inst);
+                bool vector = LLVMGetTypeKind(type) == LLVMVectorTypeKind;
+                LLVMValueRef replacement = vector ? LLVMGetUndef(type) : nullptr;
+                for (unsigned lane = 0; lane < lanes; lane++) {  // vectors one lane at a time
+                    LLVMValueRef index = g.c32(lane);
+                    auto operand = [&](unsigned i) {
+                        LLVMValueRef v = LLVMGetOperand(inst, i);
+                        return vector ? LLVMBuildExtractElement(b, v, index, "") : v;
+                    };
+                    LLVMValueRef value;
+                    if (widen) {
+                        value = g.bool64(b, operand(0));
+                        if (op == LLVMSExt) value = LLVMBuildSub(b, g.c64(0), value, "");
+                    } else if (shift) {
+                        value = shiftLane(g, b, op, operand(0), operand(1));
+                    } else {
+                        value = divideLane(g, b, op, operand(0), operand(1));
+                    }
+                    replacement = vector ? LLVMBuildInsertElement(b, replacement, value, index, "") : value;
+                }
+                LLVMReplaceAllUsesWith(inst, replacement);
+                LLVMInstructionEraseFromParent(inst);
+                fixed++;
+            }
+        }
+    }
+    LLVMDisposeBuilder(b);
+    return fixed;
+}
+
 static void logBareIntrinsics(LLVMModuleRef module) {
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
         const char *name = LLVMGetValueName(f);
@@ -406,8 +559,9 @@ static int hookedRun(void *self, LLVMModuleRef module) {
     if (module) {
         Gen g = makeGen(module);
         unsigned defined = disabled("NVAIR_INTRINSICS") ? 0 : defineMissingIntrinsics(g);
-        if (defined) inlineBodies(module);
-        if (logging() && defined) fprintf(stderr, "[nvair] %u intrinsic(s) given bodies\n", defined);
+        unsigned fixed = disabled("NVAIR_I64_FIX") ? 0 : fixWideInstructions(module, g);
+        if (defined || fixed) inlineBodies(module);
+        if (logging() && (defined || fixed)) fprintf(stderr, "[nvair] %u intrinsic(s) given bodies, %u 64-bit instruction(s) rewritten\n", defined, fixed);
         if (logging()) logBareIntrinsics(module);
     }
     return passManagerRun(self, module);
