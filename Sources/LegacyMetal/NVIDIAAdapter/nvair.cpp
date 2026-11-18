@@ -71,6 +71,9 @@
 // 32-bit products of 16-bit factors, and products an or uses, hidden from the optimizer behind an opaque min (it took
 // bits of products for clear). NVAIR_NARROW_MULTIPLY_FIX=0.
 //
+// Half vectors spelled as bitcasts of integers in constant initializers (a constant half2x2 array crashed the
+// compiler) rewritten as plain half vectors. NVAIR_HALF_CONSTANT_FIX=0.
+//
 // Constant-length copies (llvm.memcpy) of 64 bytes or more made word loops (the back end's time was cubic in their size:
 // a WebGPU CTS kernel kept the compiler busy for minutes). NVAIR_LARGE_COPY_LOOP=0.
 //
@@ -94,6 +97,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -1911,6 +1915,82 @@ static unsigned loopLargeCopies(LLVMModuleRef module, Gen &g) {
     return (unsigned)copies.size();
 }
 
+// ---- half vectors spelled as bitcasts in constants --------------------------------------------------------------------
+// A constant array of half2x2 (WGSL `const` matrices of f16: WebGPU CTS shader,execution,expression,constructor) reaches
+// the plugin with each half2 column spelled as a constant expression, bitcast (<1 x i32> <i32 bits> to <2 x half>), and
+// its constant lowering crashes on that (a null dereference in a recursive walk: the compiler service died on every try,
+// and the app's next compile waited on it forever). half2 alone, half4, half3x3 and float2x2 constants are spelled
+// plainly and compile. In global initializers, each such bitcast becomes the plain half vector it stands for.
+// NVAIR_HALF_CONSTANT_FIX=0 turns it off.
+enum { kOpBitCast = 41 };  // LLVM-C's LLVMBitCast
+static double halfBitsToDouble(unsigned h) {
+    int sign = (h >> 15) & 1, exponent = (h >> 10) & 31;
+    unsigned mantissa = h & 1023;
+    double v;
+    if (exponent == 0) v = std::ldexp((double)mantissa, -24);
+    else if (exponent == 31) v = mantissa ? NAN : INFINITY;
+    else v = std::ldexp((double)(mantissa | 1024), exponent - 25);
+    return sign ? -v : v;
+}
+// The bits of a constant integer or vector of integers, low element first; false if it isn't one.
+static bool constantBits(LLVMValueRef c, std::vector<uint8_t> &bytes) {
+    LLVMTypeRef t = LLVMTypeOf(c);
+    auto addInt = [&](LLVMValueRef v) {
+        if (!LLVMIsAConstantInt(v)) return false;
+        unsigned width = LLVMGetIntTypeWidth(LLVMTypeOf(v));
+        if (width % 8 || width > 64) return false;
+        unsigned long long x = LLVMConstIntGetZExtValue(v);
+        for (unsigned k = 0; k < width / 8; k++) bytes.push_back((uint8_t)(x >> (8 * k)));
+        return true;
+    };
+    if (LLVMGetTypeKind(t) == LLVMIntegerTypeKind) return addInt(c);
+    if (LLVMGetTypeKind(t) != LLVMVectorTypeKind) return false;
+    unsigned n = LLVMGetVectorSize(t);
+    for (unsigned i = 0; i < n; i++) {
+        LLVMValueRef e = LLVMIsAConstantDataVector(c) ? LLVMGetElementAsConstant(c, i) : LLVMIsAConstantVector(c) ? LLVMGetOperand(c, i) : nullptr;
+        if (!e || !addInt(e)) return false;
+    }
+    return true;
+}
+static LLVMValueRef foldHalfBitcasts(Gen &g, LLVMValueRef c, bool &changed, int depth = 0) {
+    if (!c || depth > 16) return c;
+    LLVMTypeRef t = LLVMTypeOf(c);
+    if (LLVMIsAConstantExpr(c) && LLVMGetConstOpcode(c) == kOpBitCast && LLVMGetTypeKind(t) == LLVMVectorTypeKind &&
+        LLVMGetElementType(t) == LLVMHalfTypeInContext(g.context)) {
+        std::vector<uint8_t> bytes;
+        unsigned n = LLVMGetVectorSize(t);
+        if (!constantBits(LLVMGetOperand(c, 0), bytes) || bytes.size() != 2 * n) return c;
+        std::vector<LLVMValueRef> halves;
+        for (unsigned i = 0; i < n; i++)
+            halves.push_back(LLVMConstReal(LLVMHalfTypeInContext(g.context), halfBitsToDouble(bytes[2 * i] | bytes[2 * i + 1] << 8)));
+        changed = true;
+        return LLVMConstVector(halves.data(), n);
+    }
+    bool isStruct = LLVMIsAConstantStruct(c), isArray = LLVMIsAConstantArray(c), isVector = LLVMIsAConstantVector(c);
+    if (!isStruct && !isArray && !isVector) return c;
+    unsigned n = (unsigned)LLVMGetNumOperands(c);
+    std::vector<LLVMValueRef> elements(n);
+    bool inner = false;
+    for (unsigned i = 0; i < n; i++) elements[i] = foldHalfBitcasts(g, LLVMGetOperand(c, i), inner, depth + 1);
+    if (!inner) return c;
+    changed = true;
+    if (isArray) return LLVMConstArray(LLVMGetElementType(t), elements.data(), n);
+    if (isVector) return LLVMConstVector(elements.data(), n);
+    return LLVMGetStructName(t) ? LLVMConstNamedStruct(t, elements.data(), n)
+                                : LLVMConstStructInContext(g.context, elements.data(), n, LLVMIsPackedStruct(t));
+}
+static unsigned foldHalfVectorBitcasts(LLVMModuleRef module, Gen &g) {
+    unsigned fixed = 0;
+    for (LLVMValueRef v = LLVMGetFirstGlobal(module); v; v = LLVMGetNextGlobal(v)) {
+        LLVMValueRef init = LLVMIsDeclaration(v) ? nullptr : LLVMGetInitializer(v);
+        if (!init) continue;
+        bool changed = false;
+        LLVMValueRef folded = foldHalfBitcasts(g, init, changed);
+        if (changed) LLVMSetInitializer(v, folded), fixed++;
+    }
+    return fixed;
+}
+
 static void logBareIntrinsics(LLVMModuleRef module) {
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
         const char *name = LLVMGetValueName(f);
@@ -1956,6 +2036,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         unsigned guarded = disabled("NVAIR_FRAGMENT_LOAD_GUARD") ? 0 : guardFragmentLoads(module, g);
         if (guarded && logging()) fprintf(stderr, "[nvair] %u fragment device load(s) kept from a negative index\n", guarded);
         unsigned demoted = disabled("NVAIR_DEMOTE_DISCARD") ? 0 : demoteDiscards(module, g);
+        unsigned halves = disabled("NVAIR_HALF_CONSTANT_FIX") ? 0 : foldHalfVectorBitcasts(module, g);
+        if (halves && logging()) fprintf(stderr, "[nvair] %u constant(s) with half vectors spelled as bitcasts rewritten\n", halves);
         unsigned copies = disabled("NVAIR_LARGE_COPY_LOOP") ? 0 : loopLargeCopies(module, g);
         if (copies && logging()) fprintf(stderr, "[nvair] %u large copy(ies) made word loops\n", copies);
         unsigned narrow = disabled("NVAIR_NARROW_PRIVATE_ARRAY_FIX") ? 0 : widenNarrowPrivateArrays(module, g);
