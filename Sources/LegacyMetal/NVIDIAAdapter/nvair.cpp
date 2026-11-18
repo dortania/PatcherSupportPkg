@@ -62,6 +62,9 @@
 // Private arrays of bytes and halfwords done on 32-bit words (a stored word reached their loads unmasked).
 // NVAIR_NARROW_PRIVATE_ARRAY_FIX=0.
 //
+// Device loads in fragment functions at a 32-bit index with its top bit set read element 0 (helper lanes' wrapped
+// indexes faulted the driver, which failed a later command buffer: ANGLE's PBO uploads). NVAIR_FRAGMENT_LOAD_GUARD=0.
+//
 // 32-bit products of 16-bit factors, and products an or uses, hidden from the optimizer behind an opaque min (it took
 // bits of products for clear). NVAIR_NARROW_MULTIPLY_FIX=0.
 //
@@ -1192,6 +1195,54 @@ static unsigned widenNarrowPrivateArrays(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
+// ---- device loads in fragment functions at a negative 32-bit index ------------------------------------------------------
+// Kepler's driver faults on a load outside every buffer, and reports it on a later command buffer as
+// kIOAccelCommandBufferCallbackErrorInvalidResource (the app sees that command buffer fail; ANGLE loses the context).
+// Fragment functions run helper lanes for the pixels of a 2x2 quad outside the primitive or the scissor rectangle, and
+// their loads count: ANGLE's buffer-to-texture shaders (readFromBuffer*TextureFS, how WebGL uploads from a pixel unpack
+// buffer that needs converting) compute uint2(position) - textureOffset, which wraps for those lanes, and read
+// ~4 GB past the buffer: Chrome's WebGL lost its context in texSubImage2D from a PBO of RGBA4, RGB565, RGB5_A1 and RGB
+// data, and after two GPU process crashes turned WebGL off (Khronos WebGL 2.0.1, deqp texsubimage2d_pbo). On a 2 GB
+// card no buffer reaches 2^31 bytes, so a 32-bit index with its top bit set can only be outside: in fragment modules,
+// such an index (the i32 a device load's GEP widens) reads element 0 instead, as x & ~(x >> 31) (no predicate).
+// NVAIR_FRAGMENT_LOAD_GUARD=0 turns it off.
+enum { kGuardAnd = 23, kGuardXor = 25, kPointerKind = 12 };  // LLVM-C's LLVMAnd, LLVMXor, LLVMPointerTypeKind
+static bool guardedIndex(LLVMValueRef x) {  // x & ~(x >> 31), as this pass writes it
+    if (!LLVMIsAInstruction(x) || LLVMGetInstructionOpcode(x) != kGuardAnd) return false;
+    LLVMValueRef m = LLVMGetOperand(x, 1);
+    return LLVMIsAInstruction(m) && LLVMGetInstructionOpcode(m) == kGuardXor;
+}
+static unsigned guardFragmentLoads(LLVMModuleRef module, Gen &g) {
+    if (!LLVMGetNamedMetadataNumOperands(module, "air.fragment")) return 0;
+    std::vector<LLVMValueRef> loads;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst))
+                if (LLVMIsALoadInst(inst)) loads.push_back(inst);
+    LLVMBuilderRef b = nullptr;
+    unsigned fixed = 0;
+    for (LLVMValueRef load : loads) {
+        LLVMValueRef gep = LLVMGetOperand(load, 0);
+        if (!LLVMIsAGetElementPtrInst(gep)) continue;
+        LLVMTypeRef pt = LLVMTypeOf(gep);
+        if (LLVMGetTypeKind(pt) != kPointerKind || LLVMGetPointerAddressSpace(pt) != 1) continue;  // device memory
+        unsigned n = LLVMGetNumOperands(gep);
+        LLVMValueRef index = LLVMGetOperand(gep, n - 1);
+        if (!LLVMIsAInstruction(index)) continue;
+        unsigned op = LLVMGetInstructionOpcode(index);
+        if (op != LLVMZExt && op != LLVMSExt) continue;
+        LLVMValueRef x = LLVMGetOperand(index, 0);
+        if (!isInt(LLVMTypeOf(x), 32) || LLVMIsAConstantInt(x) || guardedIndex(x)) continue;
+        if (!b) b = LLVMCreateBuilderInContext(g.context);
+        LLVMPositionBuilderBefore(b, index);
+        LLVMValueRef keep = LLVMBuildXor(b, LLVMBuildAShr(b, x, g.c32(31), ""), g.c32(~0u), "");
+        LLVMSetOperand(index, 0, LLVMBuildAnd(b, x, keep, ""));
+        fixed++;
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
 // ---- 32-bit products of 16-bit factors -----------------------------------------------------------------------------------
 // When both factors of a 32-bit multiply are known to fit in 16 bits (zero-extended bytes / halfwords, masked with
 // 0xffff or less, or such values or'ed together), Kepler's compiler took the product's top bit for clear, though 0xffff * 0xffff = 0xfffe0001: with it,
@@ -1529,6 +1580,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (gradients && logging()) fprintf(stderr, "[nvair] %u 3D / cube gradient sample(s) done at their level\n", gradients);
         unsigned products = disabled("NVAIR_NARROW_MULTIPLY_FIX") ? 0 : hideNarrowProducts(module, g);
         if (products && logging()) fprintf(stderr, "[nvair] %u product(s) of 16-bit factors given an opaque factor\n", products);
+        unsigned guarded = disabled("NVAIR_FRAGMENT_LOAD_GUARD") ? 0 : guardFragmentLoads(module, g);
+        if (guarded && logging()) fprintf(stderr, "[nvair] %u fragment device load(s) kept from a negative index\n", guarded);
         unsigned narrow = disabled("NVAIR_NARROW_PRIVATE_ARRAY_FIX") ? 0 : widenNarrowPrivateArrays(module, g);
         if (narrow && logging()) fprintf(stderr, "[nvair] %u private byte / halfword array(s) done on 32-bit words\n", narrow);
         unsigned counts = disabled("NVAIR_COUNT_ZERO_FIX") ? 0 : defineCountOfZero(module, g);
