@@ -500,9 +500,11 @@ static unsigned fineGradients(std::string &s) {
 // values (Dawn loads them from a uniform array): whatever the register last held became the LOD, so the level, and with
 // a linear mip filter the blend, changed from run to run (WebGPU CTS textureSampleCompareLevel in compute: 160 cases,
 // with wrong results in different places on every run). The operand becomes the destination register, which holds
-// the coordinates and the LOD. 2D samples only: a cube array's coordinate operand carries the array index in w, and the
-// back end finds the LOD elsewhere there (the CTS's cube, 2D-array and cube-array cases passed already, a09 relies on
-// it). INTEL_SAMPLE_LOD_OPERAND_FIX=0 turns it off.
+// the coordinates and the LOD. 2D, 2D-array and cube comparisons at a level are built the same way (the array index in
+// z): on the HD 4000 they compared against the wrong level whenever the level wasn't 0, with the stock compiler too, and
+// the CTS's cases had passed only because the stale w happened to hold the right value there (i78). Not cube arrays:
+// their coordinate operand carries the array index in w, and the back end finds the LOD elsewhere (a09 relies on it).
+// INTEL_SAMPLE_LOD_OPERAND_FIX=0 turns it off.
 static unsigned sampleLodOperands(std::string &s) {
     if (disabled("INTEL_SAMPLE_LOD_OPERAND_FIX") || s.find("\tSAMPLE_L") == std::string::npos) return 0;
     unsigned n = 0;
@@ -519,8 +521,9 @@ static unsigned sampleLodOperands(std::string &s) {
                 char coords[64], lod[64];
                 snprintf(coords, sizeof coords, "\tMOV r%u.xyz, r%u.xyzx;", d, c);
                 snprintf(lod, sizeof lod, "\tMOV r%u.w, ", d);
-                bool plain2D = eol >= pos + 5 && !s.compare(eol - 5, 5, ", 2D;");
-                if (plain2D && !s.compare(previous[0], strlen(coords), coords) && !s.compare(previous[1], strlen(lod), lod)) {
+                auto endsWith = [&](const char *tail) { size_t k = strlen(tail); return eol >= pos + k && !s.compare(eol - k, k, tail); };
+                bool shape = endsWith(", 2D;") || endsWith(", 2D_ARRAY;") || endsWith(", CUBE;");
+                if (shape && !s.compare(previous[0], strlen(coords), coords) && !s.compare(previous[1], strlen(lod), lod)) {
                     size_t operand = s.find(" r", pos + strlen(op) + 1);  // the coordinate operand, after "rD,"
                     operand = s.find(" r", operand + 2);
                     std::string replacement = " r" + std::to_string(d) + "(";
@@ -5791,10 +5794,43 @@ static unsigned foldHalfVectorBitcasts(LLVMModuleRef module) {
 // Depth comparisons with gradients (sample_compare(s, coord, ref, gradient2d(...)) and its 2D-array, cube and cube-array
 // forms): instruction selection gave up on them (SelectionDAGISel::CannotYetSelect: "Compiler encountered an internal
 // error", or a crash in the in-process compiler), in kernels and fragment functions. ANGLE already avoids them on these
-// GPUs (MetalOldCompat item 11, allowSamplerCompareGradient). Each becomes the same comparison at level 0, in the level form
-// of the same AIR function, which the plugin compiles (i24): exact for shadow maps of one level, level 0 of a mipmapped
-// one, as on Kepler. The 3802 runtime compiler's forms only (a float result, no LOD clamp); others are left as they are.
-// INTEL_COMPARE_GRADIENT_FIX=0 turns it off. Test: n05.
+// GPUs (MetalOldCompat item 11, allowSamplerCompareGradient). Each becomes the same comparison in the level form of the same
+// AIR function, which the plugin compiles (i24), at the level the gradients select with a nearest mip filter (Kepler,
+// whose hardware compares at level 0 only, stays there): 2D and 2D-array levels as for integer textures (selectedLevel);
+// cubes from the derivatives of the major axis's face coordinates, (db * ma - b * dma) / (2 * ma^2) for the other two axes
+// b, scaled by the face size, as GeForceAIRCompat's gradient samples. The 3802 runtime compiler's forms only (a float
+// result, no LOD clamp); others are left as they are. INTEL_COMPARE_GRADIENT_FIX=0 turns it off. Tests: n05, i78.
+// The level a cube gradient selects (nearest mip filter), an i32: 0.5 * log2(max over dPdx, dPdy of |d(face s, t)|^2 *
+// size^2) + 0.5, clamped; a zero major axis gives NaN, which clampedLevel makes 0.
+static LLVMValueRef cubeSelectedLevel(LLVMBuilderRef b, LLVMModuleRef module, LLVMValueRef texture, const char *type, LLVMValueRef coord,
+                                      LLVMValueRef dPdx, LLVMValueRef dPdy) {
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context), f32 = LLVMFloatTypeInContext(context);
+    auto lane = [&](LLVMValueRef v, unsigned k) { return LLVMBuildExtractElement(b, v, LLVMConstInt(i32, k, false), ""); };
+    auto absolute = [&](LLVMValueRef x) {
+        return LLVMBuildSelect(b, LLVMBuildFCmp(b, 4 /* OLT */, x, LLVMConstReal(f32, 0.0), ""), LLVMBuildFSub(b, LLVMConstReal(f32, 0.0), x, ""), x, "");
+    };
+    LLVMValueRef x = lane(coord, 0), y = lane(coord, 1), z = lane(coord, 2), ax = absolute(x), ay = absolute(y), az = absolute(z);
+    LLVMValueRef isX = LLVMBuildAnd(b, LLVMBuildFCmp(b, 3 /* OGE */, ax, ay, ""), LLVMBuildFCmp(b, 3 /* OGE */, ax, az, ""), "");
+    LLVMValueRef yOverZ = LLVMBuildFCmp(b, 3 /* OGE */, ay, az, "");
+    auto pick = [&](LLVMValueRef px, LLVMValueRef py, LLVMValueRef pz) {  // the major axis's component, then the two others
+        return LLVMBuildSelect(b, isX, px, LLVMBuildSelect(b, yOverZ, py, pz, ""), "");
+    };
+    LLVMValueRef ma = pick(x, y, z), b1 = LLVMBuildSelect(b, isX, y, x, ""), b2 = pick(z, z, y);
+    LLVMValueRef twoMa2 = LLVMBuildFMul(b, LLVMConstReal(f32, 2.0), LLVMBuildFMul(b, ma, ma, ""), "");
+    LLVMValueRef size = textureSize(b, module, texture, type, 0, LLVMConstInt(i32, 0, false)), rho[2];
+    for (int k = 0; k < 2; k++) {
+        LLVMValueRef g = k ? dPdy : dPdx, gx = lane(g, 0), gy = lane(g, 1), gz = lane(g, 2);
+        LLVMValueRef dma = pick(gx, gy, gz), db1 = LLVMBuildSelect(b, isX, gy, gx, ""), db2 = pick(gz, gz, gy);
+        LLVMValueRef ds = LLVMBuildFDiv(b, LLVMBuildFSub(b, LLVMBuildFMul(b, db1, ma, ""), LLVMBuildFMul(b, b1, dma, ""), ""), twoMa2, "");
+        LLVMValueRef dt = LLVMBuildFDiv(b, LLVMBuildFSub(b, LLVMBuildFMul(b, db2, ma, ""), LLVMBuildFMul(b, b2, dma, ""), ""), twoMa2, "");
+        LLVMValueRef ss = LLVMBuildFMul(b, ds, size, ""), tt = LLVMBuildFMul(b, dt, size, "");
+        rho[k] = LLVMBuildFAdd(b, LLVMBuildFMul(b, ss, ss, ""), LLVMBuildFMul(b, tt, tt, ""), "");
+    }
+    LLVMValueRef longer = LLVMBuildSelect(b, LLVMBuildFCmp(b, 2 /* OGT */, rho[0], rho[1], ""), rho[0], rho[1], "");
+    LLVMValueRef log = LLVMBuildCall(b, declared(module, "air.fast_log2.f32", f32, f32), &longer, 1, "");
+    return clampedLevel(b, module, texture, type, LLVMBuildFAdd(b, LLVMBuildFMul(b, log, LLVMConstReal(f32, 0.5), ""), LLVMConstReal(f32, 0.5), ""));
+}
 static unsigned fixGradientCompares(LLVMModuleRef module) {
     if (disabled("INTEL_COMPARE_GRADIENT_FIX")) return 0;
     enum { kPointerKind = 12 };
@@ -5803,11 +5839,11 @@ static unsigned fixGradientCompares(LLVMModuleRef module) {
     LLVMTypeRef v2 = LLVMVectorType(f32, 2), v3 = LLVMVectorType(f32, 3), v2i = LLVMVectorType(i32, 2);
     // gradient form: (texture, sampler, i32, coord, [i32 layer,] float reference, dPdx, dPdy, [i1 has offset, int2 offset,] i32)
     // level form:    (texture, sampler, i32, coord, [i32 layer,] float reference, [i1 has offset, int2 offset,] i1 1, float 0, i32)
-    static const struct { const char *grad, *level; bool cube, array; } kForms[] = {
-        {"air.sample_compare_depth_2d_grad.f32", "air.sample_compare_depth_2d.f32", false, false},
-        {"air.sample_compare_depth_2d_array_grad.f32", "air.sample_compare_depth_2d_array.f32", false, true},
-        {"air.sample_compare_depth_cube_grad.f32", "air.sample_compare_depth_cube.f32", true, false},
-        {"air.sample_compare_depth_cube_array_grad.f32", "air.sample_compare_depth_cube_array.f32", true, true},
+    static const struct { const char *grad, *level, *type; bool cube, array; } kForms[] = {
+        {"air.sample_compare_depth_2d_grad.f32", "air.sample_compare_depth_2d.f32", "depth_2d", false, false},
+        {"air.sample_compare_depth_2d_array_grad.f32", "air.sample_compare_depth_2d_array.f32", "depth_2d_array", false, true},
+        {"air.sample_compare_depth_cube_grad.f32", "air.sample_compare_depth_cube.f32", "depth_cube", true, false},
+        {"air.sample_compare_depth_cube_array_grad.f32", "air.sample_compare_depth_cube_array.f32", "depth_cube_array", true, true},
     };
     unsigned fixed = 0;
     LLVMBuilderRef b = nullptr;
@@ -5829,9 +5865,9 @@ static unsigned fixGradientCompares(LLVMModuleRef module) {
         for (unsigned k = 0; k <= r; k++) levelParams[n++] = params[k];
         if (!form.cube) levelParams[n++] = i1, levelParams[n++] = v2i;
         levelParams[n++] = i1, levelParams[n++] = f32, levelParams[n++] = i32;
-        LLVMValueRef level = LLVMGetNamedFunction(module, form.level);
-        if (!level) level = LLVMAddFunction(module, form.level, LLVMFunctionType(f32, levelParams, n, 0));
-        else if (LLVMCountParamTypes(LLVMGetElementType(LLVMTypeOf(level))) != n) continue;
+        LLVMValueRef levelForm = LLVMGetNamedFunction(module, form.level);
+        if (!levelForm) levelForm = LLVMAddFunction(module, form.level, LLVMFunctionType(f32, levelParams, n, 0));
+        else if (LLVMCountParamTypes(LLVMGetElementType(LLVMTypeOf(levelForm))) != n) continue;
         std::vector<LLVMValueRef> calls;
         for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u))
             if (LLVMValueRef call = LLVMIsACallInst(LLVMGetUser(u)))
@@ -5843,8 +5879,11 @@ static unsigned fixGradientCompares(LLVMModuleRef module) {
             unsigned a = 0;
             for (unsigned k = 0; k <= r; k++) args[a++] = LLVMGetOperand(call, k);
             if (!form.cube) args[a++] = LLVMGetOperand(call, r + 3), args[a++] = LLVMGetOperand(call, r + 4);
-            args[a++] = LLVMConstInt(i1, 1, 0), args[a++] = LLVMConstReal(f32, 0.0), args[a++] = LLVMGetOperand(call, count - 1);
-            LLVMReplaceAllUsesWith(call, LLVMBuildCall(b, level, args, a, ""));
+            LLVMValueRef texture = LLVMGetOperand(call, 0), dPdx = LLVMGetOperand(call, r + 1), dPdy = LLVMGetOperand(call, r + 2);
+            LLVMValueRef level = form.cube ? cubeSelectedLevel(b, module, texture, form.type, LLVMGetOperand(call, 3), dPdx, dPdy)
+                                           : selectedLevel(b, module, texture, form.type, 2, dPdx, dPdy, nullptr);
+            args[a++] = LLVMConstInt(i1, 1, 0), args[a++] = LLVMBuildSIToFP(b, level, f32, ""), args[a++] = LLVMGetOperand(call, count - 1);
+            LLVMReplaceAllUsesWith(call, LLVMBuildCall(b, levelForm, args, a, ""));
             LLVMInstructionEraseFromParent(call);
             fixed++;
         }
