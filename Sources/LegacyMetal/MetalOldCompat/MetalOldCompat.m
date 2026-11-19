@@ -117,6 +117,8 @@
 //      buffer is put in the command buffer's resources first
 //  62. depth and stencil textures sampled through texture2d in ANGLE's shaders on Kepler, which gave (d, d, d, d): a mask of
 //      depth / stencil bindings at the hidden index where the Kepler adapter makes them (d, 0, 0, 1)
+//  65. copies between a buffer and several slices of a 3D texture on Kepler with a padded bytesPerImage, which put slices
+//      1+ in the padding: done a slice at a time
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -2809,6 +2811,66 @@ static void nvStencilUploadOrder(void) {
     if (definesMethod(kEncoder, withOptions))
         origNVBufferToTextureOptions = (BufferToTextureOptionsIMP)swizzle(kEncoder, withOptions, (IMP)nvBufferToTextureOptions);
 }
+// 65. 3D copies with a padded image stride on the Kepler driver. A copy between a buffer and more than one slice of a 3D
+// texture whose bytesPerImage is more than bytesPerRow x height read or wrote slice n at n x bytesPerRow x height, in
+// the padding instead of the next image: all formats, both directions (GTX 770; WebGPU CTS image_copy
+// rowsPerImage_and_bytesPerRow, all 114 failing cases 3D; Dawn copies 2D arrays a slice at a time, and those were right).
+// Such a copy is done a slice at a time. MTLSHIM_NV_VOLUME_COPY=0 turns it off. Test: n15 on the GTX 770.
+static BufferToTextureIMP origNVVolumeB2T;
+static BufferToTextureOptionsIMP origNVVolumeB2TOptions;
+static TextureToBufferIMP origNVVolumeT2B;
+static TextureToBufferOptionsIMP origNVVolumeT2BOptions;
+static BOOL nvVolumeSplit(id<MTLTexture> t, MTLSize size, NSUInteger row, NSUInteger image) {
+    return t.textureType == MTLTextureType3D && size.depth > 1 && image != row * size.height;
+}
+static void nvVolumeB2T(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInteger row, NSUInteger image, MTLSize size, id t,
+                        NSUInteger slice, NSUInteger level, MTLOrigin origin) {
+    if (!nvVolumeSplit(t, size, row, image)) return origNVVolumeB2T(self, _cmd, buffer, offset, row, image, size, t, slice, level, origin);
+    for (NSUInteger z = 0; z < size.depth; z++)
+        origNVVolumeB2T(self, _cmd, buffer, offset + z * image, row, image, MTLSizeMake(size.width, size.height, 1), t, slice, level,
+                        MTLOriginMake(origin.x, origin.y, origin.z + z));
+}
+static void nvVolumeB2TOptions(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInteger row, NSUInteger image, MTLSize size, id t,
+                               NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLBlitOption options) {
+    if (!nvVolumeSplit(t, size, row, image))
+        return origNVVolumeB2TOptions(self, _cmd, buffer, offset, row, image, size, t, slice, level, origin, options);
+    for (NSUInteger z = 0; z < size.depth; z++)
+        origNVVolumeB2TOptions(self, _cmd, buffer, offset + z * image, row, image, MTLSizeMake(size.width, size.height, 1), t, slice, level,
+                               MTLOriginMake(origin.x, origin.y, origin.z + z), options);
+}
+static void nvVolumeT2B(id self, SEL _cmd, id t, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLSize size, id buffer,
+                        NSUInteger offset, NSUInteger row, NSUInteger image) {
+    if (!nvVolumeSplit(t, size, row, image)) return origNVVolumeT2B(self, _cmd, t, slice, level, origin, size, buffer, offset, row, image);
+    for (NSUInteger z = 0; z < size.depth; z++)
+        origNVVolumeT2B(self, _cmd, t, slice, level, MTLOriginMake(origin.x, origin.y, origin.z + z), MTLSizeMake(size.width, size.height, 1),
+                        buffer, offset + z * image, row, image);
+}
+static void nvVolumeT2BOptions(id self, SEL _cmd, id t, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLSize size, id buffer,
+                               NSUInteger offset, NSUInteger row, NSUInteger image, MTLBlitOption options) {
+    if (!nvVolumeSplit(t, size, row, image))
+        return origNVVolumeT2BOptions(self, _cmd, t, slice, level, origin, size, buffer, offset, row, image, options);
+    for (NSUInteger z = 0; z < size.depth; z++)
+        origNVVolumeT2BOptions(self, _cmd, t, slice, level, MTLOriginMake(origin.x, origin.y, origin.z + z),
+                               MTLSizeMake(size.width, size.height, 1), buffer, offset + z * image, row, image, options);
+}
+static void nvVolumeCopies(void) {  // after item 53, whose buffer-to-texture hook it calls
+    static const char *const kEncoder = "NVMTLBlitCommandEncoder_KEPLER_A", *const kBufferToTexture =
+        "copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:",
+                             *const kTextureToBuffer =
+        "copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:";
+    char withOptions[256];
+    const char *setting = getenv("MTLSHIM_NV_VOLUME_COPY");
+    if (origNVVolumeB2T || (setting && !strcmp(setting, "0")) || !definesMethod(kEncoder, kBufferToTexture)) return;
+    origNVVolumeB2T = (BufferToTextureIMP)swizzle(kEncoder, kBufferToTexture, (IMP)nvVolumeB2T);
+    snprintf(withOptions, sizeof withOptions, "%soptions:", kBufferToTexture);
+    if (definesMethod(kEncoder, withOptions))
+        origNVVolumeB2TOptions = (BufferToTextureOptionsIMP)swizzle(kEncoder, withOptions, (IMP)nvVolumeB2TOptions);
+    if (definesMethod(kEncoder, kTextureToBuffer))
+        origNVVolumeT2B = (TextureToBufferIMP)swizzle(kEncoder, kTextureToBuffer, (IMP)nvVolumeT2B);
+    snprintf(withOptions, sizeof withOptions, "%soptions:", kTextureToBuffer);
+    if (definesMethod(kEncoder, withOptions))
+        origNVVolumeT2BOptions = (TextureToBufferOptionsIMP)swizzle(kEncoder, withOptions, (IMP)nvVolumeT2BOptions);
+}
 static void stencilCopies(void) {
     static const char *const kTextureToBuffer =
         "copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:";
@@ -4528,6 +4590,7 @@ static void patchDriverClasses(void) {
     mpsStatisticsWidth();
     stencilCopies();
     nvStencilUploadOrder();  // item 53
+    nvVolumeCopies();  // item 65, after item 53
     stencilViewAlignment();
     computeSamplerCompare();
     // item 29, once the Intel driver is in (WebKit's processes are named by then)
