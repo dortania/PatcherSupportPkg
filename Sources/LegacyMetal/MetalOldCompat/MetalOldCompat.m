@@ -119,6 +119,8 @@
 //      depth / stencil bindings at the hidden index where the Kepler adapter makes them (d, 0, 0, 1)
 //  65. copies between a buffer and several slices of a 3D texture on Kepler with a padded bytesPerImage, which put slices
 //      1+ in the padding: done a slice at a time
+//  66. occlusion queries on Kepler that counted no samples for a draw whose color attachments all have writeMask none and
+//      no depth/stencil attachment: the first blendable attachment is written through a blend that keeps it (item 34's)
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -1489,6 +1491,10 @@ static MTLRenderPipelineDescriptor *withEmptyFragment(id<MTLDevice> device, MTLR
 // does GPUMultisampleState.mask with a sample_mask output). Discards and buffer writes are unaffected. On the Intel GPU,
 // such pipelines with several samples or alpha-to-coverage write their first blendable color attachment through a blend
 // that keeps what's there (source x 0 + destination x 1). Test: s38. MTLSHIM_COVERAGE_WRITE=0 turns it off.
+// 66. The Kepler driver counts no samples at all for such a pipeline: a draw with every color attachment at writeMask
+// none (a blendable format: an integer one still counts) and no depth or stencil attachment leaves an occlusion query at
+// 0, at any sample count (GTX 770; WebGPU CTS occlusionQuery basic, reuse and scissor with writeMask 0). On Kepler such
+// pipelines get the same blend that keeps the attachment. MTLSHIM_NV_MASKED_DRAWS=0 turns it off. Test: n16 on the GTX 770.
 static BOOL blendableFormat(MTLPixelFormat f) {
     switch (f) {
     case MTLPixelFormatR8Uint: case MTLPixelFormatR8Sint: case MTLPixelFormatR16Uint: case MTLPixelFormatR16Sint:
@@ -1503,13 +1509,15 @@ static BOOL blendableFormat(MTLPixelFormat f) {
 }
 
 static MTLRenderPipelineDescriptor *withCoverageWrite(id<MTLDevice> device, MTLRenderPipelineDescriptor *descriptor) {
-    static Class intel;
+    static Class intel, kepler;
     if (!intel) intel = objc_getClass("MTLIGAccelDevice");
-    if (!intel || ![(id)device isKindOfClass:intel] || !descriptor || !descriptor.fragmentFunction || !descriptor.rasterizationEnabled ||
+    if (!kepler) kepler = objc_getClass("NVMTLDevice");
+    BOOL onIntel = intel && [(id)device isKindOfClass:intel], onKepler = !onIntel && kepler && [(id)device isKindOfClass:kepler];
+    if ((!onIntel && !onKepler) || !descriptor || !descriptor.fragmentFunction || !descriptor.rasterizationEnabled ||
         descriptor.depthAttachmentPixelFormat != MTLPixelFormatInvalid || descriptor.stencilAttachmentPixelFormat != MTLPixelFormatInvalid ||
-        (descriptor.rasterSampleCount <= 1 && !descriptor.alphaToCoverageEnabled))
+        (onIntel && descriptor.rasterSampleCount <= 1 && !descriptor.alphaToCoverageEnabled))  // item 66: any sample count on Kepler
         return descriptor;
-    const char *setting = getenv("MTLSHIM_COVERAGE_WRITE");
+    const char *setting = getenv(onKepler ? "MTLSHIM_NV_MASKED_DRAWS" : "MTLSHIM_COVERAGE_WRITE");
     if (setting && !strcmp(setting, "0")) return descriptor;
     int target = -1;
     for (NSUInteger i = 0; i < 8; i++) {
