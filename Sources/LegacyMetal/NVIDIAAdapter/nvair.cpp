@@ -831,6 +831,59 @@ static unsigned fixCubeReadLevels(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
+// ---- compare-exchange on threadgroup memory ----------------------------------------------------------------------------
+// atomic_compare_exchange_weak_explicit on a threadgroup atomic that failed left the expected value as it was on Kepler
+// instead of the value it found, so the old value came back as the comparand (GTX 770; WebGPU CTS atomicCompareExchangeWeak
+// compare_exchange_weak_workgroup_basic: every exchange that fails; the device-memory form is right). The plugin's
+// library body for air.atomic.local.cmpxchg.* lacks the store of the found value into *expected that its
+// air.atomic.global.cmpxchg.* body makes where the exchange fails, and marks the pointer readonly. Each such body gets the
+// store, at the start of its failure block, and loses readonly. NVAIR_LOCAL_CMPXCHG=0 turns it off.
+extern "C" {
+LLVMValueRef LLVMIsAICmpInst(LLVMValueRef);
+}
+enum { kOpBr = 2, kOpStore = 28 };  // LLVM-C's LLVMBr, LLVMStore
+
+static unsigned fixLocalCompareExchange(LLVMModuleRef module, Gen &g) {
+    static const unsigned readOnly = LLVMGetEnumAttributeKindForName("readonly", 8);
+    unsigned fixed = 0;
+    LLVMBuilderRef b = nullptr;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
+        if (!startsWith(LLVMGetValueName(f), "air.atomic.local.cmpxchg.") || LLVMIsDeclaration(f) || LLVMCountParams(f) < 3) continue;
+        LLVMValueRef expected = LLVMGetParam(f, 1);
+        LLVMValueRef cas = nullptr, loaded = nullptr;
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb && !cas; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst && !cas; inst = LLVMGetNextInstruction(inst)) {
+                if (!LLVMIsACallInst(inst)) continue;
+                LLVMValueRef callee = LLVMGetCalledValue(inst);
+                if (!callee || !startsWith(LLVMGetValueName(callee), "llvm.nvvm.atomic.cas.") || LLVMGetNumArgOperands(inst) < 3) continue;
+                LLVMValueRef cmp = LLVMGetOperand(inst, 1);
+                if (LLVMIsALoadInst(cmp) && LLVMGetOperand(cmp, 0) == expected) cas = inst, loaded = cmp;
+            }
+        if (!cas) continue;
+        // the conditional branch on (cas == loaded); its false successor is where the exchange failed
+        LLVMBasicBlockRef failure = nullptr;
+        for (LLVMUseRef u = LLVMGetFirstUse(cas); u && !failure; u = LLVMGetNextUse(u)) {
+            LLVMValueRef icmp = LLVMIsAICmpInst(LLVMGetUser(u));
+            if (!icmp || (LLVMGetOperand(icmp, 0) != loaded && LLVMGetOperand(icmp, 1) != loaded)) continue;
+            for (LLVMUseRef v = LLVMGetFirstUse(icmp); v && !failure; v = LLVMGetNextUse(v)) {
+                LLVMValueRef br = LLVMGetUser(v);
+                if (LLVMGetInstructionOpcode(br) == kOpBr && LLVMGetNumOperands(br) == 3) failure = LLVMGetSuccessor(br, 1);
+            }
+        }
+        if (!failure) continue;
+        LLVMValueRef first = LLVMGetFirstInstruction(failure);
+        if (first && LLVMGetInstructionOpcode(first) == kOpStore && LLVMGetOperand(first, 0) == cas && LLVMGetOperand(first, 1) == expected)
+            continue;  // given the store in an earlier run
+        if (!b) b = LLVMCreateBuilderInContext(g.context);
+        LLVMPositionBuilderBefore(b, first);
+        LLVMBuildStore(b, cas, expected);
+        LLVMRemoveEnumAttributeAtIndex(f, 2, readOnly);  // parameter 1
+        fixed++;
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
 // ---- gradient samples of 3D textures and cubes --------------------------------------------------------------------------
 // A sample of a 3D texture, cube or cube array with explicit gradients (gradient3d, gradientcube) in a compute kernel
 // broke the kernel on Kepler: its stores after the sample never happened (GTX 770; 2D and 2D-array gradients are right,
@@ -2090,6 +2143,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         unsigned depthChannels = disabled("NVAIR_DEPTH_CHANNELS") ? 0 : fixDepthChannels(module, g);
         (void)depthChannels;
         unsigned cubeReads = disabled("NVAIR_CUBE_READ_LEVEL") ? 0 : fixCubeReadLevels(module, g);
+        unsigned exchanges = disabled("NVAIR_LOCAL_CMPXCHG") ? 0 : fixLocalCompareExchange(module, g);
+        if (exchanges && logging()) fprintf(stderr, "[nvair] %u threadgroup compare-exchange body(ies) given the store of the value found\n", exchanges);
         if (cubeReads && logging()) fprintf(stderr, "[nvair] %u cube read body(ies) given the level's size and a mip-filtered sampler\n", cubeReads);
         unsigned defined = disabled("NVAIR_INTRINSICS") ? 0 : defineMissingIntrinsics(g);
         unsigned fixed = disabled("NVAIR_I64_FIX") ? 0 : fixWideInstructions(module, g);

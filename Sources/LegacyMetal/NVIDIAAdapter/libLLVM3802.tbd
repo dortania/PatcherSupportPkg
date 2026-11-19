@@ -141,6 +141,7 @@ exports:
                    _LLVMIsAConstantVector,
                    _LLVMIsAGetElementPtrInst,
                    _LLVMIsAGlobalVariable,
+                   _LLVMIsAICmpInst,
                    _LLVMIsAInstruction,
                    _LLVMIsALoadInst,
                    _LLVMIsAMDNode,
