@@ -884,6 +884,61 @@ static unsigned fixLocalCompareExchange(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
+// ---- atomics whose operand comes out of a divergent branch ---------------------------------------------------------------
+// The back end merges an atomic read-modify-write whose operand it takes to be the same in every lane of a warp into one
+// atomic of that value times the number of lanes (or the value once, for max / and / ...). It takes a phi to be uniform
+// when its incoming values are, missing that a phi at the join of a branch on a per-lane condition differs per lane: so
+// atomic_fetch_add(p, c ? 1u : x), with x uniform (a load from a constant address, a min / max of uniform values) and the
+// front end's branch around the load, added one lane's choice for the whole warp (GTX 770; mslfuzz.py seed 1744: a
+// threadgroup counter off by multiples of the two values' difference; device atomics alike). Each such operand (a phi,
+// or casts, arithmetic and selects over one) goes through a volatile private slot before the atomic, which the back end
+// can't take for uniform. NVAIR_ATOMIC_JOIN_FIX=0 turns it off.
+extern "C" {
+LLVMValueRef LLVMIsAPHINode(LLVMValueRef);
+LLVMValueRef LLVMIsABinaryOperator(LLVMValueRef);
+LLVMValueRef LLVMIsACastInst(LLVMValueRef);
+LLVMValueRef LLVMBuildAlloca(LLVMBuilderRef, LLVMTypeRef, const char *);
+}
+static bool reachesPhi(LLVMValueRef v, int depth) {
+    if (!v || !LLVMIsAInstruction(v)) return false;
+    if (LLVMIsAPHINode(v)) return true;
+    if (depth == 0 || !(LLVMIsABinaryOperator(v) || LLVMIsACastInst(v) || LLVMIsASelectInst(v))) return false;
+    for (unsigned i = 0, n = (unsigned)LLVMGetNumOperands(v); i < n; i++)
+        if (reachesPhi(LLVMGetOperand(v, i), depth - 1)) return true;
+    return false;
+}
+static unsigned fixAtomicJoinOperands(LLVMModuleRef module, Gen &g) {
+    static const char *const kOps[] = {"add.", "sub.", "min.", "max.", "and.", "or.", "xor.", "xchg."};
+    unsigned fixed = 0;
+    LLVMBuilderRef b = nullptr;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
+        if (LLVMIsDeclaration(f) || startsWith(LLVMGetValueName(f), "air.")) continue;  // call sites, not the library's bodies
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                if (!LLVMIsACallInst(inst) || LLVMGetNumArgOperands(inst) < 2) continue;
+                LLVMValueRef callee = LLVMGetCalledValue(inst);
+                const char *name = callee ? LLVMGetValueName(callee) : "";
+                const char *op = startsWith(name, "air.atomic.local.") ? name + 17 : startsWith(name, "air.atomic.global.") ? name + 18 : nullptr;
+                bool rmw = false;
+                for (const char *k : kOps) rmw |= op && startsWith(op, k);
+                if (!rmw) continue;
+                LLVMValueRef v = LLVMGetOperand(inst, 1);
+                if ((LLVMIsALoadInst(v) && LLVMGetVolatile(v)) || !reachesPhi(v, 6)) continue;  // already through a slot, or no join
+                if (!b) b = LLVMCreateBuilderInContext(g.context);
+                LLVMPositionBuilderBefore(b, LLVMGetFirstInstruction(LLVMGetEntryBasicBlock(f)));
+                LLVMValueRef slot = LLVMBuildAlloca(b, LLVMTypeOf(v), "nvair.atomic.operand");
+                LLVMPositionBuilderBefore(b, inst);
+                LLVMSetVolatile(LLVMBuildStore(b, v, slot), 1);
+                LLVMValueRef reloaded = LLVMBuildLoad(b, slot, "");
+                LLVMSetVolatile(reloaded, 1);
+                LLVMSetOperand(inst, 1, reloaded);
+                fixed++;
+            }
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
 // ---- signed integers to bool ------------------------------------------------------------------------------------------
 // bool2(int2) and the other vectors of signed integers gave false for INT_MIN on Kepler (GTX 770; WebGPU CTS unary
 // bool_conversion:i32, vec2-vec4; scalars and unsigned vectors are right). The plugin's library body for
@@ -2172,6 +2227,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         unsigned cubeReads = disabled("NVAIR_CUBE_READ_LEVEL") ? 0 : fixCubeReadLevels(module, g);
         unsigned exchanges = disabled("NVAIR_LOCAL_CMPXCHG") ? 0 : fixLocalCompareExchange(module, g);
         unsigned signedBools = disabled("NVAIR_SIGNED_BOOL_FIX") ? 0 : fixSignedBoolConversions(module, g);
+        unsigned joinAtomics = disabled("NVAIR_ATOMIC_JOIN_FIX") ? 0 : fixAtomicJoinOperands(module, g);
+        if (joinAtomics && logging()) fprintf(stderr, "[nvair] %u atomic operand(s) from a branch join put through a private slot\n", joinAtomics);
         if (signedBools && logging()) fprintf(stderr, "[nvair] %u sign mask(s) taken out of signed-to-bool conversions\n", signedBools);
         if (exchanges && logging()) fprintf(stderr, "[nvair] %u threadgroup compare-exchange body(ies) given the store of the value found\n", exchanges);
         if (cubeReads && logging()) fprintf(stderr, "[nvair] %u cube read body(ies) given the level's size and a mip-filtered sampler\n", cubeReads);
