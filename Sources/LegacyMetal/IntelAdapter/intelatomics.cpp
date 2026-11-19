@@ -3365,7 +3365,9 @@ static unsigned exact64BitMultiplies(LLVMModuleRef module) {
 // were right (the MacBookPro11,5 session's 64-bit fuzzing, LONG=1 seed 6). An extractelement or insertelement whose
 // index comes (through casts, masks and arithmetic) from a 64-bit div / rem becomes selects on the index. So does one
 // from a 64-bit shift of a constant by a variable, w[(uint)(4151055293ul >> s) & 3]: the stock back end crashes in its
-// DAG legalizer on that index (mslfuzz2 LONG=1 seed 378; a variable shifted, or a select on the index, compiles).
+// DAG legalizer on that index (mslfuzz2 LONG=1 seed 378; a variable shifted, or a select on the index, compiles). It runs
+// again after the integer-function fold, which can make such a shift's base constant: Ivy Bridge's compiler made the
+// insert of w[(uint)((long)(1u | extract_bits(v, 0u, 0u)) >> s) & 3u] = 1u a constant one at lane 1 (i59).
 // INTEL_WIDE_DIV_INDEX_FIX=0 turns it off.
 static bool fromWideDivision(LLVMValueRef v, int depth = 0) {
     if (depth > 6 || !LLVMIsAInstruction(v)) return false;
@@ -6045,6 +6047,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] %u signed division(s) by a power of two done with shifts\n", n);
         n = foldConstantCalls(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u integer function call(s) of constants folded\n", n);
+        if (n && (n = selectWideDivisionLanes(module)) && logging())  // the fold can leave a shift of a constant as an index (i59)
+            fprintf(stderr, "[inteltex] %u vector lane(s) picked by a 64-bit shift of a folded constant done with selects\n", n);
         n = widenNarrowMinMax(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u 8/16-bit min / max / clamp call(s) done on 32-bit lanes\n", n);
         n = foldConstantSaturation(module);
