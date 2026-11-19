@@ -208,7 +208,7 @@ LLVMValueRef LLVMBuildURem(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const cha
 LLVMValueRef LLVMBuildNeg(LLVMBuilderRef, LLVMValueRef, const char *);
 LLVMValueRef LLVMBuildNot(LLVMBuilderRef, LLVMValueRef, const char *);
 LLVMTypeRef LLVMStructTypeInContext(LLVMContextRef, LLVMTypeRef *, unsigned, int);
-enum { LLVMVectorTypeKind = 13 };
+enum { LLVMArrayTypeKind = 11, LLVMVectorTypeKind = 13 };
 unsigned LLVMGetVectorSize(LLVMTypeRef);
 LLVMValueRef LLVMGetUndef(LLVMTypeRef);
 LLVMValueRef LLVMBuildExtractElement(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
@@ -2202,6 +2202,86 @@ static void logBareIntrinsics(LLVMModuleRef module) {
     }
 }
 
+// ---- private arrays: loads at a constant index ------------------------------------------------------------------------
+// The back end took two loads of the same element of a private array at a constant index for one value when the array is
+// also written at a variable index between them: with v5 = pc[0] before a loop that loads pc[0] again and stores pc[i],
+// v5 came out as the loop's last pc[0] (as if reloaded after it), even with every access to the array volatile
+// (mslfuzz2.py seed 2136 on the GTX 770; the same kernel with the loop's load at pc[1], or the first load at an index the
+// back end can't fold, is right). In kernels, each load from a private array that is also accessed at a variable index
+// gets such an index: the constant plus ((the kernel's thread position + k) >> 31), always 0, a different k for each
+// load so that no two of them look alike (a kernel without a
+// thread-position argument is left alone: the back end has no special register read for an adapter to add).
+// NVAIR_PRIVATE_CONSTANT_LOAD_FIX=0 turns it off.
+static unsigned fixPrivateConstantLoads(LLVMModuleRef module, Gen &g) {
+    std::vector<LLVMValueRef> entries(LLVMGetNamedMetadataNumOperands(module, "air.kernel"));
+    if (entries.empty()) return 0;
+    LLVMGetNamedMetadataOperands(module, "air.kernel", entries.data());
+    unsigned fixed = 0;
+    LLVMBuilderRef b = nullptr;
+    for (LLVMValueRef entry : entries) {
+        std::vector<LLVMValueRef> parts = metadataOperands(entry);
+        LLVMValueRef f = parts.empty() ? nullptr : parts[0];
+        if (!f || LLVMIsDeclaration(f) || !LLVMGetFirstBasicBlock(f)) continue;
+        // the kernel's thread position (in the threadgroup, or the grid) to make the opaque 0 from; none: left alone
+        LLVMValueRef position = nullptr;
+        for (LLVMValueRef arg : parts.size() > 2 ? metadataOperands(parts[2]) : std::vector<LLVMValueRef>()) {
+            std::vector<LLVMValueRef> fields = metadataOperands(arg);
+            if (fields.size() < 2 || !LLVMIsAConstantInt(fields[0]) || LLVMConstIntGetZExtValue(fields[0]) >= LLVMCountParams(f)) continue;
+            if (isString(fields[1], "air.thread_position_in_threadgroup") || isString(fields[1], "air.thread_index_in_threadgroup") ||
+                isString(fields[1], "air.thread_position_in_grid")) {
+                position = LLVMGetParam(f, (unsigned)LLVMConstIntGetZExtValue(fields[0]));
+                break;
+            }
+        }
+        if (!position) continue;
+        LLVMBasicBlockRef first = LLVMGetEntryBasicBlock(f);
+        LLVMValueRef zero = nullptr;  // (position.x >> 31) as i64, made at the first array that needs it
+        for (LLVMValueRef a = LLVMGetFirstInstruction(first); a; a = LLVMGetNextInstruction(a)) {
+            if (!LLVMIsAAllocaInst(a) || LLVMGetTypeKind(LLVMGetElementType(LLVMTypeOf(a))) != LLVMArrayTypeKind) continue;
+            // the array's element GEPs [0, i]: one with a variable i makes the constant ones candidates
+            std::vector<LLVMValueRef> constant;
+            bool variable = false;
+            for (LLVMUseRef u = LLVMGetFirstUse(a); u; u = LLVMGetNextUse(u)) {
+                LLVMValueRef gep = LLVMIsAGetElementPtrInst(LLVMGetUser(u));
+                if (!gep || LLVMGetNumOperands(gep) != 3 || LLVMGetOperand(gep, 0) != a) continue;
+                LLVMValueRef i0 = LLVMGetOperand(gep, 1), i1 = LLVMGetOperand(gep, 2);
+                if (!LLVMIsAConstantInt(i0) || LLVMConstIntGetZExtValue(i0) != 0) continue;
+                if (LLVMIsAConstantInt(i1)) constant.push_back(gep);
+                else variable = true;
+            }
+            if (!variable || constant.empty()) continue;
+            for (LLVMValueRef gep : constant) {
+                std::vector<LLVMValueRef> loads;
+                for (LLVMUseRef u = LLVMGetFirstUse(gep); u; u = LLVMGetNextUse(u)) {
+                    LLVMValueRef load = LLVMIsALoadInst(LLVMGetUser(u));
+                    if (load && LLVMGetOperand(load, 0) == gep) loads.push_back(load);
+                }
+                for (LLVMValueRef load : loads) {
+                    if (!b) b = LLVMCreateBuilderInContext(g.context);
+                    if (!zero) {  // position.x, once
+                        LLVMValueRef at = LLVMGetFirstInstruction(first);
+                        while (at && LLVMIsAAllocaInst(at)) at = LLVMGetNextInstruction(at);
+                        LLVMPositionBuilderBefore(b, at);
+                        LLVMValueRef x = position;
+                        if (LLVMGetTypeKind(LLVMTypeOf(x)) == LLVMVectorTypeKind) x = LLVMBuildExtractElement(b, x, LLVMConstInt(g.i32, 0, 0), "");
+                        if (!isInt(LLVMTypeOf(x), 32)) break;
+                        zero = x;
+                    }
+                    // each load its own 0, (position.x + k) >> 31: one shared 0 would leave the addresses equal to the back end
+                    LLVMPositionBuilderBefore(b, load);
+                    LLVMValueRef own = LLVMBuildLShr(b, LLVMBuildAdd(b, zero, LLVMConstInt(g.i32, fixed + 1, 0), ""), LLVMConstInt(g.i32, 31, 0), "");
+                    LLVMValueRef index[2] = {LLVMGetOperand(gep, 1),
+                                             LLVMBuildAdd(b, LLVMGetOperand(gep, 2), LLVMBuildZExt(b, own, LLVMInt64TypeInContext(g.context), ""), "")};
+                    LLVMSetOperand(load, 0, LLVMBuildGEP(b, a, index, 2, ""));
+                    fixed++;
+                }
+            }
+        }
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
 static int hookedRun(void *self, LLVMModuleRef module) {
 #ifdef NVAIR_INTERPOSE  // the test build catches every PassManager::run in the process: act for the GeForce plugin's only
     {
@@ -2228,6 +2308,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         unsigned exchanges = disabled("NVAIR_LOCAL_CMPXCHG") ? 0 : fixLocalCompareExchange(module, g);
         unsigned signedBools = disabled("NVAIR_SIGNED_BOOL_FIX") ? 0 : fixSignedBoolConversions(module, g);
         unsigned joinAtomics = disabled("NVAIR_ATOMIC_JOIN_FIX") ? 0 : fixAtomicJoinOperands(module, g);
+        unsigned constantLoads = disabled("NVAIR_PRIVATE_CONSTANT_LOAD_FIX") ? 0 : fixPrivateConstantLoads(module, g);
+        if (constantLoads && logging()) fprintf(stderr, "[nvair] %u constant-index private load(s) given an opaque index\n", constantLoads);
         if (joinAtomics && logging()) fprintf(stderr, "[nvair] %u atomic operand(s) from a branch join put through a private slot\n", joinAtomics);
         if (signedBools && logging()) fprintf(stderr, "[nvair] %u sign mask(s) taken out of signed-to-bool conversions\n", signedBools);
         if (exchanges && logging()) fprintf(stderr, "[nvair] %u threadgroup compare-exchange body(ies) given the store of the value found\n", exchanges);
