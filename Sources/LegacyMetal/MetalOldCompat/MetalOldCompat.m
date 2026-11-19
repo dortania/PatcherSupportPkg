@@ -131,7 +131,8 @@
 //      parts of other slices of level 0 wrong: an empty pass at level 0 slice 0 follows each
 //  69. triangles across the edge of the viewport on Kepler, which the driver clipped there (a guard band no bigger than
 //      the viewport) and drew as a fan, the pixels on its seams running the fragment function once per part with part
-//      of the samples: the guard band 256 times the viewport, as on other drivers for this hardware
+//      of the samples: the guard band 256 times the viewport, as on other drivers for this hardware; and wide points
+//      centered outside the viewport, which it culled whole: the point guard band as wide
 //  70. reversed viewport depth ranges (znear above zfar) on Kepler, which the driver mapped as if in order: the z scale
 //      and translate it keeps for such a viewport are set to zfar - znear and znear
 //  71. the sample positions Metal reports for Kepler's 2x and 8x patterns, which listed the standard positions in another
@@ -4725,13 +4726,18 @@ static void clipSetScissors(__unsafe_unretained id self, SEL _cmd, const MTLScis
 // it (still done for each triangle that crosses the near or far plane). The value is an immediate in the driver's code,
 // the same instruction pair in 10 places for each of the two; those 20 bytes are patched once the driver is in, if all
 // 20 are there. MTLSHIM_NV_GUARD_BAND=0 turns it off.
+// Bit 10 does the same for the line and point cull guard band: a point whose center was outside the viewport was culled,
+// with the part of a wide point that's inside (Khronos WebGL clipping-wide-points: 8-pixel points centered just past an
+// edge drew nothing; nouveau leaves it clear too). It's cleared in the same immediates; MTLSHIM_NV_POINT_GUARD_BAND=0
+// keeps it.
 static void keplerGuardBand(void) {
     static BOOL done;
-    const char *setting = getenv("MTLSHIM_NV_GUARD_BAND");
+    const char *setting = getenv("MTLSHIM_NV_GUARD_BAND"), *pointSetting = getenv("MTLSHIM_NV_POINT_GUARD_BAND");
+    BOOL geometry = !(setting && !strcmp(setting, "0")), points = !(pointSetting && !strcmp(pointSetting, "0"));
     Class device = objc_getClass("NVMTLDevice");
     Dl_info info;
     static const char *const kRender = "NVMTLRenderCommandEncoder_KEPLER_A";
-    if (done || (setting && !strcmp(setting, "0")) || !device || !dladdr((__bridge const void *)device, &info) ||
+    if (done || (!geometry && !points) || !device || !dladdr((__bridge const void *)device, &info) ||
         !strstr(info.dli_fname, "/GeForceMTLDriver.bundle/") || !definesMethod(kRender, "setViewport:") ||
         !definesMethod(kRender, "setViewports:count:") || !definesMethod(kRender, "setScissorRect:") ||
         !definesMethod(kRender, "setScissorRects:count:"))
@@ -4755,7 +4761,8 @@ static void keplerGuardBand(void) {
     for (int i = 0; i < 20; i++) {
         vm_address_t page = (vm_address_t)(sites[i] + 1) & ~(vm_address_t)(vm_page_size - 1);
         if (vm_protect(mach_task_self(), page, vm_page_size * 2, FALSE, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY) != KERN_SUCCESS) continue;
-        sites[i][1] &= (unsigned char)~0x80;  // 0x49d -> 0x41d, 0xc9d -> 0xc1d
+        if (geometry) sites[i][1] &= (unsigned char)~0x80;  // 0x49d -> 0x41d, 0xc9d -> 0xc1d
+        if (points) sites[i][2] &= (unsigned char)~0x04;    // and -> 0x01d, 0x81d
         vm_protect(mach_task_self(), page, vm_page_size * 2, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
         patched++;
     }
