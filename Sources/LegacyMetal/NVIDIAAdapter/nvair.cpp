@@ -884,6 +884,33 @@ static unsigned fixLocalCompareExchange(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
+// ---- signed integers to bool ------------------------------------------------------------------------------------------
+// bool2(int2) and the other vectors of signed integers gave false for INT_MIN on Kepler (GTX 770; WebGPU CTS unary
+// bool_conversion:i32, vec2-vec4; scalars and unsigned vectors are right). The plugin's library body for
+// air.convert.u.v<n>i1.s.v<n>i<w> tests each lane as (x & (2^(w-1) - 1)) != 0, which is how a float lane is tested (so that
+// -0.0 is false), not an integer one. Each such and in those bodies is replaced by the value it masks: x != 0.
+// NVAIR_SIGNED_BOOL_FIX=0 turns it off.
+static unsigned fixSignedBoolConversions(LLVMModuleRef module, Gen &g) {
+    (void)g;
+    unsigned fixed = 0;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
+        const char *name = LLVMGetValueName(f);
+        if (!startsWith(name, "air.convert.u.") || !strstr(name, "i1.s.") || LLVMIsDeclaration(f)) continue;
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                if (LLVMGetInstructionOpcode(inst) != 23 /* LLVMAnd */ || !LLVMGetFirstUse(inst)) continue;
+                LLVMValueRef x = LLVMGetOperand(inst, 0), mask = LLVMGetOperand(inst, 1);
+                LLVMTypeRef t = LLVMTypeOf(inst);
+                if (LLVMGetTypeKind(t) != LLVMIntegerTypeKind || !LLVMIsAConstantInt(mask)) continue;
+                unsigned width = LLVMGetIntTypeWidth(t);
+                if (width < 2 || width > 64 || LLVMConstIntGetZExtValue(mask) != (width == 64 ? 0x7fffffffffffffffull : (1ull << (width - 1)) - 1)) continue;
+                LLVMReplaceAllUsesWith(inst, x);
+                fixed++;
+            }
+    }
+    return fixed;
+}
+
 // ---- gradient samples of 3D textures and cubes --------------------------------------------------------------------------
 // A sample of a 3D texture, cube or cube array with explicit gradients (gradient3d, gradientcube) in a compute kernel
 // broke the kernel on Kepler: its stores after the sample never happened (GTX 770; 2D and 2D-array gradients are right,
@@ -2144,6 +2171,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         (void)depthChannels;
         unsigned cubeReads = disabled("NVAIR_CUBE_READ_LEVEL") ? 0 : fixCubeReadLevels(module, g);
         unsigned exchanges = disabled("NVAIR_LOCAL_CMPXCHG") ? 0 : fixLocalCompareExchange(module, g);
+        unsigned signedBools = disabled("NVAIR_SIGNED_BOOL_FIX") ? 0 : fixSignedBoolConversions(module, g);
+        if (signedBools && logging()) fprintf(stderr, "[nvair] %u sign mask(s) taken out of signed-to-bool conversions\n", signedBools);
         if (exchanges && logging()) fprintf(stderr, "[nvair] %u threadgroup compare-exchange body(ies) given the store of the value found\n", exchanges);
         if (cubeReads && logging()) fprintf(stderr, "[nvair] %u cube read body(ies) given the level's size and a mip-filtered sampler\n", cubeReads);
         unsigned defined = disabled("NVAIR_INTRINSICS") ? 0 : defineMissingIntrinsics(g);
