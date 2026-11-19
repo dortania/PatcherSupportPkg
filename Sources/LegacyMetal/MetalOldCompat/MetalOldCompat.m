@@ -4634,6 +4634,85 @@ static void keplerResolveResidency(void) {
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Kepler counter resolves: result buffer made resident\n");
 }
 
+// Item 69's other half. The driver keeps drawing inside the viewport only through that tight guard band: the pixel clip
+// rectangle it gives the GPU (VIEWPORT_HORIZ / VERT, methods 0xc00 / 0xc04) is the render target, not the viewport (nouveau
+// sets it to the viewport). With the guard band widened, a triangle or wide point reaching past a viewport smaller than
+// the target drew outside the viewport (a full-screen triangle through an 8x8 viewport in a 16x16 target: 44 pixels
+// outside). So the scissor rectangles the driver gets are the app's (none: unbounded) intersected with the viewports',
+// the pixels whose centers are inside; a fragment outside its viewport is scissored as clipping would have removed it.
+typedef struct {
+    MTLViewport viewports[16];
+    MTLScissorRect scissors[16];
+    NSUInteger viewportCount, scissorCount;  // 0: not set by the app
+} NVClipState;
+typedef void (*ClipSetViewportIMP)(id, SEL, MTLViewport);
+typedef void (*ClipSetViewportsIMP)(id, SEL, const MTLViewport *, NSUInteger);
+typedef void (*ClipSetScissorIMP)(id, SEL, MTLScissorRect);
+typedef void (*ClipSetScissorsIMP)(id, SEL, const MTLScissorRect *, NSUInteger);
+static ClipSetViewportIMP origClipSetViewport;
+static ClipSetViewportsIMP origClipSetViewports;
+static ClipSetScissorIMP origClipSetScissor;
+static ClipSetScissorsIMP origClipSetScissors;
+static NVClipState *nvClipState(__unsafe_unretained id encoder) {
+    static const void *const kKey = &kKey;
+    NSMutableData *data = objc_getAssociatedObject(encoder, kKey);
+    if (!data) {
+        data = [NSMutableData dataWithLength:sizeof(NVClipState)];
+        objc_setAssociatedObject(encoder, kKey, data, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    return data.mutableBytes;
+}
+static void nvClipSpan(double origin, double size, NSUInteger *lo, NSUInteger *hi) {  // the pixels whose centers are inside
+    double a = ceil(origin - 0.5), b = ceil(origin + size - 0.5);
+    a = fmin(fmax(a, 0), 16384), b = fmin(fmax(b, a), 16384);
+    *lo = (NSUInteger)a, *hi = (NSUInteger)b;
+}
+static void nvClipApply(__unsafe_unretained id self, const NVClipState *st) {
+    MTLScissorRect out[16];
+    NSUInteger n = st->viewportCount;
+    for (NSUInteger i = 0; i < n; i++) {
+        NSUInteger x0, x1, y0, y1;
+        nvClipSpan(st->viewports[i].originX, st->viewports[i].width, &x0, &x1);
+        nvClipSpan(st->viewports[i].originY, st->viewports[i].height, &y0, &y1);
+        if (st->scissorCount) {  // a single app rectangle serves every viewport, as the driver repeats slot 0
+            MTLScissorRect r = st->scissors[i < st->scissorCount ? i : st->scissorCount - 1];
+            x0 = MAX(x0, r.x), y0 = MAX(y0, r.y), x1 = MIN(x1, r.x + r.width), y1 = MIN(y1, r.y + r.height);
+        }
+        out[i] = (MTLScissorRect){x0, y0, x1 > x0 ? x1 - x0 : 0, y1 > y0 ? y1 - y0 : 0};
+    }
+    if (n == 1) NVO(origClipSetScissor)(self, @selector(setScissorRect:), out[0]);
+    else if (n > 1) NVO(origClipSetScissors)(self, @selector(setScissorRects:count:), out, n);
+}
+static void clipSetViewport(__unsafe_unretained id self, SEL _cmd, MTLViewport viewport) {
+    NVO(origClipSetViewport)(self, _cmd, viewport);
+    NVClipState *st = nvClipState(self);
+    st->viewports[0] = viewport, st->viewportCount = 1;
+    nvClipApply(self, st);
+}
+static void clipSetViewports(__unsafe_unretained id self, SEL _cmd, const MTLViewport *viewports, NSUInteger count) {
+    NVO(origClipSetViewports)(self, _cmd, viewports, count);
+    if (!viewports || !count) return;
+    NVClipState *st = nvClipState(self);
+    st->viewportCount = MIN(count, (NSUInteger)16);
+    memcpy(st->viewports, viewports, st->viewportCount * sizeof *viewports);
+    nvClipApply(self, st);
+}
+static void clipSetScissor(__unsafe_unretained id self, SEL _cmd, MTLScissorRect rect) {
+    NVClipState *st = nvClipState(self);
+    st->scissors[0] = rect, st->scissorCount = 1;
+    if (st->viewportCount) nvClipApply(self, st);
+    else NVO(origClipSetScissor)(self, _cmd, rect);
+}
+static void clipSetScissors(__unsafe_unretained id self, SEL _cmd, const MTLScissorRect *rects, NSUInteger count) {
+    NVClipState *st = nvClipState(self);
+    if (rects && count) {
+        st->scissorCount = MIN(count, (NSUInteger)16);
+        memcpy(st->scissors, rects, st->scissorCount * sizeof *rects);
+    }
+    if (st->viewportCount && rects && count) nvClipApply(self, st);
+    else NVO(origClipSetScissors)(self, _cmd, rects, count);
+}
+
 // 69. Triangles across the edge of the viewport on the Kepler driver. The driver sets SET_VIEWPORT_CLIP_CONTROL (method
 // 0x193c) to 0x49d with its depth clip mode's bits (0xc9d before a viewport is set), and bit 7 of that makes the
 // geometry guard band the viewport itself: a triangle that crosses the viewport's edge is clipped to it, and the
@@ -4651,9 +4730,12 @@ static void keplerGuardBand(void) {
     const char *setting = getenv("MTLSHIM_NV_GUARD_BAND");
     Class device = objc_getClass("NVMTLDevice");
     Dl_info info;
+    static const char *const kRender = "NVMTLRenderCommandEncoder_KEPLER_A";
     if (done || (setting && !strcmp(setting, "0")) || !device || !dladdr((__bridge const void *)device, &info) ||
-        !strstr(info.dli_fname, "/GeForceMTLDriver.bundle/"))
-        return;
+        !strstr(info.dli_fname, "/GeForceMTLDriver.bundle/") || !definesMethod(kRender, "setViewport:") ||
+        !definesMethod(kRender, "setViewports:count:") || !definesMethod(kRender, "setScissorRect:") ||
+        !definesMethod(kRender, "setScissorRects:count:"))
+        return;  // without the scissor half the wider guard bands would draw outside smaller viewports
     done = YES;
     unsigned long size = 0;
     unsigned char *text = getsectiondata((const struct mach_header_64 *)info.dli_fbase, "__TEXT", "__text", &size);
@@ -4676,6 +4758,13 @@ static void keplerGuardBand(void) {
         sites[i][1] &= (unsigned char)~0x80;  // 0x49d -> 0x41d, 0xc9d -> 0xc1d
         vm_protect(mach_task_self(), page, vm_page_size * 2, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
         patched++;
+    }
+    const char *scissor = getenv("MTLSHIM_NV_VIEWPORT_SCISSOR");  // =0 only to see what the scissor half prevents
+    if (patched && !(scissor && !strcmp(scissor, "0"))) {
+        origClipSetViewport = (ClipSetViewportIMP)keplerSwizzle(kRender, "setViewport:", (IMP)clipSetViewport);
+        origClipSetViewports = (ClipSetViewportsIMP)keplerSwizzle(kRender, "setViewports:count:", (IMP)clipSetViewports);
+        origClipSetScissor = (ClipSetScissorIMP)keplerSwizzle(kRender, "setScissorRect:", (IMP)clipSetScissor);
+        origClipSetScissors = (ClipSetScissorsIMP)keplerSwizzle(kRender, "setScissorRects:count:", (IMP)clipSetScissors);
     }
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Kepler guard band: viewport clip control patched at %d of 20 places\n", patched);
 }
@@ -4924,8 +5013,8 @@ static void patchDriverClasses(void) {
     keplerVisibilitySums();  // item 59
     keplerZeroBuffers();  // item 60
     keplerResolveResidency();  // item 61
+    keplerReversedDepth();  // item 70, before item 69's viewport hooks: it checks the driver's own setters
     keplerGuardBand();  // item 69
-    keplerReversedDepth();  // item 70
     keplerSamplePositions();  // item 71
     mpsStatisticsWidth();
     stencilCopies();
