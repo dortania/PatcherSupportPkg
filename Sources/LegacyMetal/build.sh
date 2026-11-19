@@ -102,7 +102,7 @@ weak AMDShared-GCN-25 AMDShared-GCN-25 @loader_path/AMDTextureAtomics.dylib
 weak libMTLIntelCompilerPlugin.dylib libMTLIntelCompilerPlugin.dylib @loader_path/IntelTextureAtomics.dylib
 weak libMTLIntelCompilerPlugin-IVB.dylib libMTLIntelCompilerPlugin-IVB.dylib @loader_path/IntelTextureAtomics.dylib
 for v in $BRONZE_VARIANTS; do weak "AMDMTLBronzeDriver-$v" "AMDMTLBronzeDriver-$v" @loader_path/AMDBronzeCompat.dylib; done
-for v in $BRONZE_VARIANTS; do python3 -I "$HERE/tools/fix_bronze_viewport_depth.py" "$B/AMDMTLBronzeDriver-$v"; done  # reversed viewport depth
+for v in $BRONZE_VARIANTS; do python3 -I "$HERE/tools/fix_bronze_driver.py" "$B/AMDMTLBronzeDriver-$v"; done  # viewport depth, wide points
 weak GeForceAIRPlugin GeForceAIRPlugin @loader_path/GeForceAIRCompat.dylib
 python3 -I "$HERE/tools/make_coreimage_fix.py" "$B/stock/CoreImageOld.dylib" "$B/CoreImageOld.dylib"
 cd "$B"
