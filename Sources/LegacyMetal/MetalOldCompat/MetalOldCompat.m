@@ -1828,14 +1828,20 @@ static BOOL clearsNarrowly(MTLRenderPassColorAttachmentDescriptor *a, id<MTLText
 
 // 24. The same driver doesn't clear R8Unorm or RG8Unorm targets at mip level 1 or higher at all (fast or slow clear;
 // draws to those levels work, as do level 0 and the other formats, R8Uint and RG8Snorm included; WebGPU CTS texture_zero
-// r8unorm/rg8unorm). Such a clear also goes through a temporary texture, of the level's size.
+// r8unorm/rg8unorm). Such a clear also goes through a temporary texture, of the level's size. So does one of a
+// BGRA8Unorm(_sRGB) 2D or cube texture at level 2 or higher (Ivy Bridge and Haswell) when those levels don't start on a 16-texel
+// column of the mip layout, i.e. level 1's width rounded up to 4 isn't a multiple of 16 (base widths 8-24, 40-56, 80,
+// 100...): nothing landed there, first clear or not, while RGBA8 and the other formats, blits and draws were right.
 static BOOL clearsNarrowFormatMip(MTLRenderPassColorAttachmentDescriptor *a, id<MTLTexture> *root, NSUInteger *level, NSUInteger *slice) {
     if (!a.texture || a.loadAction != MTLLoadActionClear || a.texture.sampleCount > 1) return NO;
     *level = a.level;
     *slice = a.slice;
     *root = rootTexture(a.texture, level, slice);
     MTLPixelFormat format = (*root).pixelFormat;
-    return *level > 0 && (format == MTLPixelFormatR8Unorm || format == MTLPixelFormatRG8Unorm);
+    if (*level > 0 && (format == MTLPixelFormatR8Unorm || format == MTLPixelFormatRG8Unorm)) return YES;
+    if (*level < 2 || (format != MTLPixelFormatBGRA8Unorm && format != MTLPixelFormatBGRA8Unorm_sRGB) || (*root).textureType == MTLTextureType3D) return NO;
+    NSUInteger column = (MAX((*root).width >> 1, 1) + 3) & ~(NSUInteger)3;  // where levels 2+ start: level 1's width, aligned
+    return column % 16 != 0;
 }
 
 static void clearThroughTemporary(id<MTLCommandBuffer> commandBuffer, MTLRenderPassColorAttachmentDescriptor *a, id<MTLTexture> root,
