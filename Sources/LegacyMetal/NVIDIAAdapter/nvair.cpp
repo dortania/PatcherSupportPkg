@@ -49,7 +49,9 @@
 // Cube array indices below 0 raised to 0, as AMDAdapter does. NVAIR_CUBE_ARRAY_FIX=0.
 //
 // Gradient samples of 3D textures and cubes in compute kernels (which broke the kernel) done at the level they pick.
-// NVAIR_GRADIENT_FIX=0.
+// NVAIR_GRADIENT_FIX=0. Cube gradient samples in vertex and fragment functions (the hardware's level was wrong for
+// gradients along the major axis) the same way, NVAIR_CUBE_GRADIENT_FIX=0; so are 3D ones in vertex functions (deqp's
+// isampler3d_vertex cases in ANGLE's shaders), NVAIR_VERTEX_3D_GRADIENT_FIX=0.
 //
 // Depth comparisons at a computed level or bias (which returned the depth) done at level 0 / the implicit level.
 // NVAIR_COMPARE_LEVEL_FIX=0.
@@ -974,8 +976,21 @@ static unsigned fixSignedBoolConversions(LLVMModuleRef module, Gen &g) {
 // unit would pick (Vulkan's and OpenGL's formula, without anisotropy): 3D, lod = log2 of the longer of the two gradients
 // scaled by the size of level 0; cubes, the same on the derivatives of the face coordinates of the major axis,
 // (db * ma - b * dma) / (2 * ma^2) for the other two axes b, scaled by the face size. Sizes from llvm.nvvm.txq.*.
-// Compute modules only (!air.kernel): fragment functions keep the hardware's own level, with anisotropy.
-// NVAIR_GRADIENT_FIX=0 turns it off.
+// NVAIR_GRADIENT_FIX=0 turns it off for compute modules (!air.kernel).
+// Cube gradients in vertex and fragment functions get the same level: the hardware's was wrong there whenever the
+// gradients had a component along the major axis. Its level for a gradient along the major axis rose by about 0.64 per
+// doubling and stopped at level 2, and diagonal ones drifted too (switches at 0.67, 1.80, 3.14 for 0.5, 1.5, 2.5),
+// though gradients within the face were exact. That is the signature of the difference of the face coordinates of p + d
+// and p, which saturates as d grows, instead of their derivative (work/grad/grad3.m; Khronos WebGL 2 deqp texturegrad
+// isamplercube_vertex and _fragment). NVAIR_CUBE_GRADIENT_FIX=0 turns the cube part off.
+// 3D gradients in vertex functions get it too: in ANGLE's vertex shaders the hardware's 3D gradient sample failed deqp's
+// isampler3d_vertex cases (texturegrad, texturegradoffset, textureprojgrad, textureprojgradoffset), which pass with the
+// explicit level; natively the same samples (deqp's 93x93 grid of coordinates and gradients, RGBA8Sint, a runtime
+// sampler, attributes from a buffer) matched the explicit level at every vertex, and so did an opaque x1 on ANGLE's
+// gradients, so what differs in ANGLE's shaders isn't found. Where the hardware is right the level is the same (vertex
+// functions lose anisotropy for these samples). NVAIR_VERTEX_3D_GRADIENT_FIX=0 turns it off. 3D gradients in fragment
+// functions keep the hardware's level, with anisotropy (within 0.11 of the exact level for diagonal gradients, a
+// formula OpenGL allows; deqp's fragment cases pass).
 extern "C" {
 LLVMValueRef LLVMBuildFMul(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
 LLVMValueRef LLVMBuildFAdd(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
@@ -1060,7 +1075,10 @@ static unsigned fixGradientSamples(LLVMModuleRef module, Gen &g) {
         {"3d.grad.", "3d", false}, {"3d.offset.grad.", "3d", false}, {"cube.grad.", "cube", true}, {"cube.array.grad.", "cube.array", true},
     };
     static const char kPrefix[] = "llvm.nvvm.sample.tex.";
-    if (!LLVMGetNamedMetadataNumOperands(module, "air.kernel")) return 0;  // fragment and vertex functions are right
+    bool compute = LLVMGetNamedMetadataNumOperands(module, "air.kernel") != 0;
+    bool vertex3d = !compute && LLVMGetNamedMetadataNumOperands(module, "air.vertex") && !disabled("NVAIR_VERTEX_3D_GRADIENT_FIX");
+    if (compute ? disabled("NVAIR_GRADIENT_FIX") : disabled("NVAIR_CUBE_GRADIENT_FIX") && !vertex3d) return 0;
+    bool cubes = compute || !disabled("NVAIR_CUBE_GRADIENT_FIX");
     std::vector<LLVMValueRef> functions;
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
         if (!strncmp(LLVMGetValueName(f), kPrefix, sizeof kPrefix - 1) && strstr(LLVMGetValueName(f), ".grad.") && LLVMGetFirstUse(f))
@@ -1072,7 +1090,7 @@ static unsigned fixGradientSamples(LLVMModuleRef module, Gen &g) {
         int k = -1;
         for (unsigned i = 0; i < sizeof kKinds / sizeof *kKinds && k < 0; i++)
             if (!strncmp(rest, kKinds[i].kind, strlen(kKinds[i].kind))) k = (int)i;
-        if (k < 0) continue;
+        if (k < 0 || (kKinds[k].cube ? !cubes : !compute && !vertex3d)) continue;  // fragment functions: cubes only
         // the .lod form: the same parameters with the two gradients replaced by one float level
         std::string name = LLVMGetValueName(f);
         name.replace(name.find(".grad."), 6, ".lod.");
@@ -2321,7 +2339,7 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (bools && logging()) fprintf(stderr, "[nvair] %u threadgroup bool(s) widened to i8\n", bools);
         unsigned cubes = disabled("NVAIR_CUBE_ARRAY_FIX") ? 0 : clampCubeArrayIndices(module, g);
         if (cubes && logging()) fprintf(stderr, "[nvair] %u cube array index(es) raised to 0\n", cubes);
-        unsigned gradients = disabled("NVAIR_GRADIENT_FIX") ? 0 : fixGradientSamples(module, g);
+        unsigned gradients = fixGradientSamples(module, g);  // its switches: NVAIR_GRADIENT_FIX, NVAIR_CUBE_GRADIENT_FIX
         if (gradients && logging()) fprintf(stderr, "[nvair] %u 3D / cube gradient sample(s) done at their level\n", gradients);
         unsigned products = disabled("NVAIR_NARROW_MULTIPLY_FIX") ? 0 : hideNarrowProducts(module, g);
         if (products && logging()) fprintf(stderr, "[nvair] %u product(s) of 16-bit factors given an opaque factor\n", products);
