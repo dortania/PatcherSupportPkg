@@ -134,6 +134,8 @@
 //      of the samples: the guard band 256 times the viewport, as on other drivers for this hardware
 //  70. reversed viewport depth ranges (znear above zfar) on Kepler, which the driver mapped as if in order: the z scale
 //      and translate it keeps for such a viewport are set to zfar - znear and znear
+//  71. the sample positions Metal reports for Kepler's 2x and 8x patterns, which listed the standard positions in another
+//      order than the hardware's: reported in the hardware's order
 //  72. copies between a format and its sRGB variant on Ivy Bridge, which converted the texels (BC blocks: garbled): made
 //      through a buffer
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
@@ -4699,6 +4701,37 @@ static void keplerReversedDepth(void) {
     origNVSetViewports = (NVSetViewportsIMP)swizzle(kClass, "setViewports:count:", (IMP)nvSetViewports);
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Kepler reversed viewport depth ranges: setters wrapped\n");
 }
+
+// 71. Sample positions of Kepler's 2x and 8x patterns. The hardware uses the standard positions, but in another order
+// than the one Metal reports (getDefaultSamplePositions:count:, which only MetalOld's _MTLDevice defines): at 2x samples
+// 0 and 1 are swapped, at 8x sample 0 is at (0.0625, 0.4375), which Metal gave as sample 5's, and so on (4x is right). So
+// anything that matches sample indices to positions (a custom resolve, a per-sample technique) got the wrong sample.
+// NVMTLDevice gets its own getDefaultSamplePositions:count:, with the order measured on a GTX 770 for 2 and 8 samples
+// (n22) and MetalOld's for any other count. MTLSHIM_NV_SAMPLE_POSITIONS=0 turns it off.
+typedef void (*SamplePositionsIMP)(id, SEL, MTLSamplePosition *, NSUInteger);
+static SamplePositionsIMP origSamplePositions;
+static void nvSamplePositions(id self, SEL _cmd, MTLSamplePosition *positions, NSUInteger count) {
+    static const MTLSamplePosition k2[2] = {{0.25f, 0.25f}, {0.75f, 0.75f}};
+    static const MTLSamplePosition k8[8] = {{0.0625f, 0.4375f}, {0.3125f, 0.1875f}, {0.1875f, 0.8125f}, {0.4375f, 0.6875f},
+                                            {0.5625f, 0.3125f}, {0.9375f, 0.0625f}, {0.6875f, 0.9375f}, {0.8125f, 0.5625f}};
+    if (positions && count == 2) memcpy(positions, k2, sizeof k2);
+    else if (positions && count == 8) memcpy(positions, k8, sizeof k8);
+    else origSamplePositions(self, _cmd, positions, count);
+}
+static void keplerSamplePositions(void) {
+    static BOOL done;
+    const char *setting = getenv("MTLSHIM_NV_SAMPLE_POSITIONS");
+    Class device = objc_getClass("NVMTLDevice");
+    SEL sel = sel_registerName("getDefaultSamplePositions:count:");
+    Method inherited = device ? class_getInstanceMethod(device, sel) : NULL;
+    if (done || (setting && !strcmp(setting, "0")) || !inherited || definesMethod("NVMTLDevice", "getDefaultSamplePositions:count:") ||
+        !definesMethod("NVMTLRenderCommandEncoder_KEPLER_A", "setViewport:"))
+        return;
+    done = YES;
+    origSamplePositions = (SamplePositionsIMP)method_getImplementation(inherited);
+    if (class_addMethod(device, sel, (IMP)nvSamplePositions, method_getTypeEncoding(inherited)) && getenv("MTLSHIM_VERBOSE"))
+        shimLog("[mtlshim] Kepler 2x / 8x sample positions: reported in the hardware's order\n");
+}
 static void keplerVisibilitySums(void) {
     static BOOL done;
     static const char *const kBuffer = "NVMTLCommandBuffer", *const kRender = "NVMTLRenderCommandEncoder_KEPLER_A";
@@ -4842,6 +4875,7 @@ static void patchDriverClasses(void) {
     keplerResolveResidency();  // item 61
     keplerGuardBand();  // item 69
     keplerReversedDepth();  // item 70
+    keplerSamplePositions();  // item 71
     mpsStatisticsWidth();
     stencilCopies();
     nvStencilUploadOrder();  // item 53
