@@ -136,7 +136,7 @@
 //      and translate it keeps for such a viewport are set to zfar - znear and znear
 //  71. the sample positions Metal reports for Kepler's 2x and 8x patterns, which listed the standard positions in another
 //      order than the hardware's: reported in the hardware's order
-//  72. copies between a format and its sRGB variant on Ivy Bridge, which converted the texels (BC blocks: garbled): made
+//  72. copies between a format and its sRGB variant on Ivy Bridge and Haswell, which converted the texels (BC: garbled): made
 //      through a buffer
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
@@ -3099,14 +3099,15 @@ static void igBufferToTextureOptions(id self, SEL _cmd, id buffer, NSUInteger of
     origIGBufferToTextureOptions(self, _cmd, buffer, offset, row, image, size, t, slice, level, origin, options);
     noteDepthStencilWrite(self, t, slice, level, origin, size, options);
 }
-// 72. Copies between a format and its sRGB variant on Ivy Bridge. copyFromTexture:...toTexture: from RGBA8Unorm to
+// 72. Copies between a format and its sRGB variant on Ivy Bridge and Haswell. copyFromTexture:...toTexture: from RGBA8Unorm to
 // RGBA8Unorm_sRGB (and back, and BGRA8, BC1, BC3) doesn't copy the bytes, as Metal says it does: RGBA8 and BGRA8 texels
 // come out converted (a 1 became 13, the sRGB encoding of 1/255; the other way 3 became 0), and BC blocks garbled, at
-// every level. Copies within one format, and between textures and buffers, are right. WebGPU's copyTextureToTexture
-// between rgba8unorm and rgba8unorm-srgb (and bgra8 and the BC pairs) failed (WebGPU CTS copyTextureToTexture
-// color_textures; Dawn copies through a view of the other format, which goes wrong the same way). Such copies, through
+// every level (the HD 4000 and the Iris Pro; the R9 is right). Copies within one format, and between textures and buffers,
+// are right. WebGPU's copyTextureToTexture between rgba8unorm and rgba8unorm-srgb (and bgra8 and the BC pairs) failed
+// (WebGPU CTS copyTextureToTexture color_textures; Dawn copies through a view of the other format, which goes wrong the
+// same way). Such copies, through
 // views too, go through a temporary buffer between the root textures: out of the source, then into the destination.
-// MTLSHIM_SRGB_COPY=0 turns it off. Test: s73 on the HD 4000.
+// MTLSHIM_SRGB_COPY=0 turns it off. Test: s73 on the HD 4000 and the Iris Pro.
 static BOOL ivbSrgbCopies;
 static BOOL srgbPairLayout(MTLPixelFormat f, NSUInteger *block, NSUInteger *bytes) {
     switch (f) {
@@ -3598,7 +3599,8 @@ static void blitsIntoDepthStencil(void) {
     const char *levelRepair = getenv("MTLSHIM_DEPTH_LEVEL_REPAIR");
     ivbDepthLevelRepair = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !(levelRepair && !strcmp(levelRepair, "0"));  // item 68
     const char *srgbCopy = getenv("MTLSHIM_SRGB_COPY");
-    ivbSrgbCopies = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !(srgbCopy && !strcmp(srgbCopy, "0"));  // item 72
+    ivbSrgbCopies = image && (strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") || strstr(image, "/AppleIntelHD5000GraphicsMTLDriver.bundle/")) &&
+                    !(srgbCopy && !strcmp(srgbCopy, "0"));  // item 72 (Ivy Bridge and Haswell)
     char withOptions[256];
     const char *setting = getenv("MTLSHIM_DEPTH_STENCIL_BLITS");
     if (origIGBlitEndEncoding || (setting && !strcmp(setting, "0"))) return;
