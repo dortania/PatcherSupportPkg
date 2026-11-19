@@ -129,6 +129,9 @@
 //      nothing: the copy's height is rounded up to the block
 //  68. render passes at levels 1+ of mipmapped depth arrays and cubes on Ivy Bridge, after which fragment functions read
 //      parts of other slices of level 0 wrong: an empty pass at level 0 slice 0 follows each
+//  69. triangles across the edge of the viewport on Kepler, which the driver clipped there (a guard band no bigger than
+//      the viewport) and drew as a fan, the pixels on its seams running the fragment function once per part with part
+//      of the samples: the guard band 256 times the viewport, as on other drivers for this hardware
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -144,6 +147,7 @@
 #include <mach/mach.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
+#include <mach-o/getsect.h>
 #include <sys/mman.h>
 #include <os/lock.h>
 #include <signal.h>
@@ -4522,6 +4526,52 @@ static void keplerResolveResidency(void) {
     origNVResolveCounters = (NVResolveCountersIMP)swizzle(kClass, kSel, (IMP)nvResolveCounters);
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Kepler counter resolves: result buffer made resident\n");
 }
+
+// 69. Triangles across the edge of the viewport on the Kepler driver. The driver sets SET_VIEWPORT_CLIP_CONTROL (method
+// 0x193c) to 0x49d with its depth clip mode's bits (0xc9d before a viewport is set), and bit 7 of that makes the
+// geometry guard band the viewport itself: a triangle that crosses the viewport's edge is clipped to it, and the
+// polygon left is drawn as a fan of triangles. With multisampling, a pixel on a seam of the fan runs the fragment
+// function once for each part, each time with only that part's samples in [[sample_mask]] (WebGPU CTS fragment_builtins
+// inputs,sample_mask: 7 then 8 for a pixel with all 4 samples covered, every case with an edge of the triangle inside
+// the target), and a fragment function's writes to buffers and atomics happen twice there (the usual full-screen
+// triangle at 4x: 20 runs for 16 pixels). With bit 7 clear the guard band is 256 times the viewport, as nouveau has it
+// on this hardware: such triangles are rasterized whole, and clipped only beyond it. Depth clipping doesn't depend on
+// it (still done for each triangle that crosses the near or far plane). The value is an immediate in the driver's code,
+// the same instruction pair in 10 places for each of the two; those 20 bytes are patched once the driver is in, if all
+// 20 are there. MTLSHIM_NV_GUARD_BAND=0 turns it off.
+static void keplerGuardBand(void) {
+    static BOOL done;
+    const char *setting = getenv("MTLSHIM_NV_GUARD_BAND");
+    Class device = objc_getClass("NVMTLDevice");
+    Dl_info info;
+    if (done || (setting && !strcmp(setting, "0")) || !device || !dladdr((__bridge const void *)device, &info) ||
+        !strstr(info.dli_fname, "/GeForceMTLDriver.bundle/"))
+        return;
+    done = YES;
+    unsigned long size = 0;
+    unsigned char *text = getsectiondata((const struct mach_header_64 *)info.dli_fbase, "__TEXT", "__text", &size);
+    // movl $0x49d, %eax; orl 0xad0(%rdi), %eax  /  movl $0xc9d, %eax; movq 0x20(%rdi), %r8
+    static const unsigned char kViewport[7] = {0xb8, 0x9d, 0x04, 0x00, 0x00, 0x0b, 0x87}, kDefault[7] = {0xb8, 0x9d, 0x0c, 0x00, 0x00, 0x4c, 0x8b};
+    unsigned char *sites[20];
+    int viewport = 0, fallback = 0;
+    for (unsigned long i = 0; text && i + sizeof kViewport <= size; i++) {
+        BOOL v = !memcmp(text + i, kViewport, sizeof kViewport), d = !v && !memcmp(text + i, kDefault, sizeof kDefault);
+        if (!v && !d) continue;
+        if (viewport + fallback == 20) return;  // more than the driver builds we know: leave it
+        sites[viewport + fallback] = text + i;
+        v ? viewport++ : fallback++;
+    }
+    if (viewport != 10 || fallback != 10) return;
+    int patched = 0;
+    for (int i = 0; i < 20; i++) {
+        vm_address_t page = (vm_address_t)(sites[i] + 1) & ~(vm_address_t)(vm_page_size - 1);
+        if (vm_protect(mach_task_self(), page, vm_page_size * 2, FALSE, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY) != KERN_SUCCESS) continue;
+        sites[i][1] &= (unsigned char)~0x80;  // 0x49d -> 0x41d, 0xc9d -> 0xc1d
+        vm_protect(mach_task_self(), page, vm_page_size * 2, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
+        patched++;
+    }
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Kepler guard band: viewport clip control patched at %d of 20 places\n", patched);
+}
 static void keplerVisibilitySums(void) {
     static BOOL done;
     static const char *const kBuffer = "NVMTLCommandBuffer", *const kRender = "NVMTLRenderCommandEncoder_KEPLER_A";
@@ -4663,6 +4713,7 @@ static void patchDriverClasses(void) {
     keplerVisibilitySums();  // item 59
     keplerZeroBuffers();  // item 60
     keplerResolveResidency();  // item 61
+    keplerGuardBand();  // item 69
     mpsStatisticsWidth();
     stencilCopies();
     nvStencilUploadOrder();  // item 53
