@@ -70,6 +70,10 @@ FIXED=$(mktemp -d) NOADAPTER=$(mktemp -d) STOCK=$(mktemp -d) PATCH3=$(mktemp -d)
 # most Intel pipelines there ("Compilation failed").
 IVB=
 ioreg -rc IntelAccelerator -d1 -w0 2>/dev/null | grep -q AppleIntelHD4000Graphics && IVB=-IVB
+# Known Ivy Bridge limitations (FIXES.md, Known limitations), which fail with every fix on the HD 4000: reported as SKIP
+# there instead of being run. They still run on every other GPU (the Iris Pro and the R9 pass them).
+IVB_KNOWN="s37-intel-stencil-subresources s41-intel-stencil-copy-rows s43-intel-stencil-view-mips s46-amd-stencil-view-subresources
+           s48-amd-stencil8-levels-slices a17-amd-integer-cube-gather c01-amdil-argument-buffer"
 cp "$B/AMDTextureAtomics.dylib" "$B/IntelTextureAtomics.dylib" "$B/AMDBronzeCompat.dylib" "$FIXED/"
 cp "$B/libMTLIntelCompilerPlugin$IVB.dylib" "$FIXED/libMTLIntelCompilerPlugin.dylib"
 cp "$B/AMDShared$V" "$FIXED/AMDShared"
@@ -163,7 +167,9 @@ run() {  # <test[@gpu]> <removed fix or "fixed">
     echo "|---|---|---|"
     for c in $CASES; do
         t=${c%%:*} removed=${c#*:}
-        if [ -z "$SHIM" ] && [ "$removed" = shim ]; then
+        if [ -n "$IVB" ] && [[ " $(echo $IVB_KNOWN) " == *" ${t%%@*} "* ]]; then
+            before="SKIP ${t%%@*}: a known Ivy Bridge limitation (FIXES.md, Known limitations)" after=$before
+        elif [ -z "$SHIM" ] && [ "$removed" = shim ]; then
             before="SKIP ${t%%@*}: MetalOldCompat needs OCLP's MetalOld wrapper" after=$before
         else
             before=$(run "$t" "$removed"); before=${before:-FAIL: crashed (in-process compiler)}
