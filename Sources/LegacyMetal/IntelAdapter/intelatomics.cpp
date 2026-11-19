@@ -5957,8 +5957,11 @@ static unsigned fixGradientCompares(LLVMModuleRef module) {
 // two may alias; dropping !alias.scope / !noalias didn't help, making the copy volatile did, but a volatile copy into
 // private memory lost values before (i16). Each word-aligned copy of a whole number of words, up to 1 KiB, becomes that
 // many 32-bit loads and stores, volatile on the device-memory side: on the Iris Pro the plain words were enough, on the
-// HD 4000 the compiler still read A first until the device accesses were volatile. After volatilizePunnedAccesses, which
-// would otherwise take the new i32 views for punning. INTEL_COPY_EXPAND_FIX=0 turns it off. Test: n12.
+// HD 4000 the compiler still read A first until the device accesses were volatile. The HD 4000 did it with threadgroup
+// memory too (WebGPU CTS ptr_aliasing two_pointers, workgroup: A in threadgroup memory, A.x updated through a pointer in a
+// helper, then A copied out came back as copied in), so threadgroup-side accesses are volatile as well (i80).
+// After volatilizePunnedAccesses, which would otherwise take the new i32 views for punning.
+// INTEL_COPY_EXPAND_FIX=0 turns it off. Tests: n12, i80.
 static unsigned expandConstantCopies(LLVMModuleRef module) {
     if (disabled("INTEL_COPY_EXPAND_FIX")) return 0;
     LLVMContextRef context = LLVMGetModuleContext(module);
@@ -5989,8 +5992,9 @@ static unsigned expandConstantCopies(LLVMModuleRef module) {
             LLVMSetAlignment(word, 4);
             LLVMValueRef store = LLVMBuildStore(b, word, LLVMBuildGEP(b, dst, &index, 1, ""));
             LLVMSetAlignment(store, 4);
-            if (LLVMGetPointerAddressSpace(LLVMTypeOf(src)) == 1) LLVMSetVolatile(word, 1);  // device memory: see above
-            if (LLVMGetPointerAddressSpace(LLVMTypeOf(dst)) == 1) LLVMSetVolatile(store, 1);
+            unsigned from = LLVMGetPointerAddressSpace(LLVMTypeOf(src)), to = LLVMGetPointerAddressSpace(LLVMTypeOf(dst));
+            if (from == 1 || from == 3) LLVMSetVolatile(word, 1);  // device and threadgroup memory: see above
+            if (to == 1 || to == 3) LLVMSetVolatile(store, 1);
         }
         LLVMInstructionEraseFromParent(copy);
     }
