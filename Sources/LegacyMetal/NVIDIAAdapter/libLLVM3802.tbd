@@ -55,6 +55,7 @@ exports:
                    _LLVMConstBitCast,
                    _LLVMConstInt,
                    _LLVMConstIntGetZExtValue,
+                   _LLVMConstIntToPtr,
                    _LLVMConstNamedStruct,
                    _LLVMConstNull,
                    _LLVMConstReal,

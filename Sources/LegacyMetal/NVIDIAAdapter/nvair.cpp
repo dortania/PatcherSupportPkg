@@ -764,6 +764,73 @@ static unsigned clampCubeArrayIndices(LLVMModuleRef module, Gen &g) {
     return clamped;
 }
 
+// ---- cube reads at a level -----------------------------------------------------------------------------------------------
+// read() of a cube or cube array at a level above 0 gave level 0 on Kepler, in depth and color formats alike (GTX 770;
+// reads of 2D and 2D-array textures at a level are right, and so is a cube sample with level(); s70's compute check of a
+// Depth32Float cube array). The plugin's library reads a cube texel by a sample.tex.cube[.array].lod along the direction
+// of its centre, with the level as the LOD, but works the direction out from level 0's size (txq ... lod(texture, 0)) and
+// samples with a built-in sampler, 0x8000000000002049, whose LOD clamp is 0 and which has no mip filter. Each such body
+// in the module gets the level's size and the same sampler with a nearest mip filter and the largest LOD clamp (bit 19 and
+// 0x7bff, half 65504, in bits 48-63, as constexpr sampler(filter::nearest, mip_filter::nearest) is encoded). Level 0
+// reads the same texel as before. A body that isn't exactly that (two size queries at 0, one sample with that sampler)
+// is left alone; one given the level in an earlier run (the plugin runs its pass managers twice) is skipped.
+// NVAIR_CUBE_READ_LEVEL=0 turns it off.
+extern "C" {
+LLVMValueRef LLVMConstIntToPtr(LLVMValueRef, LLVMTypeRef);
+unsigned LLVMCountParams(LLVMValueRef);
+LLVMValueRef LLVMGetCalledValue(LLVMValueRef);
+}
+enum { kOpIntToPtr = 40 };  // LLVM-C's LLVMIntToPtr
+static bool startsWith(const char *s, const char *prefix);
+
+static unsigned fixCubeReadLevels(LLVMModuleRef module, Gen &g) {
+    static const struct { const char *prefix; unsigned level; } kForms[] = {  // the level's parameter
+        {"air.read_texture_cube.", 3}, {"air.read_texture_cube_array.", 4}, {"air.read_depth_cube.", 4}, {"air.read_depth_cube_array.", 5},
+    };
+    const unsigned long long kPluginSampler = 0x8000000000002049ull, kLevelSampler = 0x807bff0000082049ull;
+    unsigned fixed = 0;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
+        const char *name = LLVMGetValueName(f);
+        int form = -1;
+        for (unsigned i = 0; i < sizeof kForms / sizeof *kForms && form < 0; i++)
+            if (!strncmp(name, kForms[i].prefix, strlen(kForms[i].prefix))) form = (int)i;
+        if (form < 0 || LLVMIsDeclaration(f) || LLVMCountParams(f) <= kForms[form].level) continue;
+        LLVMValueRef level = LLVMGetParam(f, kForms[form].level);
+        if (!isInt(LLVMTypeOf(level), 32)) continue;
+        std::vector<LLVMValueRef> sizes, samples;
+        bool other = false, done = false;
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                if (!LLVMIsACallInst(inst)) continue;
+                LLVMValueRef callee = LLVMGetCalledValue(inst);
+                const char *c = callee ? LLVMGetValueName(callee) : "";
+                if (startsWith(c, "llvm.nvvm.txq.width.cube") || startsWith(c, "llvm.nvvm.txq.height.cube")) {
+                    LLVMValueRef at = LLVMGetNumArgOperands(inst) == 2 ? LLVMGetOperand(inst, 1) : nullptr;
+                    if (at == level) done = true;  // given the level in an earlier run
+                    else if (at && LLVMIsAConstantInt(at) && !LLVMConstIntGetZExtValue(at)) sizes.push_back(inst);
+                    else other = true;
+                } else if (startsWith(c, "llvm.nvvm.sample.tex.cube") && strstr(c, ".lod.")) {
+                    LLVMValueRef s = LLVMGetNumArgOperands(inst) >= 2 ? LLVMGetOperand(inst, 1) : nullptr;
+                    bool plugin = s && LLVMIsAConstantExpr(s) && LLVMGetConstOpcode(s) == kOpIntToPtr &&
+                                  LLVMIsAConstantInt(LLVMGetOperand(s, 0)) && LLVMConstIntGetZExtValue(LLVMGetOperand(s, 0)) == kPluginSampler;
+                    if (plugin) samples.push_back(inst);
+                    else if (!(s && LLVMIsAConstantExpr(s) && LLVMGetConstOpcode(s) == kOpIntToPtr && LLVMIsAConstantInt(LLVMGetOperand(s, 0)) &&
+                               LLVMConstIntGetZExtValue(LLVMGetOperand(s, 0)) == kLevelSampler)) other = true;
+                }
+            }
+        if (done) continue;
+        if (other || sizes.size() != 2 || samples.size() != 1) {
+            if (logging()) fprintf(stderr, "[nvair] %s: not the expected cube read, left alone\n", name);
+            continue;
+        }
+        for (LLVMValueRef q : sizes) LLVMSetOperand(q, 1, level);
+        LLVMValueRef old = LLVMGetOperand(samples[0], 1);
+        LLVMSetOperand(samples[0], 1, LLVMConstIntToPtr(g.c64(kLevelSampler), LLVMTypeOf(old)));
+        fixed++;
+    }
+    return fixed;
+}
+
 // ---- gradient samples of 3D textures and cubes --------------------------------------------------------------------------
 // A sample of a 3D texture, cube or cube array with explicit gradients (gradient3d, gradientcube) in a compute kernel
 // broke the kernel on Kepler: its stores after the sample never happened (GTX 770; 2D and 2D-array gradients are right,
@@ -2022,6 +2089,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (atomics && logging()) fprintf(stderr, "[nvair] %u texture atomic(s) made global atomics on linear texture buffers\n", atomics);
         unsigned depthChannels = disabled("NVAIR_DEPTH_CHANNELS") ? 0 : fixDepthChannels(module, g);
         (void)depthChannels;
+        unsigned cubeReads = disabled("NVAIR_CUBE_READ_LEVEL") ? 0 : fixCubeReadLevels(module, g);
+        if (cubeReads && logging()) fprintf(stderr, "[nvair] %u cube read body(ies) given the level's size and a mip-filtered sampler\n", cubeReads);
         unsigned defined = disabled("NVAIR_INTRINSICS") ? 0 : defineMissingIntrinsics(g);
         unsigned fixed = disabled("NVAIR_I64_FIX") ? 0 : fixWideInstructions(module, g);
         unsigned samplers = disabled("NVAIR_SAMPLER_STATE_FIX") ? 0 : fixSamplerStateWords(module, g);
