@@ -132,6 +132,8 @@
 //  69. triangles across the edge of the viewport on Kepler, which the driver clipped there (a guard band no bigger than
 //      the viewport) and drew as a fan, the pixels on its seams running the fragment function once per part with part
 //      of the samples: the guard band 256 times the viewport, as on other drivers for this hardware
+//  72. copies between a format and its sRGB variant on Ivy Bridge, which converted the texels (BC blocks: garbled): made
+//      through a buffer
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -3049,6 +3051,57 @@ static void igBufferToTextureOptions(id self, SEL _cmd, id buffer, NSUInteger of
     origIGBufferToTextureOptions(self, _cmd, buffer, offset, row, image, size, t, slice, level, origin, options);
     noteDepthStencilWrite(self, t, slice, level, origin, size, options);
 }
+// 72. Copies between a format and its sRGB variant on Ivy Bridge. copyFromTexture:...toTexture: from RGBA8Unorm to
+// RGBA8Unorm_sRGB (and back, and BGRA8, BC1, BC3) doesn't copy the bytes, as Metal says it does: RGBA8 and BGRA8 texels
+// come out converted (a 1 became 13, the sRGB encoding of 1/255; the other way 3 became 0), and BC blocks garbled, at
+// every level. Copies within one format, and between textures and buffers, are right. WebGPU's copyTextureToTexture
+// between rgba8unorm and rgba8unorm-srgb (and bgra8 and the BC pairs) failed (WebGPU CTS copyTextureToTexture
+// color_textures; Dawn copies through a view of the other format, which goes wrong the same way). Such copies, through
+// views too, go through a temporary buffer between the root textures: out of the source, then into the destination.
+// MTLSHIM_SRGB_COPY=0 turns it off. Test: s73 on the HD 4000.
+static BOOL ivbSrgbCopies;
+static BOOL srgbPairLayout(MTLPixelFormat f, NSUInteger *block, NSUInteger *bytes) {
+    switch (f) {
+        case MTLPixelFormatRGBA8Unorm: case MTLPixelFormatRGBA8Unorm_sRGB: case MTLPixelFormatBGRA8Unorm: case MTLPixelFormatBGRA8Unorm_sRGB:
+            *block = 1, *bytes = 4; return YES;
+        case MTLPixelFormatBC1_RGBA: case MTLPixelFormatBC1_RGBA_sRGB:
+            *block = 4, *bytes = 8; return YES;
+        case MTLPixelFormatBC2_RGBA: case MTLPixelFormatBC2_RGBA_sRGB: case MTLPixelFormatBC3_RGBA: case MTLPixelFormatBC3_RGBA_sRGB:
+        case MTLPixelFormatBC7_RGBAUnorm: case MTLPixelFormatBC7_RGBAUnorm_sRGB:
+            *block = 4, *bytes = 16; return YES;
+        default:
+            return NO;
+    }
+}
+static BOOL srgbPairCopy(id encoder, id<MTLTexture> source, NSUInteger sourceSlice, NSUInteger sourceLevel, MTLOrigin sourceOrigin, MTLSize size,
+                         id<MTLTexture> t, NSUInteger slice, NSUInteger level, MTLOrigin origin) {
+    if (!ivbSrgbCopies || !source || !t || source.sampleCount > 1 || t.sampleCount > 1 || !size.width || !size.height || !size.depth) return NO;
+    // through views too (Dawn copies through a view of the other format): the bytes go between the root textures,
+    // whatever their format (rootTexture stops at a parent of another format)
+    id<MTLTexture> (^rawRoot)(id<MTLTexture>, NSUInteger *, NSUInteger *) = ^(id<MTLTexture> texture, NSUInteger *lv, NSUInteger *sl) {
+        while (texture.parentTexture) *lv += texture.parentRelativeLevel, *sl += texture.parentRelativeSlice, texture = texture.parentTexture;
+        return texture;
+    };
+    id<MTLTexture> sourceRoot = rawRoot(source, &sourceLevel, &sourceSlice), root = rawRoot(t, &level, &slice);
+    MTLPixelFormat formats[4] = {source.pixelFormat, t.pixelFormat, sourceRoot.pixelFormat, root.pixelFormat};
+    if (formats[0] == formats[1] && formats[1] == formats[2] && formats[2] == formats[3]) return NO;
+    NSUInteger block, bytes, block2, bytes2;
+    if (!srgbPairLayout(formats[0], &block, &bytes)) return NO;
+    for (int i = 1; i < 4; i++)
+        if (!srgbPairLayout(formats[i], &block2, &bytes2) || block != block2 || bytes != bytes2) return NO;
+    source = sourceRoot, t = root;
+    NSUInteger row = (size.width + block - 1) / block * bytes, image = row * ((size.height + block - 1) / block);
+    id<MTLBuffer> temporary = [t.device newBufferWithLength:image * size.depth options:MTLResourceStorageModePrivate];
+    if (!temporary) return NO;
+    id<MTLBlitCommandEncoder> e = encoder;
+    [e copyFromTexture:source sourceSlice:sourceSlice sourceLevel:sourceLevel sourceOrigin:sourceOrigin sourceSize:size toBuffer:temporary
+     destinationOffset:0 destinationBytesPerRow:row destinationBytesPerImage:image];
+    [e copyFromBuffer:temporary sourceOffset:0 sourceBytesPerRow:row sourceBytesPerImage:image sourceSize:size toTexture:t destinationSlice:slice
+     destinationLevel:level destinationOrigin:origin];
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] copy between a format and its sRGB variant made through a buffer\n");
+    return YES;
+}
+
 static void igTextureToTexture(id self, SEL _cmd, id source, NSUInteger sourceSlice, NSUInteger sourceLevel, MTLOrigin sourceOrigin, MTLSize size,
                                id t, NSUInteger slice, NSUInteger level, MTLOrigin origin) {
     if (deferBlit(self, ^(id<MTLBlitCommandEncoder> e) {
@@ -3058,6 +3111,7 @@ static void igTextureToTexture(id self, SEL _cmd, id source, NSUInteger sourceSl
         return;
     source = viewBlitTarget(source, &sourceSlice, &sourceLevel);  // item 49
     t = viewBlitTarget(t, &slice, &level);
+    if (srgbPairCopy(self, source, sourceSlice, sourceLevel, sourceOrigin, size, t, slice, level, origin)) return;  // item 72
     if (depthLevelCopyBetween(self, source, sourceSlice, sourceLevel, sourceOrigin, size, t, slice, level, origin, MTLBlitOptionNone)) return;  // item 63
     origIGTextureToTexture(self, _cmd, source, sourceSlice, sourceLevel, sourceOrigin, size, t, slice, level, origin);
     noteDepthStencilWrite(self, t, slice, level, origin, size, MTLBlitOptionNone);
@@ -3071,6 +3125,7 @@ static void igTextureToTextureOptions(id self, SEL _cmd, id source, NSUInteger s
         return;
     source = viewBlitTarget(source, &sourceSlice, &sourceLevel);  // item 49
     t = viewBlitTarget(t, &slice, &level);
+    if (srgbPairCopy(self, source, sourceSlice, sourceLevel, sourceOrigin, size, t, slice, level, origin)) return;  // item 72
     if (depthLevelCopyBetween(self, source, sourceSlice, sourceLevel, sourceOrigin, size, t, slice, level, origin, options)) return;  // item 63
     origIGTextureToTextureOptions(self, _cmd, source, sourceSlice, sourceLevel, sourceOrigin, size, t, slice, level, origin, options);
     noteDepthStencilWrite(self, t, slice, level, origin, size, options);
@@ -3494,6 +3549,8 @@ static void blitsIntoDepthStencil(void) {
     ivbDepthLevelBlits = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !(levelBlits && !strcmp(levelBlits, "0"));  // item 63
     const char *levelRepair = getenv("MTLSHIM_DEPTH_LEVEL_REPAIR");
     ivbDepthLevelRepair = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !(levelRepair && !strcmp(levelRepair, "0"));  // item 68
+    const char *srgbCopy = getenv("MTLSHIM_SRGB_COPY");
+    ivbSrgbCopies = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !(srgbCopy && !strcmp(srgbCopy, "0"));  // item 72
     char withOptions[256];
     const char *setting = getenv("MTLSHIM_DEPTH_STENCIL_BLITS");
     if (origIGBlitEndEncoding || (setting && !strcmp(setting, "0"))) return;
