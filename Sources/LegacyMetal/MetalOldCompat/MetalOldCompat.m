@@ -132,6 +132,8 @@
 //  69. triangles across the edge of the viewport on Kepler, which the driver clipped there (a guard band no bigger than
 //      the viewport) and drew as a fan, the pixels on its seams running the fragment function once per part with part
 //      of the samples: the guard band 256 times the viewport, as on other drivers for this hardware
+//  70. reversed viewport depth ranges (znear above zfar) on Kepler, which the driver mapped as if in order: the z scale
+//      and translate it keeps for such a viewport are set to zfar - znear and znear
 //  72. copies between a format and its sRGB variant on Ivy Bridge, which converted the texels (BC blocks: garbled): made
 //      through a buffer
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
@@ -4629,6 +4631,74 @@ static void keplerGuardBand(void) {
     }
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Kepler guard band: viewport clip control patched at %d of 20 places\n", patched);
 }
+
+// 70. Reversed viewport depth ranges on the Kepler driver. Its setViewport: and setViewports:count: keep each viewport's
+// transform as six floats in the encoder's state (scale x, y, z and translate x, y, z, 0x18 bytes apart from 0x950),
+// which the next draw sends to the GPU, and take z as scale |zfar - znear| and translate min(znear, zfar): a viewport
+// with znear above zfar, which Metal allows ("which you can flip", in setViewport:'s documentation) and MoltenVK passes
+// on from Vulkan, wasn't reversed (znear 1, zfar 0 stored a z of 0.25 as 0.25, not 0.75). After the driver's setter,
+// such a viewport's z scale becomes zfar - znear and its translate znear. The state is the driver's own ivar, at the
+// offset its setter reads first; both setters' code is checked for the stores this relies on. Depth clamping (to
+// [0, 1] on this driver) is unchanged. MTLSHIM_NV_REVERSED_DEPTH=0 turns it off.
+typedef void (*NVSetViewportIMP)(id, SEL, MTLViewport);
+typedef void (*NVSetViewportsIMP)(id, SEL, const MTLViewport *, NSUInteger);
+static NVSetViewportIMP origNVSetViewport;
+static NVSetViewportsIMP origNVSetViewports;
+static ptrdiff_t nvRenderStateOffset;
+static void nvReverseDepth(id self, const MTLViewport *viewports, NSUInteger count) {
+    char *state = *(char **)((char *)(__bridge void *)self + nvRenderStateOffset);
+    for (NSUInteger i = 0; state && viewports && i < count && i < 16; i++)
+        if (viewports[i].znear > viewports[i].zfar) {
+            float *transform = (float *)(state + 0x950 + 0x18 * i);
+            transform[2] = (float)(viewports[i].zfar - viewports[i].znear);
+            transform[5] = (float)viewports[i].znear;
+        }
+}
+static void nvSetViewport(id self, SEL _cmd, MTLViewport viewport) {
+    origNVSetViewport(self, _cmd, viewport);
+    nvReverseDepth(self, &viewport, 1);
+}
+static void nvSetViewports(id self, SEL _cmd, const MTLViewport *viewports, NSUInteger count) {
+    origNVSetViewports(self, _cmd, viewports, count);
+    nvReverseDepth(self, viewports, count);
+}
+// The ivar offset a Kepler setter loads first (push rbp; mov rbp, rsp; mov disp(%rip), %rax; mov (%rdi,%rax), %rax), if
+// its first `length` bytes also hold every one of `stores`; -1 otherwise
+static ptrdiff_t nvSetterStateOffset(const char *cls, const char *sel, size_t length, const unsigned char (*stores)[9], int storeCount) {
+    Method m = class_getInstanceMethod(objc_getClass(cls), sel_registerName(sel));
+    const unsigned char *code = m ? (const unsigned char *)method_getImplementation(m) : NULL;
+    Dl_info info;
+    static const unsigned char kHead[7] = {0x55, 0x48, 0x89, 0xe5, 0x48, 0x8b, 0x05}, kLoad[4] = {0x48, 0x8b, 0x04, 0x07};
+    if (!code || !dladdr(code, &info) || !strstr(info.dli_fname, "/GeForceMTLDriver.bundle/") || memcmp(code, kHead, 7) ||
+        memcmp(code + 11, kLoad, 4))
+        return -1;
+    for (int s = 0; s < storeCount; s++) {
+        BOOL found = NO;
+        for (size_t i = 15; !found && i + 9 <= length; i++) found = !memcmp(code + i, stores[s], 9);
+        if (!found) return -1;
+    }
+    int32_t displacement;
+    memcpy(&displacement, code + 7, 4);
+    return *(const ptrdiff_t *)(code + 11 + displacement);
+}
+static void keplerReversedDepth(void) {
+    static BOOL done;
+    static const char *const kClass = "NVMTLRenderCommandEncoder_KEPLER_A";
+    const char *setting = getenv("MTLSHIM_NV_REVERSED_DEPTH");
+    if (done || (setting && !strcmp(setting, "0")) || !definesMethod(kClass, "setViewport:") || !definesMethod(kClass, "setViewports:count:"))
+        return;
+    done = YES;
+    // movupd %xmm0, 0x950(%rax) / movss %xmm1, 0x964(%rax) (padded to 9 with the next instruction's first byte), and the
+    // array forms movupd %xmm2, 0x950(%rax,%rdi) / movss %xmm0, 0x964(%rax,%rdi)
+    static const unsigned char kOne[2][9] = {{0x66, 0x0f, 0x11, 0x80, 0x50, 0x09, 0x00, 0x00, 0xf3}, {0xf3, 0x0f, 0x11, 0x88, 0x64, 0x09, 0x00, 0x00, 0xc6}};
+    static const unsigned char kMany[2][9] = {{0x66, 0x0f, 0x11, 0x94, 0x38, 0x50, 0x09, 0x00, 0x00}, {0xf3, 0x0f, 0x11, 0x84, 0x38, 0x64, 0x09, 0x00, 0x00}};
+    ptrdiff_t one = nvSetterStateOffset(kClass, "setViewport:", 0xb7, kOne, 2), many = nvSetterStateOffset(kClass, "setViewports:count:", 0xe8, kMany, 2);
+    if (one < 0 || one != many) return;
+    nvRenderStateOffset = one;
+    origNVSetViewport = (NVSetViewportIMP)swizzle(kClass, "setViewport:", (IMP)nvSetViewport);
+    origNVSetViewports = (NVSetViewportsIMP)swizzle(kClass, "setViewports:count:", (IMP)nvSetViewports);
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Kepler reversed viewport depth ranges: setters wrapped\n");
+}
 static void keplerVisibilitySums(void) {
     static BOOL done;
     static const char *const kBuffer = "NVMTLCommandBuffer", *const kRender = "NVMTLRenderCommandEncoder_KEPLER_A";
@@ -4771,6 +4841,7 @@ static void patchDriverClasses(void) {
     keplerZeroBuffers();  // item 60
     keplerResolveResidency();  // item 61
     keplerGuardBand();  // item 69
+    keplerReversedDepth();  // item 70
     mpsStatisticsWidth();
     stencilCopies();
     nvStencilUploadOrder();  // item 53
