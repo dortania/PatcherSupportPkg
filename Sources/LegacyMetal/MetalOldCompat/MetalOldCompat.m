@@ -117,12 +117,18 @@
 //      buffer is put in the command buffer's resources first
 //  62. depth and stencil textures sampled through texture2d in ANGLE's shaders on Kepler, which gave (d, d, d, d): a mask of
 //      depth / stencil bindings at the hidden index where the Kepler adapter makes them (d, 0, 0, 1)
+//  63. blits at levels 1+ of mipmapped depth arrays and cubes on Ivy Bridge, which broke bands of other slices: done by a
+//      compute read and item 27's render pass instead, the encoder's later commands after them in order
+//  64. depth clears on Ivy Bridge of a level or slice above 0 of a mipmapped or cube depth texture, which were lost, and
+//      clears to depths with more than 16 bits of mantissa (Haswell too): a draw writes the clear depth
 //  65. copies between a buffer and several slices of a 3D texture on Kepler with a padded bytesPerImage, which put slices
 //      1+ in the padding: done a slice at a time
 //  66. occlusion queries on Kepler that counted no samples for a draw whose color attachments all have writeMask none and
 //      no depth/stencil attachment: the first blendable attachment is written through a blend that keeps it (item 34's)
 //  67. uploads into the last row of blocks of a BC texture on Kepler, at a height short of a whole block, which wrote
 //      nothing: the copy's height is rounded up to the block
+//  68. render passes at levels 1+ of mipmapped depth arrays and cubes on Ivy Bridge, after which fragment functions read
+//      parts of other slices of level 0 wrong: an empty pass at level 0 slice 0 follows each
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -1996,6 +2002,37 @@ static void drawDepthClear(id<MTLRenderCommandEncoder> encoder, MTLRenderPassDes
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] depth clear to %.9g written by a draw\n", value);
 }
 
+// 68. Render passes at levels 1+ of mipmapped depth arrays on Ivy Bridge. After any render pass with a depth attachment at
+// level 1 or higher of a Depth16Unorm or Depth32Float 2D-array, cube or cube-array texture with several levels (even one
+// that only loads and stores), fragment functions sampling level 0 read parts of some other slices wrong (a 57x13x7 array
+// with 6 levels: slice 3 after a pass at level 2 or 3, slices 4 and 5 after one at level 1, whichever slice the pass was
+// on; a cube: face 1). The texels themselves are right: compute read() sees them, and so does sampling once a pass at
+// level 0 has run. Plain 2D textures with mips are right. Item 63's own render passes into such levels (in place of the
+// blits) hit it: WebKit's ANGLE fills depth arrays and cubes level by level, which failed dEQP texstorage2d/3d
+// format_depth_stencil (cube, 2d_array) and textureformat sized_depth_stencil in Safari. Such textures keep HiZ on
+// Ivy Bridge (item 22). When such a pass ends, an empty pass at level 0 slice 0 (load and store) follows it.
+// MTLSHIM_DEPTH_LEVEL_REPAIR=0 turns it off. Test: s72 on the HD 4000.
+static BOOL ivbDepthLevelRepair;
+static const void *kPendingDepthLevelRepair = &kPendingDepthLevelRepair;
+static id<MTLTexture> depthLevelPassTexture(MTLRenderPassDescriptor *pass) {
+    MTLRenderPassDepthAttachmentDescriptor *dp = pass.depthAttachment;
+    if (!ivbDepthLevelRepair || !dp.texture) return nil;
+    NSUInteger level = dp.level, slice = dp.slice;
+    id<MTLTexture> root = rootTexture(dp.texture, &level, &slice);
+    if (!level || root.mipmapLevelCount < 2 || root.sampleCount > 1) return nil;
+    MTLTextureType type = root.textureType;
+    if (type != MTLTextureType2DArray && type != MTLTextureTypeCube && type != MTLTextureTypeCubeArray) return nil;
+    return root.pixelFormat == MTLPixelFormatDepth16Unorm || root.pixelFormat == MTLPixelFormatDepth32Float ? root : nil;
+}
+static void repairDepthLevels(id<MTLCommandBuffer> commandBuffer, id<MTLTexture> t) {
+    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+    pass.depthAttachment.texture = t;  // level 0, slice 0
+    pass.depthAttachment.loadAction = MTLLoadActionLoad;
+    pass.depthAttachment.storeAction = MTLStoreActionStore;
+    [[commandBuffer renderCommandEncoderWithDescriptor:pass] endEncoding];
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] depth pass at a level above 0: empty pass at level 0 after it\n");
+}
+
 static id igRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor) {
     MTLRenderPassDescriptor *redirected = nil;
     NSMutableArray *copies = nil;  // {temporary, destination, level, slice, depth plane}
@@ -2151,6 +2188,8 @@ static id igRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor
     if (encoder && depthAdded) objc_setAssociatedObject(encoder, kDepthAddedForStencil, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     if (encoder) setDefaultViewport(encoder, descriptor);
     if (encoder && depthClearNeedsDraw(descriptor)) drawDepthClear(encoder, redirected ?: descriptor, descriptor);  // item 64
+    id<MTLTexture> levelPass = encoder ? depthLevelPassTexture(redirected ?: descriptor) : nil;  // item 68
+    if (levelPass) objc_setAssociatedObject(encoder, kPendingDepthLevelRepair, @[self, levelPass], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     id<MTLTexture> depth = descriptor.depthAttachment.texture;  // item 50
     if (encoder && ivbDepthTouch && depth && depth.textureType == MTLTextureType2DMultisample && (depth.usage & MTLTextureUsageShaderRead) &&
         descriptor.depthAttachment.loadAction == MTLLoadActionClear)
@@ -2211,10 +2250,15 @@ static void copyOutOfTemporaries(NSArray *pending) {
 static void igRenderEndEncoding(id self, SEL _cmd) {
     NSArray *pending = objc_getAssociatedObject(self, kPendingResolveCopies);
     NSArray *touch = objc_getAssociatedObject(self, kPendingDepthTouch);
+    NSArray *repair = objc_getAssociatedObject(self, kPendingDepthLevelRepair);
     origIGRenderEndEncoding(self, _cmd);
     if (touch) {  // item 50
         objc_setAssociatedObject(self, kPendingDepthTouch, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         touchMultisampledDepth(touch[0], touch[1]);
+    }
+    if (repair) {  // item 68
+        objc_setAssociatedObject(self, kPendingDepthLevelRepair, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        repairDepthLevels(repair[0], repair[1]);
     }
     if (!pending) return;
     objc_setAssociatedObject(self, kPendingResolveCopies, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -3444,6 +3488,8 @@ static void blitsIntoDepthStencil(void) {
     hswDepthClearDraw = image && strstr(image, "/AppleIntelHD5000GraphicsMTLDriver.bundle/") && !(clearDraw && !strcmp(clearDraw, "0"));
     const char *levelBlits = getenv("MTLSHIM_DEPTH_LEVEL_BLITS");
     ivbDepthLevelBlits = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !(levelBlits && !strcmp(levelBlits, "0"));  // item 63
+    const char *levelRepair = getenv("MTLSHIM_DEPTH_LEVEL_REPAIR");
+    ivbDepthLevelRepair = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !(levelRepair && !strcmp(levelRepair, "0"));  // item 68
     char withOptions[256];
     const char *setting = getenv("MTLSHIM_DEPTH_STENCIL_BLITS");
     if (origIGBlitEndEncoding || (setting && !strcmp(setting, "0"))) return;
