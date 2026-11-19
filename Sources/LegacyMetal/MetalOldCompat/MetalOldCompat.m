@@ -121,6 +121,8 @@
 //      1+ in the padding: done a slice at a time
 //  66. occlusion queries on Kepler that counted no samples for a draw whose color attachments all have writeMask none and
 //      no depth/stencil attachment: the first blendable attachment is written through a blend that keeps it (item 34's)
+//  67. uploads into the last row of blocks of a BC texture on Kepler, at a height short of a whole block, which wrote
+//      nothing: the copy's height is rounded up to the block
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -2824,15 +2826,32 @@ static void nvStencilUploadOrder(void) {
 // the padding instead of the next image: all formats, both directions (GTX 770; WebGPU CTS image_copy
 // rowsPerImage_and_bytesPerRow, all 114 failing cases 3D; Dawn copies 2D arrays a slice at a time, and those were right).
 // Such a copy is done a slice at a time. MTLSHIM_NV_VOLUME_COPY=0 turns it off. Test: n15 on the GTX 770.
+// 67. Uploads into the last row of blocks of a block-compressed texture on the Kepler driver. A copy from a buffer into a
+// BC texture whose region ends at the level's bottom edge with a height that isn't a whole number of blocks (13x1 at
+// y = 12 of a 13-texel level: the edge row, 1 texel high) wrote nothing, as if the block rows were rounded down; edge
+// columns, whole levels and copies out were right (GTX 770; WebGPU CTS image_copy compressed_textures,
+// unaligned_mip_level_0, all BC formats). Such a copy's height is rounded up to the block: the level's memory holds whole
+// blocks, and the driver takes the size. MTLSHIM_NV_BLOCK_EDGE=0 turns it off. Test: n17 on the GTX 770.
+static BOOL nvVolumeOn, nvBlockEdgeOn;
 static BufferToTextureIMP origNVVolumeB2T;
 static BufferToTextureOptionsIMP origNVVolumeB2TOptions;
 static TextureToBufferIMP origNVVolumeT2B;
 static TextureToBufferOptionsIMP origNVVolumeT2BOptions;
 static BOOL nvVolumeSplit(id<MTLTexture> t, MTLSize size, NSUInteger row, NSUInteger image) {
-    return t.textureType == MTLTextureType3D && size.depth > 1 && image != row * size.height;
+    return nvVolumeOn && t.textureType == MTLTextureType3D && size.depth > 1 && image != row * size.height;
+}
+static MTLSize nvBlockEdge(id<MTLTexture> t, NSUInteger level, MTLOrigin origin, MTLSize size) {  // item 67
+    if (!nvBlockEdgeOn || !(size.height & 3)) return size;
+    MTLPixelFormat f = t.pixelFormat;
+    BOOL bc = (f >= MTLPixelFormatBC1_RGBA && f <= MTLPixelFormatBC3_RGBA_sRGB) || (f >= MTLPixelFormatBC4_RUnorm && f <= MTLPixelFormatBC5_RGSnorm) ||
+              (f >= MTLPixelFormatBC6H_RGBFloat && f <= MTLPixelFormatBC7_RGBAUnorm_sRGB);
+    NSUInteger height = MAX(t.height >> level, (NSUInteger)1);
+    if (bc && origin.y + size.height == height) size.height = (size.height + 3) & ~(NSUInteger)3;
+    return size;
 }
 static void nvVolumeB2T(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInteger row, NSUInteger image, MTLSize size, id t,
                         NSUInteger slice, NSUInteger level, MTLOrigin origin) {
+    size = nvBlockEdge(t, level, origin, size);
     if (!nvVolumeSplit(t, size, row, image)) return origNVVolumeB2T(self, _cmd, buffer, offset, row, image, size, t, slice, level, origin);
     for (NSUInteger z = 0; z < size.depth; z++)
         origNVVolumeB2T(self, _cmd, buffer, offset + z * image, row, image, MTLSizeMake(size.width, size.height, 1), t, slice, level,
@@ -2840,6 +2859,7 @@ static void nvVolumeB2T(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInte
 }
 static void nvVolumeB2TOptions(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInteger row, NSUInteger image, MTLSize size, id t,
                                NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLBlitOption options) {
+    size = nvBlockEdge(t, level, origin, size);
     if (!nvVolumeSplit(t, size, row, image))
         return origNVVolumeB2TOptions(self, _cmd, buffer, offset, row, image, size, t, slice, level, origin, options);
     for (NSUInteger z = 0; z < size.depth; z++)
@@ -2861,14 +2881,16 @@ static void nvVolumeT2BOptions(id self, SEL _cmd, id t, NSUInteger slice, NSUInt
         origNVVolumeT2BOptions(self, _cmd, t, slice, level, MTLOriginMake(origin.x, origin.y, origin.z + z),
                                MTLSizeMake(size.width, size.height, 1), buffer, offset + z * image, row, image, options);
 }
-static void nvVolumeCopies(void) {  // after item 53, whose buffer-to-texture hook it calls
+static void nvVolumeCopies(void) {  // items 65 and 67; after item 53, whose buffer-to-texture hook it calls
     static const char *const kEncoder = "NVMTLBlitCommandEncoder_KEPLER_A", *const kBufferToTexture =
         "copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:",
                              *const kTextureToBuffer =
         "copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:";
     char withOptions[256];
-    const char *setting = getenv("MTLSHIM_NV_VOLUME_COPY");
-    if (origNVVolumeB2T || (setting && !strcmp(setting, "0")) || !definesMethod(kEncoder, kBufferToTexture)) return;
+    const char *volume = getenv("MTLSHIM_NV_VOLUME_COPY"), *edge = getenv("MTLSHIM_NV_BLOCK_EDGE");
+    nvVolumeOn = !(volume && !strcmp(volume, "0"));
+    nvBlockEdgeOn = !(edge && !strcmp(edge, "0"));
+    if (origNVVolumeB2T || (!nvVolumeOn && !nvBlockEdgeOn) || !definesMethod(kEncoder, kBufferToTexture)) return;
     origNVVolumeB2T = (BufferToTextureIMP)swizzle(kEncoder, kBufferToTexture, (IMP)nvVolumeB2T);
     snprintf(withOptions, sizeof withOptions, "%soptions:", kBufferToTexture);
     if (definesMethod(kEncoder, withOptions))
