@@ -1885,6 +1885,99 @@ static void setDefaultViewport(id<MTLRenderCommandEncoder> encoder, MTLRenderPas
     [encoder setViewport:(MTLViewport){0, 0, (double)width, (double)height, 0, 1}];
 }
 
+// 64. Depth clears on Ivy Bridge. A render-pass clear of a level above 0 or a slice above 0 of a mipmapped, cube or
+// cube-array depth texture (Depth16Unorm, Depth32Float, Depth32Float_Stencil8) doesn't land once that subresource has
+// been written, unless slice 0 is cleared in the same command buffer: it keeps what it held (a point-light shadow cube
+// whose faces 1-5 were updated without face 0 kept their old depth wherever nothing was drawn; a mip level 1 likewise;
+// single-level 2D arrays and plain 2D textures are right). And where a clear
+// does land on Depth32Float, it keeps about 16 bits of mantissa (0.05 became 0.0499999523; 0, 1, 0.5 and 0.25 are exact),
+// on every slice of Depth32Float_Stencil8 too. Haswell's driver keeps the same 16 bits on single-level 2D and multisampled
+// 2D Depth32Float and Depth32Float_Stencil8 textures (the Iris Pro; its re-clears all land), and the R9 gets both right.
+// These textures keep HiZ on Ivy Bridge (item 22), and draws there are right, so after such a clear the pass starts with
+// a full-screen draw that writes the clear depth exactly (compare always; color and stencil untouched), and the encoder's
+// depth state and viewport are put back as they were. MTLSHIM_DEPTH_CLEAR_DRAW=0 turns it off. Test: s71.
+static BOOL ivbDepthClearDraw, hswDepthClearDraw;
+static BOOL depthClearNeedsDraw(MTLRenderPassDescriptor *pass) {
+    MTLRenderPassDepthAttachmentDescriptor *dp = pass.depthAttachment;
+    if ((!ivbDepthClearDraw && !hswDepthClearDraw) || !dp.texture || dp.loadAction != MTLLoadActionClear || pass.renderTargetArrayLength > 1)
+        return NO;
+    NSUInteger level = dp.level, slice = dp.slice;
+    id<MTLTexture> root = rootTexture(dp.texture, &level, &slice);
+    MTLPixelFormat format = root.pixelFormat;
+    if (format != MTLPixelFormatDepth16Unorm && format != MTLPixelFormatDepth32Float && format != MTLPixelFormatDepth32Float_Stencil8) return NO;
+    BOOL cube = root.textureType == MTLTextureTypeCube || root.textureType == MTLTextureTypeCubeArray;
+    if (ivbDepthClearDraw && (level || slice) && (root.mipmapLevelCount > 1 || cube)) return YES;  // the clear would be lost
+    float value = (float)dp.clearDepth;
+    uint32_t bits;
+    memcpy(&bits, &value, sizeof bits);
+    if (format == MTLPixelFormatDepth16Unorm || !(bits & 0xFF)) return NO;  // no more mantissa than the clear keeps
+    return ivbDepthClearDraw || (root.mipmapLevelCount == 1 &&
+                                 (root.textureType == MTLTextureType2D || root.textureType == MTLTextureType2DMultisample));
+}
+static id<MTLRenderPipelineState> depthClearPipeline(id<MTLDevice> device, MTLRenderPassDescriptor *pass) {
+    static NSMutableDictionary *pipelines;
+    static os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
+    MTLPixelFormat depth = pass.depthAttachment.texture.pixelFormat, stencil = pass.stencilAttachment.texture.pixelFormat;
+    NSUInteger samples = pass.depthAttachment.texture.sampleCount;
+    NSMutableString *key = [NSMutableString stringWithFormat:@"%p-%lu-%lu-%lu", device, (unsigned long)depth, (unsigned long)stencil, (unsigned long)samples];
+    for (NSUInteger i = 0; i < 8; i++) [key appendFormat:@"-%lu", (unsigned long)pass.colorAttachments[i].texture.pixelFormat];
+    os_unfair_lock_lock(&lock);
+    if (!pipelines) pipelines = [NSMutableDictionary dictionary];
+    id<MTLRenderPipelineState> pipeline = pipelines[key];
+    os_unfair_lock_unlock(&lock);
+    if (pipeline) return pipeline;
+    static id<MTLLibrary> library;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSString *source = @"#include <metal_stdlib>\nusing namespace metal;\n"
+            "vertex float4 fullScreen(uint id [[vertex_id]]) { float2 p = float2((id << 1) & 2, id & 2); return float4(p * 2 - 1, 0, 1); }\n"
+            "struct Depth { float value [[depth(any)]]; };\n"
+            "fragment Depth clearDepth(constant float &value [[buffer(0)]]) { return { value }; }\n";
+        library = [device newLibraryWithSource:source options:nil error:nil];
+    });
+    MTLRenderPipelineDescriptor *descriptor = [MTLRenderPipelineDescriptor new];
+    descriptor.vertexFunction = [library newFunctionWithName:@"fullScreen"];
+    descriptor.fragmentFunction = [library newFunctionWithName:@"clearDepth"];
+    descriptor.depthAttachmentPixelFormat = depth;
+    descriptor.stencilAttachmentPixelFormat = stencil;
+    descriptor.rasterSampleCount = samples;
+    for (NSUInteger i = 0; i < 8; i++) {
+        descriptor.colorAttachments[i].pixelFormat = pass.colorAttachments[i].texture.pixelFormat;
+        descriptor.colorAttachments[i].writeMask = MTLColorWriteMaskNone;
+    }
+    NSError *error = nil;
+    pipeline = library ? [device newRenderPipelineStateWithDescriptor:descriptor error:&error] : nil;
+    if (!pipeline && getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] depth clear pipeline: %s\n", error.localizedDescription.UTF8String);
+    os_unfair_lock_lock(&lock);
+    if (pipeline) pipelines[key] = pipeline;
+    os_unfair_lock_unlock(&lock);
+    return pipeline;
+}
+static void drawDepthClear(id<MTLRenderCommandEncoder> encoder, MTLRenderPassDescriptor *pass, MTLRenderPassDescriptor *original) {
+    id<MTLTexture> depth = pass.depthAttachment.texture;
+    id<MTLRenderPipelineState> pipeline = depthClearPipeline(depth.device, pass);
+    if (!pipeline) return;
+    static id<MTLDepthStencilState> write, none;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        MTLDepthStencilDescriptor *d = [MTLDepthStencilDescriptor new];
+        d.depthCompareFunction = MTLCompareFunctionAlways;
+        none = [depth.device newDepthStencilStateWithDescriptor:d];  // Metal's state before an app sets one
+        d.depthWriteEnabled = YES;
+        write = [depth.device newDepthStencilStateWithDescriptor:d];
+    });
+    NSUInteger level = pass.depthAttachment.level;
+    float value = (float)pass.depthAttachment.clearDepth;
+    [encoder setViewport:(MTLViewport){0, 0, (double)MAX(depth.width >> level, 1), (double)MAX(depth.height >> level, 1), 0, 1}];
+    [encoder setRenderPipelineState:pipeline];
+    [encoder setDepthStencilState:write];
+    [encoder setFragmentBytes:&value length:sizeof value atIndex:0];
+    [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [encoder setDepthStencilState:none];
+    setDefaultViewport(encoder, original);
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] depth clear to %.9g written by a draw\n", value);
+}
+
 static id igRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor) {
     MTLRenderPassDescriptor *redirected = nil;
     NSMutableArray *copies = nil;  // {temporary, destination, level, slice, depth plane}
@@ -2039,6 +2132,7 @@ static id igRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor
     id encoder = origIGRenderEncoder(self, _cmd, redirected ?: descriptor);
     if (encoder && depthAdded) objc_setAssociatedObject(encoder, kDepthAddedForStencil, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     if (encoder) setDefaultViewport(encoder, descriptor);
+    if (encoder && depthClearNeedsDraw(descriptor)) drawDepthClear(encoder, redirected ?: descriptor, descriptor);  // item 64
     id<MTLTexture> depth = descriptor.depthAttachment.texture;  // item 50
     if (encoder && ivbDepthTouch && depth && depth.textureType == MTLTextureType2DMultisample && (depth.usage & MTLTextureUsageShaderRead) &&
         descriptor.depthAttachment.loadAction == MTLLoadActionClear)
@@ -3247,6 +3341,9 @@ static void blitsIntoDepthStencil(void) {
         "copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:";
     const char *views = getenv("MTLSHIM_VIEW_BLITS"), *image = class_getImageName(objc_getClass("MTLIGAccelBlitCommandEncoder"));
     ivbViewBlits = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !(views && !strcmp(views, "0"));  // item 49
+    const char *clearDraw = getenv("MTLSHIM_DEPTH_CLEAR_DRAW");
+    ivbDepthClearDraw = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !(clearDraw && !strcmp(clearDraw, "0"));  // item 64
+    hswDepthClearDraw = image && strstr(image, "/AppleIntelHD5000GraphicsMTLDriver.bundle/") && !(clearDraw && !strcmp(clearDraw, "0"));
     const char *levelBlits = getenv("MTLSHIM_DEPTH_LEVEL_BLITS");
     ivbDepthLevelBlits = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !(levelBlits && !strcmp(levelBlits, "0"));  // item 63
     char withOptions[256];
