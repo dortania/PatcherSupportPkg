@@ -2240,20 +2240,22 @@ static unsigned fixPrivateConstantLoads(LLVMModuleRef module, Gen &g) {
         std::vector<LLVMValueRef> parts = metadataOperands(entry);
         LLVMValueRef f = parts.empty() ? nullptr : parts[0];
         if (!f || LLVMIsDeclaration(f) || !LLVMGetFirstBasicBlock(f)) continue;
-        // the kernel's thread position (in the threadgroup, or the grid) to make the opaque 0 from; none: left alone
+        // the kernel's thread position to make the opaque 0 from: in the threadgroup (below 1024, so (x + k) >> 31 is 0
+        // for any k the pass uses) if the kernel has it, else in the grid; none: left alone
         LLVMValueRef position = nullptr;
+        bool inGroup = false;
         for (LLVMValueRef arg : parts.size() > 2 ? metadataOperands(parts[2]) : std::vector<LLVMValueRef>()) {
             std::vector<LLVMValueRef> fields = metadataOperands(arg);
             if (fields.size() < 2 || !LLVMIsAConstantInt(fields[0]) || LLVMConstIntGetZExtValue(fields[0]) >= LLVMCountParams(f)) continue;
-            if (isString(fields[1], "air.thread_position_in_threadgroup") || isString(fields[1], "air.thread_index_in_threadgroup") ||
-                isString(fields[1], "air.thread_position_in_grid")) {
+            bool group = isString(fields[1], "air.thread_position_in_threadgroup") || isString(fields[1], "air.thread_index_in_threadgroup");
+            if ((group && !inGroup) || (!position && isString(fields[1], "air.thread_position_in_grid"))) {
                 position = LLVMGetParam(f, (unsigned)LLVMConstIntGetZExtValue(fields[0]));
-                break;
+                inGroup = group;
             }
         }
         if (!position) continue;
         LLVMBasicBlockRef first = LLVMGetEntryBasicBlock(f);
-        LLVMValueRef zero = nullptr;  // (position.x >> 31) as i64, made at the first array that needs it
+        LLVMValueRef zero = nullptr;  // position.x as i32, read at the first array that needs it
         for (LLVMValueRef a = LLVMGetFirstInstruction(first); a; a = LLVMGetNextInstruction(a)) {
             if (!LLVMIsAAllocaInst(a) || LLVMGetTypeKind(LLVMGetElementType(LLVMTypeOf(a))) != LLVMArrayTypeKind) continue;
             // the array's element GEPs [0, i]: one with a variable i makes the constant ones candidates
@@ -2286,10 +2288,13 @@ static unsigned fixPrivateConstantLoads(LLVMModuleRef module, Gen &g) {
                         zero = x;
                     }
                     // each load its own 0, (position.x + k) >> 31: one shared 0 would leave the addresses equal to the back end
+                    LLVMValueRef k = LLVMGetOperand(gep, 2);  // the index, in its own type (i64 from Metal's front end)
+                    LLVMTypeRef kt = LLVMTypeOf(k);
+                    if (LLVMGetTypeKind(kt) != LLVMIntegerTypeKind || LLVMGetIntTypeWidth(kt) < 32) continue;
                     LLVMPositionBuilderBefore(b, load);
-                    LLVMValueRef own = LLVMBuildLShr(b, LLVMBuildAdd(b, zero, LLVMConstInt(g.i32, fixed + 1, 0), ""), LLVMConstInt(g.i32, 31, 0), "");
-                    LLVMValueRef index[2] = {LLVMGetOperand(gep, 1),
-                                             LLVMBuildAdd(b, LLVMGetOperand(gep, 2), LLVMBuildZExt(b, own, LLVMInt64TypeInContext(g.context), ""), "")};
+                    LLVMValueRef own = LLVMBuildLShr(b, LLVMBuildAdd(b, zero, LLVMConstInt(g.i32, (fixed & 0xffff) + 1, 0), ""), LLVMConstInt(g.i32, 31, 0), "");
+                    if (LLVMGetIntTypeWidth(kt) > 32) own = LLVMBuildZExt(b, own, kt, "");
+                    LLVMValueRef index[2] = {LLVMGetOperand(gep, 1), LLVMBuildAdd(b, k, own, "")};
                     LLVMSetOperand(load, 0, LLVMBuildGEP(b, a, index, 2, ""));
                     fixed++;
                 }
