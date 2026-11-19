@@ -637,6 +637,50 @@ static IMP swizzle(const char *cls, const char *sel, IMP imp) {
     return method_setImplementation(m, imp);
 }
 
+// The Kepler driver has each encoder class twice, once for each of its 3D classes, with the same code: _KEPLER_A for the
+// GK104, GK106 and GK107 (GTX 650-770 and most other 600 / 700 cards) and _KEPLER_B for the GK110 and GK208 (GTX 780 and
+// Titan, GT 710 / 720 / 730), and _KEPLER_COMPUTE_A / _B likewise. keplerSwizzle hooks a selector of an _A class and, when
+// its _B twin defines it too, the twin, with the same hook; it returns the _A original, as swizzle does. A hook calls its
+// original through NVO(orig) (NVOR(orig, receiver) for another receiver), which is that original for an _A encoder and
+// the _B twin's for a _B one (a chained hook's "original" is the earlier hook, the same for both).
+typedef struct { IMP a, b; } NVTwin;
+static NVTwin nvTwins[64];
+static int nvTwinCount;
+static Class nvTwinClasses[8];
+static int nvTwinClassCount;
+static IMP keplerSwizzle(const char *cls, const char *sel, IMP imp) {
+    IMP a = swizzle(cls, sel, imp);
+    size_t length = strlen(cls);
+    char twin[128];
+    if (!a || length < 2 || length >= sizeof twin || strcmp(cls + length - 2, "_A") || nvTwinCount == 64) return a;
+    memcpy(twin, cls, length + 1);
+    twin[length - 1] = 'B';
+    if (!definesMethod(twin, sel)) return a;
+    IMP b = swizzle(twin, sel, imp);
+    if (!b) return a;
+    nvTwins[nvTwinCount++] = (NVTwin){a, b};
+    Class c = objc_getClass(twin);
+    int known = 0;
+    for (int i = 0; i < nvTwinClassCount; i++) known |= nvTwinClasses[i] == c;
+    if (!known && nvTwinClassCount < 8) nvTwinClasses[nvTwinClassCount++] = c;
+    return a;
+}
+static BOOL nvIsKeplerB(__unsafe_unretained id object) {
+    Class c = object ? object_getClass(object) : Nil;
+    for (int depth = 0; c && depth < 3; depth++, c = class_getSuperclass(c))  // the driver's _Statistics etc. subclasses too
+        for (int i = 0; i < nvTwinClassCount; i++)
+            if (c == nvTwinClasses[i]) return YES;
+    return NO;
+}
+static IMP nvOriginal(__unsafe_unretained id receiver, IMP a) {
+    if (!nvTwinCount || !nvIsKeplerB(receiver)) return a;
+    for (int i = 0; i < nvTwinCount; i++)
+        if (nvTwins[i].a == a) return nvTwins[i].b;
+    return a;
+}
+#define NVOR(orig, receiver) ((__typeof__(orig))nvOriginal((receiver), (IMP)(orig)))
+#define NVO(orig) NVOR(orig, self)
+
 // 14. OCLP's Metal wrapper replaces -[_MTLFunction newArgumentEncoderWithBufferIndex:reflection:functionReflection:] and
 // -[_MTLDevice newArgumentEncoderWithBufferBinding:] with stubs that return nil in every process whose path contains
 // "Safari" (Safari and its WebKit XPC services). MetalOld aborts the process (_MTLReportFailure, "bufferIndex N does not
@@ -2316,7 +2360,7 @@ static id nvRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor
 }
 static void nvRenderEndEncoding(id self, SEL _cmd) {
     NSArray *pending = objc_getAssociatedObject(self, kPendingResolveCopies);
-    origNVRenderEndEncoding(self, _cmd);
+    NVO(origNVRenderEndEncoding)(self, _cmd);
     if (!pending) return;
     objc_setAssociatedObject(self, kPendingResolveCopies, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     copyOutOfTemporaries(pending);
@@ -2327,7 +2371,7 @@ static void keplerResolveLevels(void) {
     if (origNVRenderEncoder || (setting && !strcmp(setting, "0")) || !definesMethod(kBuffer, "renderCommandEncoderWithDescriptor:") ||
         !definesMethod(kEncoder, "endEncoding"))
         return;
-    origNVRenderEndEncoding = (EndEncodingIMP)swizzle(kEncoder, "endEncoding", (IMP)nvRenderEndEncoding);
+    origNVRenderEndEncoding = (EndEncodingIMP)keplerSwizzle(kEncoder, "endEncoding", (IMP)nvRenderEndEncoding);
     origNVRenderEncoder = (RenderEncoderIMP)swizzle(kBuffer, "renderCommandEncoderWithDescriptor:", (IMP)nvRenderEncoder);
 }
 
@@ -2856,12 +2900,12 @@ static void nvOrderStencilUpload(id encoder, id<MTLTexture> t, MTLBlitOption opt
 }
 static void nvBufferToTexture(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInteger row, NSUInteger image, MTLSize size, id t,
                               NSUInteger slice, NSUInteger level, MTLOrigin origin) {
-    origNVBufferToTexture(self, _cmd, buffer, offset, row, image, size, t, slice, level, origin);
+    NVO(origNVBufferToTexture)(self, _cmd, buffer, offset, row, image, size, t, slice, level, origin);
     nvOrderStencilUpload(self, t, MTLBlitOptionNone);
 }
 static void nvBufferToTextureOptions(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInteger row, NSUInteger image, MTLSize size, id t,
                                      NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLBlitOption options) {
-    origNVBufferToTextureOptions(self, _cmd, buffer, offset, row, image, size, t, slice, level, origin, options);
+    NVO(origNVBufferToTextureOptions)(self, _cmd, buffer, offset, row, image, size, t, slice, level, origin, options);
     nvOrderStencilUpload(self, t, options);
 }
 static void nvStencilUploadOrder(void) {
@@ -2870,10 +2914,10 @@ static void nvStencilUploadOrder(void) {
     char withOptions[256];
     const char *setting = getenv("MTLSHIM_NV_STENCIL_ORDER");
     if (origNVBufferToTexture || (setting && !strcmp(setting, "0")) || !definesMethod(kEncoder, kBufferToTexture)) return;
-    origNVBufferToTexture = (BufferToTextureIMP)swizzle(kEncoder, kBufferToTexture, (IMP)nvBufferToTexture);
+    origNVBufferToTexture = (BufferToTextureIMP)keplerSwizzle(kEncoder, kBufferToTexture, (IMP)nvBufferToTexture);
     snprintf(withOptions, sizeof withOptions, "%soptions:", kBufferToTexture);
     if (definesMethod(kEncoder, withOptions))
-        origNVBufferToTextureOptions = (BufferToTextureOptionsIMP)swizzle(kEncoder, withOptions, (IMP)nvBufferToTextureOptions);
+        origNVBufferToTextureOptions = (BufferToTextureOptionsIMP)keplerSwizzle(kEncoder, withOptions, (IMP)nvBufferToTextureOptions);
 }
 // 65. 3D copies with a padded image stride on the Kepler driver. A copy between a buffer and more than one slice of a 3D
 // texture whose bytesPerImage is more than bytesPerRow x height read or wrote slice n at n x bytesPerRow x height, in
@@ -2906,33 +2950,33 @@ static MTLSize nvBlockEdge(id<MTLTexture> t, NSUInteger level, MTLOrigin origin,
 static void nvVolumeB2T(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInteger row, NSUInteger image, MTLSize size, id t,
                         NSUInteger slice, NSUInteger level, MTLOrigin origin) {
     size = nvBlockEdge(t, level, origin, size);
-    if (!nvVolumeSplit(t, size, row, image)) return origNVVolumeB2T(self, _cmd, buffer, offset, row, image, size, t, slice, level, origin);
+    if (!nvVolumeSplit(t, size, row, image)) return NVO(origNVVolumeB2T)(self, _cmd, buffer, offset, row, image, size, t, slice, level, origin);
     for (NSUInteger z = 0; z < size.depth; z++)
-        origNVVolumeB2T(self, _cmd, buffer, offset + z * image, row, image, MTLSizeMake(size.width, size.height, 1), t, slice, level,
+        NVO(origNVVolumeB2T)(self, _cmd, buffer, offset + z * image, row, image, MTLSizeMake(size.width, size.height, 1), t, slice, level,
                         MTLOriginMake(origin.x, origin.y, origin.z + z));
 }
 static void nvVolumeB2TOptions(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInteger row, NSUInteger image, MTLSize size, id t,
                                NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLBlitOption options) {
     size = nvBlockEdge(t, level, origin, size);
     if (!nvVolumeSplit(t, size, row, image))
-        return origNVVolumeB2TOptions(self, _cmd, buffer, offset, row, image, size, t, slice, level, origin, options);
+        return NVO(origNVVolumeB2TOptions)(self, _cmd, buffer, offset, row, image, size, t, slice, level, origin, options);
     for (NSUInteger z = 0; z < size.depth; z++)
-        origNVVolumeB2TOptions(self, _cmd, buffer, offset + z * image, row, image, MTLSizeMake(size.width, size.height, 1), t, slice, level,
+        NVO(origNVVolumeB2TOptions)(self, _cmd, buffer, offset + z * image, row, image, MTLSizeMake(size.width, size.height, 1), t, slice, level,
                                MTLOriginMake(origin.x, origin.y, origin.z + z), options);
 }
 static void nvVolumeT2B(id self, SEL _cmd, id t, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLSize size, id buffer,
                         NSUInteger offset, NSUInteger row, NSUInteger image) {
-    if (!nvVolumeSplit(t, size, row, image)) return origNVVolumeT2B(self, _cmd, t, slice, level, origin, size, buffer, offset, row, image);
+    if (!nvVolumeSplit(t, size, row, image)) return NVO(origNVVolumeT2B)(self, _cmd, t, slice, level, origin, size, buffer, offset, row, image);
     for (NSUInteger z = 0; z < size.depth; z++)
-        origNVVolumeT2B(self, _cmd, t, slice, level, MTLOriginMake(origin.x, origin.y, origin.z + z), MTLSizeMake(size.width, size.height, 1),
+        NVO(origNVVolumeT2B)(self, _cmd, t, slice, level, MTLOriginMake(origin.x, origin.y, origin.z + z), MTLSizeMake(size.width, size.height, 1),
                         buffer, offset + z * image, row, image);
 }
 static void nvVolumeT2BOptions(id self, SEL _cmd, id t, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLSize size, id buffer,
                                NSUInteger offset, NSUInteger row, NSUInteger image, MTLBlitOption options) {
     if (!nvVolumeSplit(t, size, row, image))
-        return origNVVolumeT2BOptions(self, _cmd, t, slice, level, origin, size, buffer, offset, row, image, options);
+        return NVO(origNVVolumeT2BOptions)(self, _cmd, t, slice, level, origin, size, buffer, offset, row, image, options);
     for (NSUInteger z = 0; z < size.depth; z++)
-        origNVVolumeT2BOptions(self, _cmd, t, slice, level, MTLOriginMake(origin.x, origin.y, origin.z + z),
+        NVO(origNVVolumeT2BOptions)(self, _cmd, t, slice, level, MTLOriginMake(origin.x, origin.y, origin.z + z),
                                MTLSizeMake(size.width, size.height, 1), buffer, offset + z * image, row, image, options);
 }
 static void nvVolumeCopies(void) {  // items 65 and 67; after item 53, whose buffer-to-texture hook it calls
@@ -2945,15 +2989,15 @@ static void nvVolumeCopies(void) {  // items 65 and 67; after item 53, whose buf
     nvVolumeOn = !(volume && !strcmp(volume, "0"));
     nvBlockEdgeOn = !(edge && !strcmp(edge, "0"));
     if (origNVVolumeB2T || (!nvVolumeOn && !nvBlockEdgeOn) || !definesMethod(kEncoder, kBufferToTexture)) return;
-    origNVVolumeB2T = (BufferToTextureIMP)swizzle(kEncoder, kBufferToTexture, (IMP)nvVolumeB2T);
+    origNVVolumeB2T = (BufferToTextureIMP)keplerSwizzle(kEncoder, kBufferToTexture, (IMP)nvVolumeB2T);
     snprintf(withOptions, sizeof withOptions, "%soptions:", kBufferToTexture);
     if (definesMethod(kEncoder, withOptions))
-        origNVVolumeB2TOptions = (BufferToTextureOptionsIMP)swizzle(kEncoder, withOptions, (IMP)nvVolumeB2TOptions);
+        origNVVolumeB2TOptions = (BufferToTextureOptionsIMP)keplerSwizzle(kEncoder, withOptions, (IMP)nvVolumeB2TOptions);
     if (definesMethod(kEncoder, kTextureToBuffer))
-        origNVVolumeT2B = (TextureToBufferIMP)swizzle(kEncoder, kTextureToBuffer, (IMP)nvVolumeT2B);
+        origNVVolumeT2B = (TextureToBufferIMP)keplerSwizzle(kEncoder, kTextureToBuffer, (IMP)nvVolumeT2B);
     snprintf(withOptions, sizeof withOptions, "%soptions:", kTextureToBuffer);
     if (definesMethod(kEncoder, withOptions))
-        origNVVolumeT2BOptions = (TextureToBufferOptionsIMP)swizzle(kEncoder, withOptions, (IMP)nvVolumeT2BOptions);
+        origNVVolumeT2BOptions = (TextureToBufferOptionsIMP)keplerSwizzle(kEncoder, withOptions, (IMP)nvVolumeT2BOptions);
 }
 static void stencilCopies(void) {
     static const char *const kTextureToBuffer =
@@ -4141,17 +4185,17 @@ static void ktaRecordBuffer(__unsafe_unretained id encoder, int stage, __unsafe_
 #define KTA_STAGE_HOOKS(name, stage)                                                                                    \
     static void ktaSetBuffer##name(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id buffer, NSUInteger offset, NSUInteger index) {                  \
         if (ktaTracking) ktaRecordBuffer(self, stage, buffer, offset, index);                                            \
-        ktaOrigSetBuffer[stage](self, _cmd, buffer, offset, index);                                                      \
+        NVO(ktaOrigSetBuffer[stage])(self, _cmd, buffer, offset, index);                                                      \
     }                                                                                                                    \
     static void ktaSetOffset##name(__unsafe_unretained id self, SEL _cmd, NSUInteger offset, NSUInteger index) {                             \
         if (ktaTracking && index < 31) ktaState(self)->offsets[stage][index] = offset;                                   \
-        ktaOrigSetOffset[stage](self, _cmd, offset, index);                                                              \
+        NVO(ktaOrigSetOffset[stage])(self, _cmd, offset, index);                                                              \
     }                                                                                                                    \
     static void ktaSetBuffers##name(__unsafe_unretained id self, SEL _cmd, const id __unsafe_unretained *buffers, const NSUInteger *offsets, \
                                     NSRange range) {                                                                     \
         for (NSUInteger i = 0; ktaTracking && i < range.length; i++)                                                     \
             ktaRecordBuffer(self, stage, buffers[i], offsets[i], range.location + i);                                    \
-        ktaOrigSetBuffers[stage](self, _cmd, buffers, offsets, range);                                                   \
+        NVO(ktaOrigSetBuffers[stage])(self, _cmd, buffers, offsets, range);                                                   \
     }                                                                                                                    \
     static void ktaSetBytes##name(__unsafe_unretained id self, SEL _cmd, const void *bytes, NSUInteger length, NSUInteger index) {           \
         if (ktaTracking && index < 31) {                                                                                 \
@@ -4159,34 +4203,34 @@ static void ktaRecordBuffer(__unsafe_unretained id encoder, int stage, __unsafe_
             s->buffers[stage][index] = nil;                                                                              \
             s->bytes[stage][index] = length <= 4096 ? [NSData dataWithBytes:bytes length:length] : nil;                   \
         }                                                                                                                \
-        ktaOrigSetBytes[stage](self, _cmd, bytes, length, index);                                                        \
+        NVO(ktaOrigSetBytes[stage])(self, _cmd, bytes, length, index);                                                        \
     }                                                                                                                    \
     static void ktaSetTexture##name(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id texture, NSUInteger index) {                                   \
         if (ktaTracking && index < kKTATextures) ktaState(self)->textures[stage][index] = texture;                       \
-        ktaOrigSetTexture[stage](self, _cmd, texture, index);                                                            \
+        NVO(ktaOrigSetTexture[stage])(self, _cmd, texture, index);                                                            \
     }                                                                                                                    \
     static void ktaSetTextures##name(__unsafe_unretained id self, SEL _cmd, const id __unsafe_unretained *textures, NSRange range) {         \
         MTLShimKTAState *s = ktaTracking ? ktaState(self) : nil;                                                         \
         for (NSUInteger i = 0; s && i < range.length; i++)                                                               \
             if (range.location + i < kKTATextures) s->textures[stage][range.location + i] = textures[i];                 \
-        ktaOrigSetTextures[stage](self, _cmd, textures, range);                                                          \
+        NVO(ktaOrigSetTextures[stage])(self, _cmd, textures, range);                                                          \
     }
 KTA_STAGE_HOOKS(Vertex, 0)
 KTA_STAGE_HOOKS(Fragment, 1)
 KTA_STAGE_HOOKS(Compute, 2)
 static void ktaSetRenderPipeline(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id pipeline) {
-    if (!ktaTracking) return ktaOrigSetRenderPipeline(self, _cmd, pipeline);
+    if (!ktaTracking) return NVO(ktaOrigSetRenderPipeline)(self, _cmd, pipeline);
     NSData *bindings = objc_getAssociatedObject(pipeline, kKTABindingsKey);
     MTLShimKTAState *s = bindings ? ktaState(self) : objc_getAssociatedObject(self, kKTAStateKey);
     if (s) s->bindings = bindings;
-    ktaOrigSetRenderPipeline(self, _cmd, pipeline);
+    NVO(ktaOrigSetRenderPipeline)(self, _cmd, pipeline);
 }
 static void ktaSetComputePipeline(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id pipeline) {
-    if (!ktaTracking) return ktaOrigSetComputePipeline(self, _cmd, pipeline);
+    if (!ktaTracking) return NVO(ktaOrigSetComputePipeline)(self, _cmd, pipeline);
     NSData *bindings = objc_getAssociatedObject(pipeline, kKTABindingsKey);
     MTLShimKTAState *s = bindings ? ktaState(self) : objc_getAssociatedObject(self, kKTAStateKey);
     if (s) s->bindings = bindings;
-    ktaOrigSetComputePipeline(self, _cmd, pipeline);
+    NVO(ktaOrigSetComputePipeline)(self, _cmd, pipeline);
 }
 static BOOL ktaDepthOrStencil(MTLPixelFormat f) {
     switch (f) {
@@ -4206,15 +4250,15 @@ static void ktaBind(__unsafe_unretained id encoder, BOOL restore) {
     for (NSUInteger k = 0; k < s->bindings.length / sizeof(KTABinding); k++) {
         int st = b[k].stage, h = b[k].hidden;
         if (restore) {
-            if (s->buffers[st][h]) ktaOrigSetBuffer[st](encoder, ktaSetBufferSel[st], s->buffers[st][h], s->offsets[st][h], h);
-            else if (s->bytes[st][h]) ktaOrigSetBytes[st](encoder, ktaSetBytesSel[st], s->bytes[st][h].bytes, s->bytes[st][h].length, h);
+            if (s->buffers[st][h]) NVOR(ktaOrigSetBuffer[st], encoder)(encoder, ktaSetBufferSel[st], s->buffers[st][h], s->offsets[st][h], h);
+            else if (s->bytes[st][h]) NVOR(ktaOrigSetBytes[st], encoder)(encoder, ktaSetBytesSel[st], s->bytes[st][h].bytes, s->bytes[st][h].length, h);
             continue;
         }
         if (b[k].texture == kKTADepthMask) {  // item 62: bit n set when texture n has a depth or stencil format
             uint32_t mask[kKTATextures / 32] = {0};
             for (int t = 0; t < kKTATextures; t++)
                 if (s->textures[st][t] && ktaDepthOrStencil([(id<MTLTexture>)s->textures[st][t] pixelFormat])) mask[t / 32] |= 1u << (t % 32);
-            ktaOrigSetBytes[st](encoder, ktaSetBytesSel[st], mask, sizeof mask, h);
+            NVOR(ktaOrigSetBytes[st], encoder)(encoder, ktaSetBytesSel[st], mask, sizeof mask, h);
             continue;
         }
         id<MTLBuffer> buffer = b[k].texture < kKTATextures ? ktaBacking(s->textures[st][b[k].texture]) : nil;  // (beyond: not tracked)
@@ -4230,7 +4274,7 @@ static void ktaBind(__unsafe_unretained id encoder, BOOL restore) {
             }
             buffer = dummy;
         }
-        if (buffer) ktaOrigSetBuffer[st](encoder, ktaSetBufferSel[st], buffer, 0, h);
+        if (buffer) NVOR(ktaOrigSetBuffer[st], encoder)(encoder, ktaSetBufferSel[st], buffer, 0, h);
     }
 }
 #define KTA_DRAW(name, params, args)                                                                                    \
@@ -4238,7 +4282,7 @@ static void ktaBind(__unsafe_unretained id encoder, BOOL restore) {
     static KTADraw##name##IMP ktaOrigDraw##name;                                                                         \
     static void ktaDraw##name params {                                                                                  \
         ktaBind(self, NO);                                                                                               \
-        ktaOrigDraw##name args;                                                                                          \
+        NVO(ktaOrigDraw##name) args;                                                                                          \
         ktaBind(self, YES);                                                                                              \
     }
 KTA_DRAW(P, (__unsafe_unretained id self, SEL _cmd, NSUInteger t, NSUInteger s, NSUInteger c), (self, _cmd, t, s, c))
@@ -4295,15 +4339,15 @@ static void keplerTextureAtomics(void) {
     for (int st = 0; st < 3; st++) {
         ktaSetBufferSel[st] = sel_registerName(setBuffer[st]);
         ktaSetBytesSel[st] = sel_registerName(setBytes[st]);
-        ktaOrigSetBuffer[st] = (ABSetBufferIMP)swizzle(stageClass[st], setBuffer[st], bufferHooks[st]);
-        ktaOrigSetOffset[st] = (ABSetOffsetIMP)swizzle(stageClass[st], setOffset[st], offsetHooks[st]);
-        ktaOrigSetBuffers[st] = (ABSetBuffersIMP)swizzle(stageClass[st], setBuffers[st], buffersHooks[st]);
-        ktaOrigSetBytes[st] = (ABSetBytesIMP)swizzle(stageClass[st], setBytes[st], bytesHooks[st]);
-        ktaOrigSetTexture[st] = (KTASetTextureIMP)swizzle(stageClass[st], setTexture[st], textureHooks[st]);
-        ktaOrigSetTextures[st] = (KTASetTexturesIMP)swizzle(stageClass[st], setTextures[st], texturesHooks[st]);
+        ktaOrigSetBuffer[st] = (ABSetBufferIMP)keplerSwizzle(stageClass[st], setBuffer[st], bufferHooks[st]);
+        ktaOrigSetOffset[st] = (ABSetOffsetIMP)keplerSwizzle(stageClass[st], setOffset[st], offsetHooks[st]);
+        ktaOrigSetBuffers[st] = (ABSetBuffersIMP)keplerSwizzle(stageClass[st], setBuffers[st], buffersHooks[st]);
+        ktaOrigSetBytes[st] = (ABSetBytesIMP)keplerSwizzle(stageClass[st], setBytes[st], bytesHooks[st]);
+        ktaOrigSetTexture[st] = (KTASetTextureIMP)keplerSwizzle(stageClass[st], setTexture[st], textureHooks[st]);
+        ktaOrigSetTextures[st] = (KTASetTexturesIMP)keplerSwizzle(stageClass[st], setTextures[st], texturesHooks[st]);
     }
-    ktaOrigSetRenderPipeline = (ABSetPipelineIMP)swizzle(kRender, "setRenderPipelineState:", (IMP)ktaSetRenderPipeline);
-    ktaOrigSetComputePipeline = (ABSetPipelineIMP)swizzle(kCompute, "setComputePipelineState:", (IMP)ktaSetComputePipeline);
+    ktaOrigSetRenderPipeline = (ABSetPipelineIMP)keplerSwizzle(kRender, "setRenderPipelineState:", (IMP)ktaSetRenderPipeline);
+    ktaOrigSetComputePipeline = (ABSetPipelineIMP)keplerSwizzle(kCompute, "setComputePipelineState:", (IMP)ktaSetComputePipeline);
     const struct { const char *cls, *sel; IMP imp; IMP *orig; } draws[] = {
         {kRender, "drawPrimitives:vertexStart:vertexCount:", (IMP)ktaDrawP, (IMP *)&ktaOrigDrawP},
         {kRender, "drawPrimitives:vertexStart:vertexCount:instanceCount:", (IMP)ktaDrawPI, (IMP *)&ktaOrigDrawPI},
@@ -4320,7 +4364,7 @@ static void keplerTextureAtomics(void) {
         {kCompute, "dispatchThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerThreadgroup:", (IMP)ktaDrawDInd, (IMP *)&ktaOrigDrawDInd},
     };
     for (size_t i = 0; i < sizeof draws / sizeof *draws; i++)
-        if (definesMethod(draws[i].cls, draws[i].sel)) *draws[i].orig = swizzle(draws[i].cls, draws[i].sel, draws[i].imp);
+        if (definesMethod(draws[i].cls, draws[i].sel)) *draws[i].orig = keplerSwizzle(draws[i].cls, draws[i].sel, draws[i].imp);
     const struct { const char *sel; IMP imp; IMP *orig; } pipelines[] = {
         {"newRenderPipelineStateWithDescriptor:options:reflection:error:", (IMP)ktaRenderRefl, (IMP *)&ktaOrigRenderRefl},
         {"newRenderPipelineStateWithDescriptor:options:completionHandler:", (IMP)ktaRenderOptAsync, (IMP *)&ktaOrigRenderOptAsync},
@@ -4398,17 +4442,17 @@ static id visRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descripto
 }
 static void visSetMode(__unsafe_unretained id self, SEL _cmd, MTLVisibilityResultMode mode, NSUInteger offset) {
     MTLShimVisState *state = objc_getAssociatedObject(self, kVisStateKey);
-    if (!state) { visOrigMode(self, _cmd, mode, offset); return; }
+    if (!state) { NVO(visOrigMode)(self, _cmd, mode, offset); return; }
     state->mode = mode;
     state->appOffset = offset;
-    if (mode == MTLVisibilityResultModeDisabled) visOrigMode(self, _cmd, mode, 0);  // the draws set their slots
+    if (mode == MTLVisibilityResultModeDisabled) NVO(visOrigMode)(self, _cmd, mode, 0);  // the draws set their slots
     else [state->touched addIndex:offset / 8];
 }
 static inline void visBeforeDraw(__unsafe_unretained id self) {
     MTLShimVisState *state = objc_getAssociatedObject(self, kVisStateKey);
     if (!state || state->mode == MTLVisibilityResultModeDisabled) return;
     NSUInteger slot = state->used < kVisSlots ? state->used++ : kVisSlots - 1;
-    visOrigMode(self, @selector(setVisibilityResultMode:offset:), state->mode, slot * 8);
+    NVO(visOrigMode)(self, @selector(setVisibilityResultMode:offset:), state->mode, slot * 8);
     uint32_t record[2] = {(uint32_t)(state->appOffset / 8), (uint32_t)slot};
     [state->records appendBytes:record length:sizeof record];
     [state->drawn addIndex:state->appOffset / 8];
@@ -4418,7 +4462,7 @@ static inline void visBeforeDraw(__unsafe_unretained id self) {
     static VisDraw##name##IMP visOrigDraw##name;                                                                         \
     static void visDraw##name params {                                                                                  \
         visBeforeDraw(self);                                                                                             \
-        visOrigDraw##name args;                                                                                          \
+        NVO(visOrigDraw##name) args;                                                                                     \
     }
 VIS_DRAW(P, (__unsafe_unretained id self, SEL _cmd, NSUInteger t, NSUInteger s, NSUInteger c), (self, _cmd, t, s, c))
 VIS_DRAW(PI, (__unsafe_unretained id self, SEL _cmd, NSUInteger t, NSUInteger s, NSUInteger c, NSUInteger i), (self, _cmd, t, s, c, i))
@@ -4458,7 +4502,7 @@ static id<MTLComputePipelineState> visSumPipeline(id<MTLDevice> device) {
 }
 static void visEndEncoding(id self, SEL _cmd) {
     MTLShimVisState *state = objc_getAssociatedObject(self, kVisStateKey);
-    visOrigEndEncoding(self, _cmd);
+    NVO(visOrigEndEncoding)(self, _cmd);
     if (!state) return;
     objc_setAssociatedObject(self, kVisStateKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [state->touched removeIndexes:state->drawn];
@@ -4576,7 +4620,7 @@ static void nvResolveCounters(id self, SEL _cmd, id sampleBuffer, NSRange range,
         if (results.length >= 4 && scratch)
             [(id<MTLBlitCommandEncoder>)self copyFromBuffer:results sourceOffset:0 toBuffer:scratch destinationOffset:0 size:4];
     }
-    origNVResolveCounters(self, _cmd, sampleBuffer, range, destination, offset);
+    NVO(origNVResolveCounters)(self, _cmd, sampleBuffer, range, destination, offset);
 }
 static void keplerResolveResidency(void) {
     static BOOL done;
@@ -4584,7 +4628,7 @@ static void keplerResolveResidency(void) {
     static const char *const kClass = "NVMTLBlitCommandEncoder_KEPLER_A", *const kSel = "resolveCounters:inRange:destinationBuffer:destinationOffset:";
     if (done || (setting && !strcmp(setting, "0")) || !definesMethod(kClass, kSel)) return;
     done = YES;
-    origNVResolveCounters = (NVResolveCountersIMP)swizzle(kClass, kSel, (IMP)nvResolveCounters);
+    origNVResolveCounters = (NVResolveCountersIMP)keplerSwizzle(kClass, kSel, (IMP)nvResolveCounters);
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Kepler counter resolves: result buffer made resident\n");
 }
 
@@ -4646,9 +4690,11 @@ typedef void (*NVSetViewportIMP)(id, SEL, MTLViewport);
 typedef void (*NVSetViewportsIMP)(id, SEL, const MTLViewport *, NSUInteger);
 static NVSetViewportIMP origNVSetViewport;
 static NVSetViewportsIMP origNVSetViewports;
-static ptrdiff_t nvRenderStateOffset;
+static ptrdiff_t nvRenderStateOffset = -1, nvRenderStateOffsetB = -1;  // _KEPLER_A, _KEPLER_B
 static void nvReverseDepth(id self, const MTLViewport *viewports, NSUInteger count) {
-    char *state = *(char **)((char *)(__bridge void *)self + nvRenderStateOffset);
+    ptrdiff_t offset = nvIsKeplerB(self) ? nvRenderStateOffsetB : nvRenderStateOffset;
+    if (offset < 0) return;
+    char *state = *(char **)((char *)(__bridge void *)self + offset);
     for (NSUInteger i = 0; state && viewports && i < count && i < 16; i++)
         if (viewports[i].znear > viewports[i].zfar) {
             float *transform = (float *)(state + 0x950 + 0x18 * i);
@@ -4657,11 +4703,11 @@ static void nvReverseDepth(id self, const MTLViewport *viewports, NSUInteger cou
         }
 }
 static void nvSetViewport(id self, SEL _cmd, MTLViewport viewport) {
-    origNVSetViewport(self, _cmd, viewport);
+    NVO(origNVSetViewport)(self, _cmd, viewport);
     nvReverseDepth(self, &viewport, 1);
 }
 static void nvSetViewports(id self, SEL _cmd, const MTLViewport *viewports, NSUInteger count) {
-    origNVSetViewports(self, _cmd, viewports, count);
+    NVO(origNVSetViewports)(self, _cmd, viewports, count);
     nvReverseDepth(self, viewports, count);
 }
 // The ivar offset a Kepler setter loads first (push rbp; mov rbp, rsp; mov disp(%rip), %rax; mov (%rdi,%rax), %rax), if
@@ -4697,8 +4743,11 @@ static void keplerReversedDepth(void) {
     ptrdiff_t one = nvSetterStateOffset(kClass, "setViewport:", 0xb7, kOne, 2), many = nvSetterStateOffset(kClass, "setViewports:count:", 0xe8, kMany, 2);
     if (one < 0 || one != many) return;
     nvRenderStateOffset = one;
-    origNVSetViewport = (NVSetViewportIMP)swizzle(kClass, "setViewport:", (IMP)nvSetViewport);
-    origNVSetViewports = (NVSetViewportsIMP)swizzle(kClass, "setViewports:count:", (IMP)nvSetViewports);
+    static const char *const kClassB = "NVMTLRenderCommandEncoder_KEPLER_B";  // checked the same way; its setters are left as they are if not
+    ptrdiff_t oneB = nvSetterStateOffset(kClassB, "setViewport:", 0xb7, kOne, 2), manyB = nvSetterStateOffset(kClassB, "setViewports:count:", 0xe8, kMany, 2);
+    if (oneB >= 0 && oneB == manyB) nvRenderStateOffsetB = oneB;
+    origNVSetViewport = (NVSetViewportIMP)keplerSwizzle(kClass, "setViewport:", (IMP)nvSetViewport);
+    origNVSetViewports = (NVSetViewportsIMP)keplerSwizzle(kClass, "setViewports:count:", (IMP)nvSetViewports);
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Kepler reversed viewport depth ranges: setters wrapped\n");
 }
 
@@ -4751,9 +4800,9 @@ static void keplerVisibilitySums(void) {
         {"drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:", (IMP)visDrawXInd, (IMP *)&visOrigDrawXInd},
     };
     for (unsigned i = 0; i < sizeof draws / sizeof *draws; i++)
-        if (definesMethod(kRender, draws[i].sel)) *draws[i].orig = swizzle(kRender, draws[i].sel, draws[i].hook);
-    visOrigMode = (VisModeIMP)swizzle(kRender, "setVisibilityResultMode:offset:", (IMP)visSetMode);
-    visOrigEndEncoding = (EndEncodingIMP)swizzle(kRender, "endEncoding", (IMP)visEndEncoding);
+        if (definesMethod(kRender, draws[i].sel)) *draws[i].orig = keplerSwizzle(kRender, draws[i].sel, draws[i].hook);
+    visOrigMode = (VisModeIMP)keplerSwizzle(kRender, "setVisibilityResultMode:offset:", (IMP)visSetMode);
+    visOrigEndEncoding = (EndEncodingIMP)keplerSwizzle(kRender, "endEncoding", (IMP)visEndEncoding);
     visOrigEncoder = (RenderEncoderIMP)swizzle(kBuffer, "renderCommandEncoderWithDescriptor:", (IMP)visRenderEncoder);
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Kepler visibility results: per-draw slots summed at the end of each pass\n");
 }
