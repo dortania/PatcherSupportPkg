@@ -2551,6 +2551,68 @@ static unsigned guardDivisorOne(LLVMModuleRef module, Gen &g) {
     return n;
 }
 
+// ---- a 2- or 4-lane vector of 8- or 16-bit integers masked or shifted with a constant ----------------------------------
+// q = (uchar4(201, v1, v2, v3) << uchar4(0, 7, 2, 5)) & uchar4(78, 137, 22, 80), then q.x ^ q.y, came out 0x40 instead of
+// 0x48 (0xc0 for 0xc8) on every thread: lane x, the constant 201 & 78, lost bit 3 (mslfuzz2.py VEC=1 seed 7232, where it
+// was a threadgroup index, so every thread's result in a word, and two more words in some threads). The IR the back end
+// gets is right: a shl <4 x i8> by <0, 7, 2, 5>, an and with a constant, two extractelements and an 8-bit or (the
+// optimizer's form of that xor, the lanes' bits being disjoint). The same with ushort4 goes wrong too; a variable lane x,
+// the same shift for every lane, a uchar2, no mask, xor or or with the constant, an add of the two lanes instead, or lane x
+// alone were right. Done lane by lane, the and alone fixes the seed, but with shifts of <0, 7, 0, 0> the vector shift left
+// over still goes wrong; the shift and the and both done lane by lane fix every form. So each and with a constant, and
+// each shl, lshr and ashr by constant amounts that aren't the same for every lane, of a 2- or 4-lane vector of 8- or
+// 16-bit integers, is done lane by lane (Kepler has no packed 8- or 16-bit logic or shifts, so the back end takes the
+// vector apart anyway; 3-lane vectors: below). NVAIR_VECTOR_CONSTANT_FIX=0 turns it off.
+static bool perLaneAmounts(LLVMValueRef c) {  // a constant vector whose lanes aren't all the same constant
+    if (!LLVMIsAConstant(c)) return false;
+    bool dv = LLVMIsAConstantDataVector(c), cv = LLVMIsAConstantVector(c);
+    if (!dv && !cv) return false;  // zeroinitializer and the like
+    unsigned long long first = 0;
+    for (unsigned i = 0, n = LLVMGetVectorSize(LLVMTypeOf(c)); i < n; i++) {
+        LLVMValueRef e = dv ? LLVMGetElementAsConstant(c, i) : LLVMGetOperand(c, i);
+        if (!e || !LLVMIsAConstantInt(e)) continue;  // an undef lane: any amount
+        unsigned long long v = LLVMConstIntGetZExtValue(e);
+        if (i && v != first) return true;
+        first = v;
+    }
+    return false;
+}
+static unsigned scalarizeConstantLaneOps(LLVMModuleRef module, Gen &g) {
+    enum { kShl = 20, kLShr = 21, kAShr = 22, kAnd = 23 };
+    std::vector<LLVMValueRef> ops;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                int op = LLVMGetInstructionOpcode(inst);
+                if (op != kAnd && op != kShl && op != kLShr && op != kAShr) continue;
+                LLVMTypeRef t = LLVMTypeOf(inst);
+                if (LLVMGetTypeKind(t) != LLVMVectorTypeKind || (LLVMGetVectorSize(t) != 2 && LLVMGetVectorSize(t) != 4)) continue;
+                LLVMTypeRef e = LLVMGetElementType(t);
+                if (LLVMGetTypeKind(e) != LLVMIntegerTypeKind || LLVMGetIntTypeWidth(e) > 16) continue;
+                if (op == kAnd ? !LLVMIsAConstant(LLVMGetOperand(inst, 0)) && !LLVMIsAConstant(LLVMGetOperand(inst, 1))
+                               : !perLaneAmounts(LLVMGetOperand(inst, 1)))
+                    continue;
+                ops.push_back(inst);
+            }
+    if (ops.empty()) return 0;
+    LLVMBuilderRef b = LLVMCreateBuilderInContext(g.context);
+    for (LLVMValueRef inst : ops) {
+        int op = LLVMGetInstructionOpcode(inst);
+        LLVMPositionBuilderBefore(b, inst);
+        LLVMValueRef x = LLVMGetOperand(inst, 0), y = LLVMGetOperand(inst, 1), r = LLVMGetUndef(LLVMTypeOf(inst));
+        for (unsigned i = 0, n = LLVMGetVectorSize(LLVMTypeOf(inst)); i < n; i++) {
+            LLVMValueRef xi = LLVMBuildExtractElement(b, x, g.c32(i), ""), yi = LLVMBuildExtractElement(b, y, g.c32(i), "");
+            LLVMValueRef v = op == kAnd ? LLVMBuildAnd(b, xi, yi, "") : op == kShl ? LLVMBuildShl(b, xi, yi, "")
+                           : op == kLShr ? LLVMBuildLShr(b, xi, yi, "") : LLVMBuildAShr(b, xi, yi, "");
+            r = LLVMBuildInsertElement(b, r, v, g.c32(i), "");
+        }
+        LLVMReplaceAllUsesWith(inst, r);
+        LLVMInstructionEraseFromParent(inst);
+    }
+    LLVMDisposeBuilder(b);
+    return (unsigned)ops.size();
+}
+
 // ---- an unsigned division of a sign-extended 8- or 16-bit value ---------------------------------------------------------
 // (uint)((int)(short)x % 28781) / d, with d not a constant, came out wrong whenever the remainder was negative: for d = 1,
 // 0xffffbb78 gave 0xffffb901 (mslfuzz2.py VEC=1 seed 5221, where it was 58 threads' results; the statement alone in a
@@ -2677,6 +2739,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (cubeReads && logging()) fprintf(stderr, "[nvair] %u cube read body(ies) given the level's size and a mip-filtered sampler\n", cubeReads);
         unsigned oddVectors = disabled("NVAIR_ODD_VECTOR_FIX") ? 0 : scalarizeOddVectors(module, g);
         if (oddVectors && logging()) fprintf(stderr, "[nvair] %u operation(s) on 3-lane 8/16-bit vectors done lane by lane\n", oddVectors);
+        unsigned laneOps = disabled("NVAIR_VECTOR_CONSTANT_FIX") ? 0 : scalarizeConstantLaneOps(module, g);
+        if (laneOps && logging()) fprintf(stderr, "[nvair] %u and(s)/shift(s) of a 2/4-lane 8/16-bit vector by a constant done lane by lane\n", laneOps);
         unsigned divisors = disabled("NVAIR_DIVISOR_ONE_FIX") ? 0 : guardDivisorOne(module, g);
         if (divisors && logging()) fprintf(stderr, "[nvair] %u remainder(s) guarded for a divisor of 1\n", divisors);
         unsigned sextDividends = disabled("NVAIR_SEXT_DIVIDEND_FIX") ? 0 : hideSignExtendedDividends(module, g);
