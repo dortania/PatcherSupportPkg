@@ -1,5 +1,5 @@
-// n32-kepler-divisor-one (Kepler adapter, NVAIR_DIVISOR_ONE_FIX): division and remainder by a divisor that turns out to
-// be 1, in a big kernel. 0xffffffff % b with b = (31 * x) | 1 equal to 1 came out as 766 instead of 0 for one thread
+// n32-kepler-divisor-one (Kepler adapter, NVAIR_DIVISOR_ONE_FIX): the remainder by a divisor that turns out to be 1, in
+// a big kernel. 0xffffffff % b with b = (31 * x) | 1 equal to 1 came out as 766 instead of 0 for one thread
 // (mslfuzz2.py VEC=1 seed 3841, unreduced: reducing it swapped in another miscompile that the fix doesn't touch); the same
 // kernel with the operands written out was right. A select on b == 1
 // fixes it and the same select on b == 2 doesn't: the divisor-1 path of Kepler's division, which always takes its final
@@ -217,5 +217,5 @@ int main(int argc, char **argv) { @autoreleasepool {
         if (h != want[t]) { wrong++; if (first < 0) first = t; }
     }
     if (wrong) return FAIL(bug, "%s: %d of %d threads differ from the CPU reference (first: thread %d)", name, wrong, T, first);
-    return PASS(bug, "%s: division and remainder by a divisor of 1 are right in a big kernel too", name);
+    return PASS(bug, "%s: the remainder by a divisor of 1 is right in a big kernel too", name);
 }}
