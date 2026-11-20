@@ -48,6 +48,9 @@
 //
 // Cube array indices below 0 raised to 0, as AMDAdapter does. NVAIR_CUBE_ARRAY_FIX=0.
 //
+// Integer arithmetic on 3-lane vectors of 8- and 16-bit integers (lane z went wrong beside the padding lane) done lane by
+// lane. NVAIR_ODD_VECTOR_FIX=0.
+//
 // LLVM's {u,s}{add,sub,mul}.with.overflow intrinsics, which Metal's front end makes of overflow checks and the back end
 // can't select, made plain arithmetic. NVAIR_OVERFLOW_FIX=0.
 //
@@ -190,6 +193,10 @@ void LLVMAddAttributeAtIndex(LLVMValueRef, unsigned, LLVMAttributeRef);
 void LLVMRemoveEnumAttributeAtIndex(LLVMValueRef, unsigned, unsigned);
 enum { LLVMUDiv = 14, LLVMSDiv = 15, LLVMURem = 17, LLVMSRem = 18, LLVMShl = 20, LLVMLShr = 21, LLVMAShr = 22, LLVMTrunc = 30, LLVMZExt = 31, LLVMSExt = 32 };
 int LLVMGetInstructionOpcode(LLVMValueRef);
+int LLVMGetICmpPredicate(LLVMValueRef);
+LLVMValueRef LLVMBuildSDiv(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildSRem(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+LLVMValueRef LLVMBuildSExt(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
 LLVMBasicBlockRef LLVMGetFirstBasicBlock(LLVMValueRef);
 LLVMBasicBlockRef LLVMGetNextBasicBlock(LLVMBasicBlockRef);
 LLVMValueRef LLVMGetFirstInstruction(LLVMBasicBlockRef);
@@ -2545,6 +2552,62 @@ static unsigned guardDivisorOne(LLVMModuleRef module, Gen &g) {
     return n;
 }
 
+// ---- arithmetic on 3-lane vectors of 8- and 16-bit integers --------------------------------------------------------------
+// ushort3(1, 6, 5) | (ushort3(7166, 18911, 44867) & m), with m.z = ushort(x & 1124510566u), lost bit 0 of the constant in
+// lane z (6 for 7) on every thread, while lanes x and y, a ushort2 or ushort4 of the same, and the same expression with
+// either mask left out were right (mslfuzz2.py VEC=1 seed 4480: every thread's result wrong in two words). The IR the back
+// end receives, after the plugin's optimizer, is right; the back end widens a 3-lane vector to 4 lanes in two 32-bit
+// registers, and lane z, beside the undefined fourth lane, is where it goes wrong. Each integer add, sub, mul, shift,
+// and, or, xor, division and remainder on a 3-lane vector of 8- or 16-bit integers is done lane by lane (Kepler has no
+// packed 16-bit arithmetic, so the lanes were separate instructions anyway). NVAIR_ODD_VECTOR_FIX=0 turns it off.
+static unsigned scalarizeOddVectors(LLVMModuleRef module, Gen &g) {
+    enum { kAdd = 8, kSub = 10, kMul = 12, kShl = 20, kLShr = 21, kAShr = 22, kAnd = 23, kOr = 24, kXor = 25 };
+    std::vector<LLVMValueRef> ops;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                int op = LLVMGetInstructionOpcode(inst);
+                if (op != kAdd && op != kSub && op != kMul && op != kShl && op != kLShr && op != kAShr && op != kAnd && op != kOr && op != kXor &&
+                    op != LLVMUDiv && op != LLVMSDiv && op != LLVMURem && op != LLVMSRem)
+                    continue;
+                LLVMTypeRef t = LLVMTypeOf(inst);
+                if (LLVMGetTypeKind(t) != LLVMVectorTypeKind || LLVMGetVectorSize(t) != 3) continue;
+                LLVMTypeRef e = LLVMGetElementType(t);
+                if (LLVMGetTypeKind(e) != LLVMIntegerTypeKind || LLVMGetIntTypeWidth(e) > 16) continue;
+                ops.push_back(inst);
+            }
+    if (ops.empty()) return 0;
+    LLVMBuilderRef b = LLVMCreateBuilderInContext(g.context);
+    for (LLVMValueRef inst : ops) {
+        int op = LLVMGetInstructionOpcode(inst);
+        LLVMPositionBuilderBefore(b, inst);
+        LLVMValueRef x = LLVMGetOperand(inst, 0), y = LLVMGetOperand(inst, 1), r = LLVMGetUndef(LLVMTypeOf(inst));
+        for (unsigned i = 0; i < 3; i++) {
+            LLVMValueRef xi = LLVMBuildExtractElement(b, x, g.c32(i), ""), yi = LLVMBuildExtractElement(b, y, g.c32(i), ""), v;
+            switch (op) {
+            case kAdd: v = LLVMBuildAdd(b, xi, yi, ""); break;
+            case kSub: v = LLVMBuildSub(b, xi, yi, ""); break;
+            case kMul: v = LLVMBuildMul(b, xi, yi, ""); break;
+            case kShl: v = LLVMBuildShl(b, xi, yi, ""); break;
+            case kLShr: v = LLVMBuildLShr(b, xi, yi, ""); break;
+            case kAShr: v = LLVMBuildAShr(b, xi, yi, ""); break;
+            case kAnd: v = LLVMBuildAnd(b, xi, yi, ""); break;
+            case kOr: v = LLVMBuildOr(b, xi, yi, ""); break;
+            case kXor: v = LLVMBuildXor(b, xi, yi, ""); break;
+            case LLVMUDiv: v = LLVMBuildUDiv(b, xi, yi, ""); break;
+            case LLVMSDiv: v = LLVMBuildSDiv(b, xi, yi, ""); break;
+            case LLVMURem: v = LLVMBuildURem(b, xi, yi, ""); break;
+            default: v = LLVMBuildSRem(b, xi, yi, ""); break;
+            }
+            r = LLVMBuildInsertElement(b, r, v, g.c32(i), "");
+        }
+        LLVMReplaceAllUsesWith(inst, r);
+        LLVMInstructionEraseFromParent(inst);
+    }
+    LLVMDisposeBuilder(b);
+    return (unsigned)ops.size();
+}
+
 static int hookedRun(void *self, LLVMModuleRef module) {
 #ifdef NVAIR_INTERPOSE  // the test build catches every PassManager::run in the process: act for the GeForce plugin's only
     {
@@ -2577,6 +2640,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (signedBools && logging()) fprintf(stderr, "[nvair] %u sign mask(s) taken out of signed-to-bool conversions\n", signedBools);
         if (exchanges && logging()) fprintf(stderr, "[nvair] %u threadgroup compare-exchange body(ies) given the store of the value found\n", exchanges);
         if (cubeReads && logging()) fprintf(stderr, "[nvair] %u cube read body(ies) given the level's size and a mip-filtered sampler\n", cubeReads);
+        unsigned oddVectors = disabled("NVAIR_ODD_VECTOR_FIX") ? 0 : scalarizeOddVectors(module, g);
+        if (oddVectors && logging()) fprintf(stderr, "[nvair] %u operation(s) on 3-lane 8/16-bit vectors done lane by lane\n", oddVectors);
         unsigned divisors = disabled("NVAIR_DIVISOR_ONE_FIX") ? 0 : guardDivisorOne(module, g);
         if (divisors && logging()) fprintf(stderr, "[nvair] %u division(s) guarded for a divisor of 1\n", divisors);
         unsigned madSats = disabled("NVAIR_MAD_SAT_FIX") ? 0 : lowerMadSat(module, g);
