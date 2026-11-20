@@ -21,8 +21,12 @@ if [ -n "${BUILD:-}" ]; then
         -framework Metal -o "$T/tools/bronzeload.dylib"
     # The compiler files by their leaf names in a folder of their own (build/ also holds a Metal, which must not load).
     L=$H/build/libs; mkdir -p "$L"
+    # Copies only when changed, and through a rename: a reducer and a fuzz run side by side share this folder, and a
+    # plain cp rewrote the plugin's metal_runtime.metallib while the other run's compiler was reading it (the shader then
+    # failed to compile with "Unhandled constant").
+    put() { cp -p "$1" "$2.$$" && mv -f "$2.$$" "$2"; }
     for f in AMDTextureAtomics.dylib IntelTextureAtomics.dylib AMDBronzeCompat.dylib AMDShared libAMDIL902.dylib; do
-        [ "$B/$f" -nt "$L/$f" ] && cp -p "$B/$f" "$L/$f"
+        [ "$B/$f" -nt "$L/$f" ] && put "$B/$f" "$L/$f"
     done
     # The Intel compiler plugin of this Mac's own driver, as in verify.sh: on Ivy Bridge (HD 4000) the one from OCLP's
     # 11.7.10 driver, which build.sh writes as libMTLIntelCompilerPlugin-IVB.dylib. With Haswell's, the adapter's Ivy
@@ -30,14 +34,15 @@ if [ -n "${BUILD:-}" ]; then
     ivb=
     ioreg -rc IntelAccelerator -d1 -w0 2>/dev/null | grep -q AppleIntelHD4000Graphics && ivb=-IVB
     cmp -s "$B/libMTLIntelCompilerPlugin$ivb.dylib" "$L/libMTLIntelCompilerPlugin.dylib" ||
-        cp -p "$B/libMTLIntelCompilerPlugin$ivb.dylib" "$L/libMTLIntelCompilerPlugin.dylib"
+        put "$B/libMTLIntelCompilerPlugin$ivb.dylib" "$L/libMTLIntelCompilerPlugin.dylib"
     # Kepler: the patched GeForceAIRPlugin (weak load of GeForceAIRCompat.dylib) in a copy of its bundle, which it opens
     # its built-in library from (as in verify.sh)
     K=$L/GeForceAIRPlugin.bundle/Contents S=/System/Library/Extensions/GeForceAIRPlugin.bundle/Contents
     if [ -d "$S" ]; then
         mkdir -p "$K/MacOS" "$K/Resources"
-        cp -p "$S/Info.plist" "$S/PkgInfo" "$S/version.plist" "$K/" && cp -p "$S/Resources/"* "$K/Resources/"
-        for f in GeForceAIRPlugin GeForceAIRCompat.dylib; do [ "$B/$f" -nt "$K/MacOS/$f" ] && cp -p "$B/$f" "$K/MacOS/$f"; done
+        for f in "$S/Info.plist" "$S/PkgInfo" "$S/version.plist"; do cmp -s "$f" "$K/${f##*/}" || put "$f" "$K/${f##*/}"; done
+        for f in "$S/Resources/"*; do cmp -s "$f" "$K/Resources/${f##*/}" || put "$f" "$K/Resources/${f##*/}"; done
+        for f in GeForceAIRPlugin GeForceAIRCompat.dylib; do [ "$B/$f" -nt "$K/MacOS/$f" ] && put "$B/$f" "$K/MacOS/$f"; done
     fi
     inserted=$T/tools/localcc.dylib:$T/tools/bronzeload.dylib
     [ -f /System/Library/Frameworks/Metal.framework/Versions/A/MetalOld.dylib ] && inserted=$B/MetalOldCompat.dylib:$inserted
