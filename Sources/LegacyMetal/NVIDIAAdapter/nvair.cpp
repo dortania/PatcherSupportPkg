@@ -2551,6 +2551,42 @@ static unsigned guardDivisorOne(LLVMModuleRef module, Gen &g) {
     return n;
 }
 
+// ---- an unsigned division of a sign-extended 8- or 16-bit value ---------------------------------------------------------
+// (uint)((int)(short)x % 28781) / d, with d not a constant, came out wrong whenever the remainder was negative: for d = 1,
+// 0xffffbb78 gave 0xffffb901 (mslfuzz2.py VEC=1 seed 5221, where it was 58 threads' results; the statement alone in a
+// kernel is wrong in 139 of 256 threads). The plugin's optimizer narrows the remainder to 16 bits, so the back end gets
+// udiv i32 (sext i16 r), d, and it divides that in floating point, as if the dividend had 16 significant bits: right for a
+// signed division, but as an unsigned number a sign-extended negative value is close to 2^32, and the float's 24 bits plus
+// one correction step leave the quotient hundreds off (0xffffbb78 rounds to 0xffffbb00, a reciprocal of 1 a unit low takes
+// it to 0xffffb900, the correction adds 1). Same for a narrowed signed division, for 8 bits, and for urem; a signed division
+// of the same, the same value sign-extended with shifts (what (int)(short)x of a 32-bit x is), a constant d, a sign-extended
+// divisor, and 64-bit divisions of a sign-extended int are right. The dividend of each 32-bit udiv and urem that is a sext
+// goes through the opaque minimum (as for the narrow products above), which keeps the value and hides the sext.
+// NVAIR_SEXT_DIVIDEND_FIX=0 turns it off.
+static unsigned hideSignExtendedDividends(LLVMModuleRef module, Gen &g) {
+    std::vector<LLVMValueRef> divs;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
+        if (LLVMIsDeclaration(f) || !strncmp(LLVMGetValueName(f), "nvair.", 6)) continue;
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                int op = LLVMGetInstructionOpcode(inst);
+                if ((op != LLVMUDiv && op != LLVMURem) || !isInt(LLVMTypeOf(inst), 32)) continue;
+                LLVMValueRef x = LLVMGetOperand(inst, 0);
+                if (LLVMIsAInstruction(x) && LLVMGetInstructionOpcode(x) == LLVMSExt) divs.push_back(inst);
+            }
+    }
+    if (divs.empty()) return 0;
+    LLVMBuilderRef b = LLVMCreateBuilderInContext(g.context);
+    LLVMTypeRef params[2] = {g.i32, g.i32};
+    for (LLVMValueRef inst : divs) {
+        LLVMPositionBuilderBefore(b, inst);
+        LLVMValueRef args[2] = {LLVMGetOperand(inst, 0), g.c32(~0u)};
+        LLVMSetOperand(inst, 0, LLVMBuildCall(b, g.intrinsic("llvm.nvvm.min.u.i32", g.i32, params, 2), args, 2, ""));
+    }
+    LLVMDisposeBuilder(b);
+    return (unsigned)divs.size();
+}
+
 // ---- arithmetic on 3-lane vectors of 8- and 16-bit integers --------------------------------------------------------------
 // ushort3(1, 6, 5) | (ushort3(7166, 18911, 44867) & m), with m.z = ushort(x & 1124510566u), lost bit 0 of the constant in
 // lane z (6 for 7) on every thread, while lanes x and y, a ushort2 or ushort4 of the same, and the same expression with
@@ -2643,6 +2679,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (oddVectors && logging()) fprintf(stderr, "[nvair] %u operation(s) on 3-lane 8/16-bit vectors done lane by lane\n", oddVectors);
         unsigned divisors = disabled("NVAIR_DIVISOR_ONE_FIX") ? 0 : guardDivisorOne(module, g);
         if (divisors && logging()) fprintf(stderr, "[nvair] %u remainder(s) guarded for a divisor of 1\n", divisors);
+        unsigned sextDividends = disabled("NVAIR_SEXT_DIVIDEND_FIX") ? 0 : hideSignExtendedDividends(module, g);
+        if (sextDividends && logging()) fprintf(stderr, "[nvair] %u unsigned division(s) of a sign-extended value given an opaque dividend\n", sextDividends);
         unsigned madSats = disabled("NVAIR_MAD_SAT_FIX") ? 0 : lowerMadSat(module, g);
         if (madSats && logging()) fprintf(stderr, "[nvair] %u madsat call(s) given the adapter's own body\n", madSats);
         unsigned overflows = disabled("NVAIR_OVERFLOW_FIX") ? 0 : fixOverflowIntrinsics(module, g);
