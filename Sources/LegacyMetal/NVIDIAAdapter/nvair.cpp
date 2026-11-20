@@ -2613,6 +2613,43 @@ static unsigned scalarizeConstantLaneOps(LLVMModuleRef module, Gen &g) {
     return (unsigned)ops.size();
 }
 
+// ---- a saturating add or subtract of a product ----------------------------------------------------------------------------
+// subsat(0xffffffffu, (uint)(uchar)x * 213u) came out 0 instead of 0xffffffff whenever the product was 0, and the signed
+// addsat(a, (int)(uchar)x * 213) and subsat, with the product either side, came out wrong on every thread (a value that
+// followed the thread index) (mslfuzz2.py VEC=1 ASTYPE=1 LONG=1 seed 74). The IR the back end gets is right: a mul by the
+// constant feeding llvm.nvvm.{add,sub}.sat.{s,u}.i32. The back end folds the multiply into the saturating operation and
+// gets the saturation wrong (for the unsigned subtract it is as if the borrow came from the carry of a + -b, which a b
+// of 0 never sets). A product with a variable factor, a shift, the plain value, ushort, and the unsigned add were right.
+// Each operand of a 32-bit saturating add or subtract that is a mul now goes through the opaque minimum, as for the narrow
+// products above, so the two stay separate operations. NVAIR_SATURATED_PRODUCT_FIX=0 turns it off.
+static unsigned hideSaturatedProducts(LLVMModuleRef module, Gen &g) {
+    static const char *const names[] = {"air.add_sat.s.i32", "air.add_sat.u.i32", "air.sub_sat.s.i32", "air.sub_sat.u.i32",
+                                        "llvm.nvvm.add.sat.s.i32", "llvm.nvvm.add.sat.u.i32", "llvm.nvvm.sub.sat.s.i32", "llvm.nvvm.sub.sat.u.i32"};
+    std::vector<std::pair<LLVMValueRef, unsigned>> todo;
+    for (const char *name : names) {
+        LLVMValueRef f = LLVMGetNamedFunction(module, name);
+        if (!f) continue;
+        for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u)) {
+            LLVMValueRef call = LLVMGetUser(u);
+            if (!LLVMIsACallInst(call) || LLVMGetNumOperands(call) != 3 || LLVMGetOperand(call, 2) != f) continue;
+            for (unsigned k = 0; k < 2; k++) {
+                LLVMValueRef x = LLVMGetOperand(call, k);
+                if (LLVMIsAInstruction(x) && LLVMGetInstructionOpcode(x) == 12 /* mul */) todo.push_back({call, k});
+            }
+        }
+    }
+    if (todo.empty()) return 0;
+    LLVMBuilderRef b = LLVMCreateBuilderInContext(g.context);
+    LLVMTypeRef params[2] = {g.i32, g.i32};
+    for (auto &[call, k] : todo) {
+        LLVMPositionBuilderBefore(b, call);
+        LLVMValueRef args[2] = {LLVMGetOperand(call, k), g.c32(~0u)};
+        LLVMSetOperand(call, k, LLVMBuildCall(b, g.intrinsic("llvm.nvvm.min.u.i32", g.i32, params, 2), args, 2, ""));
+    }
+    LLVMDisposeBuilder(b);
+    return (unsigned)todo.size();
+}
+
 // ---- an unsigned division of a sign-extended 8- or 16-bit value ---------------------------------------------------------
 // (uint)((int)(short)x % 28781) / d, with d not a constant, came out wrong whenever the remainder was negative: for d = 1,
 // 0xffffbb78 gave 0xffffb901 (mslfuzz2.py VEC=1 seed 5221, where it was 58 threads' results; the statement alone in a
@@ -2745,6 +2782,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (divisors && logging()) fprintf(stderr, "[nvair] %u remainder(s) guarded for a divisor of 1\n", divisors);
         unsigned sextDividends = disabled("NVAIR_SEXT_DIVIDEND_FIX") ? 0 : hideSignExtendedDividends(module, g);
         if (sextDividends && logging()) fprintf(stderr, "[nvair] %u unsigned division(s) of a sign-extended value given an opaque dividend\n", sextDividends);
+        unsigned satProducts = disabled("NVAIR_SATURATED_PRODUCT_FIX") ? 0 : hideSaturatedProducts(module, g);
+        if (satProducts && logging()) fprintf(stderr, "[nvair] %u product(s) given to a saturating add/subtract through an opaque value\n", satProducts);
         unsigned madSats = disabled("NVAIR_MAD_SAT_FIX") ? 0 : lowerMadSat(module, g);
         if (madSats && logging()) fprintf(stderr, "[nvair] %u madsat call(s) given the adapter's own body\n", madSats);
         unsigned overflows = disabled("NVAIR_OVERFLOW_FIX") ? 0 : fixOverflowIntrinsics(module, g);
