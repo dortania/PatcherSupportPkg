@@ -2235,29 +2235,37 @@ static void logBareIntrinsics(LLVMModuleRef module) {
 // Stores at a constant index get such an index too: with pc[0] stored at a constant index in a loop and pc read at
 // variable indexes, reads came out with a slot's old value (mslfuzz2.py VEC=1 seed 2603: right with the store at an
 // opaque index, and with the array left in bytes, NVAIR_NARROW_PRIVATE_ARRAY_FIX=0). NVAIR_PRIVATE_CONSTANT_STORE_FIX=0
-// turns the store part off.
+// turns the store part off. Fragment and vertex functions get it too, from their position or vertex_id (FRAG=1 seed 2136,
+// the same body as the kernel of seed 2136); NVAIR_PRIVATE_CONSTANT_GRAPHICS_FIX=0 turns that part off.
 static unsigned fixPrivateConstantLoads(LLVMModuleRef module, Gen &g) {
     bool stores = !disabled("NVAIR_PRIVATE_CONSTANT_STORE_FIX");
-    std::vector<LLVMValueRef> entries(LLVMGetNamedMetadataNumOperands(module, "air.kernel"));
-    if (entries.empty()) return 0;
-    LLVMGetNamedMetadataOperands(module, "air.kernel", entries.data());
+    bool graphics = !disabled("NVAIR_PRIVATE_CONSTANT_GRAPHICS_FIX");
     unsigned fixed = 0;
     LLVMBuilderRef b = nullptr;
+    for (const char *list : {"air.kernel", "air.fragment", "air.vertex"}) {
+    bool kernel = !strcmp(list, "air.kernel");
+    if (!kernel && !graphics) continue;
+    std::vector<LLVMValueRef> entries(LLVMGetNamedMetadataNumOperands(module, list));
+    if (entries.empty()) continue;
+    LLVMGetNamedMetadataOperands(module, list, entries.data());
     for (LLVMValueRef entry : entries) {
         std::vector<LLVMValueRef> parts = metadataOperands(entry);
         LLVMValueRef f = parts.empty() ? nullptr : parts[0];
         if (!f || LLVMIsDeclaration(f) || !LLVMGetFirstBasicBlock(f)) continue;
-        // the kernel's thread position to make the opaque 0 from: in the threadgroup (below 1024, so (x + k) >> 31 is 0
-        // for any k the pass uses) if the kernel has it, else in the grid; none: left alone
+        // the value to make the opaque 0 from, (x + k) >> 31 being 0 for any k the pass uses: a kernel's thread position
+        // in the threadgroup (below 1024) if it has it, else in the grid; a fragment function's position (x, a float of
+        // at least 0, whose bits are below 2^31); a vertex function's vertex_id. None: left alone
         LLVMValueRef position = nullptr;
         bool inGroup = false;
         for (LLVMValueRef arg : parts.size() > 2 ? metadataOperands(parts[2]) : std::vector<LLVMValueRef>()) {
             std::vector<LLVMValueRef> fields = metadataOperands(arg);
             if (fields.size() < 2 || !LLVMIsAConstantInt(fields[0]) || LLVMConstIntGetZExtValue(fields[0]) >= LLVMCountParams(f)) continue;
-            bool group = isString(fields[1], "air.thread_position_in_threadgroup") || isString(fields[1], "air.thread_index_in_threadgroup");
-            if ((group && !inGroup) || (!position && isString(fields[1], "air.thread_position_in_grid"))) {
-                position = LLVMGetParam(f, (unsigned)LLVMConstIntGetZExtValue(fields[0]));
-                inGroup = group;
+            LLVMValueRef param = LLVMGetParam(f, (unsigned)LLVMConstIntGetZExtValue(fields[0]));
+            if (kernel) {
+                bool group = isString(fields[1], "air.thread_position_in_threadgroup") || isString(fields[1], "air.thread_index_in_threadgroup");
+                if ((group && !inGroup) || (!position && isString(fields[1], "air.thread_position_in_grid"))) position = param, inGroup = group;
+            } else if (!position && (isString(fields[1], "air.position") || isString(fields[1], "air.vertex_id"))) {
+                position = param;
             }
         }
         if (!position) continue;
@@ -2293,6 +2301,7 @@ static unsigned fixPrivateConstantLoads(LLVMModuleRef module, Gen &g) {
                         LLVMPositionBuilderBefore(b, at);
                         LLVMValueRef x = position;
                         if (LLVMGetTypeKind(LLVMTypeOf(x)) == LLVMVectorTypeKind) x = LLVMBuildExtractElement(b, x, LLVMConstInt(g.i32, 0, 0), "");
+                        if (LLVMTypeOf(x) == LLVMFloatTypeInContext(g.context)) x = LLVMBuildBitCast(b, x, g.i32, "");  // position.x
                         if (!isInt(LLVMTypeOf(x), 32)) break;
                         zero = x;
                     }
@@ -2310,6 +2319,7 @@ static unsigned fixPrivateConstantLoads(LLVMModuleRef module, Gen &g) {
             }
         }
     }
+    }  // the entry lists
     if (b) LLVMDisposeBuilder(b);
     return fixed;
 }
