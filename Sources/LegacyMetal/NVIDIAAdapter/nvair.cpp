@@ -2223,7 +2223,7 @@ static void logBareIntrinsics(LLVMModuleRef module) {
     }
 }
 
-// ---- private arrays: loads and stores at a constant index -------------------------------------------------------------
+// ---- private arrays: loads at a constant index ------------------------------------------------------------------------
 // The back end took two loads of the same element of a private array at a constant index for one value when the array is
 // also written at a variable index between them: with v5 = pc[0] before a loop that loads pc[0] again and stores pc[i],
 // v5 came out as the loop's last pc[0] (as if reloaded after it), even with every access to the array volatile
@@ -2231,14 +2231,12 @@ static void logBareIntrinsics(LLVMModuleRef module) {
 // back end can't fold, is right). In kernels, each load from a private array that is also accessed at a variable index
 // gets such an index: the constant plus ((the kernel's thread position + k) >> 31), always 0, a different k for each
 // load so that no two of them look alike (a kernel without a thread-position argument is left alone: the back end has
-// no special register read for an adapter to add). NVAIR_PRIVATE_CONSTANT_LOAD_FIX=0 turns it off, stores included.
-// Stores at a constant index get such an index too: with pc[0] stored at a constant index in a loop and pc read at
-// variable indexes, reads came out with a slot's old value (mslfuzz2.py VEC=1 seed 2603: right with the store at an
-// opaque index, and with the array left in bytes, NVAIR_NARROW_PRIVATE_ARRAY_FIX=0). NVAIR_PRIVATE_CONSTANT_STORE_FIX=0
-// turns the store part off. Fragment and vertex functions get it too, from their position or vertex_id (FRAG=1 seed 2136,
-// the same body as the kernel of seed 2136); NVAIR_PRIVATE_CONSTANT_GRAPHICS_FIX=0 turns that part off.
+// no special register read for an adapter to add). NVAIR_PRIVATE_CONSTANT_LOAD_FIX=0 turns it off. Fragment and vertex
+// functions get it too, from their position or vertex_id (FRAG=1 seed 2136, the same body as the kernel of seed 2136);
+// NVAIR_PRIVATE_CONSTANT_GRAPHICS_FIX=0 turns that part off. Stores are left alone: the same index on constant-index
+// stores in loops made VEC=1 seed 2603 right but broke seed 3890, and rewriting almost any one of 2603's stores alone made
+// it right, so that was moving a layout-sensitive miscompile, not fixing one (FIXES.md, Known limitations).
 static unsigned fixPrivateConstantLoads(LLVMModuleRef module, Gen &g) {
-    bool stores = !disabled("NVAIR_PRIVATE_CONSTANT_STORE_FIX");
     bool graphics = !disabled("NVAIR_PRIVATE_CONSTANT_GRAPHICS_FIX");
     unsigned fixed = 0;
     LLVMBuilderRef b = nullptr;
@@ -2290,8 +2288,6 @@ static unsigned fixPrivateConstantLoads(LLVMModuleRef module, Gen &g) {
                 for (LLVMUseRef u = LLVMGetFirstUse(gep); u; u = LLVMGetNextUse(u)) {
                     LLVMValueRef load = LLVMIsALoadInst(LLVMGetUser(u));
                     if (load && LLVMGetOperand(load, 0) == gep) loads.push_back(load);
-                    LLVMValueRef store = stores ? LLVMIsAStoreInst(LLVMGetUser(u)) : nullptr;
-                    if (store && LLVMGetOperand(store, 1) == gep) loads.push_back(store);  // as the pointer, not the value
                 }
                 for (LLVMValueRef load : loads) {
                     if (!b) b = LLVMCreateBuilderInContext(g.context);
@@ -2305,7 +2301,7 @@ static unsigned fixPrivateConstantLoads(LLVMModuleRef module, Gen &g) {
                         if (!isInt(LLVMTypeOf(x), 32)) break;
                         zero = x;
                     }
-                    // each access its own 0, (position.x + k) >> 31: one shared 0 would leave the addresses equal to the back end
+                    // each load its own 0, (position.x + k) >> 31: one shared 0 would leave the addresses equal to the back end
                     LLVMValueRef k = LLVMGetOperand(gep, 2);  // the index, in its own type (i64 from Metal's front end)
                     LLVMTypeRef kt = LLVMTypeOf(k);
                     if (LLVMGetTypeKind(kt) != LLVMIntegerTypeKind || LLVMGetIntTypeWidth(kt) < 32) continue;
@@ -2313,7 +2309,7 @@ static unsigned fixPrivateConstantLoads(LLVMModuleRef module, Gen &g) {
                     LLVMValueRef own = LLVMBuildLShr(b, LLVMBuildAdd(b, zero, LLVMConstInt(g.i32, (fixed & 0xffff) + 1, 0), ""), LLVMConstInt(g.i32, 31, 0), "");
                     if (LLVMGetIntTypeWidth(kt) > 32) own = LLVMBuildZExt(b, own, kt, "");
                     LLVMValueRef index[2] = {LLVMGetOperand(gep, 1), LLVMBuildAdd(b, k, own, "")};
-                    LLVMSetOperand(load, LLVMIsAStoreInst(load) ? 1 : 0, LLVMBuildGEP(b, a, index, 2, ""));
+                    LLVMSetOperand(load, 0, LLVMBuildGEP(b, a, index, 2, ""));
                     fixed++;
                 }
             }
@@ -2525,7 +2521,7 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         unsigned signedBools = disabled("NVAIR_SIGNED_BOOL_FIX") ? 0 : fixSignedBoolConversions(module, g);
         unsigned joinAtomics = disabled("NVAIR_ATOMIC_JOIN_FIX") ? 0 : fixAtomicJoinOperands(module, g);
         unsigned constantLoads = disabled("NVAIR_PRIVATE_CONSTANT_LOAD_FIX") ? 0 : fixPrivateConstantLoads(module, g);
-        if (constantLoads && logging()) fprintf(stderr, "[nvair] %u constant-index private load(s) and store(s) given an opaque index\n", constantLoads);
+        if (constantLoads && logging()) fprintf(stderr, "[nvair] %u constant-index private load(s) given an opaque index\n", constantLoads);
         if (joinAtomics && logging()) fprintf(stderr, "[nvair] %u atomic operand(s) from a branch join put through a private slot\n", joinAtomics);
         if (signedBools && logging()) fprintf(stderr, "[nvair] %u sign mask(s) taken out of signed-to-bool conversions\n", signedBools);
         if (exchanges && logging()) fprintf(stderr, "[nvair] %u threadgroup compare-exchange body(ies) given the store of the value found\n", exchanges);
