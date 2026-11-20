@@ -48,6 +48,9 @@
 //
 // Cube array indices below 0 raised to 0, as AMDAdapter does. NVAIR_CUBE_ARRAY_FIX=0.
 //
+// LLVM's {u,s}{add,sub,mul}.with.overflow intrinsics, which Metal's front end makes of overflow checks and the back end
+// can't select, made plain arithmetic. NVAIR_OVERFLOW_FIX=0.
+//
 // Gradient samples of 3D textures and cubes in compute kernels (which broke the kernel) done at the level they pick.
 // NVAIR_GRADIENT_FIX=0. Cube gradient samples in vertex and fragment functions (the hardware's level was wrong for
 // gradients along the major axis) the same way, NVAIR_CUBE_GRADIENT_FIX=0; so are 3D ones in vertex functions (deqp's
@@ -2305,6 +2308,94 @@ static unsigned fixPrivateConstantLoads(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
+// ---- overflow intrinsics ---------------------------------------------------------------------------------------------------
+// Metal's front end turns overflow checks into LLVM's *.with.overflow intrinsics: (0xffffffffu / a) < b and
+// ulong(a) * ulong(b) > 0xffffffffull both become llvm.umul.with.overflow.i32, which the plugin's back end can't select
+// ("Unhandled atom in intrinsic: llvm.umul.with.overflow.i32": the pipeline failed; mslfuzz2.py VEC=1 seed 2478). Each
+// {u,s}{add,sub,mul}.with.overflow.i{8,16,32,64} becomes plain arithmetic: the result, and the overflow bit from a compare
+// (add, sub) or from the high half of the product (mul: in i64 for i32 and narrower, the adapter's mulHi for i64).
+// The plugin's own optimizer makes them too (a udiv -1 compare in one run of the pass manager is the intrinsic in the
+// next), so this runs on every module. NVAIR_OVERFLOW_FIX=0 turns it off.
+static unsigned fixOverflowIntrinsics(LLVMModuleRef module, Gen &g) {
+    std::vector<LLVMValueRef> functions;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
+        const char *n = LLVMGetValueName(f);
+        if (!strncmp(n, "llvm.", 5) && strstr(n, ".with.overflow.i") && LLVMGetFirstUse(f)) functions.push_back(f);
+    }
+    unsigned fixed = 0;
+    if (functions.empty()) return 0;
+    // a builder of its own (makeGen leaves g.b null), lent to g for mulHi
+    LLVMBuilderRef b = LLVMCreateBuilderInContext(g.context), saved = g.b;
+    g.b = b;
+    for (LLVMValueRef f : functions) {
+        const char *n = LLVMGetValueName(f) + 5;  // {u,s}{add,sub,mul}.with.overflow.i<w>
+        bool isSigned = n[0] == 's';
+        int op = !strncmp(n + 1, "add.", 4) ? 0 : !strncmp(n + 1, "sub.", 4) ? 1 : !strncmp(n + 1, "mul.", 4) ? 2 : -1;
+        unsigned w = (unsigned)atoi(strstr(n, ".with.overflow.i") + 16);
+        if ((n[0] != 'u' && n[0] != 's') || op < 0 || (w != 8 && w != 16 && w != 32 && w != 64)) continue;
+        std::vector<LLVMValueRef> calls;
+        for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u))
+            if (LLVMValueRef call = LLVMIsACallInst(LLVMGetUser(u)))
+                if (LLVMGetNumOperands(call) == 3 && LLVMGetOperand(call, 2) == f) calls.push_back(call);
+        for (LLVMValueRef call : calls) {
+            LLVMValueRef x = LLVMGetOperand(call, 0), y = LLVMGetOperand(call, 1), r, ov;
+            LLVMTypeRef t = LLVMTypeOf(x);
+            if (!isInt(t, w)) continue;
+            LLVMPositionBuilderBefore(b, call);
+            LLVMValueRef zero = LLVMConstInt(t, 0, 0);
+            // the overflow bits compare against values the optimizer can't see through, behind the plugin's own
+            // llvm.nvvm.min.u.i32: against constants, InstCombine folds them straight back into the intrinsics (the plugin
+            // optimizes between the runs of this pass)
+            LLVMTypeRef i32 = g.i32, i64 = LLVMInt64TypeInContext(g.context);
+            auto minU = [&](LLVMValueRef v, unsigned long long k) {
+                LLVMTypeRef params[2] = {i32, i32};
+                LLVMValueRef args[2] = {v, LLVMConstInt(i32, k, 0)};
+                return LLVMBuildCall(b, g.intrinsic("llvm.nvvm.min.u.i32", i32, params, 2), args, 2, "");
+            };
+            auto to32 = [&](LLVMValueRef v) { return w == 32 ? v : LLVMBuildZExt(b, v, i32, ""); };
+            if (op == 0) {  // signed: x and y of one sign, the sum of the other; unsigned: the sum below x
+                r = LLVMBuildAdd(b, x, y, "");
+                if (isSigned)
+                    ov = LLVMBuildICmp(b, LLVMIntSLT, LLVMBuildAnd(b, LLVMBuildXor(b, x, r, ""), LLVMBuildXor(b, y, r, ""), ""), zero, "");
+                else
+                    ov = w == 64 ? LLVMBuildICmp(b, LLVMIntULT, r, x, "") : LLVMBuildICmp(b, LLVMIntULT, to32(r), minU(to32(x), 0xffffffff), "");
+            } else if (op == 1) {  // signed: x and y of different signs, the difference of y's; unsigned: x below y
+                r = LLVMBuildSub(b, x, y, "");
+                ov = isSigned ? LLVMBuildICmp(b, LLVMIntSLT, LLVMBuildAnd(b, LLVMBuildXor(b, x, y, ""), LLVMBuildXor(b, x, r, ""), ""), zero, "")
+                              : LLVMBuildICmp(b, LLVMIntULT, x, y, "");
+            } else if (w == 64) {
+                r = LLVMBuildMul(b, x, y, "");
+                LLVMValueRef hi = g.mulHi(x, y, isSigned);
+                ov = LLVMBuildICmp(b, LLVMIntNE, hi, isSigned ? LLVMBuildAShr(b, r, LLVMConstInt(t, 63, 0), "") : zero, "");
+            } else {  // the exact product in i64 (sign extension as a shift left and an arithmetic shift right)
+                LLVMValueRef s = LLVMConstInt(i64, 64 - w, 0), k = LLVMConstInt(i64, w, 0);
+                auto wide = [&](LLVMValueRef v) {
+                    LLVMValueRef z = LLVMBuildZExt(b, v, i64, "");
+                    return isSigned ? LLVMBuildAShr(b, LLVMBuildShl(b, z, s, ""), s, "") : z;
+                };
+                LLVMValueRef product = LLVMBuildMul(b, wide(x), wide(y), "");
+                r = LLVMBuildTrunc(b, product, t, "");
+                // d: the high half (unsigned), or the high half xor the sign of the low half (signed); 0 unless it overflowed
+                LLVMValueRef d;
+                if (!isSigned) {
+                    d = LLVMBuildTrunc(b, LLVMBuildLShr(b, product, k, ""), i32, "");
+                } else {
+                    LLVMValueRef sign = LLVMBuildAShr(b, LLVMBuildShl(b, product, s, ""), LLVMConstInt(i64, 63, 0), "");
+                    d = LLVMBuildTrunc(b, LLVMBuildXor(b, LLVMBuildAShr(b, product, k, ""), sign, ""), i32, "");
+                }
+                ov = LLVMBuildICmp(b, LLVMIntNE, d, minU(d, 0), "");
+            }
+            LLVMValueRef v = LLVMBuildInsertValue(b, LLVMBuildInsertValue(b, LLVMGetUndef(LLVMTypeOf(call)), r, 0, ""), ov, 1, "");
+            LLVMReplaceAllUsesWith(call, v);
+            LLVMInstructionEraseFromParent(call);
+            fixed++;
+        }
+    }
+    g.b = saved;
+    LLVMDisposeBuilder(b);
+    return fixed;
+}
+
 static int hookedRun(void *self, LLVMModuleRef module) {
 #ifdef NVAIR_INTERPOSE  // the test build catches every PassManager::run in the process: act for the GeForce plugin's only
     {
@@ -2337,6 +2428,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (signedBools && logging()) fprintf(stderr, "[nvair] %u sign mask(s) taken out of signed-to-bool conversions\n", signedBools);
         if (exchanges && logging()) fprintf(stderr, "[nvair] %u threadgroup compare-exchange body(ies) given the store of the value found\n", exchanges);
         if (cubeReads && logging()) fprintf(stderr, "[nvair] %u cube read body(ies) given the level's size and a mip-filtered sampler\n", cubeReads);
+        unsigned overflows = disabled("NVAIR_OVERFLOW_FIX") ? 0 : fixOverflowIntrinsics(module, g);
+        if (overflows && logging()) fprintf(stderr, "[nvair] %u overflow intrinsic(s) made plain arithmetic\n", overflows);
         unsigned defined = disabled("NVAIR_INTRINSICS") ? 0 : defineMissingIntrinsics(g);
         unsigned fixed = disabled("NVAIR_I64_FIX") ? 0 : fixWideInstructions(module, g);
         unsigned samplers = disabled("NVAIR_SAMPLER_STATE_FIX") ? 0 : fixSamplerStateWords(module, g);
