@@ -2402,6 +2402,92 @@ static unsigned fixOverflowIntrinsics(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
+// ---- saturating multiply-add ------------------------------------------------------------------------------------------------
+// madsat(a, b, c) (air.mad_sat.{u,s}.i{8,16,32}) came out saturated in a big kernel for madsat(0, 0xfffffffe, c), which is
+// c (mslfuzz2.py LONG=1 seed 2245: one thread of 256; every small kernel with the same operands, constant or not, was
+// right). The plugin's own body did it, and so did a plain i64 a * b + c with the clamp on its high word: that high word
+// came out nonzero for a product of 0, as a carry into it would make it, though the IR (after the plugin's optimizer)
+// was right. With the carry into the high word computed by a compare instead of a 64-bit add it is right. So each call
+// becomes the adapter's own body without 64-bit adds: 8 and 16 bits in 32-bit arithmetic (the exact a * b + c fits), 32
+// bits as the 64-bit product's two words plus c with the carry from a compare; clamped to the type's range, the clamp
+// decided against values InstCombine can't see through (behind the plugin's own llvm.nvvm.min.u.i32, as for the overflow
+// intrinsics). Scalar forms only. NVAIR_MAD_SAT_FIX=0 turns it off.
+static unsigned lowerMadSat(LLVMModuleRef module, Gen &g) {
+    std::vector<LLVMValueRef> functions;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        if (!strncmp(LLVMGetValueName(f), "air.mad_sat.", 12) && LLVMGetFirstUse(f)) functions.push_back(f);
+    if (functions.empty()) return 0;
+    LLVMBuilderRef b = LLVMCreateBuilderInContext(g.context);
+    LLVMTypeRef i32 = g.i32, i64 = LLVMInt64TypeInContext(g.context);
+    auto c32 = [&](unsigned long long v) { return LLVMConstInt(i32, v, 0); };
+    auto minU = [&](LLVMValueRef v, unsigned long long k) {
+        LLVMTypeRef params[2] = {i32, i32};
+        LLVMValueRef args[2] = {v, c32(k)};
+        return LLVMBuildCall(b, g.intrinsic("llvm.nvvm.min.u.i32", i32, params, 2), args, 2, "");
+    };
+    auto nonzero = [&](LLVMValueRef v) { return LLVMBuildICmp(b, LLVMIntNE, v, minU(v, 0), ""); };  // v != 0, opaquely
+    unsigned fixed = 0;
+    for (LLVMValueRef f : functions) {
+        const char *n = LLVMGetValueName(f) + 12;  // u.i32, s.i16, ...
+        bool isSigned = n[0] == 's';
+        if ((n[0] != 'u' && n[0] != 's') || strncmp(n + 1, ".i", 2)) continue;  // scalar forms
+        unsigned w = (unsigned)atoi(n + 3);
+        if (w != 8 && w != 16 && w != 32) continue;
+        std::vector<LLVMValueRef> calls;
+        for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u))
+            if (LLVMValueRef call = LLVMIsACallInst(LLVMGetUser(u)))
+                if (LLVMGetNumOperands(call) == 4 && LLVMGetOperand(call, 3) == f) calls.push_back(call);
+        for (LLVMValueRef call : calls) {
+            LLVMValueRef x = LLVMGetOperand(call, 0), y = LLVMGetOperand(call, 1), z = LLVMGetOperand(call, 2);
+            LLVMTypeRef t = LLVMTypeOf(x);
+            if (!isInt(t, w) || LLVMTypeOf(call) != t) continue;
+            LLVMPositionBuilderBefore(b, call);
+            LLVMValueRef maxT = LLVMConstInt(t, isSigned ? (1ull << (w - 1)) - 1 : (w == 32 ? 0xffffffffull : (1ull << w) - 1), 0);
+            LLVMValueRef minT = LLVMConstInt(t, isSigned ? 1ull << (w - 1) : 0, 0);
+            LLVMValueRef r;
+            if (w < 32) {  // exact in 32 bits
+                LLVMValueRef s = c32(32 - w);
+                auto wide = [&](LLVMValueRef v) {
+                    LLVMValueRef zx = LLVMBuildZExt(b, v, i32, "");
+                    return isSigned ? LLVMBuildAShr(b, LLVMBuildShl(b, zx, s, ""), s, "") : zx;
+                };
+                LLVMValueRef p = LLVMBuildAdd(b, LLVMBuildMul(b, wide(x), wide(y), ""), wide(z), "");
+                LLVMValueRef lo = LLVMBuildTrunc(b, p, t, "");
+                if (!isSigned) {
+                    r = LLVMBuildSelect(b, nonzero(LLVMBuildLShr(b, p, c32(w), "")), maxT, lo, "");
+                } else {  // in range when p >> (w - 1) is 0 or -1, that is when (it + 1) >> 1 (unsigned) is 0
+                    LLVMValueRef e = LLVMBuildLShr(b, LLVMBuildAdd(b, LLVMBuildAShr(b, p, c32(w - 1), ""), c32(1), ""), c32(1), "");
+                    LLVMValueRef limit = LLVMBuildSelect(b, LLVMBuildICmp(b, LLVMIntSLT, p, c32(0), ""), minT, maxT, "");
+                    r = LLVMBuildSelect(b, nonzero(e), limit, lo, "");
+                }
+            } else {  // the 64-bit product's two words, plus c with the carry from a compare
+                LLVMValueRef s = LLVMConstInt(i64, 32, 0);
+                auto wide = [&](LLVMValueRef v) {
+                    LLVMValueRef zx = LLVMBuildZExt(b, v, i64, "");
+                    return isSigned ? LLVMBuildAShr(b, LLVMBuildShl(b, zx, s, ""), s, "") : zx;
+                };
+                LLVMValueRef prod = LLVMBuildMul(b, wide(x), wide(y), "");
+                LLVMValueRef plo = LLVMBuildTrunc(b, prod, i32, ""), phi = LLVMBuildTrunc(b, LLVMBuildLShr(b, prod, s, ""), i32, "");
+                LLVMValueRef sum = LLVMBuildAdd(b, plo, z, "");
+                LLVMValueRef carry = LLVMBuildZExt(b, LLVMBuildICmp(b, LLVMIntULT, sum, minU(plo, 0xffffffff), ""), i32, "");
+                if (!isSigned) {
+                    r = LLVMBuildSelect(b, nonzero(LLVMBuildAdd(b, phi, carry, "")), maxT, sum, "");
+                } else {  // high word: phi + (c's sign word) + carry; in range when it is the sign word of the low word
+                    LLVMValueRef shi = LLVMBuildAdd(b, LLVMBuildAdd(b, phi, LLVMBuildAShr(b, z, c32(31), ""), ""), carry, "");
+                    LLVMValueRef d = LLVMBuildXor(b, shi, LLVMBuildAShr(b, sum, c32(31), ""), "");
+                    LLVMValueRef limit = LLVMBuildSelect(b, LLVMBuildICmp(b, LLVMIntSLT, shi, c32(0), ""), minT, maxT, "");
+                    r = LLVMBuildSelect(b, nonzero(d), limit, sum, "");
+                }
+            }
+            LLVMReplaceAllUsesWith(call, r);
+            LLVMInstructionEraseFromParent(call);
+            fixed++;
+        }
+    }
+    LLVMDisposeBuilder(b);
+    return fixed;
+}
+
 static int hookedRun(void *self, LLVMModuleRef module) {
 #ifdef NVAIR_INTERPOSE  // the test build catches every PassManager::run in the process: act for the GeForce plugin's only
     {
@@ -2434,6 +2520,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (signedBools && logging()) fprintf(stderr, "[nvair] %u sign mask(s) taken out of signed-to-bool conversions\n", signedBools);
         if (exchanges && logging()) fprintf(stderr, "[nvair] %u threadgroup compare-exchange body(ies) given the store of the value found\n", exchanges);
         if (cubeReads && logging()) fprintf(stderr, "[nvair] %u cube read body(ies) given the level's size and a mip-filtered sampler\n", cubeReads);
+        unsigned madSats = disabled("NVAIR_MAD_SAT_FIX") ? 0 : lowerMadSat(module, g);
+        if (madSats && logging()) fprintf(stderr, "[nvair] %u madsat call(s) given the adapter's own body\n", madSats);
         unsigned overflows = disabled("NVAIR_OVERFLOW_FIX") ? 0 : fixOverflowIntrinsics(module, g);
         if (overflows && logging()) fprintf(stderr, "[nvair] %u overflow intrinsic(s) made plain arithmetic\n", overflows);
         unsigned defined = disabled("NVAIR_INTRINSICS") ? 0 : defineMissingIntrinsics(g);
