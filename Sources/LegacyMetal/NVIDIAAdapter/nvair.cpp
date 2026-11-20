@@ -2494,6 +2494,57 @@ static unsigned lowerMadSat(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
+// ---- division by a divisor that turns out to be 1 -----------------------------------------------------------------------------
+// In a big kernel, 0xffffffff % b with b = (31 * x) | 1 = 1 came out as 766 instead of 0 for one thread (mslfuzz2.py VEC=1
+// seed 3841; the kernel with the operands written out was right). Kepler's division takes its final correction step every
+// time for a divisor of 1, so that step going wrong in some register contexts shows there. Each 32-bit division and
+// remainder whose divisor isn't a constant becomes select(b == 1, a or 0, the original): with that the kernel is right,
+// while the same select on b == 2 (an exact equivalent too, as much of a change to the code) left it wrong. The arms go
+// through the plugin's opaque llvm.nvvm.min.u.i32, since InstCombine drops a select whose arms it can prove equal.
+// NVAIR_DIVISOR_ONE_FIX=0 turns it off.
+static unsigned guardDivisorOne(LLVMModuleRef module, Gen &g) {
+    std::vector<LLVMValueRef> divs;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                int op = LLVMGetInstructionOpcode(inst);
+                if ((op != LLVMUDiv && op != LLVMSDiv && op != LLVMURem && op != LLVMSRem) || !isInt(LLVMTypeOf(inst), 32)) continue;
+                if (LLVMIsAConstant(LLVMGetOperand(inst, 1))) continue;  // a constant divisor isn't 1 (or is folded)
+                // guarded on an earlier run: its only use is our select
+                LLVMUseRef u = LLVMGetFirstUse(inst);
+                if (u && !LLVMGetNextUse(u)) {
+                    LLVMValueRef user = LLVMGetUser(u);
+                    if (LLVMIsASelectInst(user) && LLVMGetOperand(user, 2) == inst) {
+                        LLVMValueRef c = LLVMGetOperand(user, 0);
+                        if (LLVMIsAICmpInst(c) && LLVMGetOperand(c, 0) == LLVMGetOperand(inst, 1) && LLVMIsAConstantInt(LLVMGetOperand(c, 1)) &&
+                            LLVMConstIntGetZExtValue(LLVMGetOperand(c, 1)) == 1)
+                            continue;
+                    }
+                }
+                divs.push_back(inst);
+            }
+    if (divs.empty()) return 0;
+    LLVMBuilderRef b = LLVMCreateBuilderInContext(g.context);
+    LLVMTypeRef params[2] = {g.i32, g.i32};
+    unsigned n = 0;
+    for (LLVMValueRef inst : divs) {
+        LLVMValueRef next = LLVMGetNextInstruction(inst);
+        if (!next) continue;
+        int op = LLVMGetInstructionOpcode(inst);
+        LLVMValueRef a = LLVMGetOperand(inst, 0), d = LLVMGetOperand(inst, 1);
+        LLVMPositionBuilderBefore(b, next);
+        bool remainder = op == LLVMURem || op == LLVMSRem;
+        LLVMValueRef args[2] = {remainder ? LLVMBuildAnd(b, d, g.c32(0), "") : a, g.c32(0xffffffff)};  // 0, or a
+        LLVMValueRef special = LLVMBuildCall(b, g.intrinsic("llvm.nvvm.min.u.i32", g.i32, params, 2), args, 2, "");
+        LLVMValueRef r = LLVMBuildSelect(b, LLVMBuildICmp(b, LLVMIntEQ, d, g.c32(1), ""), special, inst, "");
+        LLVMReplaceAllUsesWith(inst, r);
+        LLVMSetOperand(r, 2, inst);
+        n++;
+    }
+    LLVMDisposeBuilder(b);
+    return n;
+}
+
 static int hookedRun(void *self, LLVMModuleRef module) {
 #ifdef NVAIR_INTERPOSE  // the test build catches every PassManager::run in the process: act for the GeForce plugin's only
     {
@@ -2526,6 +2577,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (signedBools && logging()) fprintf(stderr, "[nvair] %u sign mask(s) taken out of signed-to-bool conversions\n", signedBools);
         if (exchanges && logging()) fprintf(stderr, "[nvair] %u threadgroup compare-exchange body(ies) given the store of the value found\n", exchanges);
         if (cubeReads && logging()) fprintf(stderr, "[nvair] %u cube read body(ies) given the level's size and a mip-filtered sampler\n", cubeReads);
+        unsigned divisors = disabled("NVAIR_DIVISOR_ONE_FIX") ? 0 : guardDivisorOne(module, g);
+        if (divisors && logging()) fprintf(stderr, "[nvair] %u division(s) guarded for a divisor of 1\n", divisors);
         unsigned madSats = disabled("NVAIR_MAD_SAT_FIX") ? 0 : lowerMadSat(module, g);
         if (madSats && logging()) fprintf(stderr, "[nvair] %u madsat call(s) given the adapter's own body\n", madSats);
         unsigned overflows = disabled("NVAIR_OVERFLOW_FIX") ? 0 : fixOverflowIntrinsics(module, g);
