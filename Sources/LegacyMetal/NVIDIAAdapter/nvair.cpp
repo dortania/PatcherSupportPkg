@@ -2624,8 +2624,11 @@ static unsigned scalarizeConstantLaneOps(LLVMModuleRef module, Gen &g) {
 // the back end's handling of these vectors, which it packs into one register (Kepler has no packed 8- or 16-bit
 // arithmetic, so it takes them apart anyway). Each integer add, sub, mul, division, remainder, shift, and, or and xor of a
 // 2- to 4-lane vector of 8- or 16-bit integers, each icmp of one, and each zext or sext of a compare's <N x i1> to such
-// lanes (which any and all do) is now done lane by lane. The 3-lane arithmetic (below) and the constant masks and shifts
-// (above) keep their own switches, which this pass follows. Selects and conversions, done lane by lane as well, changed nothing.
+// lanes (which any and all do), and each select of such vectors, is now done lane by lane. The selects came later: a
+// kernel reduced from VEC=1 seed 13302, with a loop counted by vf(select(..., uchar4(...) > uchar4(...))) & 3, was wrong on
+// 138 threads with only a <4 x i8> select left in vector form, and right with it lane by lane, as were five seeds listed in
+// FIXES.md (10949, 1025, 1837, 3303, 2126); one, 7105, right since this pass, went wrong again. The 3-lane arithmetic and the constant
+// masks and shifts (below, above) keep their own switches, which this pass follows. Conversions done lane by lane changed nothing.
 // NVAIR_NARROW_VECTOR_FIX=0 turns it off.
 static bool narrowVectorType(LLVMTypeRef t) {
     if (LLVMGetTypeKind(t) != LLVMVectorTypeKind || LLVMGetVectorSize(t) < 2 || LLVMGetVectorSize(t) > 4) return false;
@@ -2633,7 +2636,7 @@ static bool narrowVectorType(LLVMTypeRef t) {
     return LLVMGetTypeKind(e) == LLVMIntegerTypeKind && LLVMGetIntTypeWidth(e) <= 16;
 }
 static unsigned scalarizeNarrowVectors(LLVMModuleRef module, Gen &g) {
-    enum { kAdd = 8, kSub = 10, kMul = 12, kShl = 20, kLShr = 21, kAShr = 22, kAnd = 23, kOr = 24, kXor = 25, kICmp = 42 };
+    enum { kAdd = 8, kSub = 10, kMul = 12, kShl = 20, kLShr = 21, kAShr = 22, kAnd = 23, kOr = 24, kXor = 25, kICmp = 42, kSelect = 46 };
     bool oddOff = disabled("NVAIR_ODD_VECTOR_FIX"), constOff = disabled("NVAIR_VECTOR_CONSTANT_FIX");
     std::vector<LLVMValueRef> ops;
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
@@ -2651,6 +2654,8 @@ static unsigned scalarizeNarrowVectors(LLVMModuleRef module, Gen &g) {
                                     : (op == kShl || op == kLShr || op == kAShr) && perLaneAmounts(LLVMGetOperand(inst, 1))))
                         continue;
                     ops.push_back(inst);
+                } else if (op == kSelect) {
+                    if (narrowVectorType(LLVMTypeOf(inst))) ops.push_back(inst);
                 } else if (op == kICmp) {
                     if (narrowVectorType(LLVMTypeOf(LLVMGetOperand(inst, 0)))) ops.push_back(inst);
                 } else if (op == LLVMZExt || op == LLVMSExt) {
@@ -2665,10 +2670,14 @@ static unsigned scalarizeNarrowVectors(LLVMModuleRef module, Gen &g) {
         int op = LLVMGetInstructionOpcode(inst);
         LLVMPositionBuilderBefore(b, inst);
         LLVMValueRef x = LLVMGetOperand(inst, 0), r = LLVMGetUndef(LLVMTypeOf(inst));
-        unsigned n = LLVMGetVectorSize(LLVMTypeOf(x));
+        bool scalarCond = op == kSelect && LLVMGetTypeKind(LLVMTypeOf(x)) != LLVMVectorTypeKind;  // a select's condition may be one i1
+        unsigned n = LLVMGetVectorSize(LLVMTypeOf(op == kSelect ? inst : x));
         for (unsigned i = 0; i < n; i++) {
-            LLVMValueRef xi = LLVMBuildExtractElement(b, x, g.c32(i), ""), v;
-            if (op == LLVMZExt || op == LLVMSExt) {
+            LLVMValueRef xi = scalarCond ? x : LLVMBuildExtractElement(b, x, g.c32(i), ""), v;
+            if (op == kSelect) {
+                v = LLVMBuildSelect(b, xi, LLVMBuildExtractElement(b, LLVMGetOperand(inst, 1), g.c32(i), ""),
+                                    LLVMBuildExtractElement(b, LLVMGetOperand(inst, 2), g.c32(i), ""), "");
+            } else if (op == LLVMZExt || op == LLVMSExt) {
                 LLVMTypeRef et = LLVMGetElementType(LLVMTypeOf(inst));
                 v = op == LLVMZExt ? LLVMBuildZExt(b, xi, et, "") : LLVMBuildSExt(b, xi, et, "");
             } else {
