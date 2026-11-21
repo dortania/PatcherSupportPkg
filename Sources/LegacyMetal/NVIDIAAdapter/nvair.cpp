@@ -2613,6 +2613,92 @@ static unsigned scalarizeConstantLaneOps(LLVMModuleRef module, Gen &g) {
     return (unsigned)ops.size();
 }
 
+// ---- operations on 2- to 4-lane vectors of 8- or 16-bit integers ---------------------------------------------------------
+// In a loop that runs until all(a != b) for two char4 a and b turned false, nested in a loop the optimizer unrolls, the
+// inner loop stopped at the wrong iteration in a few threads (mslfuzz2.py VEC=1 ASTYPE=1 seed 9923, about 20 threads'
+// results). The condition is right when it is only summed in the same loops, and the loops are right without the outer
+// one; the same lanes compared one by one and combined with & are right, and so is the kernel once its narrow vectors are
+// gone. Doing only the compare lane by lane left the bug; the and of two char4 that each have constant lanes, feeding
+// the compare, is part of it, and the full kernel needed every such vector operation done lane by lane. With that, VEC=1
+// seeds 5171, 5865, 6785 and 7105, listed as layout-dependent, are right as well: what moved with the code's layout was
+// the back end's handling of these vectors, which it packs into one register (Kepler has no packed 8- or 16-bit
+// arithmetic, so it takes them apart anyway). Each integer add, sub, mul, division, remainder, shift, and, or and xor of a
+// 2- to 4-lane vector of 8- or 16-bit integers, each icmp of one, and each zext or sext of a compare's <N x i1> to such
+// lanes (which any and all do) is now done lane by lane. The 3-lane arithmetic (below) and the constant masks and shifts
+// (above) keep their own switches, which this pass follows. Selects and conversions, done lane by lane as well, changed nothing.
+// NVAIR_NARROW_VECTOR_FIX=0 turns it off.
+static bool narrowVectorType(LLVMTypeRef t) {
+    if (LLVMGetTypeKind(t) != LLVMVectorTypeKind || LLVMGetVectorSize(t) < 2 || LLVMGetVectorSize(t) > 4) return false;
+    LLVMTypeRef e = LLVMGetElementType(t);
+    return LLVMGetTypeKind(e) == LLVMIntegerTypeKind && LLVMGetIntTypeWidth(e) <= 16;
+}
+static unsigned scalarizeNarrowVectors(LLVMModuleRef module, Gen &g) {
+    enum { kAdd = 8, kSub = 10, kMul = 12, kShl = 20, kLShr = 21, kAShr = 22, kAnd = 23, kOr = 24, kXor = 25, kICmp = 42 };
+    bool oddOff = disabled("NVAIR_ODD_VECTOR_FIX"), constOff = disabled("NVAIR_VECTOR_CONSTANT_FIX");
+    std::vector<LLVMValueRef> ops;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                int op = LLVMGetInstructionOpcode(inst);
+                bool bin = op == kAdd || op == kSub || op == kMul || op == LLVMUDiv || op == LLVMSDiv || op == LLVMURem || op == LLVMSRem ||
+                           op == kShl || op == kLShr || op == kAShr || op == kAnd || op == kOr || op == kXor;
+                if (bin) {
+                    LLVMTypeRef t = LLVMTypeOf(inst);
+                    if (!narrowVectorType(t)) continue;
+                    if (oddOff && LLVMGetVectorSize(t) == 3) continue;  // the 3-lane arithmetic's switch
+                    if (constOff && LLVMGetVectorSize(t) != 3 &&        // the constant masks and shifts' switch
+                        (op == kAnd ? LLVMIsAConstant(LLVMGetOperand(inst, 0)) || LLVMIsAConstant(LLVMGetOperand(inst, 1))
+                                    : (op == kShl || op == kLShr || op == kAShr) && perLaneAmounts(LLVMGetOperand(inst, 1))))
+                        continue;
+                    ops.push_back(inst);
+                } else if (op == kICmp) {
+                    if (narrowVectorType(LLVMTypeOf(LLVMGetOperand(inst, 0)))) ops.push_back(inst);
+                } else if (op == LLVMZExt || op == LLVMSExt) {
+                    LLVMTypeRef from = LLVMTypeOf(LLVMGetOperand(inst, 0));
+                    if (narrowVectorType(LLVMTypeOf(inst)) && LLVMGetTypeKind(from) == LLVMVectorTypeKind && LLVMGetIntTypeWidth(LLVMGetElementType(from)) == 1)
+                        ops.push_back(inst);
+                }
+            }
+    if (ops.empty()) return 0;
+    LLVMBuilderRef b = LLVMCreateBuilderInContext(g.context);
+    for (LLVMValueRef inst : ops) {
+        int op = LLVMGetInstructionOpcode(inst);
+        LLVMPositionBuilderBefore(b, inst);
+        LLVMValueRef x = LLVMGetOperand(inst, 0), r = LLVMGetUndef(LLVMTypeOf(inst));
+        unsigned n = LLVMGetVectorSize(LLVMTypeOf(x));
+        for (unsigned i = 0; i < n; i++) {
+            LLVMValueRef xi = LLVMBuildExtractElement(b, x, g.c32(i), ""), v;
+            if (op == LLVMZExt || op == LLVMSExt) {
+                LLVMTypeRef et = LLVMGetElementType(LLVMTypeOf(inst));
+                v = op == LLVMZExt ? LLVMBuildZExt(b, xi, et, "") : LLVMBuildSExt(b, xi, et, "");
+            } else {
+                LLVMValueRef yi = LLVMBuildExtractElement(b, LLVMGetOperand(inst, 1), g.c32(i), "");
+                switch (op) {
+                case kICmp: v = LLVMBuildICmp(b, LLVMGetICmpPredicate(inst), xi, yi, ""); break;
+                case kAdd: v = LLVMBuildAdd(b, xi, yi, ""); break;
+                case kSub: v = LLVMBuildSub(b, xi, yi, ""); break;
+                case kMul: v = LLVMBuildMul(b, xi, yi, ""); break;
+                case LLVMUDiv: v = LLVMBuildUDiv(b, xi, yi, ""); break;
+                case LLVMSDiv: v = LLVMBuildSDiv(b, xi, yi, ""); break;
+                case LLVMURem: v = LLVMBuildURem(b, xi, yi, ""); break;
+                case LLVMSRem: v = LLVMBuildSRem(b, xi, yi, ""); break;
+                case kShl: v = LLVMBuildShl(b, xi, yi, ""); break;
+                case kLShr: v = LLVMBuildLShr(b, xi, yi, ""); break;
+                case kAShr: v = LLVMBuildAShr(b, xi, yi, ""); break;
+                case kAnd: v = LLVMBuildAnd(b, xi, yi, ""); break;
+                case kOr: v = LLVMBuildOr(b, xi, yi, ""); break;
+                default: v = LLVMBuildXor(b, xi, yi, ""); break;
+                }
+            }
+            r = LLVMBuildInsertElement(b, r, v, g.c32(i), "");
+        }
+        LLVMReplaceAllUsesWith(inst, r);
+        LLVMInstructionEraseFromParent(inst);
+    }
+    LLVMDisposeBuilder(b);
+    return (unsigned)ops.size();
+}
+
 // ---- a saturating add or subtract of a product ----------------------------------------------------------------------------
 // subsat(0xffffffffu, (uint)(uchar)x * 213u) came out 0 instead of 0xffffffff whenever the product was 0, and the signed
 // addsat(a, (int)(uchar)x * 213) and subsat, with the product either side, came out wrong on every thread (a value that
@@ -2784,6 +2870,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (sextDividends && logging()) fprintf(stderr, "[nvair] %u unsigned division(s) of a sign-extended value given an opaque dividend\n", sextDividends);
         unsigned satProducts = disabled("NVAIR_SATURATED_PRODUCT_FIX") ? 0 : hideSaturatedProducts(module, g);
         if (satProducts && logging()) fprintf(stderr, "[nvair] %u product(s) given to a saturating add/subtract through an opaque value\n", satProducts);
+        unsigned narrowVectors = disabled("NVAIR_NARROW_VECTOR_FIX") ? 0 : scalarizeNarrowVectors(module, g);
+        if (narrowVectors && logging()) fprintf(stderr, "[nvair] %u operation(s) on 2-4 lane 8/16-bit vectors done lane by lane\n", narrowVectors);
         unsigned madSats = disabled("NVAIR_MAD_SAT_FIX") ? 0 : lowerMadSat(module, g);
         if (madSats && logging()) fprintf(stderr, "[nvair] %u madsat call(s) given the adapter's own body\n", madSats);
         unsigned overflows = disabled("NVAIR_OVERFLOW_FIX") ? 0 : fixOverflowIntrinsics(module, g);
