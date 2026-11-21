@@ -1,0 +1,141 @@
+//===-- metal_integer_math ------------------------------------------------===//
+// Copyright (c) 2015-2017 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_INTEGER_MATH
+#define __METAL_INTEGER_MATH
+
+#include <metal_math_utils>
+#include <metal_type_traits>
+
+#pragma METAL internals : enable
+namespace metal
+{
+template <typename T>
+struct _integer_ternary_func_enable : false_type
+{
+};
+
+template <>
+struct _integer_ternary_func_enable<char> : true_type
+{
+};
+template <>
+struct _integer_ternary_func_enable<uchar> : true_type
+{
+};
+template <>
+struct _integer_ternary_func_enable<short> : true_type
+{
+};
+template <>
+struct _integer_ternary_func_enable<ushort> : true_type
+{
+};
+template <>
+struct _integer_ternary_func_enable<int> : true_type
+{
+};
+template <>
+struct _integer_ternary_func_enable<uint> : true_type
+{
+};
+template <typename T, int N>
+struct _integer_ternary_func_enable<T __attribute__((ext_vector_type(N)))> : _integer_ternary_func_enable<T>
+{
+};
+template <typename T, int N>
+struct _integer_ternary_func_enable<T __attribute__((packed_vector_type(N)))> : _integer_ternary_func_enable<T>
+{
+};
+
+#if defined(__HAVE_MAX3__)
+template <typename T, typename _E = void>
+struct _max3_impl;
+
+template <typename T>
+struct _max3_impl<T, typename enable_if<_integer_ternary_func_enable<T>::value>::type>
+{
+  METAL_FUNC T operator()(T x, T y, T z) const thread
+  {
+    return __metal_max3(x, y, z);
+  }
+};
+
+template <typename T>
+struct _max3_impl<T, typename enable_if<is_floating_point<T>::value>::type>
+{
+  METAL_FUNC T operator()(T x, T y, T z) const thread
+  {
+    return __metal_fmax3(x, y, z, _METAL_MAYBE_FAST_MATH);
+  }
+};
+
+template <typename T, typename _E = typename enable_if<_integer_ternary_func_enable<T>::value || is_floating_point<T>::value>::type>
+METAL_FUNC T max3(T x, T y, T z)
+{
+  return _max3_impl<T>()(x, y, z);
+}
+#endif
+
+#if defined(__HAVE_MEDIAN3__)
+template <typename T, typename _E = void>
+struct _median3_impl;
+
+template <typename T>
+struct _median3_impl<T, typename enable_if<_integer_ternary_func_enable<T>::value>::type>
+{
+  METAL_FUNC T operator()(T x, T y, T z) const thread
+  {
+    return __metal_median3(x, y, z);
+  }
+};
+
+template <typename T>
+struct _median3_impl<T, typename enable_if<is_floating_point<T>::value>::type>
+{
+  METAL_FUNC T operator()(T x, T y, T z) const thread
+  {
+    return __metal_fmedian3(x, y, z, _METAL_MAYBE_FAST_MATH);
+  }
+};
+
+template <typename T, typename _E = typename enable_if<_integer_ternary_func_enable<T>::value || is_floating_point<T>::value>::type>
+METAL_FUNC T median3(T x, T y, T z)
+{
+  return _median3_impl<T>()(x, y, z);
+}
+#endif
+
+#if defined(__HAVE_MIN3__)
+template <typename T, typename _E = void>
+struct _min3_impl;
+
+template <typename T>
+struct _min3_impl<T, typename enable_if<_integer_ternary_func_enable<T>::value>::type>
+{
+  METAL_FUNC T operator()(T x, T y, T z) const thread
+  {
+    return __metal_min3(x, y, z);
+  }
+};
+
+template <typename T>
+struct _min3_impl<T, typename enable_if<is_floating_point<T>::value>::type>
+{
+  METAL_FUNC T operator()(T x, T y, T z) const thread
+  {
+    return __metal_fmin3(x, y, z, _METAL_MAYBE_FAST_MATH);
+  }
+};
+
+template <typename T, typename _E = typename enable_if<_integer_ternary_func_enable<T>::value || is_floating_point<T>::value>::type>
+METAL_FUNC T min3(T x, T y, T z)
+{
+  return _min3_impl<T>()(x, y, z);
+}
+#endif
+} // namespace metal
+#pragma METAL internals : disable
+
+#endif // __METAL_INTEGER_MATH

@@ -1,0 +1,286 @@
+//===-- metal_types -------------------------------------------------------===//
+// Copyright (c) 2014-2017 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_TYPES
+#define __METAL_TYPES
+
+#include <metal_config>
+
+#define METAL_ALIGN(L) __attribute__((aligned(L)))
+#define METAL_ASM
+#define METAL_CONST __attribute__((const))
+#define METAL_DEPRECATED(M) __attribute__((deprecated(M)))
+#define METAL_ENABLE_IF(P, M) __attribute__((enable_if(P, M)))
+#define METAL_FUNC inline __attribute__((__always_inline__))
+#define METAL_INTERNAL
+#define METAL_NON_NULL_RETURN __attribute__((returns_nonnull))
+#define METAL_NORETURN __attribute__((noreturn))
+#define METAL_NOTHROW __attribute__((nothrow))
+#define METAL_PURE __attribute__((pure))
+#define METAL_UNAVAILABLE(M) __attribute__((unavailable(M)))
+#define METAL_IMPLICIT
+#define METAL_EXPLICIT explicit METAL_ENABLE_IF(true, "")
+
+// TODO: This is only used by the builtin library. To be removed -- see
+// <rdar://problem/26107016>.
+#define __INLINE__ __attribute__((__always_inline__))
+
+// Metal 1.1 s2.1: Scalar Data Types.
+typedef unsigned char uchar;
+typedef unsigned short ushort;
+typedef unsigned int uint;
+typedef struct __Reserved_Name__Do_not_use_ulong ulong;
+typedef struct __Reserved_Name__Do_not_use_llong llong;
+typedef struct __Reserved_Name__Do_not_use_ullong ullong;
+typedef struct __Reserved_Name__Do_not_use_quad quad;
+typedef struct __Reserved_Name__Do_not_use_complex complex;
+typedef struct __Reserved_Name__Do_not_use_imaginary imaginary;
+
+typedef __INT8_TYPE__ int8_t;
+typedef __UINT8_TYPE__ uint8_t;
+typedef __INT16_TYPE__ int16_t;
+typedef __UINT16_TYPE__ uint16_t;
+typedef __INT32_TYPE__ int32_t;
+typedef __UINT32_TYPE__ uint32_t;
+#if 0
+// TODO: We shall be using the macro defined by the compiler to define
+// int64_t, uint64_t -- see <rdar://problem/29116680>.
+#if 0
+typedef __INT64_TYPE__ int64_t;
+typedef __UINT64_TYPE__ uint64_t;
+#else
+typedef __metal_internal_int64_t int64_t;
+typedef unsigned __metal_internal_int64_t uint64_t;
+#endif
+#else
+typedef struct __Reserved_Name__Do_not_use_packed_int64_t int64_t;
+typedef struct __Reserved_Name__Do_not_use_packed_uint64_t uint64_t;
+#endif
+
+// TODO: We shall be using the macro defined by the compiler to define
+// ptrdiff_t, size_t, intptr_t, uintptr_t -- see <rdar://problem/29116680>.
+#if 0
+typedef __PTRDIFF_TYPE__ ptrdiff_t;
+typedef __SIZE_TYPE__ size_t;
+typedef __INTPTR_TYPE__ intptr_t;
+typedef __UINTPTR_TYPE__ uintptr_t;
+#else
+typedef __metal_internal_int64_t ptrdiff_t;
+typedef unsigned __metal_internal_int64_t size_t;
+typedef __metal_internal_int64_t intptr_t;
+typedef unsigned __metal_internal_int64_t uintptr_t;
+#endif
+
+namespace metal
+{
+typedef ::uchar uchar;
+typedef ::ushort ushort;
+typedef ::uint uint;
+typedef ::ulong ulong;
+typedef ::llong llong;
+typedef ::ullong ullong;
+typedef ::quad quad;
+typedef ::complex complex;
+typedef ::imaginary imaginary;
+
+typedef ::int8_t int8_t;
+typedef ::uint8_t uint8_t;
+typedef ::int16_t int16_t;
+typedef ::uint16_t uint16_t;
+typedef ::int32_t int32_t;
+typedef ::uint32_t uint32_t;
+typedef ::int64_t int64_t;
+typedef ::uint64_t uint64_t;
+
+typedef ::ptrdiff_t ptrdiff_t;
+typedef ::size_t size_t;
+typedef ::intptr_t intptr_t;
+typedef ::uintptr_t uintptr_t;
+}
+
+#include <metal_extended_vector>
+#include <metal_packed_vector>
+
+#include <metal_type_traits>
+
+#pragma METAL internals : enable
+namespace metal
+{
+// This is intended to be used by the METAL_CONST_ARG macro. Each type that may
+// be interested in being used in constant argument checks must specialize this
+// trait.
+template <typename T, typename = void>
+struct _constarg_traits
+{
+  // Must return true if T is a constant argument, false otherwise. A possible
+  // specialization would be to force a constexpr computation on t, such as
+  // the t == t expression.
+  constexpr static bool check(const thread T &t)
+  {
+    return false;
+  }
+  constexpr static bool check(const threadgroup T &t)
+  {
+    return false;
+  }
+  constexpr static bool check(const constant T &t)
+  {
+    return false;
+  }
+  constexpr static bool check(const device T &t)
+  {
+    return false;
+  }
+};
+#define METAL_CONST_ARG(A) METAL_ENABLE_IF(_constarg_traits<decltype(A)>::check(A), "'" #A "' argument must be known at compile-time")
+
+template <typename T>
+struct _constarg_traits<T, typename enable_if<is_arithmetic<T>::value && !is_vector<T>::value>::type>
+{
+  constexpr static bool check(T a)
+  {
+    return a != 0 || a == 0;
+  }
+};
+template <typename T>
+struct _constarg_traits<T, typename enable_if<is_enum<T>::value>::type>
+{
+  constexpr static bool check(T a)
+  {
+    return _constarg_traits<underlying_type_t<T>>::check(static_cast<underlying_type_t<T>>(a));
+  }
+};
+} // namespace metal
+#pragma METAL internals : disable
+
+#if defined(__HAVE_TESSELLATION__)
+#include <metal_tessellation>
+#endif
+
+#if defined(__HAVE_FUNCTION_CONSTANTS__)
+#define is_function_constant_defined(c) __metal_is_function_constant_defined(c)
+#endif
+
+namespace metal {
+// Metal 2.0 s5.12.1: Memory Order.
+enum memory_order {
+  memory_order_relaxed = __METAL_MEMORY_ORDER_RELAXED__,
+};
+
+} // namespace metal
+
+// TODO: All these constants should be set by the compiler using preprocessor
+// macros/builtins to guarantee interoperability with other languages.
+//
+// FIXME: Determine if these constants should be defined here and we should
+// switch to using an Metal flags instead of CL flags.
+
+#define CHAR_BIT  8                 /* size of char in bits */
+#define SCHAR_MAX 127               /* min value for a signed char */
+#define SCHAR_MIN (-128)            /* max value for a signed char */
+#define UCHAR_MAX 255               /* max value for an unsigned char */
+#define CHAR_MAX  SCHAR_MAX         /* max value for a char */
+#define CHAR_MIN  SCHAR_MIN         /* min value for a char */
+#define USHRT_MAX 65535             /* max value for an unsigned short */
+#define SHRT_MAX  32767             /* max value for a short */
+#define SHRT_MIN  (-32768)          /* min value for a short */
+#define UINT_MAX  0xffffffff        /* max value for an unsigned int */
+#define INT_MAX   2147483647        /* max value for an int */
+#define INT_MIN   (-2147483647 - 1) /* min value for an int */
+
+#define FLT_DIG        6
+#define FLT_MANT_DIG   24
+#define FLT_MAX_10_EXP +38
+#define FLT_MAX_EXP    +128
+#define FLT_MIN_10_EXP -37
+#define FLT_MIN_EXP    -125
+#define FLT_RADIX      2
+#define FLT_MAX        0x1.fffffep127f
+#define FLT_MIN        0x1.0p-126f
+#define FLT_EPSILON    0x1.0p-23f
+
+#define FP_ILOGB0   INT_MIN
+#define FP_ILOGBNAN INT_MIN
+
+#define MAXFLOAT  0x1.fffffep+127f
+#define HUGE_VALF __builtin_huge_valf()
+#define INFINITY  __builtin_inff()
+#define NAN       __builtin_nanf("")
+
+#define M_E_F        2.71828182845904523536028747135266250f   /* e */
+#define M_LOG2E_F    1.44269504088896340735992468100189214f   /* log 2e */
+#define M_LOG10E_F   0.434294481903251827651128918916605082f  /* log 10e */
+#define M_LN2_F      0.693147180559945309417232121458176568f  /* log e2 */
+#define M_LN10_F     2.3025850929940456840179914546843642f    /* log e10 */
+#define M_PI_F       3.14159265358979323846264338327950288f   /* pi */
+#define M_PI_2_F     1.57079632679489661923132169163975144f   /* pi/2 */
+#define M_PI_4_F     0.785398163397448309615660845819875721f  /* pi/4 */
+#define M_1_PI_F     0.318309886183790671537767526745028724f  /* 1/pi */
+#define M_2_PI_F     0.636619772367581343075535053490057448f  /* 2/pi */
+#define M_2_SQRTPI_F 1.12837916709551257389615890312154517f   /* 2/sqrt(pi) */
+#define M_SQRT2_F    1.41421356237309504880168872420969808f   /* sqrt(2) */
+#define M_SQRT1_2_F  0.707106781186547524400844362104849039f  /* 1/sqrt(2) */
+
+#define HALF_DIG        2
+#define HALF_MANT_DIG   11
+#define HALF_MAX_10_EXP +4
+#define HALF_MAX_EXP    +16
+#define HALF_MIN_10_EXP -4
+#define HALF_MIN_EXP    -13
+#define HALF_RADIX      2
+#define HALF_MAX        0x1.ffcp15h
+#define HALF_MIN        0x1.0p-14h
+#define HALF_EPSILON    0x1.0p-10h
+
+#define MAXHALF   0x1.ffcp15h
+#define HUGE_VALH ((half)INFINITY)
+
+#define M_E_H         2.71828182845904523536028747135266250h   /* e */
+#define M_LOG2E_H     1.44269504088896340735992468100189214h   /* log 2e */
+#define M_LOG10E_H    0.434294481903251827651128918916605082h  /* log 10e */
+#define M_LN2_H       0.693147180559945309417232121458176568h  /* log e2 */
+#define M_LN10_H      2.3025850929940456840179914546843642h    /* log e10 */
+#define M_PI_H        3.14159265358979323846264338327950288h   /* pi */
+#define M_PI_2_H      1.57079632679489661923132169163975144h   /* pi/2 */
+#define M_PI_4_H      0.785398163397448309615660845819875721h  /* pi/4 */
+#define M_1_PI_H      0.318309886183790671537767526745028724h  /* 1/pi */
+#define M_2_PI_H      0.636619772367581343075535053490057448h  /* 2/pi */
+#define M_2_SQRTPI_H  1.12837916709551257389615890312154517h   /* 2/sqrt(pi) */
+#define M_SQRT2_H     1.41421356237309504880168872420969808h   /* sqrt(2) */
+#define M_SQRT1_2_H   0.707106781186547524400844362104849039h  /* 1/sqrt(2) */
+
+#if defined(__HAVE_NATIVE_DOUBLE__)
+#define DBL_DIG        15
+#define DBL_MANT_DIG   53
+#define DBL_MAX_10_EXP +308
+#define DBL_MAX_EXP    +1024
+#define DBL_MIN_10_EXP -307
+#define DBL_MIN_EXP    -1021
+#define DBL_RADIX      2
+#define DBL_MAX        0x1.fffffffffffffp1023
+#define DBL_MIN        0x1.0p-1022
+#define DBL_EPSILON    0x1.0p-52
+
+#define HUGE_VAL        __builtin_huge_val()
+
+#define M_E         2.71828182845904523536028747135266250   /* e */
+#define M_LOG2E     1.44269504088896340735992468100189214   /* log 2e */
+#define M_LOG10E    0.434294481903251827651128918916605082  /* log 10e */
+#define M_LN2       0.693147180559945309417232121458176568  /* log e2 */
+#define M_LN10      2.30258509299404568401799145468436421   /* log e10 */
+#define M_PI        3.14159265358979323846264338327950288   /* pi */
+#define M_PI_2      1.57079632679489661923132169163975144   /* pi/2 */
+#define M_PI_4      0.785398163397448309615660845819875721  /* pi/4 */
+#define M_1_PI      0.318309886183790671537767526745028724  /* 1/pi */
+#define M_2_PI      0.636619772367581343075535053490057448  /* 2/pi */
+#define M_2_SQRTPI  1.12837916709551257389615890312154517   /* 2/sqrt(pi) */
+#define M_SQRT2     1.41421356237309504880168872420969808   /* sqrt(2) */
+#define M_SQRT1_2   0.707106781186547524400844362104849039  /* 1/sqrt(2) */
+#endif
+
+// TODO: Temporary workaround, needed till all the clients are moved to
+// explicitly include the simd headers -- see <rdar://problem/35912250>.
+namespace simd = metal;
+
+#endif // __METAL_TYPES

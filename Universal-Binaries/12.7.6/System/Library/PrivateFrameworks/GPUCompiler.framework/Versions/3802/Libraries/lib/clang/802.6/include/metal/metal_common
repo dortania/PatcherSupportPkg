@@ -1,0 +1,86 @@
+//===-- metal_common ------------------------------------------------------===//
+// Copyright (c) 2014-2016 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_COMMON
+#define __METAL_COMMON
+
+#include <metal_math_utils>
+
+// Metal 1.1 s5.2: Common Functions.
+
+namespace metal
+{
+
+namespace fast
+{
+template <typename T, typename U, typename V, typename _O = typename enable_if<_math_fast_or_precise_ternary_func_enable<T, U, V>::value, _math_fast_or_precise_ternary_func_operand_type_t<T, U, V>>::type, typename _E = typename enable_if<is_same<float, make_scalar_t<_O>>::value>::type>
+METAL_FUNC _O clamp(T x, U minval, V maxval)
+{
+  return __metal_clamp(_O(x), _O(minval), _O(maxval), _METAL_FAST_MATH);
+}
+
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T saturate(T x)
+{
+  return __metal_saturate(x, _METAL_FAST_MATH);
+}
+}  // namespace fast
+
+namespace precise
+{
+template <typename T, typename U, typename V, typename _O = typename enable_if<_math_fast_or_precise_ternary_func_enable<T, U, V>::value, _math_fast_or_precise_ternary_func_operand_type_t<T, U, V>>::type, typename _E = typename enable_if<is_same<float, make_scalar_t<_O>>::value>::type>
+METAL_FUNC _O clamp(T x, U minval, V maxval)
+{
+  return __metal_clamp(_O(x), _O(minval), _O(maxval), _METAL_PRECISE_MATH);
+}
+
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T saturate(T x)
+{
+  return __metal_saturate(x, _METAL_PRECISE_MATH);
+}
+}  // namespace precise
+
+template <typename T, typename U, typename V, typename _O = typename enable_if<_math_ternary_func_enable<T, U, V>::value, _math_ternary_func_operand_type_t<T, U, V>>::type>
+METAL_FUNC _O clamp(T x, U minval, V maxval)
+{
+  return __metal_clamp(_O(x), _O(minval), _O(maxval), _METAL_MAYBE_FAST_MATH);
+}
+
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T saturate(T x)
+{
+  return __metal_saturate(x, _METAL_MAYBE_FAST_MATH);
+}
+} // namespace metal
+
+namespace metal
+{
+template <typename T, typename U, typename V, typename _O = typename enable_if<_math_ternary_func_enable<T, U, V>::value, _math_ternary_func_operand_type_t<T, U, V>>::type>
+METAL_FUNC _O mix(T x, U y, V a)
+{
+  return __metal_mix(_O(x), _O(y), _O(a));
+}
+
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T sign(T x)
+{
+  return __metal_sign(x);
+}
+
+template <typename T, typename U, typename V, typename _O = typename enable_if<_math_ternary_func_enable<T, U, V>::value, _math_ternary_func_operand_type_t<T, U, V>>::type>
+METAL_FUNC _O smoothstep(T edge0, U edge1, V x)
+{
+  _O t = clamp((_O(x) - _O(edge0)) / (_O(edge1) - _O(edge0)), _O(0), _O(1));
+  return t * t * (_O(3) - _O(2) * t);
+}
+
+template <typename T, typename U, typename _O = typename enable_if<_math_binary_func_enable<T, U>::value, _math_binary_func_operand_type_t<T, U>>::type>
+METAL_FUNC _O step(T edge, U x)
+{
+  return _O(_O(x) >= _O(edge));
+}
+} // namespace metal
+
+#endif // __METAL_COMMON

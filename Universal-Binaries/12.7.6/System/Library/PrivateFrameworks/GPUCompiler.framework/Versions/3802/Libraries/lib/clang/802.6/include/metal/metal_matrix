@@ -1,0 +1,1386 @@
+//===-- metal_matrix ------------------------------------------------------===//
+// Copyright (c) 2014-2017 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_MATRIX_H
+#define __METAL_MATRIX_H
+
+#include <metal_functional>
+#include <metal_geometric>
+#include <metal_initializer_list>
+#include <metal_numeric>
+#include <metal_utility>
+
+#pragma METAL internals : enable
+namespace metal {
+// Metal 1.1 s2.2: Vector and Matrix Data Types.
+
+template <typename T, int Cols, int Rows = Cols, typename _E = typename enable_if<is_scalar<T>::value && is_floating_point<T>::value && Cols >=2 && Rows >= 2>::type>
+struct matrix
+{
+  vec<T, Rows> columns[Cols];
+
+private:
+  template <typename U, int... R>
+  static vec<T, Rows> build_col(initializer_list<U> col, _integer_sequence<int, R...>)
+  {
+    return {(R < col.size() ? *(col.begin() + R) : U())...};
+  }
+  template <int... R>
+  static vec<T, Rows> build_diag_col(int c, T val, _integer_sequence<int, R...>)
+  {
+    return {(c == R ? val : 0)...};
+  }
+#if defined(__HAVE_MATRIX_MULTIPLE_SCALAR_CONSTRUCTORS__)
+  template <int... R>
+  static vec<T, Rows> build_full_col(int c, initializer_list<T> elems, _integer_sequence<int, R...>)
+  {
+    return {*(elems.begin() + c * Rows + R)...};
+  }
+#endif // defined(__HAVE_MATRIX_MULTIPLE_SCALAR_CONSTRUCTORS__)
+
+  struct cols_init_tag
+  {
+  };
+  struct cols_all_tag
+  {
+  };
+#if defined(__HAVE_MATRIX_MULTIPLE_SCALAR_CONSTRUCTORS__)
+  struct elems_all_tag
+  {
+  };
+#endif // defined(__HAVE_MATRIX_MULTIPLE_SCALAR_CONSTRUCTORS__)
+
+  template <int... C>
+  METAL_FUNC explicit matrix(T val, _integer_sequence<int, C...>) thread
+      : columns{build_diag_col(C, val, _make_integer_sequence<int, Rows>())...}
+  {
+  }
+
+  template <int... C>
+  METAL_FUNC explicit matrix(cols_init_tag, initializer_list<vec<T, Rows>> cols, _integer_sequence<int, C...>) thread
+     : columns{(C < cols.size() ? *(cols.begin() + C) : vec<T, Rows>())...}
+  {
+  }
+
+  template <typename... U, typename _G = typename enable_if<_conjunction<is_convertible<U, vec<T, Rows>>...>::value>::type>
+  METAL_FUNC explicit matrix(cols_all_tag, U... cols) thread
+      : columns{vec<T, Rows>(cols)...}
+  {
+  }
+
+#if defined(__HAVE_MATRIX_MULTIPLE_SCALAR_CONSTRUCTORS__)
+  template <typename... U, typename _G = typename enable_if<_conjunction<is_convertible<U, T>...>::value>::type>
+  METAL_FUNC explicit matrix(elems_all_tag, U... elems) thread
+      : matrix({T(elems)...}, _make_integer_sequence<int, Cols>())
+  {
+  }
+  template <int... C>
+  METAL_FUNC explicit matrix(initializer_list<T> elems, _integer_sequence<int, C...>) thread
+      : columns{build_full_col(C, elems, _make_integer_sequence<int, Rows>())...}
+  {
+  }
+#endif // defined(__HAVE_MATRIX_MULTIPLE_SCALAR_CONSTRUCTORS__)
+  template <int... C>
+  METAL_FUNC explicit matrix(T val, _integer_sequence<int, C...>) constant
+      : columns{build_diag_col(C, val, _make_integer_sequence<int, Rows>())...}
+  {
+  }
+
+  template <int... C>
+  METAL_FUNC explicit matrix(cols_init_tag, initializer_list<vec<T, Rows>> cols, _integer_sequence<int, C...>) constant
+     : columns{(C < cols.size() ? *(cols.begin() + C) : vec<T, Rows>())...}
+  {
+  }
+
+  template <typename... U, typename _G = typename enable_if<_conjunction<is_convertible<U, vec<T, Rows>>...>::value>::type>
+  METAL_FUNC explicit matrix(cols_all_tag, U... cols) constant
+      : columns{vec<T, Rows>(cols)...}
+  {
+  }
+
+#if defined(__HAVE_MATRIX_MULTIPLE_SCALAR_CONSTRUCTORS__)
+  template <typename... U, typename _G = typename enable_if<_conjunction<is_convertible<U, T>...>::value>::type>
+  METAL_FUNC explicit matrix(elems_all_tag, U... elems) constant
+      : matrix({T(elems)...}, _make_integer_sequence<int, Cols>())
+  {
+  }
+  template <int... C>
+  METAL_FUNC explicit matrix(initializer_list<T> elems, _integer_sequence<int, C...>) constant
+      : columns{build_full_col(C, elems, _make_integer_sequence<int, Rows>())...}
+  {
+  }
+#endif // defined(__HAVE_MATRIX_MULTIPLE_SCALAR_CONSTRUCTORS__)
+
+  template <typename U, int... C>
+  METAL_FUNC explicit matrix(const thread matrix<U, Cols, Rows> &that, _integer_sequence<int, C...>) thread
+      : columns{vec<T, Rows>(that.columns[C])...}
+  {
+  }
+  template <typename U, int... C>
+  METAL_FUNC explicit matrix(const device matrix<U, Cols, Rows> &that, _integer_sequence<int, C...>) thread
+      : columns{vec<T, Rows>(that.columns[C])...}
+  {
+  }
+  template <typename U, int... C>
+  METAL_FUNC explicit matrix(const constant matrix<U, Cols, Rows> &that, _integer_sequence<int, C...>) thread
+      : columns{vec<T, Rows>(that.columns[C])...}
+  {
+  }
+  template <typename U, int... C>
+  METAL_FUNC explicit matrix(const threadgroup matrix<U, Cols, Rows> &that, _integer_sequence<int, C...>) thread
+      : columns{vec<T, Rows>(that.columns[C])...}
+  {
+  }
+  template <typename U, int... C>
+  METAL_FUNC explicit matrix(const thread matrix<U, Cols, Rows> &that, _integer_sequence<int, C...>) constant
+      : columns{vec<T, Rows>(that.columns[C])...}
+  {
+  }
+  template <typename U, int... C>
+  METAL_FUNC explicit matrix(const device matrix<U, Cols, Rows> &that, _integer_sequence<int, C...>) constant
+      : columns{vec<T, Rows>(that.columns[C])...}
+  {
+  }
+  template <typename U, int... C>
+  METAL_FUNC explicit matrix(const constant matrix<U, Cols, Rows> &that, _integer_sequence<int, C...>) constant
+      : columns{vec<T, Rows>(that.columns[C])...}
+  {
+  }
+  template <typename U, int... C>
+  METAL_FUNC explicit matrix(const threadgroup matrix<U, Cols, Rows> &that, _integer_sequence<int, C...>) constant
+      : columns{vec<T, Rows>(that.columns[C])...}
+  {
+  }
+
+public:
+  METAL_FUNC matrix() thread = default;
+
+  METAL_FUNC matrix(initializer_list<vec<T, Rows>> cols) thread
+      : matrix(cols_init_tag(), cols, _make_integer_sequence<int, Cols>())
+  {
+  }
+  template <typename... U, typename _G = typename enable_if<sizeof...(U) == Cols>::type>
+  METAL_FUNC explicit matrix(initializer_list<U>... cols) thread
+      : columns{build_col(cols, _make_integer_sequence<int, Rows>())...}
+  {
+  }
+
+  METAL_FUNC explicit matrix(T val) thread
+      : matrix(val, _make_integer_sequence<int, Cols>())
+  {
+  }
+
+#if defined(__HAVE_MATRIX_MULTIPLE_SCALAR_CONSTRUCTORS__)
+  template <typename... U, typename _G = typename enable_if<(sizeof...(U) == Cols) || (sizeof...(U) == Cols * Rows)>::type>
+  METAL_FUNC explicit matrix(U... vals) thread
+      : matrix(conditional_t<sizeof...(U) == Cols, cols_all_tag, elems_all_tag>(), vals...)
+  {
+  }
+#else
+  template <typename... U, typename _G = typename enable_if<(sizeof...(U) == Cols)>::type>
+  METAL_FUNC explicit matrix(U... vals) thread
+      : matrix(cols_all_tag(), vals...)
+  {
+  }
+#endif // defined(__HAVE_MATRIX_MULTIPLE_SCALAR_CONSTRUCTORS__)
+  METAL_FUNC matrix() constant = default;
+
+  METAL_FUNC matrix(initializer_list<vec<T, Rows>> cols) constant
+      : matrix(cols_init_tag(), cols, _make_integer_sequence<int, Cols>())
+  {
+  }
+  template <typename... U, typename _G = typename enable_if<sizeof...(U) == Cols>::type>
+  METAL_FUNC explicit matrix(initializer_list<U>... cols) constant
+      : columns{build_col(cols, _make_integer_sequence<int, Rows>())...}
+  {
+  }
+
+  METAL_FUNC explicit matrix(T val) constant
+      : matrix(val, _make_integer_sequence<int, Cols>())
+  {
+  }
+
+#if defined(__HAVE_MATRIX_MULTIPLE_SCALAR_CONSTRUCTORS__)
+  template <typename... U, typename _G = typename enable_if<(sizeof...(U) == Cols) || (sizeof...(U) == Cols * Rows)>::type>
+  METAL_FUNC explicit matrix(U... vals) constant
+      : matrix(conditional_t<sizeof...(U) == Cols, cols_all_tag, elems_all_tag>(), vals...)
+  {
+  }
+#else
+  template <typename... U, typename _G = typename enable_if<(sizeof...(U) == Cols)>::type>
+  METAL_FUNC explicit matrix(U... vals) constant
+      : matrix(cols_all_tag(), vals...)
+  {
+  }
+#endif // defined(__HAVE_MATRIX_MULTIPLE_SCALAR_CONSTRUCTORS__)
+
+  METAL_FUNC matrix(const thread matrix<T, Cols, Rows> &that) thread = default;
+
+  template <typename U>
+  METAL_FUNC explicit matrix(const thread matrix<U, Cols, Rows> &that) thread
+      : matrix(that, _make_integer_sequence<int, Cols>())
+  {
+  }
+  METAL_FUNC matrix(const device matrix<T, Cols, Rows> &that) thread = default;
+
+  template <typename U>
+  METAL_FUNC explicit matrix(const device matrix<U, Cols, Rows> &that) thread
+      : matrix(that, _make_integer_sequence<int, Cols>())
+  {
+  }
+  METAL_FUNC matrix(const constant matrix<T, Cols, Rows> &that) thread = default;
+
+  template <typename U>
+  METAL_FUNC explicit matrix(const constant matrix<U, Cols, Rows> &that) thread
+      : matrix(that, _make_integer_sequence<int, Cols>())
+  {
+  }
+  METAL_FUNC matrix(const threadgroup matrix<T, Cols, Rows> &that) thread = default;
+
+  template <typename U>
+  METAL_FUNC explicit matrix(const threadgroup matrix<U, Cols, Rows> &that) thread
+      : matrix(that, _make_integer_sequence<int, Cols>())
+  {
+  }
+  METAL_FUNC matrix(const thread matrix<T, Cols, Rows> &that) constant = default;
+
+  template <typename U>
+  METAL_FUNC explicit matrix(const thread matrix<U, Cols, Rows> &that) constant
+      : matrix(that, _make_integer_sequence<int, Cols>())
+  {
+  }
+  METAL_FUNC matrix(const device matrix<T, Cols, Rows> &that) constant = default;
+
+  template <typename U>
+  METAL_FUNC explicit matrix(const device matrix<U, Cols, Rows> &that) constant
+      : matrix(that, _make_integer_sequence<int, Cols>())
+  {
+  }
+  METAL_FUNC matrix(const constant matrix<T, Cols, Rows> &that) constant = default;
+
+  template <typename U>
+  METAL_FUNC explicit matrix(const constant matrix<U, Cols, Rows> &that) constant
+      : matrix(that, _make_integer_sequence<int, Cols>())
+  {
+  }
+  METAL_FUNC matrix(const threadgroup matrix<T, Cols, Rows> &that) constant = default;
+
+  template <typename U>
+  METAL_FUNC explicit matrix(const threadgroup matrix<U, Cols, Rows> &that) constant
+      : matrix(that, _make_integer_sequence<int, Cols>())
+  {
+  }
+
+public:
+  METAL_FUNC thread vec<T, Rows> &operator[](int r) thread
+  {
+    return columns[r];
+  }
+  METAL_FUNC device vec<T, Rows> &operator[](int r) device
+  {
+    return columns[r];
+  }
+  METAL_FUNC threadgroup vec<T, Rows> &operator[](int r) threadgroup
+  {
+    return columns[r];
+  }
+
+  METAL_FUNC const thread vec<T, Rows> &operator[](int r) const thread
+  {
+    return columns[r];
+  }
+  METAL_FUNC const device vec<T, Rows> &operator[](int r) const device
+  {
+    return columns[r];
+  }
+  METAL_FUNC const constant vec<T, Rows> &operator[](int r) const constant
+  {
+    return columns[r];
+  }
+  METAL_FUNC const threadgroup vec<T, Rows> &operator[](int r) const threadgroup
+  {
+    return columns[r];
+  }
+
+private:
+  template <typename O, int... C>
+  static void _make_compound_foreach(thread matrix<T, Cols, Rows> &a, vec<T, Rows> b, O op, _integer_sequence<int, C...>)
+  {
+    a[Cols - sizeof...(C)] = op(a[Cols - sizeof...(C)], b);
+    _make_compound_foreach(a, b, op, _make_integer_sequence<int, sizeof...(C) - 1>());
+  }
+  template <typename O>
+  static void _make_compound_foreach(thread matrix<T, Cols, Rows> &a, vec<T, Rows> b, O op, _integer_sequence<int, 0>)
+  {
+    a[Cols - 1] = op(a[Cols - 1], b);
+  }
+  template <typename O, int... C>
+  static void _make_compound_foreach(device matrix<T, Cols, Rows> &a, vec<T, Rows> b, O op, _integer_sequence<int, C...>)
+  {
+    a[Cols - sizeof...(C)] = op(a[Cols - sizeof...(C)], b);
+    _make_compound_foreach(a, b, op, _make_integer_sequence<int, sizeof...(C) - 1>());
+  }
+  template <typename O>
+  static void _make_compound_foreach(device matrix<T, Cols, Rows> &a, vec<T, Rows> b, O op, _integer_sequence<int, 0>)
+  {
+    a[Cols - 1] = op(a[Cols - 1], b);
+  }
+  template <typename O, int... C>
+  static void _make_compound_foreach(threadgroup matrix<T, Cols, Rows> &a, vec<T, Rows> b, O op, _integer_sequence<int, C...>)
+  {
+    a[Cols - sizeof...(C)] = op(a[Cols - sizeof...(C)], b);
+    _make_compound_foreach(a, b, op, _make_integer_sequence<int, sizeof...(C) - 1>());
+  }
+  template <typename O>
+  static void _make_compound_foreach(threadgroup matrix<T, Cols, Rows> &a, vec<T, Rows> b, O op, _integer_sequence<int, 0>)
+  {
+    a[Cols - 1] = op(a[Cols - 1], b);
+  }
+
+  template <typename O, int... C>
+  static void _make_compound_foreach(thread matrix<T, Cols, Rows> &a, const thread matrix<T, Cols, Rows> &b, O op, _integer_sequence<int, C...>)
+  {
+    a[Cols - sizeof...(C)] = op(a[Cols - sizeof...(C)], b[Cols - sizeof...(C)]);
+    _make_compound_foreach(a, b, op, _make_integer_sequence<int, sizeof...(C) - 1>());
+  }
+  template <typename O>
+  static void _make_compound_foreach(thread matrix<T, Cols, Rows> &a, const thread matrix<T, Cols, Rows> &b, O op, _integer_sequence<int, 0>)
+  {
+    a[Cols - 1] = op(a[Cols - 1], b[Cols - 1]);
+  }
+  template <typename O, int... C>
+  static void _make_compound_foreach(thread matrix<T, Cols, Rows> &a, const device matrix<T, Cols, Rows> &b, O op, _integer_sequence<int, C...>)
+  {
+    a[Cols - sizeof...(C)] = op(a[Cols - sizeof...(C)], b[Cols - sizeof...(C)]);
+    _make_compound_foreach(a, b, op, _make_integer_sequence<int, sizeof...(C) - 1>());
+  }
+  template <typename O>
+  static void _make_compound_foreach(thread matrix<T, Cols, Rows> &a, const device matrix<T, Cols, Rows> &b, O op, _integer_sequence<int, 0>)
+  {
+    a[Cols - 1] = op(a[Cols - 1], b[Cols - 1]);
+  }
+  template <typename O, int... C>
+  static void _make_compound_foreach(thread matrix<T, Cols, Rows> &a, const constant matrix<T, Cols, Rows> &b, O op, _integer_sequence<int, C...>)
+  {
+    a[Cols - sizeof...(C)] = op(a[Cols - sizeof...(C)], b[Cols - sizeof...(C)]);
+    _make_compound_foreach(a, b, op, _make_integer_sequence<int, sizeof...(C) - 1>());
+  }
+  template <typename O>
+  static void _make_compound_foreach(thread matrix<T, Cols, Rows> &a, const constant matrix<T, Cols, Rows> &b, O op, _integer_sequence<int, 0>)
+  {
+    a[Cols - 1] = op(a[Cols - 1], b[Cols - 1]);
+  }
+  template <typename O, int... C>
+  static void _make_compound_foreach(thread matrix<T, Cols, Rows> &a, const threadgroup matrix<T, Cols, Rows> &b, O op, _integer_sequence<int, C...>)
+  {
+    a[Cols - sizeof...(C)] = op(a[Cols - sizeof...(C)], b[Cols - sizeof...(C)]);
+    _make_compound_foreach(a, b, op, _make_integer_sequence<int, sizeof...(C) - 1>());
+  }
+  template <typename O>
+  static void _make_compound_foreach(thread matrix<T, Cols, Rows> &a, const threadgroup matrix<T, Cols, Rows> &b, O op, _integer_sequence<int, 0>)
+  {
+    a[Cols - 1] = op(a[Cols - 1], b[Cols - 1]);
+  }
+  template <typename O, int... C>
+  static void _make_compound_foreach(device matrix<T, Cols, Rows> &a, const thread matrix<T, Cols, Rows> &b, O op, _integer_sequence<int, C...>)
+  {
+    a[Cols - sizeof...(C)] = op(a[Cols - sizeof...(C)], b[Cols - sizeof...(C)]);
+    _make_compound_foreach(a, b, op, _make_integer_sequence<int, sizeof...(C) - 1>());
+  }
+  template <typename O>
+  static void _make_compound_foreach(device matrix<T, Cols, Rows> &a, const thread matrix<T, Cols, Rows> &b, O op, _integer_sequence<int, 0>)
+  {
+    a[Cols - 1] = op(a[Cols - 1], b[Cols - 1]);
+  }
+  template <typename O, int... C>
+  static void _make_compound_foreach(device matrix<T, Cols, Rows> &a, const device matrix<T, Cols, Rows> &b, O op, _integer_sequence<int, C...>)
+  {
+    a[Cols - sizeof...(C)] = op(a[Cols - sizeof...(C)], b[Cols - sizeof...(C)]);
+    _make_compound_foreach(a, b, op, _make_integer_sequence<int, sizeof...(C) - 1>());
+  }
+  template <typename O>
+  static void _make_compound_foreach(device matrix<T, Cols, Rows> &a, const device matrix<T, Cols, Rows> &b, O op, _integer_sequence<int, 0>)
+  {
+    a[Cols - 1] = op(a[Cols - 1], b[Cols - 1]);
+  }
+  template <typename O, int... C>
+  static void _make_compound_foreach(device matrix<T, Cols, Rows> &a, const constant matrix<T, Cols, Rows> &b, O op, _integer_sequence<int, C...>)
+  {
+    a[Cols - sizeof...(C)] = op(a[Cols - sizeof...(C)], b[Cols - sizeof...(C)]);
+    _make_compound_foreach(a, b, op, _make_integer_sequence<int, sizeof...(C) - 1>());
+  }
+  template <typename O>
+  static void _make_compound_foreach(device matrix<T, Cols, Rows> &a, const constant matrix<T, Cols, Rows> &b, O op, _integer_sequence<int, 0>)
+  {
+    a[Cols - 1] = op(a[Cols - 1], b[Cols - 1]);
+  }
+  template <typename O, int... C>
+  static void _make_compound_foreach(device matrix<T, Cols, Rows> &a, const threadgroup matrix<T, Cols, Rows> &b, O op, _integer_sequence<int, C...>)
+  {
+    a[Cols - sizeof...(C)] = op(a[Cols - sizeof...(C)], b[Cols - sizeof...(C)]);
+    _make_compound_foreach(a, b, op, _make_integer_sequence<int, sizeof...(C) - 1>());
+  }
+  template <typename O>
+  static void _make_compound_foreach(device matrix<T, Cols, Rows> &a, const threadgroup matrix<T, Cols, Rows> &b, O op, _integer_sequence<int, 0>)
+  {
+    a[Cols - 1] = op(a[Cols - 1], b[Cols - 1]);
+  }
+  template <typename O, int... C>
+  static void _make_compound_foreach(threadgroup matrix<T, Cols, Rows> &a, const thread matrix<T, Cols, Rows> &b, O op, _integer_sequence<int, C...>)
+  {
+    a[Cols - sizeof...(C)] = op(a[Cols - sizeof...(C)], b[Cols - sizeof...(C)]);
+    _make_compound_foreach(a, b, op, _make_integer_sequence<int, sizeof...(C) - 1>());
+  }
+  template <typename O>
+  static void _make_compound_foreach(threadgroup matrix<T, Cols, Rows> &a, const thread matrix<T, Cols, Rows> &b, O op, _integer_sequence<int, 0>)
+  {
+    a[Cols - 1] = op(a[Cols - 1], b[Cols - 1]);
+  }
+  template <typename O, int... C>
+  static void _make_compound_foreach(threadgroup matrix<T, Cols, Rows> &a, const device matrix<T, Cols, Rows> &b, O op, _integer_sequence<int, C...>)
+  {
+    a[Cols - sizeof...(C)] = op(a[Cols - sizeof...(C)], b[Cols - sizeof...(C)]);
+    _make_compound_foreach(a, b, op, _make_integer_sequence<int, sizeof...(C) - 1>());
+  }
+  template <typename O>
+  static void _make_compound_foreach(threadgroup matrix<T, Cols, Rows> &a, const device matrix<T, Cols, Rows> &b, O op, _integer_sequence<int, 0>)
+  {
+    a[Cols - 1] = op(a[Cols - 1], b[Cols - 1]);
+  }
+  template <typename O, int... C>
+  static void _make_compound_foreach(threadgroup matrix<T, Cols, Rows> &a, const constant matrix<T, Cols, Rows> &b, O op, _integer_sequence<int, C...>)
+  {
+    a[Cols - sizeof...(C)] = op(a[Cols - sizeof...(C)], b[Cols - sizeof...(C)]);
+    _make_compound_foreach(a, b, op, _make_integer_sequence<int, sizeof...(C) - 1>());
+  }
+  template <typename O>
+  static void _make_compound_foreach(threadgroup matrix<T, Cols, Rows> &a, const constant matrix<T, Cols, Rows> &b, O op, _integer_sequence<int, 0>)
+  {
+    a[Cols - 1] = op(a[Cols - 1], b[Cols - 1]);
+  }
+  template <typename O, int... C>
+  static void _make_compound_foreach(threadgroup matrix<T, Cols, Rows> &a, const threadgroup matrix<T, Cols, Rows> &b, O op, _integer_sequence<int, C...>)
+  {
+    a[Cols - sizeof...(C)] = op(a[Cols - sizeof...(C)], b[Cols - sizeof...(C)]);
+    _make_compound_foreach(a, b, op, _make_integer_sequence<int, sizeof...(C) - 1>());
+  }
+  template <typename O>
+  static void _make_compound_foreach(threadgroup matrix<T, Cols, Rows> &a, const threadgroup matrix<T, Cols, Rows> &b, O op, _integer_sequence<int, 0>)
+  {
+    a[Cols - 1] = op(a[Cols - 1], b[Cols - 1]);
+  }
+
+public:
+  METAL_FUNC thread matrix<T, Cols, Rows> &operator+=(const thread matrix<T, Cols, Rows> &that) thread
+  {
+    _make_compound_foreach(*this, that, plus<vec<T, Rows>>(), _make_integer_sequence<int, Cols>());
+    return *this;
+  }
+  METAL_FUNC thread matrix<T, Cols, Rows> &operator-=(const thread matrix<T, Cols, Rows> &that) thread
+  {
+    _make_compound_foreach(*this, that, minus<vec<T, Rows>>(), _make_integer_sequence<int, Cols>());
+    return *this;
+  }
+  METAL_FUNC thread matrix<T, Cols, Rows> &operator+=(const device matrix<T, Cols, Rows> &that) thread
+  {
+    _make_compound_foreach(*this, that, plus<vec<T, Rows>>(), _make_integer_sequence<int, Cols>());
+    return *this;
+  }
+  METAL_FUNC thread matrix<T, Cols, Rows> &operator-=(const device matrix<T, Cols, Rows> &that) thread
+  {
+    _make_compound_foreach(*this, that, minus<vec<T, Rows>>(), _make_integer_sequence<int, Cols>());
+    return *this;
+  }
+  METAL_FUNC thread matrix<T, Cols, Rows> &operator+=(const constant matrix<T, Cols, Rows> &that) thread
+  {
+    _make_compound_foreach(*this, that, plus<vec<T, Rows>>(), _make_integer_sequence<int, Cols>());
+    return *this;
+  }
+  METAL_FUNC thread matrix<T, Cols, Rows> &operator-=(const constant matrix<T, Cols, Rows> &that) thread
+  {
+    _make_compound_foreach(*this, that, minus<vec<T, Rows>>(), _make_integer_sequence<int, Cols>());
+    return *this;
+  }
+  METAL_FUNC thread matrix<T, Cols, Rows> &operator+=(const threadgroup matrix<T, Cols, Rows> &that) thread
+  {
+    _make_compound_foreach(*this, that, plus<vec<T, Rows>>(), _make_integer_sequence<int, Cols>());
+    return *this;
+  }
+  METAL_FUNC thread matrix<T, Cols, Rows> &operator-=(const threadgroup matrix<T, Cols, Rows> &that) thread
+  {
+    _make_compound_foreach(*this, that, minus<vec<T, Rows>>(), _make_integer_sequence<int, Cols>());
+    return *this;
+  }
+  METAL_FUNC device matrix<T, Cols, Rows> &operator+=(const thread matrix<T, Cols, Rows> &that) device
+  {
+    _make_compound_foreach(*this, that, plus<vec<T, Rows>>(), _make_integer_sequence<int, Cols>());
+    return *this;
+  }
+  METAL_FUNC device matrix<T, Cols, Rows> &operator-=(const thread matrix<T, Cols, Rows> &that) device
+  {
+    _make_compound_foreach(*this, that, minus<vec<T, Rows>>(), _make_integer_sequence<int, Cols>());
+    return *this;
+  }
+  METAL_FUNC device matrix<T, Cols, Rows> &operator+=(const device matrix<T, Cols, Rows> &that) device
+  {
+    _make_compound_foreach(*this, that, plus<vec<T, Rows>>(), _make_integer_sequence<int, Cols>());
+    return *this;
+  }
+  METAL_FUNC device matrix<T, Cols, Rows> &operator-=(const device matrix<T, Cols, Rows> &that) device
+  {
+    _make_compound_foreach(*this, that, minus<vec<T, Rows>>(), _make_integer_sequence<int, Cols>());
+    return *this;
+  }
+  METAL_FUNC device matrix<T, Cols, Rows> &operator+=(const constant matrix<T, Cols, Rows> &that) device
+  {
+    _make_compound_foreach(*this, that, plus<vec<T, Rows>>(), _make_integer_sequence<int, Cols>());
+    return *this;
+  }
+  METAL_FUNC device matrix<T, Cols, Rows> &operator-=(const constant matrix<T, Cols, Rows> &that) device
+  {
+    _make_compound_foreach(*this, that, minus<vec<T, Rows>>(), _make_integer_sequence<int, Cols>());
+    return *this;
+  }
+  METAL_FUNC device matrix<T, Cols, Rows> &operator+=(const threadgroup matrix<T, Cols, Rows> &that) device
+  {
+    _make_compound_foreach(*this, that, plus<vec<T, Rows>>(), _make_integer_sequence<int, Cols>());
+    return *this;
+  }
+  METAL_FUNC device matrix<T, Cols, Rows> &operator-=(const threadgroup matrix<T, Cols, Rows> &that) device
+  {
+    _make_compound_foreach(*this, that, minus<vec<T, Rows>>(), _make_integer_sequence<int, Cols>());
+    return *this;
+  }
+  METAL_FUNC threadgroup matrix<T, Cols, Rows> &operator+=(const thread matrix<T, Cols, Rows> &that) threadgroup
+  {
+    _make_compound_foreach(*this, that, plus<vec<T, Rows>>(), _make_integer_sequence<int, Cols>());
+    return *this;
+  }
+  METAL_FUNC threadgroup matrix<T, Cols, Rows> &operator-=(const thread matrix<T, Cols, Rows> &that) threadgroup
+  {
+    _make_compound_foreach(*this, that, minus<vec<T, Rows>>(), _make_integer_sequence<int, Cols>());
+    return *this;
+  }
+  METAL_FUNC threadgroup matrix<T, Cols, Rows> &operator+=(const device matrix<T, Cols, Rows> &that) threadgroup
+  {
+    _make_compound_foreach(*this, that, plus<vec<T, Rows>>(), _make_integer_sequence<int, Cols>());
+    return *this;
+  }
+  METAL_FUNC threadgroup matrix<T, Cols, Rows> &operator-=(const device matrix<T, Cols, Rows> &that) threadgroup
+  {
+    _make_compound_foreach(*this, that, minus<vec<T, Rows>>(), _make_integer_sequence<int, Cols>());
+    return *this;
+  }
+  METAL_FUNC threadgroup matrix<T, Cols, Rows> &operator+=(const constant matrix<T, Cols, Rows> &that) threadgroup
+  {
+    _make_compound_foreach(*this, that, plus<vec<T, Rows>>(), _make_integer_sequence<int, Cols>());
+    return *this;
+  }
+  METAL_FUNC threadgroup matrix<T, Cols, Rows> &operator-=(const constant matrix<T, Cols, Rows> &that) threadgroup
+  {
+    _make_compound_foreach(*this, that, minus<vec<T, Rows>>(), _make_integer_sequence<int, Cols>());
+    return *this;
+  }
+  METAL_FUNC threadgroup matrix<T, Cols, Rows> &operator+=(const threadgroup matrix<T, Cols, Rows> &that) threadgroup
+  {
+    _make_compound_foreach(*this, that, plus<vec<T, Rows>>(), _make_integer_sequence<int, Cols>());
+    return *this;
+  }
+  METAL_FUNC threadgroup matrix<T, Cols, Rows> &operator-=(const threadgroup matrix<T, Cols, Rows> &that) threadgroup
+  {
+    _make_compound_foreach(*this, that, minus<vec<T, Rows>>(), _make_integer_sequence<int, Cols>());
+    return *this;
+  }
+
+  METAL_FUNC thread matrix<T, Cols, Rows> &operator*=(T val) thread
+  {
+    _make_compound_foreach(*this, vec<T, Rows>(val), multiplies<vec<T, Rows>>(), _make_integer_sequence<int, Cols>());
+    return *this;
+  }
+  METAL_FUNC device matrix<T, Cols, Rows> &operator*=(T val) device
+  {
+    _make_compound_foreach(*this, vec<T, Rows>(val), multiplies<vec<T, Rows>>(), _make_integer_sequence<int, Cols>());
+    return *this;
+  }
+  METAL_FUNC threadgroup matrix<T, Cols, Rows> &operator*=(T val) threadgroup
+  {
+    _make_compound_foreach(*this, vec<T, Rows>(val), multiplies<vec<T, Rows>>(), _make_integer_sequence<int, Cols>());
+    return *this;
+  }
+};
+
+typedef matrix<half, 2, 2> half2x2;
+typedef matrix<half, 2, 3> half2x3;
+typedef matrix<half, 2, 4> half2x4;
+typedef matrix<half, 3, 2> half3x2;
+typedef matrix<half, 3, 3> half3x3;
+typedef matrix<half, 3, 4> half3x4;
+typedef matrix<half, 4, 2> half4x2;
+typedef matrix<half, 4, 3> half4x3;
+typedef matrix<half, 4, 4> half4x4;
+typedef matrix<float, 2, 2> float2x2;
+typedef matrix<float, 2, 3> float2x3;
+typedef matrix<float, 2, 4> float2x4;
+typedef matrix<float, 3, 2> float3x2;
+typedef matrix<float, 3, 3> float3x3;
+typedef matrix<float, 3, 4> float3x4;
+typedef matrix<float, 4, 2> float4x2;
+typedef matrix<float, 4, 3> float4x3;
+typedef matrix<float, 4, 4> float4x4;
+#if defined(__HAVE_NATIVE_DOUBLE__)
+typedef matrix<double, 2, 2> double2x2;
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+typedef matrix<double, 2, 3> double2x3;
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+typedef matrix<double, 2, 4> double2x4;
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+typedef matrix<double, 3, 2> double3x2;
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+typedef matrix<double, 3, 3> double3x3;
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+typedef matrix<double, 3, 4> double3x4;
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+typedef matrix<double, 4, 2> double4x2;
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+typedef matrix<double, 4, 3> double4x3;
+#endif
+#if defined(__HAVE_NATIVE_DOUBLE__)
+typedef matrix<double, 4, 4> double4x4;
+#endif
+
+// Metal 1.1 s3.2: Matrix Operators.
+
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator*(T a, const thread matrix<T, Cols, Rows> &b)
+{
+  return _matrix_scalar_product_impl(b, a, _make_integer_sequence<int, Cols>());
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator*(const thread matrix<T, Cols, Rows> &a, T b)
+{
+  return b * a;
+}
+template <typename T, int Cols, int K>
+METAL_FUNC vec<T, Cols> operator*(vec<T, K> a, const thread matrix<T, Cols, K> &b)
+{
+  return _vector_matrix_product_impl(a, b, _make_integer_sequence<int, Cols>());
+}
+template <typename T, int K, int Rows>
+METAL_FUNC vec<T, Rows> operator*(const thread matrix<T, K, Rows> &a, vec<T, K> b)
+{
+  return _matrix_vector_product_impl(vec<T, Rows>(), a, b, _make_integer_sequence<int, K>());
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator*(T a, const device matrix<T, Cols, Rows> &b)
+{
+  return _matrix_scalar_product_impl(b, a, _make_integer_sequence<int, Cols>());
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator*(const device matrix<T, Cols, Rows> &a, T b)
+{
+  return b * a;
+}
+template <typename T, int Cols, int K>
+METAL_FUNC vec<T, Cols> operator*(vec<T, K> a, const device matrix<T, Cols, K> &b)
+{
+  return _vector_matrix_product_impl(a, b, _make_integer_sequence<int, Cols>());
+}
+template <typename T, int K, int Rows>
+METAL_FUNC vec<T, Rows> operator*(const device matrix<T, K, Rows> &a, vec<T, K> b)
+{
+  return _matrix_vector_product_impl(vec<T, Rows>(), a, b, _make_integer_sequence<int, K>());
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator*(T a, const constant matrix<T, Cols, Rows> &b)
+{
+  return _matrix_scalar_product_impl(b, a, _make_integer_sequence<int, Cols>());
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator*(const constant matrix<T, Cols, Rows> &a, T b)
+{
+  return b * a;
+}
+template <typename T, int Cols, int K>
+METAL_FUNC vec<T, Cols> operator*(vec<T, K> a, const constant matrix<T, Cols, K> &b)
+{
+  return _vector_matrix_product_impl(a, b, _make_integer_sequence<int, Cols>());
+}
+template <typename T, int K, int Rows>
+METAL_FUNC vec<T, Rows> operator*(const constant matrix<T, K, Rows> &a, vec<T, K> b)
+{
+  return _matrix_vector_product_impl(vec<T, Rows>(), a, b, _make_integer_sequence<int, K>());
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator*(T a, const threadgroup matrix<T, Cols, Rows> &b)
+{
+  return _matrix_scalar_product_impl(b, a, _make_integer_sequence<int, Cols>());
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator*(const threadgroup matrix<T, Cols, Rows> &a, T b)
+{
+  return b * a;
+}
+template <typename T, int Cols, int K>
+METAL_FUNC vec<T, Cols> operator*(vec<T, K> a, const threadgroup matrix<T, Cols, K> &b)
+{
+  return _vector_matrix_product_impl(a, b, _make_integer_sequence<int, Cols>());
+}
+template <typename T, int K, int Rows>
+METAL_FUNC vec<T, Rows> operator*(const threadgroup matrix<T, K, Rows> &a, vec<T, K> b)
+{
+  return _matrix_vector_product_impl(vec<T, Rows>(), a, b, _make_integer_sequence<int, K>());
+}
+
+template <typename T, int Cols, int Rows, int... C>
+METAL_FUNC matrix<T, Cols, Rows> _matrix_scalar_product_impl(const thread matrix<T, Cols, Rows> &a, T b, _integer_sequence<int, C...>)
+{
+  return {(a[C] * vec<T, Rows>(b))...};
+}
+template <typename T, int Cols, int K, int... C>
+METAL_FUNC vec<T, Cols> _vector_matrix_product_impl(vec<T, K> a, const thread matrix<T, Cols, K> &b, _integer_sequence<int, C...>)
+{
+  return {dot(a, b[C])...};
+}
+
+template <typename T, int K, int Rows, int... H>
+METAL_FUNC vec<T, Rows> _matrix_vector_product_impl(vec<T, Rows> tmp, const thread matrix<T, K, Rows> &a, vec<T, K> b, _integer_sequence<int, H...>)
+{
+  return _matrix_vector_product_impl(tmp + a[K - sizeof...(H)] * b[K - sizeof...(H)], a, b, _make_integer_sequence<int, sizeof...(H) - 1>());
+}
+template <typename T, int K, int Rows>
+METAL_FUNC vec<T, Rows> _matrix_vector_product_impl(vec<T, Rows> tmp, const thread matrix<T, K, Rows> &a, vec<T, K> b, _integer_sequence<int, 0>)
+{
+  return tmp + a[K - 1] * b[K - 1];
+}
+template <typename T, int Cols, int Rows, int... C>
+METAL_FUNC matrix<T, Cols, Rows> _matrix_scalar_product_impl(const device matrix<T, Cols, Rows> &a, T b, _integer_sequence<int, C...>)
+{
+  return {(a[C] * vec<T, Rows>(b))...};
+}
+template <typename T, int Cols, int K, int... C>
+METAL_FUNC vec<T, Cols> _vector_matrix_product_impl(vec<T, K> a, const device matrix<T, Cols, K> &b, _integer_sequence<int, C...>)
+{
+  return {dot(a, b[C])...};
+}
+
+template <typename T, int K, int Rows, int... H>
+METAL_FUNC vec<T, Rows> _matrix_vector_product_impl(vec<T, Rows> tmp, const device matrix<T, K, Rows> &a, vec<T, K> b, _integer_sequence<int, H...>)
+{
+  return _matrix_vector_product_impl(tmp + a[K - sizeof...(H)] * b[K - sizeof...(H)], a, b, _make_integer_sequence<int, sizeof...(H) - 1>());
+}
+template <typename T, int K, int Rows>
+METAL_FUNC vec<T, Rows> _matrix_vector_product_impl(vec<T, Rows> tmp, const device matrix<T, K, Rows> &a, vec<T, K> b, _integer_sequence<int, 0>)
+{
+  return tmp + a[K - 1] * b[K - 1];
+}
+template <typename T, int Cols, int Rows, int... C>
+METAL_FUNC matrix<T, Cols, Rows> _matrix_scalar_product_impl(const constant matrix<T, Cols, Rows> &a, T b, _integer_sequence<int, C...>)
+{
+  return {(a[C] * vec<T, Rows>(b))...};
+}
+template <typename T, int Cols, int K, int... C>
+METAL_FUNC vec<T, Cols> _vector_matrix_product_impl(vec<T, K> a, const constant matrix<T, Cols, K> &b, _integer_sequence<int, C...>)
+{
+  return {dot(a, b[C])...};
+}
+
+template <typename T, int K, int Rows, int... H>
+METAL_FUNC vec<T, Rows> _matrix_vector_product_impl(vec<T, Rows> tmp, const constant matrix<T, K, Rows> &a, vec<T, K> b, _integer_sequence<int, H...>)
+{
+  return _matrix_vector_product_impl(tmp + a[K - sizeof...(H)] * b[K - sizeof...(H)], a, b, _make_integer_sequence<int, sizeof...(H) - 1>());
+}
+template <typename T, int K, int Rows>
+METAL_FUNC vec<T, Rows> _matrix_vector_product_impl(vec<T, Rows> tmp, const constant matrix<T, K, Rows> &a, vec<T, K> b, _integer_sequence<int, 0>)
+{
+  return tmp + a[K - 1] * b[K - 1];
+}
+template <typename T, int Cols, int Rows, int... C>
+METAL_FUNC matrix<T, Cols, Rows> _matrix_scalar_product_impl(const threadgroup matrix<T, Cols, Rows> &a, T b, _integer_sequence<int, C...>)
+{
+  return {(a[C] * vec<T, Rows>(b))...};
+}
+template <typename T, int Cols, int K, int... C>
+METAL_FUNC vec<T, Cols> _vector_matrix_product_impl(vec<T, K> a, const threadgroup matrix<T, Cols, K> &b, _integer_sequence<int, C...>)
+{
+  return {dot(a, b[C])...};
+}
+
+template <typename T, int K, int Rows, int... H>
+METAL_FUNC vec<T, Rows> _matrix_vector_product_impl(vec<T, Rows> tmp, const threadgroup matrix<T, K, Rows> &a, vec<T, K> b, _integer_sequence<int, H...>)
+{
+  return _matrix_vector_product_impl(tmp + a[K - sizeof...(H)] * b[K - sizeof...(H)], a, b, _make_integer_sequence<int, sizeof...(H) - 1>());
+}
+template <typename T, int K, int Rows>
+METAL_FUNC vec<T, Rows> _matrix_vector_product_impl(vec<T, Rows> tmp, const threadgroup matrix<T, K, Rows> &a, vec<T, K> b, _integer_sequence<int, 0>)
+{
+  return tmp + a[K - 1] * b[K - 1];
+}
+
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator+(const thread matrix<T, Cols, Rows> &a, const thread matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp += b;
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator-(const thread matrix<T, Cols, Rows> &a, const thread matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp -= b;
+}
+template <typename T, int K, int Rows, int Cols>
+METAL_FUNC matrix<T, Cols, Rows> operator*(const thread matrix<T, K, Rows> &a, const thread matrix<T, Cols, K> &b)
+{
+  return _matrix_matrix_product_impl(a, b, _make_integer_sequence<int, Cols>());
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator+(const thread matrix<T, Cols, Rows> &a, const device matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp += b;
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator-(const thread matrix<T, Cols, Rows> &a, const device matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp -= b;
+}
+template <typename T, int K, int Rows, int Cols>
+METAL_FUNC matrix<T, Cols, Rows> operator*(const thread matrix<T, K, Rows> &a, const device matrix<T, Cols, K> &b)
+{
+  return _matrix_matrix_product_impl(a, b, _make_integer_sequence<int, Cols>());
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator+(const thread matrix<T, Cols, Rows> &a, const constant matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp += b;
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator-(const thread matrix<T, Cols, Rows> &a, const constant matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp -= b;
+}
+template <typename T, int K, int Rows, int Cols>
+METAL_FUNC matrix<T, Cols, Rows> operator*(const thread matrix<T, K, Rows> &a, const constant matrix<T, Cols, K> &b)
+{
+  return _matrix_matrix_product_impl(a, b, _make_integer_sequence<int, Cols>());
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator+(const thread matrix<T, Cols, Rows> &a, const threadgroup matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp += b;
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator-(const thread matrix<T, Cols, Rows> &a, const threadgroup matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp -= b;
+}
+template <typename T, int K, int Rows, int Cols>
+METAL_FUNC matrix<T, Cols, Rows> operator*(const thread matrix<T, K, Rows> &a, const threadgroup matrix<T, Cols, K> &b)
+{
+  return _matrix_matrix_product_impl(a, b, _make_integer_sequence<int, Cols>());
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator+(const device matrix<T, Cols, Rows> &a, const thread matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp += b;
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator-(const device matrix<T, Cols, Rows> &a, const thread matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp -= b;
+}
+template <typename T, int K, int Rows, int Cols>
+METAL_FUNC matrix<T, Cols, Rows> operator*(const device matrix<T, K, Rows> &a, const thread matrix<T, Cols, K> &b)
+{
+  return _matrix_matrix_product_impl(a, b, _make_integer_sequence<int, Cols>());
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator+(const device matrix<T, Cols, Rows> &a, const device matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp += b;
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator-(const device matrix<T, Cols, Rows> &a, const device matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp -= b;
+}
+template <typename T, int K, int Rows, int Cols>
+METAL_FUNC matrix<T, Cols, Rows> operator*(const device matrix<T, K, Rows> &a, const device matrix<T, Cols, K> &b)
+{
+  return _matrix_matrix_product_impl(a, b, _make_integer_sequence<int, Cols>());
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator+(const device matrix<T, Cols, Rows> &a, const constant matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp += b;
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator-(const device matrix<T, Cols, Rows> &a, const constant matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp -= b;
+}
+template <typename T, int K, int Rows, int Cols>
+METAL_FUNC matrix<T, Cols, Rows> operator*(const device matrix<T, K, Rows> &a, const constant matrix<T, Cols, K> &b)
+{
+  return _matrix_matrix_product_impl(a, b, _make_integer_sequence<int, Cols>());
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator+(const device matrix<T, Cols, Rows> &a, const threadgroup matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp += b;
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator-(const device matrix<T, Cols, Rows> &a, const threadgroup matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp -= b;
+}
+template <typename T, int K, int Rows, int Cols>
+METAL_FUNC matrix<T, Cols, Rows> operator*(const device matrix<T, K, Rows> &a, const threadgroup matrix<T, Cols, K> &b)
+{
+  return _matrix_matrix_product_impl(a, b, _make_integer_sequence<int, Cols>());
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator+(const constant matrix<T, Cols, Rows> &a, const thread matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp += b;
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator-(const constant matrix<T, Cols, Rows> &a, const thread matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp -= b;
+}
+template <typename T, int K, int Rows, int Cols>
+METAL_FUNC matrix<T, Cols, Rows> operator*(const constant matrix<T, K, Rows> &a, const thread matrix<T, Cols, K> &b)
+{
+  return _matrix_matrix_product_impl(a, b, _make_integer_sequence<int, Cols>());
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator+(const constant matrix<T, Cols, Rows> &a, const device matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp += b;
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator-(const constant matrix<T, Cols, Rows> &a, const device matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp -= b;
+}
+template <typename T, int K, int Rows, int Cols>
+METAL_FUNC matrix<T, Cols, Rows> operator*(const constant matrix<T, K, Rows> &a, const device matrix<T, Cols, K> &b)
+{
+  return _matrix_matrix_product_impl(a, b, _make_integer_sequence<int, Cols>());
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator+(const constant matrix<T, Cols, Rows> &a, const constant matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp += b;
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator-(const constant matrix<T, Cols, Rows> &a, const constant matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp -= b;
+}
+template <typename T, int K, int Rows, int Cols>
+METAL_FUNC matrix<T, Cols, Rows> operator*(const constant matrix<T, K, Rows> &a, const constant matrix<T, Cols, K> &b)
+{
+  return _matrix_matrix_product_impl(a, b, _make_integer_sequence<int, Cols>());
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator+(const constant matrix<T, Cols, Rows> &a, const threadgroup matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp += b;
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator-(const constant matrix<T, Cols, Rows> &a, const threadgroup matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp -= b;
+}
+template <typename T, int K, int Rows, int Cols>
+METAL_FUNC matrix<T, Cols, Rows> operator*(const constant matrix<T, K, Rows> &a, const threadgroup matrix<T, Cols, K> &b)
+{
+  return _matrix_matrix_product_impl(a, b, _make_integer_sequence<int, Cols>());
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator+(const threadgroup matrix<T, Cols, Rows> &a, const thread matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp += b;
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator-(const threadgroup matrix<T, Cols, Rows> &a, const thread matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp -= b;
+}
+template <typename T, int K, int Rows, int Cols>
+METAL_FUNC matrix<T, Cols, Rows> operator*(const threadgroup matrix<T, K, Rows> &a, const thread matrix<T, Cols, K> &b)
+{
+  return _matrix_matrix_product_impl(a, b, _make_integer_sequence<int, Cols>());
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator+(const threadgroup matrix<T, Cols, Rows> &a, const device matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp += b;
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator-(const threadgroup matrix<T, Cols, Rows> &a, const device matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp -= b;
+}
+template <typename T, int K, int Rows, int Cols>
+METAL_FUNC matrix<T, Cols, Rows> operator*(const threadgroup matrix<T, K, Rows> &a, const device matrix<T, Cols, K> &b)
+{
+  return _matrix_matrix_product_impl(a, b, _make_integer_sequence<int, Cols>());
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator+(const threadgroup matrix<T, Cols, Rows> &a, const constant matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp += b;
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator-(const threadgroup matrix<T, Cols, Rows> &a, const constant matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp -= b;
+}
+template <typename T, int K, int Rows, int Cols>
+METAL_FUNC matrix<T, Cols, Rows> operator*(const threadgroup matrix<T, K, Rows> &a, const constant matrix<T, Cols, K> &b)
+{
+  return _matrix_matrix_product_impl(a, b, _make_integer_sequence<int, Cols>());
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator+(const threadgroup matrix<T, Cols, Rows> &a, const threadgroup matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp += b;
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Cols, Rows> operator-(const threadgroup matrix<T, Cols, Rows> &a, const threadgroup matrix<T, Cols, Rows> &b)
+{
+  matrix<T, Cols, Rows> tmp = a;
+  return tmp -= b;
+}
+template <typename T, int K, int Rows, int Cols>
+METAL_FUNC matrix<T, Cols, Rows> operator*(const threadgroup matrix<T, K, Rows> &a, const threadgroup matrix<T, Cols, K> &b)
+{
+  return _matrix_matrix_product_impl(a, b, _make_integer_sequence<int, Cols>());
+}
+
+template <typename T, int K, int Rows, int Cols, int... C>
+METAL_FUNC matrix<T, Cols, Rows> _matrix_matrix_product_impl(const thread matrix<T, K, Rows> &a, const thread matrix<T, Cols, K> &b, _integer_sequence<int, C...>)
+{
+  return {a * b[C]...};
+}
+template <typename T, int K, int Rows, int Cols, int... C>
+METAL_FUNC matrix<T, Cols, Rows> _matrix_matrix_product_impl(const thread matrix<T, K, Rows> &a, const device matrix<T, Cols, K> &b, _integer_sequence<int, C...>)
+{
+  return {a * b[C]...};
+}
+template <typename T, int K, int Rows, int Cols, int... C>
+METAL_FUNC matrix<T, Cols, Rows> _matrix_matrix_product_impl(const thread matrix<T, K, Rows> &a, const constant matrix<T, Cols, K> &b, _integer_sequence<int, C...>)
+{
+  return {a * b[C]...};
+}
+template <typename T, int K, int Rows, int Cols, int... C>
+METAL_FUNC matrix<T, Cols, Rows> _matrix_matrix_product_impl(const thread matrix<T, K, Rows> &a, const threadgroup matrix<T, Cols, K> &b, _integer_sequence<int, C...>)
+{
+  return {a * b[C]...};
+}
+template <typename T, int K, int Rows, int Cols, int... C>
+METAL_FUNC matrix<T, Cols, Rows> _matrix_matrix_product_impl(const device matrix<T, K, Rows> &a, const thread matrix<T, Cols, K> &b, _integer_sequence<int, C...>)
+{
+  return {a * b[C]...};
+}
+template <typename T, int K, int Rows, int Cols, int... C>
+METAL_FUNC matrix<T, Cols, Rows> _matrix_matrix_product_impl(const device matrix<T, K, Rows> &a, const device matrix<T, Cols, K> &b, _integer_sequence<int, C...>)
+{
+  return {a * b[C]...};
+}
+template <typename T, int K, int Rows, int Cols, int... C>
+METAL_FUNC matrix<T, Cols, Rows> _matrix_matrix_product_impl(const device matrix<T, K, Rows> &a, const constant matrix<T, Cols, K> &b, _integer_sequence<int, C...>)
+{
+  return {a * b[C]...};
+}
+template <typename T, int K, int Rows, int Cols, int... C>
+METAL_FUNC matrix<T, Cols, Rows> _matrix_matrix_product_impl(const device matrix<T, K, Rows> &a, const threadgroup matrix<T, Cols, K> &b, _integer_sequence<int, C...>)
+{
+  return {a * b[C]...};
+}
+template <typename T, int K, int Rows, int Cols, int... C>
+METAL_FUNC matrix<T, Cols, Rows> _matrix_matrix_product_impl(const constant matrix<T, K, Rows> &a, const thread matrix<T, Cols, K> &b, _integer_sequence<int, C...>)
+{
+  return {a * b[C]...};
+}
+template <typename T, int K, int Rows, int Cols, int... C>
+METAL_FUNC matrix<T, Cols, Rows> _matrix_matrix_product_impl(const constant matrix<T, K, Rows> &a, const device matrix<T, Cols, K> &b, _integer_sequence<int, C...>)
+{
+  return {a * b[C]...};
+}
+template <typename T, int K, int Rows, int Cols, int... C>
+METAL_FUNC matrix<T, Cols, Rows> _matrix_matrix_product_impl(const constant matrix<T, K, Rows> &a, const constant matrix<T, Cols, K> &b, _integer_sequence<int, C...>)
+{
+  return {a * b[C]...};
+}
+template <typename T, int K, int Rows, int Cols, int... C>
+METAL_FUNC matrix<T, Cols, Rows> _matrix_matrix_product_impl(const constant matrix<T, K, Rows> &a, const threadgroup matrix<T, Cols, K> &b, _integer_sequence<int, C...>)
+{
+  return {a * b[C]...};
+}
+template <typename T, int K, int Rows, int Cols, int... C>
+METAL_FUNC matrix<T, Cols, Rows> _matrix_matrix_product_impl(const threadgroup matrix<T, K, Rows> &a, const thread matrix<T, Cols, K> &b, _integer_sequence<int, C...>)
+{
+  return {a * b[C]...};
+}
+template <typename T, int K, int Rows, int Cols, int... C>
+METAL_FUNC matrix<T, Cols, Rows> _matrix_matrix_product_impl(const threadgroup matrix<T, K, Rows> &a, const device matrix<T, Cols, K> &b, _integer_sequence<int, C...>)
+{
+  return {a * b[C]...};
+}
+template <typename T, int K, int Rows, int Cols, int... C>
+METAL_FUNC matrix<T, Cols, Rows> _matrix_matrix_product_impl(const threadgroup matrix<T, K, Rows> &a, const constant matrix<T, Cols, K> &b, _integer_sequence<int, C...>)
+{
+  return {a * b[C]...};
+}
+template <typename T, int K, int Rows, int Cols, int... C>
+METAL_FUNC matrix<T, Cols, Rows> _matrix_matrix_product_impl(const threadgroup matrix<T, K, Rows> &a, const threadgroup matrix<T, Cols, K> &b, _integer_sequence<int, C...>)
+{
+  return {a * b[C]...};
+}
+
+template <typename T, int K>
+METAL_FUNC thread vec<T, K> &operator*=(thread vec<T, K> &a, const thread matrix<T, K, K> &b)
+{
+  return a = a * b;
+}
+template <typename T, int K>
+METAL_FUNC thread vec<T, K> &operator*=(thread vec<T, K> &a, const device matrix<T, K, K> &b)
+{
+  return a = a * b;
+}
+template <typename T, int K>
+METAL_FUNC thread vec<T, K> &operator*=(thread vec<T, K> &a, const constant matrix<T, K, K> &b)
+{
+  return a = a * b;
+}
+template <typename T, int K>
+METAL_FUNC thread vec<T, K> &operator*=(thread vec<T, K> &a, const threadgroup matrix<T, K, K> &b)
+{
+  return a = a * b;
+}
+template <typename T, int K>
+METAL_FUNC device vec<T, K> &operator*=(device vec<T, K> &a, const thread matrix<T, K, K> &b)
+{
+  return a = a * b;
+}
+template <typename T, int K>
+METAL_FUNC device vec<T, K> &operator*=(device vec<T, K> &a, const device matrix<T, K, K> &b)
+{
+  return a = a * b;
+}
+template <typename T, int K>
+METAL_FUNC device vec<T, K> &operator*=(device vec<T, K> &a, const constant matrix<T, K, K> &b)
+{
+  return a = a * b;
+}
+template <typename T, int K>
+METAL_FUNC device vec<T, K> &operator*=(device vec<T, K> &a, const threadgroup matrix<T, K, K> &b)
+{
+  return a = a * b;
+}
+template <typename T, int K>
+METAL_FUNC threadgroup vec<T, K> &operator*=(threadgroup vec<T, K> &a, const thread matrix<T, K, K> &b)
+{
+  return a = a * b;
+}
+template <typename T, int K>
+METAL_FUNC threadgroup vec<T, K> &operator*=(threadgroup vec<T, K> &a, const device matrix<T, K, K> &b)
+{
+  return a = a * b;
+}
+template <typename T, int K>
+METAL_FUNC threadgroup vec<T, K> &operator*=(threadgroup vec<T, K> &a, const constant matrix<T, K, K> &b)
+{
+  return a = a * b;
+}
+template <typename T, int K>
+METAL_FUNC threadgroup vec<T, K> &operator*=(threadgroup vec<T, K> &a, const threadgroup matrix<T, K, K> &b)
+{
+  return a = a * b;
+}
+
+// Metal 1.1 s5.6: Matrix Functions.
+
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Rows, Cols> transpose(const thread matrix<T, Cols, Rows> &a)
+{
+  return _transpose_impl(a, _make_integer_sequence<int, Rows>());
+}
+template <typename T, int K>
+METAL_FUNC T determinant(const thread matrix<T, K, K> &a)
+{
+  return _determinant_impl(a, 0, _make_determinant_rows(_make_integer_sequence<int, K>()), _make_integer_sequence<int, K>());
+}
+
+template <typename T, int Cols, int Rows, int... R>
+METAL_FUNC matrix<T, Rows, Cols> _transpose_impl(const thread matrix<T, Cols, Rows> &a, _integer_sequence<int, R...>)
+{
+  return {_transpose_row(R, a, _make_integer_sequence<int, Cols>())...};
+}
+template <typename T, int Cols, int Rows, int... C>
+METAL_FUNC vec<T, Cols> _transpose_row(int r, const thread matrix<T, Cols, Rows> &a, _integer_sequence<int, C...>)
+{
+  return {a[C][r]...};
+}
+
+template <typename T, int K, int... R>
+METAL_FUNC T _determinant_impl(const thread matrix<T, K, K> &a, int c, vec<int, sizeof...(R)> rows, _integer_sequence<int, R...>)
+{
+  return _make_accumulation(((R & 1 ? -1 : 1) * a[c][rows[R]] * _determinant_impl(a, c + 1, _remove_determinant_row(rows, R, _make_integer_sequence<int, sizeof...(R) - 1>()), _make_integer_sequence<int, sizeof...(R) - 1>()))...);
+}
+template <typename T, int K>
+METAL_FUNC T _determinant_impl(const thread matrix<T, K, K> &a, int c, vec<int, 2> rows, _integer_sequence<int, 0, 1>)
+{
+  return a[c][rows[0]] * a[c + 1][rows[1]] - a[c][rows[1]] * a[c + 1][rows[0]];
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Rows, Cols> transpose(const device matrix<T, Cols, Rows> &a)
+{
+  return _transpose_impl(a, _make_integer_sequence<int, Rows>());
+}
+template <typename T, int K>
+METAL_FUNC T determinant(const device matrix<T, K, K> &a)
+{
+  return _determinant_impl(a, 0, _make_determinant_rows(_make_integer_sequence<int, K>()), _make_integer_sequence<int, K>());
+}
+
+template <typename T, int Cols, int Rows, int... R>
+METAL_FUNC matrix<T, Rows, Cols> _transpose_impl(const device matrix<T, Cols, Rows> &a, _integer_sequence<int, R...>)
+{
+  return {_transpose_row(R, a, _make_integer_sequence<int, Cols>())...};
+}
+template <typename T, int Cols, int Rows, int... C>
+METAL_FUNC vec<T, Cols> _transpose_row(int r, const device matrix<T, Cols, Rows> &a, _integer_sequence<int, C...>)
+{
+  return {a[C][r]...};
+}
+
+template <typename T, int K, int... R>
+METAL_FUNC T _determinant_impl(const device matrix<T, K, K> &a, int c, vec<int, sizeof...(R)> rows, _integer_sequence<int, R...>)
+{
+  return _make_accumulation(((R & 1 ? -1 : 1) * a[c][rows[R]] * _determinant_impl(a, c + 1, _remove_determinant_row(rows, R, _make_integer_sequence<int, sizeof...(R) - 1>()), _make_integer_sequence<int, sizeof...(R) - 1>()))...);
+}
+template <typename T, int K>
+METAL_FUNC T _determinant_impl(const device matrix<T, K, K> &a, int c, vec<int, 2> rows, _integer_sequence<int, 0, 1>)
+{
+  return a[c][rows[0]] * a[c + 1][rows[1]] - a[c][rows[1]] * a[c + 1][rows[0]];
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Rows, Cols> transpose(const constant matrix<T, Cols, Rows> &a)
+{
+  return _transpose_impl(a, _make_integer_sequence<int, Rows>());
+}
+template <typename T, int K>
+METAL_FUNC T determinant(const constant matrix<T, K, K> &a)
+{
+  return _determinant_impl(a, 0, _make_determinant_rows(_make_integer_sequence<int, K>()), _make_integer_sequence<int, K>());
+}
+
+template <typename T, int Cols, int Rows, int... R>
+METAL_FUNC matrix<T, Rows, Cols> _transpose_impl(const constant matrix<T, Cols, Rows> &a, _integer_sequence<int, R...>)
+{
+  return {_transpose_row(R, a, _make_integer_sequence<int, Cols>())...};
+}
+template <typename T, int Cols, int Rows, int... C>
+METAL_FUNC vec<T, Cols> _transpose_row(int r, const constant matrix<T, Cols, Rows> &a, _integer_sequence<int, C...>)
+{
+  return {a[C][r]...};
+}
+
+template <typename T, int K, int... R>
+METAL_FUNC T _determinant_impl(const constant matrix<T, K, K> &a, int c, vec<int, sizeof...(R)> rows, _integer_sequence<int, R...>)
+{
+  return _make_accumulation(((R & 1 ? -1 : 1) * a[c][rows[R]] * _determinant_impl(a, c + 1, _remove_determinant_row(rows, R, _make_integer_sequence<int, sizeof...(R) - 1>()), _make_integer_sequence<int, sizeof...(R) - 1>()))...);
+}
+template <typename T, int K>
+METAL_FUNC T _determinant_impl(const constant matrix<T, K, K> &a, int c, vec<int, 2> rows, _integer_sequence<int, 0, 1>)
+{
+  return a[c][rows[0]] * a[c + 1][rows[1]] - a[c][rows[1]] * a[c + 1][rows[0]];
+}
+template <typename T, int Cols, int Rows>
+METAL_FUNC matrix<T, Rows, Cols> transpose(const threadgroup matrix<T, Cols, Rows> &a)
+{
+  return _transpose_impl(a, _make_integer_sequence<int, Rows>());
+}
+template <typename T, int K>
+METAL_FUNC T determinant(const threadgroup matrix<T, K, K> &a)
+{
+  return _determinant_impl(a, 0, _make_determinant_rows(_make_integer_sequence<int, K>()), _make_integer_sequence<int, K>());
+}
+
+template <typename T, int Cols, int Rows, int... R>
+METAL_FUNC matrix<T, Rows, Cols> _transpose_impl(const threadgroup matrix<T, Cols, Rows> &a, _integer_sequence<int, R...>)
+{
+  return {_transpose_row(R, a, _make_integer_sequence<int, Cols>())...};
+}
+template <typename T, int Cols, int Rows, int... C>
+METAL_FUNC vec<T, Cols> _transpose_row(int r, const threadgroup matrix<T, Cols, Rows> &a, _integer_sequence<int, C...>)
+{
+  return {a[C][r]...};
+}
+
+template <typename T, int K, int... R>
+METAL_FUNC T _determinant_impl(const threadgroup matrix<T, K, K> &a, int c, vec<int, sizeof...(R)> rows, _integer_sequence<int, R...>)
+{
+  return _make_accumulation(((R & 1 ? -1 : 1) * a[c][rows[R]] * _determinant_impl(a, c + 1, _remove_determinant_row(rows, R, _make_integer_sequence<int, sizeof...(R) - 1>()), _make_integer_sequence<int, sizeof...(R) - 1>()))...);
+}
+template <typename T, int K>
+METAL_FUNC T _determinant_impl(const threadgroup matrix<T, K, K> &a, int c, vec<int, 2> rows, _integer_sequence<int, 0, 1>)
+{
+  return a[c][rows[0]] * a[c + 1][rows[1]] - a[c][rows[1]] * a[c + 1][rows[0]];
+}
+
+template <int... R>
+METAL_FUNC vec<int, sizeof...(R)> _make_determinant_rows(_integer_sequence<int, R...>)
+{
+  return {R...};
+}
+template <int... R>
+METAL_FUNC vec<int, sizeof...(R)> _remove_determinant_row(vec<int, sizeof...(R) + 1> rows, int r, _integer_sequence<int, R...>)
+{
+  return {rows[R < r ? R : R + 1]...};
+}
+} // namespace metal
+#pragma METAL internals : disable
+
+#endif // __METAL_MATRIX_H

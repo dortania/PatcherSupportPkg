@@ -1,0 +1,2304 @@
+//===-- metal_math --------------------------------------------------------===//
+// Copyright (c) 2014-2016 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_MATH
+#define __METAL_MATH
+
+#include <metal_integer_math>
+#include <metal_math_utils>
+#include <metal_relational>
+
+namespace metal {
+// Metal 1.1 s5.5: Math Functions.
+
+
+namespace fast
+{
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T abs(T x)
+{
+  return __metal_fabs(x, _METAL_PRECISE_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T acos(T x)
+{
+  return __metal_acos(x, _METAL_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T acosh(T x)
+{
+  return __metal_acosh(x, _METAL_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T asin(T x)
+{
+  return __metal_asin(x, _METAL_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T asinh(T x)
+{
+  return __metal_asinh(x, _METAL_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T atan(T y_over_x)
+{
+  return __metal_atan(y_over_x, _METAL_FAST_MATH);
+}
+template <typename T, typename U, typename _O = typename enable_if<_math_fast_or_precise_binary_func_enable<T, U>::value, _math_fast_or_precise_binary_func_operand_type_t<T, U>>::type, typename _E = typename enable_if<is_same<float, make_scalar_t<_O>>::value>::type>
+METAL_FUNC _O atan2(T y, U x)
+{
+  return __metal_atan2(_O(y), _O(x), _METAL_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T atanh(T x)
+{
+  return __metal_atanh(x, _METAL_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T ceil(T x)
+{
+  return __metal_ceil(x, _METAL_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T cos(T x)
+{
+  return __metal_cos(x, _METAL_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T cosh(T x)
+{
+  return __metal_cosh(x, _METAL_FAST_MATH);
+}
+#if defined(__HAVE_TRIG_PI__)
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T cospi(T x)
+{
+  return __metal_cospi(x, _METAL_FAST_MATH);
+}
+#endif  // defined(__HAVE_TRIG_PI__)
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T exp(T x)
+{
+  return __metal_exp(x, _METAL_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T exp10(T x)
+{
+  return __metal_exp10(x, _METAL_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T exp2(T x)
+{
+  return __metal_exp2(x, _METAL_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T fabs(T x)
+{
+  return __metal_fabs(x, _METAL_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T floor(T x)
+{
+  return __metal_floor(x, _METAL_FAST_MATH);
+}
+template <typename T, typename U, typename _O = typename enable_if<_math_fast_or_precise_binary_func_enable<T, U>::value, _math_fast_or_precise_binary_func_operand_type_t<T, U>>::type, typename _E = typename enable_if<is_same<float, make_scalar_t<_O>>::value>::type>
+METAL_FUNC _O fmax(T x, U y)
+{
+  return __metal_fmax(_O(x), _O(y), _METAL_FAST_MATH);
+}
+#if defined(__HAVE_FMAX3__)
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T fmax3(T x, T y, T z)
+{
+  return __metal_fmax3(x, y, z, _METAL_FAST_MATH);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T fmedian3(T x, T y, T z)
+{
+  return __metal_fmedian3(x, y, z, _METAL_FAST_MATH);
+}
+#endif
+template <typename T, typename U, typename _O = typename enable_if<_math_fast_or_precise_binary_func_enable<T, U>::value, _math_fast_or_precise_binary_func_operand_type_t<T, U>>::type, typename _E = typename enable_if<is_same<float, make_scalar_t<_O>>::value>::type>
+METAL_FUNC _O fmin(T x, U y)
+{
+  return __metal_fmin(_O(x), _O(y), _METAL_FAST_MATH);
+}
+#if defined(__HAVE_FMIN3__)
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T fmin3(T x, T y, T z)
+{
+  return __metal_fmin3(x, y, z, _METAL_FAST_MATH);
+}
+#endif
+template <typename T, typename U, typename _O = typename enable_if<_math_fast_or_precise_binary_func_enable<T, U>::value, _math_fast_or_precise_binary_func_operand_type_t<T, U>>::type, typename _E = typename enable_if<is_same<float, make_scalar_t<_O>>::value>::type>
+METAL_FUNC _O fmod(T x, U y)
+{
+  return __metal_fmod(_O(x), _O(y), _METAL_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T log(T x)
+{
+  return __metal_log(x, _METAL_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T log2(T x)
+{
+  return __metal_log2(x, _METAL_FAST_MATH);
+}
+template <typename T, typename U, typename _O = typename enable_if<_math_fast_or_precise_binary_func_enable<T, U>::value, _math_fast_or_precise_binary_func_operand_type_t<T, U>>::type, typename _E = typename enable_if<is_same<float, make_scalar_t<_O>>::value>::type>
+METAL_FUNC _O max(T x, U y)
+{
+  return __metal_fmax(_O(x), _O(y), _METAL_FAST_MATH);
+}
+#if defined(__HAVE_MAX3__)
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T max3(T x, T y, T z)
+{
+  return __metal_fmax3(x, y, z, _METAL_FAST_MATH);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T median3(T x, T y, T z)
+{
+  return __metal_fmedian3(x, y, z, _METAL_FAST_MATH);
+}
+#endif
+template <typename T, typename U, typename _O = typename enable_if<_math_fast_or_precise_binary_func_enable<T, U>::value, _math_fast_or_precise_binary_func_operand_type_t<T, U>>::type, typename _E = typename enable_if<is_same<float, make_scalar_t<_O>>::value>::type>
+METAL_FUNC _O min(T x, U y)
+{
+  return __metal_fmin(_O(x), _O(y), _METAL_FAST_MATH);
+}
+#if defined(__HAVE_MIN3__)
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T min3(T x, T y, T z)
+{
+  return __metal_fmin3(x, y, z, _METAL_FAST_MATH);
+}
+#endif
+template <typename T, typename U, typename _O = typename enable_if<_math_fast_or_precise_binary_func_enable<T, U>::value, _math_fast_or_precise_binary_func_operand_type_t<T, U>>::type, typename _E = typename enable_if<is_same<float, make_scalar_t<_O>>::value>::type>
+METAL_FUNC _O pow(T x, U y)
+{
+  return __metal_pow(_O(x), _O(y), _METAL_FAST_MATH);
+}
+template <typename T, typename U, typename _O = typename enable_if<_math_fast_or_precise_binary_func_enable<T, U>::value, _math_fast_or_precise_binary_func_operand_type_t<T, U>>::type, typename _E = typename enable_if<is_same<float, make_scalar_t<_O>>::value>::type>
+METAL_FUNC _O powr(T x, U y)
+{
+  return __metal_powr(_O(x), _O(y), _METAL_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T rint(T x)
+{
+  return __metal_rint(x, _METAL_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T round(T x)
+{
+  return __metal_round(x, _METAL_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T rsqrt(T x)
+{
+  return __metal_rsqrt(x, _METAL_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T sin(T x)
+{
+  return __metal_sin(x, _METAL_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T sinh(T x)
+{
+  return __metal_sinh(x, _METAL_FAST_MATH);
+}
+#if defined(__HAVE_TRIG_PI__)
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T sinpi(T x)
+{
+  return __metal_sinpi(x, _METAL_FAST_MATH);
+}
+#endif  // defined(__HAVE_TRIG_PI__)
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T sqrt(T x)
+{
+  return __metal_sqrt(x, _METAL_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T tan(T x)
+{
+  return __metal_tan(x, _METAL_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T tanh(T x)
+{
+  return __metal_tanh(x, _METAL_FAST_MATH);
+}
+#if defined(__HAVE_TRIG_PI__)
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T tanpi(T x)
+{
+  return __metal_tanpi(x, _METAL_FAST_MATH);
+}
+#endif  // defined(__HAVE_TRIG_PI__)
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T trunc(T x)
+{
+  return __metal_trunc(x, _METAL_FAST_MATH);
+}
+}  // namespace fast
+
+namespace precise
+{
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T abs(T x)
+{
+  return __metal_fabs(x, _METAL_PRECISE_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T acos(T x)
+{
+  return __metal_acos(x, _METAL_PRECISE_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T acosh(T x)
+{
+  return __metal_acosh(x, _METAL_PRECISE_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T asin(T x)
+{
+  return __metal_asin(x, _METAL_PRECISE_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T asinh(T x)
+{
+  return __metal_asinh(x, _METAL_PRECISE_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T atan(T y_over_x)
+{
+  return __metal_atan(y_over_x, _METAL_PRECISE_MATH);
+}
+template <typename T, typename U, typename _O = typename enable_if<_math_fast_or_precise_binary_func_enable<T, U>::value, _math_fast_or_precise_binary_func_operand_type_t<T, U>>::type, typename _E = typename enable_if<is_same<float, make_scalar_t<_O>>::value>::type>
+METAL_FUNC _O atan2(T y, U x)
+{
+  return __metal_atan2(_O(y), _O(x), _METAL_PRECISE_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T atanh(T x)
+{
+  return __metal_atanh(x, _METAL_PRECISE_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T ceil(T x)
+{
+  return __metal_ceil(x, _METAL_PRECISE_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T cos(T x)
+{
+  return __metal_cos(x, _METAL_PRECISE_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T cosh(T x)
+{
+  return __metal_cosh(x, _METAL_PRECISE_MATH);
+}
+#if defined(__HAVE_TRIG_PI__)
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T cospi(T x)
+{
+  return __metal_cospi(x, _METAL_PRECISE_MATH);
+}
+#endif  // defined(__HAVE_TRIG_PI__)
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T exp(T x)
+{
+  return __metal_exp(x, _METAL_PRECISE_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T exp10(T x)
+{
+  return __metal_exp10(x, _METAL_PRECISE_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T exp2(T x)
+{
+  return __metal_exp2(x, _METAL_PRECISE_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T fabs(T x)
+{
+  return __metal_fabs(x, _METAL_PRECISE_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T floor(T x)
+{
+  return __metal_floor(x, _METAL_PRECISE_MATH);
+}
+template <typename T, typename U, typename _O = typename enable_if<_math_fast_or_precise_binary_func_enable<T, U>::value, _math_fast_or_precise_binary_func_operand_type_t<T, U>>::type, typename _E = typename enable_if<is_same<float, make_scalar_t<_O>>::value>::type>
+METAL_FUNC _O fmax(T x, U y)
+{
+  return __metal_fmax(_O(x), _O(y), _METAL_PRECISE_MATH);
+}
+#if defined(__HAVE_FMAX3__)
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T fmax3(T x, T y, T z)
+{
+  return __metal_fmax3(x, y, z, _METAL_PRECISE_MATH);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T fmedian3(T x, T y, T z)
+{
+  return __metal_fmedian3(x, y, z, _METAL_PRECISE_MATH);
+}
+#endif
+template <typename T, typename U, typename _O = typename enable_if<_math_fast_or_precise_binary_func_enable<T, U>::value, _math_fast_or_precise_binary_func_operand_type_t<T, U>>::type, typename _E = typename enable_if<is_same<float, make_scalar_t<_O>>::value>::type>
+METAL_FUNC _O fmin(T x, U y)
+{
+  return __metal_fmin(_O(x), _O(y), _METAL_PRECISE_MATH);
+}
+#if defined(__HAVE_FMIN3__)
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T fmin3(T x, T y, T z)
+{
+  return __metal_fmin3(x, y, z, _METAL_PRECISE_MATH);
+}
+#endif
+template <typename T, typename U, typename _O = typename enable_if<_math_fast_or_precise_binary_func_enable<T, U>::value, _math_fast_or_precise_binary_func_operand_type_t<T, U>>::type, typename _E = typename enable_if<is_same<float, make_scalar_t<_O>>::value>::type>
+METAL_FUNC _O fmod(T x, U y)
+{
+  return __metal_fmod(_O(x), _O(y), _METAL_PRECISE_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T log(T x)
+{
+  return __metal_log(x, _METAL_PRECISE_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T log2(T x)
+{
+  return __metal_log2(x, _METAL_PRECISE_MATH);
+}
+template <typename T, typename U, typename _O = typename enable_if<_math_fast_or_precise_binary_func_enable<T, U>::value, _math_fast_or_precise_binary_func_operand_type_t<T, U>>::type, typename _E = typename enable_if<is_same<float, make_scalar_t<_O>>::value>::type>
+METAL_FUNC _O max(T x, U y)
+{
+  return __metal_fmax(_O(x), _O(y), _METAL_PRECISE_MATH);
+}
+#if defined(__HAVE_MAX3__)
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T max3(T x, T y, T z)
+{
+  return __metal_fmax3(x, y, z, _METAL_PRECISE_MATH);
+}
+#endif
+#if defined(__HAVE_MEDIAN3__)
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T median3(T x, T y, T z)
+{
+  return __metal_fmedian3(x, y, z, _METAL_PRECISE_MATH);
+}
+#endif
+template <typename T, typename U, typename _O = typename enable_if<_math_fast_or_precise_binary_func_enable<T, U>::value, _math_fast_or_precise_binary_func_operand_type_t<T, U>>::type, typename _E = typename enable_if<is_same<float, make_scalar_t<_O>>::value>::type>
+METAL_FUNC _O min(T x, U y)
+{
+  return __metal_fmin(_O(x), _O(y), _METAL_PRECISE_MATH);
+}
+#if defined(__HAVE_MIN3__)
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T min3(T x, T y, T z)
+{
+  return __metal_fmin3(x, y, z, _METAL_PRECISE_MATH);
+}
+#endif
+template <typename T, typename U, typename _O = typename enable_if<_math_fast_or_precise_binary_func_enable<T, U>::value, _math_fast_or_precise_binary_func_operand_type_t<T, U>>::type, typename _E = typename enable_if<is_same<float, make_scalar_t<_O>>::value>::type>
+METAL_FUNC _O pow(T x, U y)
+{
+  return __metal_pow(_O(x), _O(y), _METAL_PRECISE_MATH);
+}
+template <typename T, typename U, typename _O = typename enable_if<_math_fast_or_precise_binary_func_enable<T, U>::value, _math_fast_or_precise_binary_func_operand_type_t<T, U>>::type, typename _E = typename enable_if<is_same<float, make_scalar_t<_O>>::value>::type>
+METAL_FUNC _O powr(T x, U y)
+{
+  return __metal_powr(_O(x), _O(y), _METAL_PRECISE_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T rint(T x)
+{
+  return __metal_rint(x, _METAL_PRECISE_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T round(T x)
+{
+  return __metal_round(x, _METAL_PRECISE_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T rsqrt(T x)
+{
+  return __metal_rsqrt(x, _METAL_PRECISE_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T sin(T x)
+{
+  return __metal_sin(x, _METAL_PRECISE_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T sinh(T x)
+{
+  return __metal_sinh(x, _METAL_PRECISE_MATH);
+}
+#if defined(__HAVE_TRIG_PI__)
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T sinpi(T x)
+{
+  return __metal_sinpi(x, _METAL_PRECISE_MATH);
+}
+#endif  // defined(__HAVE_TRIG_PI__)
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T sqrt(T x)
+{
+  return __metal_sqrt(x, _METAL_PRECISE_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T tan(T x)
+{
+  return __metal_tan(x, _METAL_PRECISE_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T tanh(T x)
+{
+  return __metal_tanh(x, _METAL_PRECISE_MATH);
+}
+#if defined(__HAVE_TRIG_PI__)
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T tanpi(T x)
+{
+  return __metal_tanpi(x, _METAL_PRECISE_MATH);
+}
+#endif  // defined(__HAVE_TRIG_PI__)
+template <typename T, typename _E = typename enable_if<is_same<float, make_scalar_t<T>>::value>::type>
+METAL_FUNC T trunc(T x)
+{
+  return __metal_trunc(x, _METAL_PRECISE_MATH);
+}
+}  // namespace precise
+
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T abs(T x)
+{
+  return __metal_fabs(x, _METAL_PRECISE_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T acos(T x)
+{
+  return __metal_acos(x, _METAL_MAYBE_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T acosh(T x)
+{
+  return __metal_acosh(x, _METAL_MAYBE_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T asin(T x)
+{
+  return __metal_asin(x, _METAL_MAYBE_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T asinh(T x)
+{
+  return __metal_asinh(x, _METAL_MAYBE_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T atan(T y_over_x)
+{
+  return __metal_atan(y_over_x, _METAL_MAYBE_FAST_MATH);
+}
+template <typename T, typename U, typename _O = typename enable_if<_math_binary_func_enable<T, U>::value, _math_binary_func_operand_type_t<T, U>>::type>
+METAL_FUNC _O atan2(T y, U x)
+{
+  return __metal_atan2(_O(y), _O(x), _METAL_MAYBE_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T atanh(T x)
+{
+  return __metal_atanh(x, _METAL_MAYBE_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T ceil(T x)
+{
+  return __metal_ceil(x, _METAL_MAYBE_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T cos(T x)
+{
+  return __metal_cos(x, _METAL_MAYBE_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T cosh(T x)
+{
+  return __metal_cosh(x, _METAL_MAYBE_FAST_MATH);
+}
+#if defined(__HAVE_TRIG_PI__)
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T cospi(T x)
+{
+  return __metal_cospi(x, _METAL_MAYBE_FAST_MATH);
+}
+#endif  // defined(__HAVE_TRIG_PI__)
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T exp(T x)
+{
+  return __metal_exp(x, _METAL_MAYBE_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T exp10(T x)
+{
+  return __metal_exp10(x, _METAL_MAYBE_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T exp2(T x)
+{
+  return __metal_exp2(x, _METAL_MAYBE_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T fabs(T x)
+{
+  return __metal_fabs(x, _METAL_MAYBE_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T floor(T x)
+{
+  return __metal_floor(x, _METAL_MAYBE_FAST_MATH);
+}
+template <typename T, typename U, typename _O = typename enable_if<_math_binary_func_enable<T, U>::value, _math_binary_func_operand_type_t<T, U>>::type>
+METAL_FUNC _O fmax(T x, U y)
+{
+  return __metal_fmax(_O(x), _O(y), _METAL_MAYBE_FAST_MATH);
+}
+#if defined(__HAVE_FMAX3__)
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T fmax3(T x, T y, T z)
+{
+  return __metal_fmax3(x, y, z, _METAL_MAYBE_FAST_MATH);
+}
+#endif
+#if defined(__HAVE_FMEDIAN3__)
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T fmedian3(T x, T y, T z)
+{
+  return __metal_fmedian3(x, y, z, _METAL_MAYBE_FAST_MATH);
+}
+#endif
+template <typename T, typename U, typename _O = typename enable_if<_math_binary_func_enable<T, U>::value, _math_binary_func_operand_type_t<T, U>>::type>
+METAL_FUNC _O fmin(T x, U y)
+{
+  return __metal_fmin(_O(x), _O(y), _METAL_MAYBE_FAST_MATH);
+}
+#if defined(__HAVE_FMIN3__)
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T fmin3(T x, T y, T z)
+{
+  return __metal_fmin3(x, y, z, _METAL_MAYBE_FAST_MATH);
+}
+#endif
+template <typename T, typename U, typename _O = typename enable_if<_math_binary_func_enable<T, U>::value, _math_binary_func_operand_type_t<T, U>>::type>
+METAL_FUNC _O fmod(T x, U y)
+{
+  return __metal_fmod(_O(x), _O(y), _METAL_MAYBE_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T log(T x)
+{
+  return __metal_log(x, _METAL_MAYBE_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T log2(T x)
+{
+  return __metal_log2(x, _METAL_MAYBE_FAST_MATH);
+}
+template <typename T, typename U, typename _O = typename enable_if<_math_binary_func_enable<T, U>::value, _math_binary_func_operand_type_t<T, U>>::type>
+METAL_FUNC _O max(T x, U y)
+{
+  return __metal_fmax(_O(x), _O(y), _METAL_MAYBE_FAST_MATH);
+}
+template <typename T, typename U, typename _O = typename enable_if<_math_binary_func_enable<T, U>::value, _math_binary_func_operand_type_t<T, U>>::type>
+METAL_FUNC _O min(T x, U y)
+{
+  return __metal_fmin(_O(x), _O(y), _METAL_MAYBE_FAST_MATH);
+}
+template <typename T, typename U, typename _O = typename enable_if<_math_binary_func_enable<T, U>::value, _math_binary_func_operand_type_t<T, U>>::type>
+METAL_FUNC _O pow(T x, U y)
+{
+  return __metal_pow(_O(x), _O(y), _METAL_MAYBE_FAST_MATH);
+}
+template <typename T, typename U, typename _O = typename enable_if<_math_binary_func_enable<T, U>::value, _math_binary_func_operand_type_t<T, U>>::type>
+METAL_FUNC _O powr(T x, U y)
+{
+  return __metal_powr(_O(x), _O(y), _METAL_MAYBE_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T rint(T x)
+{
+  return __metal_rint(x, _METAL_MAYBE_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T round(T x)
+{
+  return __metal_round(x, _METAL_MAYBE_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T rsqrt(T x)
+{
+  return __metal_rsqrt(x, _METAL_MAYBE_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T sin(T x)
+{
+  return __metal_sin(x, _METAL_MAYBE_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T sinh(T x)
+{
+  return __metal_sinh(x, _METAL_MAYBE_FAST_MATH);
+}
+#if defined(__HAVE_TRIG_PI__)
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T sinpi(T x)
+{
+  return __metal_sinpi(x, _METAL_MAYBE_FAST_MATH);
+}
+#endif  // defined(__HAVE_TRIG_PI__)
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T sqrt(T x)
+{
+  return __metal_sqrt(x, _METAL_MAYBE_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T tan(T x)
+{
+  return __metal_tan(x, _METAL_MAYBE_FAST_MATH);
+}
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T tanh(T x)
+{
+  return __metal_tanh(x, _METAL_MAYBE_FAST_MATH);
+}
+#if defined(__HAVE_TRIG_PI__)
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T tanpi(T x)
+{
+  return __metal_tanpi(x, _METAL_MAYBE_FAST_MATH);
+}
+#endif  // defined(__HAVE_TRIG_PI__)
+template <typename T, typename _E = typename enable_if<is_floating_point<T>::value>::type>
+METAL_FUNC T trunc(T x)
+{
+  return __metal_trunc(x, _METAL_MAYBE_FAST_MATH);
+}
+
+#define _AIR_PREFIX_half ""
+#if defined(__FAST_MATH__)
+#define _AIR_PREFIX_float "fast_"
+#else
+#define _AIR_PREFIX_float ""
+#endif
+#define _AIR_PREFIX_double ""
+
+  // Forward declaration of some functions implemented in metal
+  // namespace and called directly by corresponding functions in
+  // fast and precise namespaces directly i.e. copysign in fast
+  // and precise namespaces call metal::copysign.
+  METAL_FUNC half copysign(half, half);
+  METAL_FUNC half fdim(half, half);
+  METAL_FUNC half frexp(half, thread int&);
+  METAL_FUNC int ilogb(half);
+  METAL_FUNC half ldexp(half, int);
+  METAL_FUNC half modf(half, thread half&);
+  METAL_FUNC float copysign(float, float);
+  METAL_FUNC float fdim(float, float);
+  METAL_FUNC float frexp(float, thread int&);
+  METAL_FUNC int ilogb(float);
+  METAL_FUNC float ldexp(float, int);
+  METAL_FUNC float modf(float, thread float&);
+#if defined(__HAVE_NATIVE_DOUBLE__)
+  METAL_FUNC double copysign(double, double);
+  METAL_FUNC double fdim(double, double);
+  METAL_FUNC double frexp(double, thread int&);
+  METAL_FUNC int ilogb(double);
+  METAL_FUNC double ldexp(double, int);
+  METAL_FUNC double modf(double, thread double&);
+#endif
+  METAL_FUNC vec<half,2> copysign(vec<half,2>, vec<half,2>);
+  METAL_FUNC vec<half,2> fdim(vec<half,2>, vec<half,2>);
+  METAL_FUNC vec<half,2> frexp(vec<half,2>, thread vec<int,2>&);
+  METAL_FUNC vec<int,2> ilogb(vec<half,2>);
+  METAL_FUNC vec<half,2> ldexp(vec<half,2>, vec<int,2>);
+  METAL_FUNC vec<half,2> modf(vec<half,2>, thread vec<half,2>&);
+  METAL_FUNC vec<float,2> copysign(vec<float,2>, vec<float,2>);
+  METAL_FUNC vec<float,2> fdim(vec<float,2>, vec<float,2>);
+  METAL_FUNC vec<float,2> frexp(vec<float,2>, thread vec<int,2>&);
+  METAL_FUNC vec<int,2> ilogb(vec<float,2>);
+  METAL_FUNC vec<float,2> ldexp(vec<float,2>, vec<int,2>);
+  METAL_FUNC vec<float,2> modf(vec<float,2>, thread vec<float,2>&);
+#if defined(__HAVE_NATIVE_DOUBLE__)
+  METAL_FUNC vec<double,2> copysign(vec<double,2>, vec<double,2>);
+  METAL_FUNC vec<double,2> fdim(vec<double,2>, vec<double,2>);
+  METAL_FUNC vec<double,2> frexp(vec<double,2>, thread vec<int,2>&);
+  METAL_FUNC vec<int,2> ilogb(vec<double,2>);
+  METAL_FUNC vec<double,2> ldexp(vec<double,2>, vec<int,2>);
+  METAL_FUNC vec<double,2> modf(vec<double,2>, thread vec<double,2>&);
+#endif
+  METAL_FUNC vec<half,3> copysign(vec<half,3>, vec<half,3>);
+  METAL_FUNC vec<half,3> fdim(vec<half,3>, vec<half,3>);
+  METAL_FUNC vec<half,3> frexp(vec<half,3>, thread vec<int,3>&);
+  METAL_FUNC vec<int,3> ilogb(vec<half,3>);
+  METAL_FUNC vec<half,3> ldexp(vec<half,3>, vec<int,3>);
+  METAL_FUNC vec<half,3> modf(vec<half,3>, thread vec<half,3>&);
+  METAL_FUNC vec<float,3> copysign(vec<float,3>, vec<float,3>);
+  METAL_FUNC vec<float,3> fdim(vec<float,3>, vec<float,3>);
+  METAL_FUNC vec<float,3> frexp(vec<float,3>, thread vec<int,3>&);
+  METAL_FUNC vec<int,3> ilogb(vec<float,3>);
+  METAL_FUNC vec<float,3> ldexp(vec<float,3>, vec<int,3>);
+  METAL_FUNC vec<float,3> modf(vec<float,3>, thread vec<float,3>&);
+#if defined(__HAVE_NATIVE_DOUBLE__)
+  METAL_FUNC vec<double,3> copysign(vec<double,3>, vec<double,3>);
+  METAL_FUNC vec<double,3> fdim(vec<double,3>, vec<double,3>);
+  METAL_FUNC vec<double,3> frexp(vec<double,3>, thread vec<int,3>&);
+  METAL_FUNC vec<int,3> ilogb(vec<double,3>);
+  METAL_FUNC vec<double,3> ldexp(vec<double,3>, vec<int,3>);
+  METAL_FUNC vec<double,3> modf(vec<double,3>, thread vec<double,3>&);
+#endif
+  METAL_FUNC vec<half,4> copysign(vec<half,4>, vec<half,4>);
+  METAL_FUNC vec<half,4> fdim(vec<half,4>, vec<half,4>);
+  METAL_FUNC vec<half,4> frexp(vec<half,4>, thread vec<int,4>&);
+  METAL_FUNC vec<int,4> ilogb(vec<half,4>);
+  METAL_FUNC vec<half,4> ldexp(vec<half,4>, vec<int,4>);
+  METAL_FUNC vec<half,4> modf(vec<half,4>, thread vec<half,4>&);
+  METAL_FUNC vec<float,4> copysign(vec<float,4>, vec<float,4>);
+  METAL_FUNC vec<float,4> fdim(vec<float,4>, vec<float,4>);
+  METAL_FUNC vec<float,4> frexp(vec<float,4>, thread vec<int,4>&);
+  METAL_FUNC vec<int,4> ilogb(vec<float,4>);
+  METAL_FUNC vec<float,4> ldexp(vec<float,4>, vec<int,4>);
+  METAL_FUNC vec<float,4> modf(vec<float,4>, thread vec<float,4>&);
+#if defined(__HAVE_NATIVE_DOUBLE__)
+  METAL_FUNC vec<double,4> copysign(vec<double,4>, vec<double,4>);
+  METAL_FUNC vec<double,4> fdim(vec<double,4>, vec<double,4>);
+  METAL_FUNC vec<double,4> frexp(vec<double,4>, thread vec<int,4>&);
+  METAL_FUNC vec<int,4> ilogb(vec<double,4>);
+  METAL_FUNC vec<double,4> ldexp(vec<double,4>, vec<int,4>);
+  METAL_FUNC vec<double,4> modf(vec<double,4>, thread vec<double,4>&);
+#endif
+
+namespace fast {
+  // Forward declarations
+  METAL_FUNC float copysign(float x, float y) {
+    return metal::copysign(x, y);
+  }
+
+#if defined(__HAVE_FMA__)
+  METAL_ASM float fma(float a, float b, float c) __asm("air.fma.f32");
+#endif
+
+  METAL_ASM float fract(float x) __asm("air.fast_fract.f32");
+
+  METAL_FUNC float frexp(float x, thread int &exp) {
+    return metal::frexp(x, exp);
+  }
+  METAL_FUNC int ilogb(float x) {
+    return metal::ilogb(x);
+  }
+#if defined(__HAVE_AIR_LDEXP__)
+  METAL_ASM float ldexp(float x, int k) __asm("air.fast_ldexp.f32");
+#else
+  //TODO: <rdar://problem/20022019> fract and ldexp should call air function/builtins
+  METAL_FUNC float ldexp(float x, int k) {
+    return metal::ldexp(x, k);
+  }
+#endif
+  METAL_FUNC float fdim(float x, float y) {
+    return metal::fdim(x, y);
+  }
+  METAL_ASM float log10(float x) __asm("air.fast_log10.f32");
+
+  METAL_FUNC float modf(float x, thread float &intval) {
+    return metal::modf(x, intval);
+  }
+  METAL_ASM float sincos(float x, thread float &cosval) __asm("air.fast_sincos.f32");
+
+  //METAL_ASM float trunc(float x) __asm("air.fast_trunc.f32");
+  // Forward declarations
+  METAL_FUNC vec<float,2> copysign(vec<float,2> x, vec<float,2> y) {
+    return metal::copysign(x, y);
+  }
+
+#if defined(__HAVE_FMA__)
+  METAL_ASM vec<float,2> fma(vec<float,2> a, vec<float,2> b, vec<float,2> c) __asm("air.fma.v2f32");
+#endif
+
+  METAL_FUNC vec<float,2> frexp(vec<float,2> x, thread vec<int,2> &exponent) {
+    int temp_exponent;
+    vec<float,2> ret_val;
+    ret_val[0] = frexp(x[0], temp_exponent);
+    exponent[0] = temp_exponent;
+    ret_val[1] = frexp(x[1], temp_exponent);
+    exponent[1] = temp_exponent;
+    return ret_val;
+  }
+  METAL_FUNC vec<int,2> ilogb(vec<float,2> x) {
+    vec<int,2> ret_val;
+    ret_val[0] = ilogb(x[0]);
+    ret_val[1] = ilogb(x[1]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_LDEXP__)
+  METAL_ASM vec<float,2> ldexp(vec<float,2> x, vec<int,2> k) __asm("air.fast_ldexp.v2f32");
+#else
+  METAL_FUNC vec<float,2> ldexp(vec<float,2> x, vec<int,2> k) {
+    vec<float,2> ret_val;
+    ret_val[0] = ldexp(x[0], k[0]);
+    ret_val[1] = ldexp(x[1], k[1]);
+    return ret_val;
+  }
+#endif
+  METAL_FUNC vec<float,2> fdim(vec<float,2> x, vec<float,2> y) {
+    vec<float,2> ret_val;
+    ret_val[0] = fdim(x[0], y[0]);
+    ret_val[1] = fdim(x[1], y[1]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_FRACT__)
+  METAL_ASM vec<float,2> fract(vec<float,2> x) __asm("air.fast_fract.v2f32");
+#else
+  METAL_FUNC vec<float,2> fract(vec<float,2> x) {
+    vec<float,2> ret_val;
+    ret_val[0] = fract(x[0]);
+    ret_val[1] = fract(x[1]);
+    return ret_val;
+  }
+#endif
+  METAL_ASM vec<float,2> log10(vec<float,2> x) __asm("air.fast_log10.v2f32");
+
+  METAL_FUNC vec<float,2> modf(vec<float,2> x, thread vec<float,2> &intval) {
+    return metal::modf(x, intval);
+  }
+  METAL_ASM vec<float,2> sincos(vec<float,2> x, thread vec<float,2> &cosval) __asm("air.fast_sincos.v2f32");
+
+  //METAL_ASM vec<float,2> trunc(vec<float,2> x) __asm("air.fast_trunc.v2f32");
+  // Forward declarations
+  METAL_FUNC vec<float,3> copysign(vec<float,3> x, vec<float,3> y) {
+    return metal::copysign(x, y);
+  }
+
+#if defined(__HAVE_FMA__)
+  METAL_ASM vec<float,3> fma(vec<float,3> a, vec<float,3> b, vec<float,3> c) __asm("air.fma.v3f32");
+#endif
+
+  METAL_FUNC vec<float,3> frexp(vec<float,3> x, thread vec<int,3> &exponent) {
+    int temp_exponent;
+    vec<float,3> ret_val;
+    ret_val[0] = frexp(x[0], temp_exponent);
+    exponent[0] = temp_exponent;
+    ret_val[1] = frexp(x[1], temp_exponent);
+    exponent[1] = temp_exponent;
+    ret_val[2] = frexp(x[2], temp_exponent);
+    exponent[2] = temp_exponent;
+    return ret_val;
+  }
+  METAL_FUNC vec<int,3> ilogb(vec<float,3> x) {
+    vec<int,3> ret_val;
+    ret_val[0] = ilogb(x[0]);
+    ret_val[1] = ilogb(x[1]);
+    ret_val[2] = ilogb(x[2]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_LDEXP__)
+  METAL_ASM vec<float,3> ldexp(vec<float,3> x, vec<int,3> k) __asm("air.fast_ldexp.v3f32");
+#else
+  METAL_FUNC vec<float,3> ldexp(vec<float,3> x, vec<int,3> k) {
+    vec<float,3> ret_val;
+    ret_val[0] = ldexp(x[0], k[0]);
+    ret_val[1] = ldexp(x[1], k[1]);
+    ret_val[2] = ldexp(x[2], k[2]);
+    return ret_val;
+  }
+#endif
+  METAL_FUNC vec<float,3> fdim(vec<float,3> x, vec<float,3> y) {
+    vec<float,3> ret_val;
+    ret_val[0] = fdim(x[0], y[0]);
+    ret_val[1] = fdim(x[1], y[1]);
+    ret_val[2] = fdim(x[2], y[2]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_FRACT__)
+  METAL_ASM vec<float,3> fract(vec<float,3> x) __asm("air.fast_fract.v3f32");
+#else
+  METAL_FUNC vec<float,3> fract(vec<float,3> x) {
+    vec<float,3> ret_val;
+    ret_val[0] = fract(x[0]);
+    ret_val[1] = fract(x[1]);
+    ret_val[2] = fract(x[2]);
+    return ret_val;
+  }
+#endif
+  METAL_ASM vec<float,3> log10(vec<float,3> x) __asm("air.fast_log10.v3f32");
+
+  METAL_FUNC vec<float,3> modf(vec<float,3> x, thread vec<float,3> &intval) {
+    return metal::modf(x, intval);
+  }
+  METAL_ASM vec<float,3> sincos(vec<float,3> x, thread vec<float,3> &cosval) __asm("air.fast_sincos.v3f32");
+
+  //METAL_ASM vec<float,3> trunc(vec<float,3> x) __asm("air.fast_trunc.v3f32");
+  // Forward declarations
+  METAL_FUNC vec<float,4> copysign(vec<float,4> x, vec<float,4> y) {
+    return metal::copysign(x, y);
+  }
+
+#if defined(__HAVE_FMA__)
+  METAL_ASM vec<float,4> fma(vec<float,4> a, vec<float,4> b, vec<float,4> c) __asm("air.fma.v4f32");
+#endif
+
+  METAL_FUNC vec<float,4> frexp(vec<float,4> x, thread vec<int,4> &exponent) {
+    int temp_exponent;
+    vec<float,4> ret_val;
+    ret_val[0] = frexp(x[0], temp_exponent);
+    exponent[0] = temp_exponent;
+    ret_val[1] = frexp(x[1], temp_exponent);
+    exponent[1] = temp_exponent;
+    ret_val[2] = frexp(x[2], temp_exponent);
+    exponent[2] = temp_exponent;
+    ret_val[3] = frexp(x[3], temp_exponent);
+    exponent[3] = temp_exponent;
+    return ret_val;
+  }
+  METAL_FUNC vec<int,4> ilogb(vec<float,4> x) {
+    vec<int,4> ret_val;
+    ret_val[0] = ilogb(x[0]);
+    ret_val[1] = ilogb(x[1]);
+    ret_val[2] = ilogb(x[2]);
+    ret_val[3] = ilogb(x[3]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_LDEXP__)
+  METAL_ASM vec<float,4> ldexp(vec<float,4> x, vec<int,4> k) __asm("air.fast_ldexp.v4f32");
+#else
+  METAL_FUNC vec<float,4> ldexp(vec<float,4> x, vec<int,4> k) {
+    vec<float,4> ret_val;
+    ret_val[0] = ldexp(x[0], k[0]);
+    ret_val[1] = ldexp(x[1], k[1]);
+    ret_val[2] = ldexp(x[2], k[2]);
+    ret_val[3] = ldexp(x[3], k[3]);
+    return ret_val;
+  }
+#endif
+  METAL_FUNC vec<float,4> fdim(vec<float,4> x, vec<float,4> y) {
+    vec<float,4> ret_val;
+    ret_val[0] = fdim(x[0], y[0]);
+    ret_val[1] = fdim(x[1], y[1]);
+    ret_val[2] = fdim(x[2], y[2]);
+    ret_val[3] = fdim(x[3], y[3]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_FRACT__)
+  METAL_ASM vec<float,4> fract(vec<float,4> x) __asm("air.fast_fract.v4f32");
+#else
+  METAL_FUNC vec<float,4> fract(vec<float,4> x) {
+    vec<float,4> ret_val;
+    ret_val[0] = fract(x[0]);
+    ret_val[1] = fract(x[1]);
+    ret_val[2] = fract(x[2]);
+    ret_val[3] = fract(x[3]);
+    return ret_val;
+  }
+#endif
+  METAL_ASM vec<float,4> log10(vec<float,4> x) __asm("air.fast_log10.v4f32");
+
+  METAL_FUNC vec<float,4> modf(vec<float,4> x, thread vec<float,4> &intval) {
+    return metal::modf(x, intval);
+  }
+  METAL_ASM vec<float,4> sincos(vec<float,4> x, thread vec<float,4> &cosval) __asm("air.fast_sincos.v4f32");
+
+  //METAL_ASM vec<float,4> trunc(vec<float,4> x) __asm("air.fast_trunc.v4f32");
+} // namespace fast
+
+namespace precise {
+  // Forward declarations
+  METAL_FUNC float copysign(float x, float y) {
+    return metal::copysign(x, y);
+  }
+
+#if defined(__HAVE_FMA__)
+  METAL_ASM float fma(float a, float b, float c) __asm("air.fma.f32");
+#endif
+
+#if defined(__HAVE_AIR_FRACT__)
+  METAL_ASM float fract(float x) __asm("air.fract.f32");
+#else
+  //TODO: <rdar://problem/20022019> fract and ldexp should call air function/builtins
+  METAL_FUNC float fract(float x) {
+    if (metal::isinf(x))
+      return float(0);
+    if (metal::isnan(x))
+      return x;
+    return fmin(x - floor(x), float(0x1.fffffep-1));
+  }
+#endif
+
+  METAL_FUNC float frexp(float x, thread int &exp) {
+    return metal::frexp(x, exp);
+  }
+  METAL_FUNC int ilogb(float x) {
+    return metal::ilogb(x);
+  }
+#if defined(__HAVE_AIR_LDEXP__)
+  METAL_ASM float ldexp(float x, int k) __asm("air.ldexp.f32");
+#else
+  //TODO: <rdar://problem/20022019> fract and ldexp should call air function/builtins
+  METAL_FUNC float ldexp(float x, int k) {
+    return metal::ldexp(x, k);
+  }
+#endif
+  METAL_FUNC float fdim(float x, float y) {
+    return metal::fdim(x, y);
+  }
+  METAL_ASM float log10(float x) __asm("air.log10.f32");
+
+  METAL_FUNC float modf(float x, thread float &intval) {
+    return metal::modf(x, intval);
+  }
+  METAL_ASM float sincos(float x, thread float &cosval) __asm("air.sincos.f32");
+
+  //METAL_ASM float trunc(float x) __asm("air.trunc.f32");
+  // Forward declarations
+  METAL_FUNC vec<float,2> copysign(vec<float,2> x, vec<float,2> y) {
+    return metal::copysign(x, y);
+  }
+
+#if defined(__HAVE_FMA__)
+  METAL_ASM vec<float,2> fma(vec<float,2> a, vec<float,2> b, vec<float,2> c) __asm("air.fma.v2f32");
+#endif
+
+  METAL_FUNC vec<float,2> frexp(vec<float,2> x, thread vec<int,2> &exponent) {
+    int temp_exponent;
+    vec<float,2> ret_val;
+    ret_val[0] = frexp(x[0], temp_exponent);
+    exponent[0] = temp_exponent;
+    ret_val[1] = frexp(x[1], temp_exponent);
+    exponent[1] = temp_exponent;
+    return ret_val;
+  }
+  METAL_FUNC vec<int,2> ilogb(vec<float,2> x) {
+    vec<int,2> ret_val;
+    ret_val[0] = ilogb(x[0]);
+    ret_val[1] = ilogb(x[1]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_LDEXP__)
+  METAL_ASM vec<float,2> ldexp(vec<float,2> x, vec<int,2> k) __asm("air.ldexp.v2f32");
+#else
+  METAL_FUNC vec<float,2> ldexp(vec<float,2> x, vec<int,2> k) {
+    vec<float,2> ret_val;
+    ret_val[0] = ldexp(x[0], k[0]);
+    ret_val[1] = ldexp(x[1], k[1]);
+    return ret_val;
+  }
+#endif
+  METAL_FUNC vec<float,2> fdim(vec<float,2> x, vec<float,2> y) {
+    vec<float,2> ret_val;
+    ret_val[0] = fdim(x[0], y[0]);
+    ret_val[1] = fdim(x[1], y[1]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_FRACT__)
+  METAL_ASM vec<float,2> fract(vec<float,2> x) __asm("air.fract.v2f32");
+#else
+  METAL_FUNC vec<float,2> fract(vec<float,2> x) {
+    vec<float,2> ret_val;
+    ret_val[0] = fract(x[0]);
+    ret_val[1] = fract(x[1]);
+    return ret_val;
+  }
+#endif
+  METAL_ASM vec<float,2> log10(vec<float,2> x) __asm("air.log10.v2f32");
+
+  METAL_FUNC vec<float,2> modf(vec<float,2> x, thread vec<float,2> &intval) {
+    return metal::modf(x, intval);
+  }
+  METAL_ASM vec<float,2> sincos(vec<float,2> x, thread vec<float,2> &cosval) __asm("air.sincos.v2f32");
+
+  //METAL_ASM vec<float,2> trunc(vec<float,2> x) __asm("air.trunc.v2f32");
+  // Forward declarations
+  METAL_FUNC vec<float,3> copysign(vec<float,3> x, vec<float,3> y) {
+    return metal::copysign(x, y);
+  }
+
+#if defined(__HAVE_FMA__)
+  METAL_ASM vec<float,3> fma(vec<float,3> a, vec<float,3> b, vec<float,3> c) __asm("air.fma.v3f32");
+#endif
+
+  METAL_FUNC vec<float,3> frexp(vec<float,3> x, thread vec<int,3> &exponent) {
+    int temp_exponent;
+    vec<float,3> ret_val;
+    ret_val[0] = frexp(x[0], temp_exponent);
+    exponent[0] = temp_exponent;
+    ret_val[1] = frexp(x[1], temp_exponent);
+    exponent[1] = temp_exponent;
+    ret_val[2] = frexp(x[2], temp_exponent);
+    exponent[2] = temp_exponent;
+    return ret_val;
+  }
+  METAL_FUNC vec<int,3> ilogb(vec<float,3> x) {
+    vec<int,3> ret_val;
+    ret_val[0] = ilogb(x[0]);
+    ret_val[1] = ilogb(x[1]);
+    ret_val[2] = ilogb(x[2]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_LDEXP__)
+  METAL_ASM vec<float,3> ldexp(vec<float,3> x, vec<int,3> k) __asm("air.ldexp.v3f32");
+#else
+  METAL_FUNC vec<float,3> ldexp(vec<float,3> x, vec<int,3> k) {
+    vec<float,3> ret_val;
+    ret_val[0] = ldexp(x[0], k[0]);
+    ret_val[1] = ldexp(x[1], k[1]);
+    ret_val[2] = ldexp(x[2], k[2]);
+    return ret_val;
+  }
+#endif
+  METAL_FUNC vec<float,3> fdim(vec<float,3> x, vec<float,3> y) {
+    vec<float,3> ret_val;
+    ret_val[0] = fdim(x[0], y[0]);
+    ret_val[1] = fdim(x[1], y[1]);
+    ret_val[2] = fdim(x[2], y[2]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_FRACT__)
+  METAL_ASM vec<float,3> fract(vec<float,3> x) __asm("air.fract.v3f32");
+#else
+  METAL_FUNC vec<float,3> fract(vec<float,3> x) {
+    vec<float,3> ret_val;
+    ret_val[0] = fract(x[0]);
+    ret_val[1] = fract(x[1]);
+    ret_val[2] = fract(x[2]);
+    return ret_val;
+  }
+#endif
+  METAL_ASM vec<float,3> log10(vec<float,3> x) __asm("air.log10.v3f32");
+
+  METAL_FUNC vec<float,3> modf(vec<float,3> x, thread vec<float,3> &intval) {
+    return metal::modf(x, intval);
+  }
+  METAL_ASM vec<float,3> sincos(vec<float,3> x, thread vec<float,3> &cosval) __asm("air.sincos.v3f32");
+
+  //METAL_ASM vec<float,3> trunc(vec<float,3> x) __asm("air.trunc.v3f32");
+  // Forward declarations
+  METAL_FUNC vec<float,4> copysign(vec<float,4> x, vec<float,4> y) {
+    return metal::copysign(x, y);
+  }
+
+#if defined(__HAVE_FMA__)
+  METAL_ASM vec<float,4> fma(vec<float,4> a, vec<float,4> b, vec<float,4> c) __asm("air.fma.v4f32");
+#endif
+
+  METAL_FUNC vec<float,4> frexp(vec<float,4> x, thread vec<int,4> &exponent) {
+    int temp_exponent;
+    vec<float,4> ret_val;
+    ret_val[0] = frexp(x[0], temp_exponent);
+    exponent[0] = temp_exponent;
+    ret_val[1] = frexp(x[1], temp_exponent);
+    exponent[1] = temp_exponent;
+    ret_val[2] = frexp(x[2], temp_exponent);
+    exponent[2] = temp_exponent;
+    ret_val[3] = frexp(x[3], temp_exponent);
+    exponent[3] = temp_exponent;
+    return ret_val;
+  }
+  METAL_FUNC vec<int,4> ilogb(vec<float,4> x) {
+    vec<int,4> ret_val;
+    ret_val[0] = ilogb(x[0]);
+    ret_val[1] = ilogb(x[1]);
+    ret_val[2] = ilogb(x[2]);
+    ret_val[3] = ilogb(x[3]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_LDEXP__)
+  METAL_ASM vec<float,4> ldexp(vec<float,4> x, vec<int,4> k) __asm("air.ldexp.v4f32");
+#else
+  METAL_FUNC vec<float,4> ldexp(vec<float,4> x, vec<int,4> k) {
+    vec<float,4> ret_val;
+    ret_val[0] = ldexp(x[0], k[0]);
+    ret_val[1] = ldexp(x[1], k[1]);
+    ret_val[2] = ldexp(x[2], k[2]);
+    ret_val[3] = ldexp(x[3], k[3]);
+    return ret_val;
+  }
+#endif
+  METAL_FUNC vec<float,4> fdim(vec<float,4> x, vec<float,4> y) {
+    vec<float,4> ret_val;
+    ret_val[0] = fdim(x[0], y[0]);
+    ret_val[1] = fdim(x[1], y[1]);
+    ret_val[2] = fdim(x[2], y[2]);
+    ret_val[3] = fdim(x[3], y[3]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_FRACT__)
+  METAL_ASM vec<float,4> fract(vec<float,4> x) __asm("air.fract.v4f32");
+#else
+  METAL_FUNC vec<float,4> fract(vec<float,4> x) {
+    vec<float,4> ret_val;
+    ret_val[0] = fract(x[0]);
+    ret_val[1] = fract(x[1]);
+    ret_val[2] = fract(x[2]);
+    ret_val[3] = fract(x[3]);
+    return ret_val;
+  }
+#endif
+  METAL_ASM vec<float,4> log10(vec<float,4> x) __asm("air.log10.v4f32");
+
+  METAL_FUNC vec<float,4> modf(vec<float,4> x, thread vec<float,4> &intval) {
+    return metal::modf(x, intval);
+  }
+  METAL_ASM vec<float,4> sincos(vec<float,4> x, thread vec<float,4> &cosval) __asm("air.sincos.v4f32");
+
+  //METAL_ASM vec<float,4> trunc(vec<float,4> x) __asm("air.trunc.v4f32");
+} // namespace precise
+
+  // Forward declarations
+  METAL_FUNC half copysign(half x, half y) {
+    ushort iy = as_type<ushort>(y) & (ushort)(0x8000);
+    ushort ret = (as_type<ushort>(x) & (ushort)(0x8000 - 1ULL)) | iy;
+    return as_type<half>(ret);
+  }
+
+#if defined(__HAVE_FMA__)
+  METAL_ASM half fma(half a, half b, half c) __asm("air.fma.f16");
+#endif
+
+  METAL_ASM half fract(half x) __asm("air.fract.f16");
+
+  METAL_FUNC half frexp(half x, thread int &exp) {
+  if ((as_type<ushort>(x) & (ushort)(0x7c00)) == (ushort)(0x7c00)) {
+    exp = 0;
+    return x;
+  }
+
+  // This will evaluate to true on G3 for denorms
+  if (x == 0.0f) {
+    exp = 0;
+    return 0.0f;
+  }
+
+  ushort xi = as_type<ushort>(x);
+  int e = (xi & 0x7c00) >> 10;
+  // subnormal
+  if (e == 0) {
+    // subnormal mantissa + 1.0f
+    half t = as_type<half>((ushort)((xi & (ushort)0x03ff) | (ushort)0x3c00));
+    t = t - 1.0f;
+    xi = as_type<ushort>(copysign(t, x));
+    e = -14 + ((xi & 0x7c00) >> 10);
+  }
+
+  e -= 14;
+  exp = e;
+  return as_type<half>((ushort)((xi & (0x8000 | 0x03ff)) | 0x3800));
+  }
+  METAL_FUNC int ilogb(half x) {
+    ushort ux = as_type<ushort>(x) & (ushort)(0x7fff);
+    short exp = ux >> (ushort)(10);
+
+    if(((uint)(exp) - (uint)(1)) >= (uint)(30)) {
+      // +-0, +-denormal, +-inf, NaN
+      if(x == half(0))
+        return FP_ILOGB0;
+
+      if(metal::isnan(x))
+        return FP_ILOGBNAN;
+
+      if(ux == (ushort)(0x7c00))
+        return INT_MAX;
+
+      ux |= (ushort)(0x3c00);
+      half f = as_type<half>(ux) - half(1);
+      exp = as_type<ushort>(f) >> (ushort)(10);
+
+      return exp - short(15 + 14);
+    }
+
+    return exp - short(15);
+  }
+#if defined(__HAVE_AIR_LDEXP__)
+  METAL_ASM half ldexp(half x, int k) __asm("air." _AIR_PREFIX_half "ldexp.f16");
+#else
+  //TODO: <rdar://problem/20022019> fract and ldexp should call air function/builtins
+  METAL_FUNC half ldexp(half x, int k) {
+    if (x==0.0f) return 0.0f;
+    ushort ux = as_type<ushort>(x);
+    int exp = (ux & (ushort)(0x7c00)) >> 10;
+    ushort sign = ux & (ushort)(0x8000);
+    ushort m = ux & (~(ushort)(0x7c00));
+
+    // If inf or nan
+    if (exp == ((ushort)(0x7c00) >> 10))
+    return x;
+
+  // if k > (power of minimum subnormal + max exponent), simply return inf of same sign
+  if (k > (30 + 10 + 14))
+    return as_type<half>((ushort)(0x7c00 | sign));
+
+  // subnormal
+  if (exp == 0) {
+    half t = as_type<half>((ushort)(m | 0x3c00));
+    x = t - copysign(half(1), x);
+    ux = as_type<ushort>(x);
+    exp = ((ux & (ushort)(0x7c00)) >> 10) - (14);
+    m = ux & (~(ushort)(0x7c00));
+  }
+
+  int e = (int)(exp) + k;
+  if (e >= (30+1)) // return inf of same sign as x
+    return as_type<half>((ushort)((ushort)(0x7c00) | sign));
+
+  if (e <= 0) // return 0.0f of same sign as x
+    return as_type<half>((ushort)((ushort)(0) | sign));
+
+  return as_type<half>((ushort)(m | ((ushort)(e) << 10)));
+  }
+#endif
+  METAL_FUNC half fdim(half x, half y) {
+    bool xNan = x != x;
+    bool yNan = y != y;
+    if (xNan || yNan)
+      return as_type<half>((ushort)0x7e00);
+
+    half t = x - y;
+
+    // When either x or y are nan, t is nan and t < 0 evaluate to false
+    // When x == y == +/-INFINITY, t is nan but x == y evaluate to true.
+    return select(t, half(0), bool(t < half(0)) || bool(x == y));
+  }
+  METAL_ASM half log10(half x) __asm("air.log10.f16");
+
+  METAL_FUNC half modf(half x, thread half &intval) {
+    intval = trunc(x);
+    bool isinf_x = isinf(x);
+    return copysign(select(x - intval, half(0), isinf_x), x);
+  }
+  METAL_ASM half sincos(half x, thread half &cosval) __asm("air." _AIR_PREFIX_half "sincos.f16");
+
+  //METAL_ASM half trunc(half x) __asm("air." _AIR_PREFIX_half "trunc.f16");
+  // Forward declarations
+  METAL_FUNC float copysign(float x, float y) {
+    uint iy = as_type<uint>(y) & (uint)(0x80000000);
+    uint ret = (as_type<uint>(x) & (uint)(0x80000000 - 1ULL)) | iy;
+    return as_type<float>(ret);
+  }
+
+#if defined(__HAVE_FMA__)
+  METAL_ASM float fma(float a, float b, float c) __asm("air.fma.f32");
+#endif
+
+  METAL_FUNC float fract(float x) {
+#if defined(__FAST_MATH__)
+    return fast::fract(x);
+#else
+    return precise::fract(x);
+#endif
+  }
+
+  METAL_FUNC float frexp(float x, thread int &exp) {
+  if ((as_type<uint>(x) & (uint)(0x7f800000)) == (uint)(0x7f800000)) {
+    exp = 0;
+    return x;
+  }
+
+  // This will evaluate to true on G3 for denorms
+  if (x == 0.0f) {
+    exp = 0;
+    return 0.0f;
+  }
+
+  uint xi = as_type<uint>(x);
+  int e = (xi & 0x7f800000) >> 23;
+  // subnormal
+  if (e == 0) {
+    // subnormal mantissa + 1.0f
+    float t = as_type<float>((uint)((xi & (uint)0x007fffff) | (uint)0x3f800000));
+    t = t - 1.0f;
+    xi = as_type<uint>(copysign(t, x));
+    e = -126 + ((xi & 0x7f800000) >> 23);
+  }
+
+  e -= 126;
+  exp = e;
+  return as_type<float>((uint)((xi & (0x80000000 | 0x007fffff)) | 0x3f000000));
+  }
+  METAL_FUNC int ilogb(float x) {
+    uint ux = as_type<uint>(x) & (uint)(0x7fffffff);
+    int exp = ux >> (uint)(23);
+
+    if(((uint)(exp) - (uint)(1)) >= (uint)(254)) {
+      // +-0, +-denormal, +-inf, NaN
+      if(x == float(0))
+        return FP_ILOGB0;
+
+      if(metal::isnan(x))
+        return FP_ILOGBNAN;
+
+      if(ux == (uint)(0x7f800000))
+        return INT_MAX;
+
+      ux |= (uint)(0x3f800000);
+      float f = as_type<float>(ux) - float(1);
+      exp = as_type<uint>(f) >> (uint)(23);
+
+      return exp - int(127 + 126);
+    }
+
+    return exp - int(127);
+  }
+#if defined(__HAVE_AIR_LDEXP__)
+  METAL_ASM float ldexp(float x, int k) __asm("air." _AIR_PREFIX_float "ldexp.f32");
+#else
+  //TODO: <rdar://problem/20022019> fract and ldexp should call air function/builtins
+  METAL_FUNC float ldexp(float x, int k) {
+    if (x==0.0f) return 0.0f;
+    uint ux = as_type<uint>(x);
+    int exp = (ux & (uint)(0x7f800000)) >> 23;
+    uint sign = ux & (uint)(0x80000000);
+    uint m = ux & (~(uint)(0x7f800000));
+
+    // If inf or nan
+    if (exp == ((uint)(0x7f800000) >> 23))
+    return x;
+
+  // if k > (power of minimum subnormal + max exponent), simply return inf of same sign
+  if (k > (254 + 23 + 126))
+    return as_type<float>((uint)(0x7f800000 | sign));
+
+  // subnormal
+  if (exp == 0) {
+    float t = as_type<float>((uint)(m | 0x3f800000));
+    x = t - copysign(float(1), x);
+    ux = as_type<uint>(x);
+    exp = ((ux & (uint)(0x7f800000)) >> 23) - (126);
+    m = ux & (~(uint)(0x7f800000));
+  }
+
+  int e = (int)(exp) + k;
+  if (e >= (254+1)) // return inf of same sign as x
+    return as_type<float>((uint)((uint)(0x7f800000) | sign));
+
+  if (e <= 0) // return 0.0f of same sign as x
+    return as_type<float>((uint)((uint)(0) | sign));
+
+  return as_type<float>((uint)(m | ((uint)(e) << 23)));
+  }
+#endif
+  METAL_FUNC float fdim(float x, float y) {
+    bool xNan = x != x;
+    bool yNan = y != y;
+    if (xNan || yNan)
+      return as_type<float>(0x7fc00000);
+
+    float t = x - y;
+
+    // When either x or y are nan, t is nan and t < 0 evaluate to false
+    // When x == y == +/-INFINITY, t is nan but x == y evaluate to true.
+    return select(t, float(0), bool(t < float(0)) || bool(x == y));
+  }
+  METAL_FUNC float log10(float x) {
+#if defined(__FAST_MATH__)
+    return fast::log10(x);
+#else
+    return precise::log10(x);
+#endif
+  }
+
+  METAL_FUNC float modf(float x, thread float &intval) {
+    intval = trunc(x);
+    bool isinf_x = isinf(x);
+    return copysign(select(x - intval, float(0), isinf_x), x);
+  }
+  METAL_ASM float sincos(float x, thread float &cosval) __asm("air." _AIR_PREFIX_float "sincos.f32");
+
+  //METAL_ASM float trunc(float x) __asm("air." _AIR_PREFIX_float "trunc.f32");
+#if defined(__HAVE_NATIVE_DOUBLE__)
+  // Forward declarations
+  METAL_FUNC double copysign(double x, double y) {
+    unsigned __metal_internal_int64_t iy = as_type<unsigned __metal_internal_int64_t>(y) & (unsigned __metal_internal_int64_t)(0x8000000000000000);
+    unsigned __metal_internal_int64_t ret = (as_type<unsigned __metal_internal_int64_t>(x) & (unsigned __metal_internal_int64_t)(0x8000000000000000 - 1ULL)) | iy;
+    return as_type<double>(ret);
+  }
+
+#if defined(__HAVE_FMA__)
+  METAL_ASM double fma(double a, double b, double c) __asm("air.fma.f64");
+#endif
+
+#if defined(__HAVE_AIR_FRACT__)
+  METAL_ASM double fract(double x) __asm("air." _AIR_PREFIX_double "fract.f64");
+#else
+  //TODO: <rdar://problem/20022019> fract and ldexp should call air function/builtins
+  METAL_FUNC double fract(double x) {
+    if (metal::isinf(x))
+      return double(0);
+    if (metal::isnan(x))
+      return x;
+    return fmin(x - floor(x), double(0x1.fffffep-1));
+  }
+#endif
+
+  METAL_FUNC double frexp(double x, thread int &exp) {
+  if ((as_type<unsigned __metal_internal_int64_t>(x) & (unsigned __metal_internal_int64_t)(0x7ff0000000000000)) == (unsigned __metal_internal_int64_t)(0x7ff0000000000000)) {
+    exp = 0;
+    return x;
+  }
+
+  // This will evaluate to true on G3 for denorms
+  if (x == 0.0f) {
+    exp = 0;
+    return 0.0f;
+  }
+
+  unsigned __metal_internal_int64_t xi = as_type<unsigned __metal_internal_int64_t>(x);
+  int e = (xi & 0x7ff0000000000000) >> 52;
+  // subnormal
+  if (e == 0) {
+    // subnormal mantissa + 1.0f
+    double t = as_type<double>((unsigned __metal_internal_int64_t)((xi & (unsigned __metal_internal_int64_t)0x000fffffffffffff) | (unsigned __metal_internal_int64_t)0x3ff0000000000000));
+    t = t - 1.0f;
+    xi = as_type<unsigned __metal_internal_int64_t>(copysign(t, x));
+    e = -1022 + ((xi & 0x7ff0000000000000) >> 52);
+  }
+
+  e -= 1022;
+  exp = e;
+  return as_type<double>((unsigned __metal_internal_int64_t)((xi & (0x8000000000000000 | 0x000fffffffffffff)) | 0x3fe0000000000000));
+  }
+  METAL_FUNC int ilogb(double x) {
+    unsigned __metal_internal_int64_t ux = as_type<unsigned __metal_internal_int64_t>(x) & (unsigned __metal_internal_int64_t)(0x7fffffffffffffff);
+    __metal_internal_int64_t exp = ux >> (unsigned __metal_internal_int64_t)(52);
+
+    if(((unsigned __metal_internal_int64_t)(exp) - (unsigned __metal_internal_int64_t)(1)) >= (unsigned __metal_internal_int64_t)(2046)) {
+      // +-0, +-denormal, +-inf, NaN
+      if(x == double(0))
+        return FP_ILOGB0;
+
+      if(metal::isnan(x))
+        return FP_ILOGBNAN;
+
+      if(ux == (unsigned __metal_internal_int64_t)(0x7ff0000000000000))
+        return INT_MAX;
+
+      ux |= (unsigned __metal_internal_int64_t)(0x3ff0000000000000);
+      double f = as_type<double>(ux) - double(1);
+      exp = as_type<unsigned __metal_internal_int64_t>(f) >> (unsigned __metal_internal_int64_t)(52);
+
+      return exp - __metal_internal_int64_t(1023 + 1022);
+    }
+
+    return exp - __metal_internal_int64_t(1023);
+  }
+#if defined(__HAVE_AIR_LDEXP__)
+  METAL_ASM double ldexp(double x, int k) __asm("air." _AIR_PREFIX_double "ldexp.f64");
+#else
+  //TODO: <rdar://problem/20022019> fract and ldexp should call air function/builtins
+  METAL_FUNC double ldexp(double x, int k) {
+    if (x==0.0f) return 0.0f;
+    unsigned __metal_internal_int64_t ux = as_type<unsigned __metal_internal_int64_t>(x);
+    int exp = (ux & (unsigned __metal_internal_int64_t)(0x7ff0000000000000)) >> 52;
+    unsigned __metal_internal_int64_t sign = ux & (unsigned __metal_internal_int64_t)(0x8000000000000000);
+    unsigned __metal_internal_int64_t m = ux & (~(unsigned __metal_internal_int64_t)(0x7ff0000000000000));
+
+    // If inf or nan
+    if (exp == ((unsigned __metal_internal_int64_t)(0x7ff0000000000000) >> 52))
+    return x;
+
+  // if k > (power of minimum subnormal + max exponent), simply return inf of same sign
+  if (k > (2046 + 52 + 1022))
+    return as_type<double>((unsigned __metal_internal_int64_t)(0x7ff0000000000000 | sign));
+
+  // subnormal
+  if (exp == 0) {
+    double t = as_type<double>((unsigned __metal_internal_int64_t)(m | 0x3ff0000000000000));
+    x = t - copysign(double(1), x);
+    ux = as_type<unsigned __metal_internal_int64_t>(x);
+    exp = ((ux & (unsigned __metal_internal_int64_t)(0x7ff0000000000000)) >> 52) - (1022);
+    m = ux & (~(unsigned __metal_internal_int64_t)(0x7ff0000000000000));
+  }
+
+  int e = (int)(exp) + k;
+  if (e >= (2046+1)) // return inf of same sign as x
+    return as_type<double>((unsigned __metal_internal_int64_t)((unsigned __metal_internal_int64_t)(0x7ff0000000000000) | sign));
+
+  if (e <= 0) // return 0.0f of same sign as x
+    return as_type<double>((unsigned __metal_internal_int64_t)((unsigned __metal_internal_int64_t)(0) | sign));
+
+  return as_type<double>((unsigned __metal_internal_int64_t)(m | ((unsigned __metal_internal_int64_t)(e) << 52)));
+  }
+#endif
+  METAL_FUNC double fdim(double x, double y) {
+    bool xNan = x != x;
+    bool yNan = y != y;
+    if (xNan || yNan)
+      return as_type<double>(0x7ff8000000000000);
+
+    double t = x - y;
+
+    // When either x or y are nan, t is nan and t < 0 evaluate to false
+    // When x == y == +/-INFINITY, t is nan but x == y evaluate to true.
+    return select(t, double(0), bool(t < double(0)) || bool(x == y));
+  }
+  METAL_ASM double log10(double x) __asm("air.log10.f64");
+
+  METAL_FUNC double modf(double x, thread double &intval) {
+    intval = trunc(x);
+    bool isinf_x = isinf(x);
+    return copysign(select(x - intval, double(0), isinf_x), x);
+  }
+  METAL_ASM double sincos(double x, thread double &cosval) __asm("air." _AIR_PREFIX_double "sincos.f64");
+
+  //METAL_ASM double trunc(double x) __asm("air." _AIR_PREFIX_double "trunc.f64");
+#endif
+  // Forward declarations
+  METAL_FUNC vec<half,2> copysign(vec<half,2> x, vec<half,2> y) {
+    vec<ushort,2> iy = as_type<vec<ushort,2>>(y) & (vec<ushort,2>)(0x8000);
+    vec<ushort,2> ret = (as_type<vec<ushort,2>>(x) & (vec<ushort,2>)(0x8000 - 1ULL)) | iy;
+    return as_type<vec<half,2>>(ret);
+  }
+
+#if defined(__HAVE_FMA__)
+  METAL_ASM vec<half,2> fma(vec<half,2> a, vec<half,2> b, vec<half,2> c) __asm("air.fma.v2f16");
+#endif
+
+  METAL_FUNC vec<half,2> frexp(vec<half,2> x, thread vec<int,2> &exponent) {
+    int temp_exponent;
+    vec<half,2> ret_val;
+    ret_val[0] = frexp(x[0], temp_exponent);
+    exponent[0] = temp_exponent;
+    ret_val[1] = frexp(x[1], temp_exponent);
+    exponent[1] = temp_exponent;
+    return ret_val;
+  }
+  METAL_FUNC vec<int,2> ilogb(vec<half,2> x) {
+    vec<int,2> ret_val;
+    ret_val[0] = ilogb(x[0]);
+    ret_val[1] = ilogb(x[1]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_LDEXP__)
+  METAL_ASM vec<half,2> ldexp(vec<half,2> x, vec<int,2> k) __asm("air." _AIR_PREFIX_half "ldexp.v2f16");
+#else
+  METAL_FUNC vec<half,2> ldexp(vec<half,2> x, vec<int,2> k) {
+    vec<half,2> ret_val;
+    ret_val[0] = ldexp(x[0], k[0]);
+    ret_val[1] = ldexp(x[1], k[1]);
+    return ret_val;
+  }
+#endif
+  METAL_FUNC vec<half,2> fdim(vec<half,2> x, vec<half,2> y) {
+    vec<half,2> ret_val;
+    ret_val[0] = fdim(x[0], y[0]);
+    ret_val[1] = fdim(x[1], y[1]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_FRACT__)
+  METAL_ASM vec<half,2> fract(vec<half,2> x) __asm("air." _AIR_PREFIX_half "fract.v2f16");
+#else
+  METAL_FUNC vec<half,2> fract(vec<half,2> x) {
+    vec<half,2> ret_val;
+    ret_val[0] = fract(x[0]);
+    ret_val[1] = fract(x[1]);
+    return ret_val;
+  }
+#endif
+  METAL_ASM vec<half,2> log10(vec<half,2> x) __asm("air.log10.v2f16");
+
+  METAL_FUNC vec<half,2> modf(vec<half,2> x, thread vec<half,2> &intval) {
+    intval = trunc(x);
+    vec<bool,2> isinf_x = isinf(x);
+    return copysign(select(x - intval, vec<half,2>(0), isinf_x), x);
+  }
+  METAL_ASM vec<half,2> sincos(vec<half,2> x, thread vec<half,2> &cosval) __asm("air." _AIR_PREFIX_half "sincos.v2f16");
+
+  //METAL_ASM vec<half,2> trunc(vec<half,2> x) __asm("air." _AIR_PREFIX_half "trunc.v2f16");
+  // Forward declarations
+  METAL_FUNC vec<float,2> copysign(vec<float,2> x, vec<float,2> y) {
+    vec<uint,2> iy = as_type<vec<uint,2>>(y) & (vec<uint,2>)(0x80000000);
+    vec<uint,2> ret = (as_type<vec<uint,2>>(x) & (vec<uint,2>)(0x80000000 - 1ULL)) | iy;
+    return as_type<vec<float,2>>(ret);
+  }
+
+#if defined(__HAVE_FMA__)
+  METAL_ASM vec<float,2> fma(vec<float,2> a, vec<float,2> b, vec<float,2> c) __asm("air.fma.v2f32");
+#endif
+
+  METAL_FUNC vec<float,2> frexp(vec<float,2> x, thread vec<int,2> &exponent) {
+    int temp_exponent;
+    vec<float,2> ret_val;
+    ret_val[0] = frexp(x[0], temp_exponent);
+    exponent[0] = temp_exponent;
+    ret_val[1] = frexp(x[1], temp_exponent);
+    exponent[1] = temp_exponent;
+    return ret_val;
+  }
+  METAL_FUNC vec<int,2> ilogb(vec<float,2> x) {
+    vec<int,2> ret_val;
+    ret_val[0] = ilogb(x[0]);
+    ret_val[1] = ilogb(x[1]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_LDEXP__)
+  METAL_ASM vec<float,2> ldexp(vec<float,2> x, vec<int,2> k) __asm("air." _AIR_PREFIX_float "ldexp.v2f32");
+#else
+  METAL_FUNC vec<float,2> ldexp(vec<float,2> x, vec<int,2> k) {
+    vec<float,2> ret_val;
+    ret_val[0] = ldexp(x[0], k[0]);
+    ret_val[1] = ldexp(x[1], k[1]);
+    return ret_val;
+  }
+#endif
+  METAL_FUNC vec<float,2> fdim(vec<float,2> x, vec<float,2> y) {
+    vec<float,2> ret_val;
+    ret_val[0] = fdim(x[0], y[0]);
+    ret_val[1] = fdim(x[1], y[1]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_FRACT__)
+  METAL_ASM vec<float,2> fract(vec<float,2> x) __asm("air." _AIR_PREFIX_float "fract.v2f32");
+#else
+  METAL_FUNC vec<float,2> fract(vec<float,2> x) {
+    vec<float,2> ret_val;
+    ret_val[0] = fract(x[0]);
+    ret_val[1] = fract(x[1]);
+    return ret_val;
+  }
+#endif
+  METAL_FUNC vec<float,2> log10(vec<float,2> x) {
+#if defined(__FAST_MATH__)
+    return fast::log10(x);
+#else
+    return precise::log10(x);
+#endif
+  }
+
+  METAL_FUNC vec<float,2> modf(vec<float,2> x, thread vec<float,2> &intval) {
+    intval = trunc(x);
+    vec<bool,2> isinf_x = isinf(x);
+    return copysign(select(x - intval, vec<float,2>(0), isinf_x), x);
+  }
+  METAL_ASM vec<float,2> sincos(vec<float,2> x, thread vec<float,2> &cosval) __asm("air." _AIR_PREFIX_float "sincos.v2f32");
+
+  //METAL_ASM vec<float,2> trunc(vec<float,2> x) __asm("air." _AIR_PREFIX_float "trunc.v2f32");
+#if defined(__HAVE_NATIVE_DOUBLE__)
+  // Forward declarations
+  METAL_FUNC vec<double,2> copysign(vec<double,2> x, vec<double,2> y) {
+    vec<unsigned __metal_internal_int64_t,2> iy = as_type<vec<unsigned __metal_internal_int64_t,2>>(y) & (vec<unsigned __metal_internal_int64_t,2>)(0x8000000000000000);
+    vec<unsigned __metal_internal_int64_t,2> ret = (as_type<vec<unsigned __metal_internal_int64_t,2>>(x) & (vec<unsigned __metal_internal_int64_t,2>)(0x8000000000000000 - 1ULL)) | iy;
+    return as_type<vec<double,2>>(ret);
+  }
+
+#if defined(__HAVE_FMA__)
+  METAL_ASM vec<double,2> fma(vec<double,2> a, vec<double,2> b, vec<double,2> c) __asm("air.fma.v2f64");
+#endif
+
+  METAL_FUNC vec<double,2> frexp(vec<double,2> x, thread vec<int,2> &exponent) {
+    int temp_exponent;
+    vec<double,2> ret_val;
+    ret_val[0] = frexp(x[0], temp_exponent);
+    exponent[0] = temp_exponent;
+    ret_val[1] = frexp(x[1], temp_exponent);
+    exponent[1] = temp_exponent;
+    return ret_val;
+  }
+  METAL_FUNC vec<int,2> ilogb(vec<double,2> x) {
+    vec<int,2> ret_val;
+    ret_val[0] = ilogb(x[0]);
+    ret_val[1] = ilogb(x[1]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_LDEXP__)
+  METAL_ASM vec<double,2> ldexp(vec<double,2> x, vec<int,2> k) __asm("air." _AIR_PREFIX_double "ldexp.v2f64");
+#else
+  METAL_FUNC vec<double,2> ldexp(vec<double,2> x, vec<int,2> k) {
+    vec<double,2> ret_val;
+    ret_val[0] = ldexp(x[0], k[0]);
+    ret_val[1] = ldexp(x[1], k[1]);
+    return ret_val;
+  }
+#endif
+  METAL_FUNC vec<double,2> fdim(vec<double,2> x, vec<double,2> y) {
+    vec<double,2> ret_val;
+    ret_val[0] = fdim(x[0], y[0]);
+    ret_val[1] = fdim(x[1], y[1]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_FRACT__)
+  METAL_ASM vec<double,2> fract(vec<double,2> x) __asm("air." _AIR_PREFIX_double "fract.v2f64");
+#else
+  METAL_FUNC vec<double,2> fract(vec<double,2> x) {
+    vec<double,2> ret_val;
+    ret_val[0] = fract(x[0]);
+    ret_val[1] = fract(x[1]);
+    return ret_val;
+  }
+#endif
+  METAL_ASM vec<double,2> log10(vec<double,2> x) __asm("air.log10.v2f64");
+
+  METAL_FUNC vec<double,2> modf(vec<double,2> x, thread vec<double,2> &intval) {
+    intval = trunc(x);
+    vec<bool,2> isinf_x = isinf(x);
+    return copysign(select(x - intval, vec<double,2>(0), isinf_x), x);
+  }
+  METAL_ASM vec<double,2> sincos(vec<double,2> x, thread vec<double,2> &cosval) __asm("air." _AIR_PREFIX_double "sincos.v2f64");
+
+  //METAL_ASM vec<double,2> trunc(vec<double,2> x) __asm("air." _AIR_PREFIX_double "trunc.v2f64");
+#endif
+  // Forward declarations
+  METAL_FUNC vec<half,3> copysign(vec<half,3> x, vec<half,3> y) {
+    vec<ushort,3> iy = as_type<vec<ushort,3>>(y) & (vec<ushort,3>)(0x8000);
+    vec<ushort,3> ret = (as_type<vec<ushort,3>>(x) & (vec<ushort,3>)(0x8000 - 1ULL)) | iy;
+    return as_type<vec<half,3>>(ret);
+  }
+
+#if defined(__HAVE_FMA__)
+  METAL_ASM vec<half,3> fma(vec<half,3> a, vec<half,3> b, vec<half,3> c) __asm("air.fma.v3f16");
+#endif
+
+  METAL_FUNC vec<half,3> frexp(vec<half,3> x, thread vec<int,3> &exponent) {
+    int temp_exponent;
+    vec<half,3> ret_val;
+    ret_val[0] = frexp(x[0], temp_exponent);
+    exponent[0] = temp_exponent;
+    ret_val[1] = frexp(x[1], temp_exponent);
+    exponent[1] = temp_exponent;
+    ret_val[2] = frexp(x[2], temp_exponent);
+    exponent[2] = temp_exponent;
+    return ret_val;
+  }
+  METAL_FUNC vec<int,3> ilogb(vec<half,3> x) {
+    vec<int,3> ret_val;
+    ret_val[0] = ilogb(x[0]);
+    ret_val[1] = ilogb(x[1]);
+    ret_val[2] = ilogb(x[2]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_LDEXP__)
+  METAL_ASM vec<half,3> ldexp(vec<half,3> x, vec<int,3> k) __asm("air." _AIR_PREFIX_half "ldexp.v3f16");
+#else
+  METAL_FUNC vec<half,3> ldexp(vec<half,3> x, vec<int,3> k) {
+    vec<half,3> ret_val;
+    ret_val[0] = ldexp(x[0], k[0]);
+    ret_val[1] = ldexp(x[1], k[1]);
+    ret_val[2] = ldexp(x[2], k[2]);
+    return ret_val;
+  }
+#endif
+  METAL_FUNC vec<half,3> fdim(vec<half,3> x, vec<half,3> y) {
+    vec<half,3> ret_val;
+    ret_val[0] = fdim(x[0], y[0]);
+    ret_val[1] = fdim(x[1], y[1]);
+    ret_val[2] = fdim(x[2], y[2]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_FRACT__)
+  METAL_ASM vec<half,3> fract(vec<half,3> x) __asm("air." _AIR_PREFIX_half "fract.v3f16");
+#else
+  METAL_FUNC vec<half,3> fract(vec<half,3> x) {
+    vec<half,3> ret_val;
+    ret_val[0] = fract(x[0]);
+    ret_val[1] = fract(x[1]);
+    ret_val[2] = fract(x[2]);
+    return ret_val;
+  }
+#endif
+  METAL_ASM vec<half,3> log10(vec<half,3> x) __asm("air.log10.v3f16");
+
+  METAL_FUNC vec<half,3> modf(vec<half,3> x, thread vec<half,3> &intval) {
+    intval = trunc(x);
+    vec<bool,3> isinf_x = isinf(x);
+    return copysign(select(x - intval, vec<half,3>(0), isinf_x), x);
+  }
+  METAL_ASM vec<half,3> sincos(vec<half,3> x, thread vec<half,3> &cosval) __asm("air." _AIR_PREFIX_half "sincos.v3f16");
+
+  //METAL_ASM vec<half,3> trunc(vec<half,3> x) __asm("air." _AIR_PREFIX_half "trunc.v3f16");
+  // Forward declarations
+  METAL_FUNC vec<float,3> copysign(vec<float,3> x, vec<float,3> y) {
+    vec<uint,3> iy = as_type<vec<uint,3>>(y) & (vec<uint,3>)(0x80000000);
+    vec<uint,3> ret = (as_type<vec<uint,3>>(x) & (vec<uint,3>)(0x80000000 - 1ULL)) | iy;
+    return as_type<vec<float,3>>(ret);
+  }
+
+#if defined(__HAVE_FMA__)
+  METAL_ASM vec<float,3> fma(vec<float,3> a, vec<float,3> b, vec<float,3> c) __asm("air.fma.v3f32");
+#endif
+
+  METAL_FUNC vec<float,3> frexp(vec<float,3> x, thread vec<int,3> &exponent) {
+    int temp_exponent;
+    vec<float,3> ret_val;
+    ret_val[0] = frexp(x[0], temp_exponent);
+    exponent[0] = temp_exponent;
+    ret_val[1] = frexp(x[1], temp_exponent);
+    exponent[1] = temp_exponent;
+    ret_val[2] = frexp(x[2], temp_exponent);
+    exponent[2] = temp_exponent;
+    return ret_val;
+  }
+  METAL_FUNC vec<int,3> ilogb(vec<float,3> x) {
+    vec<int,3> ret_val;
+    ret_val[0] = ilogb(x[0]);
+    ret_val[1] = ilogb(x[1]);
+    ret_val[2] = ilogb(x[2]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_LDEXP__)
+  METAL_ASM vec<float,3> ldexp(vec<float,3> x, vec<int,3> k) __asm("air." _AIR_PREFIX_float "ldexp.v3f32");
+#else
+  METAL_FUNC vec<float,3> ldexp(vec<float,3> x, vec<int,3> k) {
+    vec<float,3> ret_val;
+    ret_val[0] = ldexp(x[0], k[0]);
+    ret_val[1] = ldexp(x[1], k[1]);
+    ret_val[2] = ldexp(x[2], k[2]);
+    return ret_val;
+  }
+#endif
+  METAL_FUNC vec<float,3> fdim(vec<float,3> x, vec<float,3> y) {
+    vec<float,3> ret_val;
+    ret_val[0] = fdim(x[0], y[0]);
+    ret_val[1] = fdim(x[1], y[1]);
+    ret_val[2] = fdim(x[2], y[2]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_FRACT__)
+  METAL_ASM vec<float,3> fract(vec<float,3> x) __asm("air." _AIR_PREFIX_float "fract.v3f32");
+#else
+  METAL_FUNC vec<float,3> fract(vec<float,3> x) {
+    vec<float,3> ret_val;
+    ret_val[0] = fract(x[0]);
+    ret_val[1] = fract(x[1]);
+    ret_val[2] = fract(x[2]);
+    return ret_val;
+  }
+#endif
+  METAL_FUNC vec<float,3> log10(vec<float,3> x) {
+#if defined(__FAST_MATH__)
+    return fast::log10(x);
+#else
+    return precise::log10(x);
+#endif
+  }
+
+  METAL_FUNC vec<float,3> modf(vec<float,3> x, thread vec<float,3> &intval) {
+    intval = trunc(x);
+    vec<bool,3> isinf_x = isinf(x);
+    return copysign(select(x - intval, vec<float,3>(0), isinf_x), x);
+  }
+  METAL_ASM vec<float,3> sincos(vec<float,3> x, thread vec<float,3> &cosval) __asm("air." _AIR_PREFIX_float "sincos.v3f32");
+
+  //METAL_ASM vec<float,3> trunc(vec<float,3> x) __asm("air." _AIR_PREFIX_float "trunc.v3f32");
+#if defined(__HAVE_NATIVE_DOUBLE__)
+  // Forward declarations
+  METAL_FUNC vec<double,3> copysign(vec<double,3> x, vec<double,3> y) {
+    vec<unsigned __metal_internal_int64_t,3> iy = as_type<vec<unsigned __metal_internal_int64_t,3>>(y) & (vec<unsigned __metal_internal_int64_t,3>)(0x8000000000000000);
+    vec<unsigned __metal_internal_int64_t,3> ret = (as_type<vec<unsigned __metal_internal_int64_t,3>>(x) & (vec<unsigned __metal_internal_int64_t,3>)(0x8000000000000000 - 1ULL)) | iy;
+    return as_type<vec<double,3>>(ret);
+  }
+
+#if defined(__HAVE_FMA__)
+  METAL_ASM vec<double,3> fma(vec<double,3> a, vec<double,3> b, vec<double,3> c) __asm("air.fma.v3f64");
+#endif
+
+  METAL_FUNC vec<double,3> frexp(vec<double,3> x, thread vec<int,3> &exponent) {
+    int temp_exponent;
+    vec<double,3> ret_val;
+    ret_val[0] = frexp(x[0], temp_exponent);
+    exponent[0] = temp_exponent;
+    ret_val[1] = frexp(x[1], temp_exponent);
+    exponent[1] = temp_exponent;
+    ret_val[2] = frexp(x[2], temp_exponent);
+    exponent[2] = temp_exponent;
+    return ret_val;
+  }
+  METAL_FUNC vec<int,3> ilogb(vec<double,3> x) {
+    vec<int,3> ret_val;
+    ret_val[0] = ilogb(x[0]);
+    ret_val[1] = ilogb(x[1]);
+    ret_val[2] = ilogb(x[2]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_LDEXP__)
+  METAL_ASM vec<double,3> ldexp(vec<double,3> x, vec<int,3> k) __asm("air." _AIR_PREFIX_double "ldexp.v3f64");
+#else
+  METAL_FUNC vec<double,3> ldexp(vec<double,3> x, vec<int,3> k) {
+    vec<double,3> ret_val;
+    ret_val[0] = ldexp(x[0], k[0]);
+    ret_val[1] = ldexp(x[1], k[1]);
+    ret_val[2] = ldexp(x[2], k[2]);
+    return ret_val;
+  }
+#endif
+  METAL_FUNC vec<double,3> fdim(vec<double,3> x, vec<double,3> y) {
+    vec<double,3> ret_val;
+    ret_val[0] = fdim(x[0], y[0]);
+    ret_val[1] = fdim(x[1], y[1]);
+    ret_val[2] = fdim(x[2], y[2]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_FRACT__)
+  METAL_ASM vec<double,3> fract(vec<double,3> x) __asm("air." _AIR_PREFIX_double "fract.v3f64");
+#else
+  METAL_FUNC vec<double,3> fract(vec<double,3> x) {
+    vec<double,3> ret_val;
+    ret_val[0] = fract(x[0]);
+    ret_val[1] = fract(x[1]);
+    ret_val[2] = fract(x[2]);
+    return ret_val;
+  }
+#endif
+  METAL_ASM vec<double,3> log10(vec<double,3> x) __asm("air.log10.v3f64");
+
+  METAL_FUNC vec<double,3> modf(vec<double,3> x, thread vec<double,3> &intval) {
+    intval = trunc(x);
+    vec<bool,3> isinf_x = isinf(x);
+    return copysign(select(x - intval, vec<double,3>(0), isinf_x), x);
+  }
+  METAL_ASM vec<double,3> sincos(vec<double,3> x, thread vec<double,3> &cosval) __asm("air." _AIR_PREFIX_double "sincos.v3f64");
+
+  //METAL_ASM vec<double,3> trunc(vec<double,3> x) __asm("air." _AIR_PREFIX_double "trunc.v3f64");
+#endif
+  // Forward declarations
+  METAL_FUNC vec<half,4> copysign(vec<half,4> x, vec<half,4> y) {
+    vec<ushort,4> iy = as_type<vec<ushort,4>>(y) & (vec<ushort,4>)(0x8000);
+    vec<ushort,4> ret = (as_type<vec<ushort,4>>(x) & (vec<ushort,4>)(0x8000 - 1ULL)) | iy;
+    return as_type<vec<half,4>>(ret);
+  }
+
+#if defined(__HAVE_FMA__)
+  METAL_ASM vec<half,4> fma(vec<half,4> a, vec<half,4> b, vec<half,4> c) __asm("air.fma.v4f16");
+#endif
+
+  METAL_FUNC vec<half,4> frexp(vec<half,4> x, thread vec<int,4> &exponent) {
+    int temp_exponent;
+    vec<half,4> ret_val;
+    ret_val[0] = frexp(x[0], temp_exponent);
+    exponent[0] = temp_exponent;
+    ret_val[1] = frexp(x[1], temp_exponent);
+    exponent[1] = temp_exponent;
+    ret_val[2] = frexp(x[2], temp_exponent);
+    exponent[2] = temp_exponent;
+    ret_val[3] = frexp(x[3], temp_exponent);
+    exponent[3] = temp_exponent;
+    return ret_val;
+  }
+  METAL_FUNC vec<int,4> ilogb(vec<half,4> x) {
+    vec<int,4> ret_val;
+    ret_val[0] = ilogb(x[0]);
+    ret_val[1] = ilogb(x[1]);
+    ret_val[2] = ilogb(x[2]);
+    ret_val[3] = ilogb(x[3]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_LDEXP__)
+  METAL_ASM vec<half,4> ldexp(vec<half,4> x, vec<int,4> k) __asm("air." _AIR_PREFIX_half "ldexp.v4f16");
+#else
+  METAL_FUNC vec<half,4> ldexp(vec<half,4> x, vec<int,4> k) {
+    vec<half,4> ret_val;
+    ret_val[0] = ldexp(x[0], k[0]);
+    ret_val[1] = ldexp(x[1], k[1]);
+    ret_val[2] = ldexp(x[2], k[2]);
+    ret_val[3] = ldexp(x[3], k[3]);
+    return ret_val;
+  }
+#endif
+  METAL_FUNC vec<half,4> fdim(vec<half,4> x, vec<half,4> y) {
+    vec<half,4> ret_val;
+    ret_val[0] = fdim(x[0], y[0]);
+    ret_val[1] = fdim(x[1], y[1]);
+    ret_val[2] = fdim(x[2], y[2]);
+    ret_val[3] = fdim(x[3], y[3]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_FRACT__)
+  METAL_ASM vec<half,4> fract(vec<half,4> x) __asm("air." _AIR_PREFIX_half "fract.v4f16");
+#else
+  METAL_FUNC vec<half,4> fract(vec<half,4> x) {
+    vec<half,4> ret_val;
+    ret_val[0] = fract(x[0]);
+    ret_val[1] = fract(x[1]);
+    ret_val[2] = fract(x[2]);
+    ret_val[3] = fract(x[3]);
+    return ret_val;
+  }
+#endif
+  METAL_ASM vec<half,4> log10(vec<half,4> x) __asm("air.log10.v4f16");
+
+  METAL_FUNC vec<half,4> modf(vec<half,4> x, thread vec<half,4> &intval) {
+    intval = trunc(x);
+    vec<bool,4> isinf_x = isinf(x);
+    return copysign(select(x - intval, vec<half,4>(0), isinf_x), x);
+  }
+  METAL_ASM vec<half,4> sincos(vec<half,4> x, thread vec<half,4> &cosval) __asm("air." _AIR_PREFIX_half "sincos.v4f16");
+
+  //METAL_ASM vec<half,4> trunc(vec<half,4> x) __asm("air." _AIR_PREFIX_half "trunc.v4f16");
+  // Forward declarations
+  METAL_FUNC vec<float,4> copysign(vec<float,4> x, vec<float,4> y) {
+    vec<uint,4> iy = as_type<vec<uint,4>>(y) & (vec<uint,4>)(0x80000000);
+    vec<uint,4> ret = (as_type<vec<uint,4>>(x) & (vec<uint,4>)(0x80000000 - 1ULL)) | iy;
+    return as_type<vec<float,4>>(ret);
+  }
+
+#if defined(__HAVE_FMA__)
+  METAL_ASM vec<float,4> fma(vec<float,4> a, vec<float,4> b, vec<float,4> c) __asm("air.fma.v4f32");
+#endif
+
+  METAL_FUNC vec<float,4> frexp(vec<float,4> x, thread vec<int,4> &exponent) {
+    int temp_exponent;
+    vec<float,4> ret_val;
+    ret_val[0] = frexp(x[0], temp_exponent);
+    exponent[0] = temp_exponent;
+    ret_val[1] = frexp(x[1], temp_exponent);
+    exponent[1] = temp_exponent;
+    ret_val[2] = frexp(x[2], temp_exponent);
+    exponent[2] = temp_exponent;
+    ret_val[3] = frexp(x[3], temp_exponent);
+    exponent[3] = temp_exponent;
+    return ret_val;
+  }
+  METAL_FUNC vec<int,4> ilogb(vec<float,4> x) {
+    vec<int,4> ret_val;
+    ret_val[0] = ilogb(x[0]);
+    ret_val[1] = ilogb(x[1]);
+    ret_val[2] = ilogb(x[2]);
+    ret_val[3] = ilogb(x[3]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_LDEXP__)
+  METAL_ASM vec<float,4> ldexp(vec<float,4> x, vec<int,4> k) __asm("air." _AIR_PREFIX_float "ldexp.v4f32");
+#else
+  METAL_FUNC vec<float,4> ldexp(vec<float,4> x, vec<int,4> k) {
+    vec<float,4> ret_val;
+    ret_val[0] = ldexp(x[0], k[0]);
+    ret_val[1] = ldexp(x[1], k[1]);
+    ret_val[2] = ldexp(x[2], k[2]);
+    ret_val[3] = ldexp(x[3], k[3]);
+    return ret_val;
+  }
+#endif
+  METAL_FUNC vec<float,4> fdim(vec<float,4> x, vec<float,4> y) {
+    vec<float,4> ret_val;
+    ret_val[0] = fdim(x[0], y[0]);
+    ret_val[1] = fdim(x[1], y[1]);
+    ret_val[2] = fdim(x[2], y[2]);
+    ret_val[3] = fdim(x[3], y[3]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_FRACT__)
+  METAL_ASM vec<float,4> fract(vec<float,4> x) __asm("air." _AIR_PREFIX_float "fract.v4f32");
+#else
+  METAL_FUNC vec<float,4> fract(vec<float,4> x) {
+    vec<float,4> ret_val;
+    ret_val[0] = fract(x[0]);
+    ret_val[1] = fract(x[1]);
+    ret_val[2] = fract(x[2]);
+    ret_val[3] = fract(x[3]);
+    return ret_val;
+  }
+#endif
+  METAL_FUNC vec<float,4> log10(vec<float,4> x) {
+#if defined(__FAST_MATH__)
+    return fast::log10(x);
+#else
+    return precise::log10(x);
+#endif
+  }
+
+  METAL_FUNC vec<float,4> modf(vec<float,4> x, thread vec<float,4> &intval) {
+    intval = trunc(x);
+    vec<bool,4> isinf_x = isinf(x);
+    return copysign(select(x - intval, vec<float,4>(0), isinf_x), x);
+  }
+  METAL_ASM vec<float,4> sincos(vec<float,4> x, thread vec<float,4> &cosval) __asm("air." _AIR_PREFIX_float "sincos.v4f32");
+
+  //METAL_ASM vec<float,4> trunc(vec<float,4> x) __asm("air." _AIR_PREFIX_float "trunc.v4f32");
+#if defined(__HAVE_NATIVE_DOUBLE__)
+  // Forward declarations
+  METAL_FUNC vec<double,4> copysign(vec<double,4> x, vec<double,4> y) {
+    vec<unsigned __metal_internal_int64_t,4> iy = as_type<vec<unsigned __metal_internal_int64_t,4>>(y) & (vec<unsigned __metal_internal_int64_t,4>)(0x8000000000000000);
+    vec<unsigned __metal_internal_int64_t,4> ret = (as_type<vec<unsigned __metal_internal_int64_t,4>>(x) & (vec<unsigned __metal_internal_int64_t,4>)(0x8000000000000000 - 1ULL)) | iy;
+    return as_type<vec<double,4>>(ret);
+  }
+
+#if defined(__HAVE_FMA__)
+  METAL_ASM vec<double,4> fma(vec<double,4> a, vec<double,4> b, vec<double,4> c) __asm("air.fma.v4f64");
+#endif
+
+  METAL_FUNC vec<double,4> frexp(vec<double,4> x, thread vec<int,4> &exponent) {
+    int temp_exponent;
+    vec<double,4> ret_val;
+    ret_val[0] = frexp(x[0], temp_exponent);
+    exponent[0] = temp_exponent;
+    ret_val[1] = frexp(x[1], temp_exponent);
+    exponent[1] = temp_exponent;
+    ret_val[2] = frexp(x[2], temp_exponent);
+    exponent[2] = temp_exponent;
+    ret_val[3] = frexp(x[3], temp_exponent);
+    exponent[3] = temp_exponent;
+    return ret_val;
+  }
+  METAL_FUNC vec<int,4> ilogb(vec<double,4> x) {
+    vec<int,4> ret_val;
+    ret_val[0] = ilogb(x[0]);
+    ret_val[1] = ilogb(x[1]);
+    ret_val[2] = ilogb(x[2]);
+    ret_val[3] = ilogb(x[3]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_LDEXP__)
+  METAL_ASM vec<double,4> ldexp(vec<double,4> x, vec<int,4> k) __asm("air." _AIR_PREFIX_double "ldexp.v4f64");
+#else
+  METAL_FUNC vec<double,4> ldexp(vec<double,4> x, vec<int,4> k) {
+    vec<double,4> ret_val;
+    ret_val[0] = ldexp(x[0], k[0]);
+    ret_val[1] = ldexp(x[1], k[1]);
+    ret_val[2] = ldexp(x[2], k[2]);
+    ret_val[3] = ldexp(x[3], k[3]);
+    return ret_val;
+  }
+#endif
+  METAL_FUNC vec<double,4> fdim(vec<double,4> x, vec<double,4> y) {
+    vec<double,4> ret_val;
+    ret_val[0] = fdim(x[0], y[0]);
+    ret_val[1] = fdim(x[1], y[1]);
+    ret_val[2] = fdim(x[2], y[2]);
+    ret_val[3] = fdim(x[3], y[3]);
+    return ret_val;
+  }
+#if defined(__HAVE_AIR_FRACT__)
+  METAL_ASM vec<double,4> fract(vec<double,4> x) __asm("air." _AIR_PREFIX_double "fract.v4f64");
+#else
+  METAL_FUNC vec<double,4> fract(vec<double,4> x) {
+    vec<double,4> ret_val;
+    ret_val[0] = fract(x[0]);
+    ret_val[1] = fract(x[1]);
+    ret_val[2] = fract(x[2]);
+    ret_val[3] = fract(x[3]);
+    return ret_val;
+  }
+#endif
+  METAL_ASM vec<double,4> log10(vec<double,4> x) __asm("air.log10.v4f64");
+
+  METAL_FUNC vec<double,4> modf(vec<double,4> x, thread vec<double,4> &intval) {
+    intval = trunc(x);
+    vec<bool,4> isinf_x = isinf(x);
+    return copysign(select(x - intval, vec<double,4>(0), isinf_x), x);
+  }
+  METAL_ASM vec<double,4> sincos(vec<double,4> x, thread vec<double,4> &cosval) __asm("air." _AIR_PREFIX_double "sincos.v4f64");
+
+  //METAL_ASM vec<double,4> trunc(vec<double,4> x) __asm("air." _AIR_PREFIX_double "trunc.v4f64");
+#endif
+} // namespace metal
+
+#endif // __METAL_MATH

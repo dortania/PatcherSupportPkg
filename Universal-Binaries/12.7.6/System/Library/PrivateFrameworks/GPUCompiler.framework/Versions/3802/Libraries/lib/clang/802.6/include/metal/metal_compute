@@ -1,0 +1,80 @@
+//===-- metal_compute -----------------------------------------------------===//
+// Copyright (c) 2014-2016 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_COMPUTE
+#define __METAL_COMPUTE
+
+namespace metal
+{
+// Metal 1.1 s5.8: Compute Functions.
+
+enum class mem_flags
+{
+  mem_none = 0,
+  mem_device = 1,
+  mem_threadgroup = 2,
+#if defined(__HAVE_TEXTURE_READWRITE__)
+  mem_texture = 4,
+#endif
+  mem_device_and_threadgroup METAL_DEPRECATED("use mem_device or mem_threadgroup instead") = mem_device | mem_threadgroup
+};
+
+#if defined(__HAVE_MEMFLAG_OPERATORS__)
+METAL_FUNC constexpr mem_flags operator|(mem_flags x, mem_flags y)
+{
+  return static_cast<mem_flags>(static_cast<int>(x) | static_cast<int>(y));
+}
+
+METAL_FUNC constexpr mem_flags operator&(mem_flags x, mem_flags y)
+{
+  return static_cast<mem_flags>(static_cast<int>(x) & static_cast<int>(y));
+}
+
+METAL_FUNC constexpr mem_flags operator^(mem_flags x, mem_flags y)
+{
+  return static_cast<mem_flags>(static_cast<int>(x) ^ static_cast<int>(y));
+}
+
+METAL_FUNC constexpr mem_flags operator~(mem_flags x)
+{
+  return static_cast<mem_flags>(~static_cast<int>(x));
+}
+#endif
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wtautological-compare"
+template <>
+struct _constarg_traits<mem_flags>
+{
+  constexpr static METAL_INTERNAL bool check(mem_flags flags)
+  {
+    return flags == flags;
+  }
+};
+#pragma clang diagnostic pop
+
+METAL_FUNC void threadgroup_barrier(mem_flags flags)
+{
+  __metal_wg_barrier(int(flags), __METAL_MEMORY_SCOPE_THREADGROUP__);
+}
+
+#if defined(__HAVE_SIMDGROUP_BARRIER__)
+METAL_FUNC void simdgroup_barrier(mem_flags flags)
+{
+  // TODO: We should be using _METAL_MEM_SCOPE_WORKGROUP -- see <rdar://problem/32740236>.
+  __metal_simdgroup_barrier(int(flags), __METAL_MEMORY_SCOPE_THREADGROUP__);
+}
+#endif // defined(__HAVE_SIMDGROUP_BARRIER__)
+
+#if defined(__HAVE_DRAW_INDIRECT__)
+struct MTLDispatchThreadgroupsIndirectArguments
+{
+  uint threadgroupsPerGrid[3];
+};
+#endif
+
+
+} // namespace metal
+
+#endif // __METAL_COMPUTE

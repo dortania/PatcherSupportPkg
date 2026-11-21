@@ -1,0 +1,250 @@
+//===-- metal_quadgroup ---------------------------------------------------===//
+// Copyright (c) 2014-2017 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_QUADGROUP
+#define __METAL_QUADGROUP
+
+#include <metal_relational>
+
+namespace metal {
+
+#if defined(__HAVE_QUADGROUP__)
+// TODO: Specify the appropriate section for quadgroups.
+// Metal 2.2 s5.<TODO>: Quadgroup Functions.
+
+#pragma METAL internals : enable
+template <typename T, typename _E = void>
+struct __is_valid_quadgroup_type : false_type
+{
+};
+
+template <typename T>
+struct __is_valid_quadgroup_type<T, typename enable_if<is_same_v<make_scalar_t<T>, half> ||
+                                                       is_same_v<make_scalar_t<T>, float> ||
+#if defined(__HAVE_NATIVE_DOUBLE__)
+                                                       is_same_v<make_scalar_t<T>, double> ||
+#endif
+                                                       is_same_v<make_scalar_t<T>, char> ||
+                                                       is_same_v<make_scalar_t<T>, uchar> ||
+                                                       is_same_v<make_scalar_t<T>, signed char> ||
+                                                       is_same_v<make_scalar_t<T>, short> ||
+                                                       is_same_v<make_scalar_t<T>, ushort> ||
+                                                       is_same_v<make_scalar_t<T>, int> ||
+                                                       is_same_v<make_scalar_t<T>, uint>>::type> : true_type
+{
+};
+
+template <typename T, typename _E = void>
+struct __is_valid_quadgroup_integral_type : false_type
+{
+};
+
+template <typename T>
+struct __is_valid_quadgroup_integral_type<T, typename enable_if<is_same_v<make_scalar_t<T>, char> ||
+                                                                is_same_v<make_scalar_t<T>, uchar> ||
+                                                                is_same_v<make_scalar_t<T>, signed char> ||
+                                                                is_same_v<make_scalar_t<T>, short> ||
+                                                                is_same_v<make_scalar_t<T>, ushort> ||
+                                                                is_same_v<make_scalar_t<T>, int> ||
+                                                                is_same_v<make_scalar_t<T>, uint>>::type> : true_type
+{
+};
+#pragma METAL internals : disable
+
+#if defined(__HAVE_QUADGROUP_BALLOT__)
+struct quad_vote {
+  typedef ushort vote_t;
+
+  METAL_FUNC explicit constexpr quad_vote(vote_t v = 0) thread : v(v & 0xf)
+  {
+  }
+
+  METAL_FUNC explicit constexpr operator vote_t() const thread
+  {
+    return v;
+  }
+
+  bool all() const thread
+  {
+    return __metal_quad_vote_all(v);
+  }
+
+  bool any() const thread
+  {
+    return __metal_quad_vote_any(v);
+  }
+
+private:
+  vote_t v;
+};
+
+METAL_FUNC quad_vote quad_active_threads_mask()
+{
+  return quad_vote(__metal_quad_active_threads_mask());
+}
+
+METAL_FUNC bool quad_all(bool expr)
+{
+  return __metal_quad_all(expr);
+}
+#endif // defined(__HAVE_QUADGROUP_BALLOT__)
+
+#if defined(__HAVE_QUADGROUP_REDUCTION__)
+template <typename T, typename _E = typename enable_if<__is_valid_quadgroup_integral_type<T>::value>::type>
+METAL_FUNC T quad_and(T data)
+{
+  return __metal_quad_and(data);
+}
+#endif // defined(__HAVE_QUADGROUP_REDUCTION__)
+
+#if defined(__HAVE_QUADGROUP_BALLOT__)
+METAL_FUNC bool quad_any(bool expr)
+{
+  return __metal_quad_any(expr);
+}
+#endif // defined(__HAVE_QUADGROUP_BALLOT__)
+
+#if defined(__HAVE_QUADGROUP_BALLOT__)
+METAL_FUNC quad_vote quad_ballot(bool expr)
+{
+  return quad_vote(__metal_quad_ballot(expr));
+}
+#endif // defined(__HAVE_QUADGROUP_BALLOT__)
+
+template <typename T, typename _E = typename enable_if<__is_valid_quadgroup_type<T>::value>::type>
+METAL_FUNC T quad_broadcast(T data, ushort broadcast_lane_id)
+{
+  return __metal_quad_broadcast(data, broadcast_lane_id);
+}
+
+#if defined(__HAVE_QUADGROUP_BROADCAST_FIRST__)
+template <typename T, typename _E = typename enable_if<__is_valid_quadgroup_type<T>::value>::type>
+METAL_FUNC T quad_broadcast_first(T data)
+{
+  return __metal_quad_broadcast_first(data);
+}
+#endif // defined(__HAVE_QUADGROUP_BROADCAST_FIRST__)
+
+#if defined(__HAVE_QUADGROUP_REDUCTION__)
+METAL_FUNC bool quad_is_helper_thread()
+{
+  return __metal_quad_is_helper_thread();
+}
+
+template <typename T, typename _E = typename enable_if<__is_valid_quadgroup_type<T>::value>::type>
+METAL_FUNC T quad_max(T data)
+{
+  return __metal_quad_max(data);
+}
+
+template <typename T, typename _E = typename enable_if<__is_valid_quadgroup_type<T>::value>::type>
+METAL_FUNC T quad_min(T data)
+{
+  return __metal_quad_min(data);
+}
+#endif // defined(__HAVE_QUADGROUP_REDUCTION__)
+
+#if defined(__HAVE_QUADGROUP_ONCE__)
+METAL_FUNC bool quad_once()
+{
+  return __metal_quad_once();
+}
+#endif // defined(__HAVE_QUADGROUP_ONCE__)
+
+#if defined(__HAVE_QUADGROUP_REDUCTION__)
+template <typename T, typename _E = typename enable_if<__is_valid_quadgroup_integral_type<T>::value>::type>
+METAL_FUNC T quad_or(T data)
+{
+  return __metal_quad_or(data);
+}
+
+template <typename T, typename _E = typename enable_if<__is_valid_quadgroup_type<T>::value>::type>
+METAL_FUNC T quad_prefix_exclusive_product(T data)
+{
+  return __metal_quad_prefix_exclusive_product(data);
+}
+
+template <typename T, typename _E = typename enable_if<__is_valid_quadgroup_type<T>::value>::type>
+METAL_FUNC T quad_prefix_exclusive_sum(T data)
+{
+  return __metal_quad_prefix_exclusive_sum(data);
+}
+
+template <typename T, typename _E = typename enable_if<__is_valid_quadgroup_type<T>::value>::type>
+METAL_FUNC T quad_prefix_inclusive_product(T data)
+{
+  return __metal_quad_prefix_inclusive_product(data);
+}
+
+template <typename T, typename _E = typename enable_if<__is_valid_quadgroup_type<T>::value>::type>
+METAL_FUNC T quad_prefix_inclusive_sum(T data)
+{
+  return __metal_quad_prefix_inclusive_sum(data);
+}
+
+template <typename T, typename _E = typename enable_if<__is_valid_quadgroup_type<T>::value>::type>
+METAL_FUNC T quad_product(T data)
+{
+  return __metal_quad_product(data);
+}
+#endif // defined(__HAVE_QUADGROUP_REDUCTION__)
+
+template <typename T, typename _E = typename enable_if<__is_valid_quadgroup_type<T>::value>::type>
+METAL_FUNC T quad_shuffle(T data, ushort quad_lane_id)
+{
+  return __metal_quad_shuffle(data, quad_lane_id);
+}
+
+template <typename T, typename _E = typename enable_if<__is_valid_quadgroup_type<T>::value>::type>
+METAL_FUNC T quad_shuffle_down(T data, ushort delta)
+{
+  return __metal_quad_shuffle_down(data, delta);
+}
+
+template <typename T, typename _E = typename enable_if<__is_valid_quadgroup_type<T>::value>::type>
+METAL_FUNC T quad_shuffle_up(T data, ushort delta)
+{
+  return __metal_quad_shuffle_up(data, delta);
+}
+
+#if defined(__HAVE_QUADGROUP_SHUFFLE_ROTATE_DOWN__)
+template <typename T, typename _E = typename enable_if<__is_valid_quadgroup_type<T>::value>::type>
+METAL_FUNC T quad_shuffle_rotate_down(T data, ushort delta)
+{
+  return __metal_quad_shuffle_rotate_down(data, delta);
+}
+#endif // defined(__HAVE_QUADGROUP_SHUFFLE_ROTATE_UP__)
+
+#if defined(__HAVE_QUADGROUP_SHUFFLE_ROTATE_UP__)
+template <typename T, typename _E = typename enable_if<__is_valid_quadgroup_type<T>::value>::type>
+METAL_FUNC T quad_shuffle_rotate_up(T data, ushort delta)
+{
+  return __metal_quad_shuffle_rotate_up(data, delta);
+}
+#endif // defined(__HAVE_QUADGROUP_SHUFFLE_ROTATE_UP__)
+
+template <typename T, typename _E = typename enable_if<__is_valid_quadgroup_type<T>::value>::type>
+METAL_FUNC T quad_shuffle_xor(T data, ushort mask)
+{
+  return __metal_quad_shuffle_xor(data, mask);
+}
+
+#if defined(__HAVE_QUADGROUP_REDUCTION__)
+template <typename T, typename _E = typename enable_if<__is_valid_quadgroup_type<T>::value>::type>
+METAL_FUNC T quad_sum(T data)
+{
+  return __metal_quad_sum(data);
+}
+
+template <typename T, typename _E = typename enable_if<__is_valid_quadgroup_integral_type<T>::value>::type>
+METAL_FUNC T quad_xor(T data)
+{
+  return __metal_quad_xor(data);
+}
+#endif // defined(__HAVE_QUADGROUP_REDUCTION__)
+#endif // defined(__HAVE_QUADGROUP__)
+
+} // namespace metal
+
+#endif // __METAL_QUADGROUP

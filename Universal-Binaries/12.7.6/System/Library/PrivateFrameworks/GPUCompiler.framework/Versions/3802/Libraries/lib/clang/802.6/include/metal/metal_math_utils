@@ -1,0 +1,230 @@
+//===-- metal_math_utils --------------------------------------------------===//
+// Copyright (c) 2015-2017 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_MATH_UTILS
+#define __METAL_MATH_UTILS
+
+#define _METAL_PRECISE_MATH false
+#define _METAL_FAST_MATH true
+#if defined(__FAST_MATH__)
+#define _METAL_MAYBE_FAST_MATH _METAL_FAST_MATH
+#else
+#define _METAL_MAYBE_FAST_MATH _METAL_PRECISE_MATH
+#endif
+
+#pragma METAL internals : enable
+namespace metal
+{
+template <typename T>
+struct _is_scalar : bool_constant<is_scalar<T>::value && is_arithmetic<T>::value>
+{
+};
+
+template <typename T>
+struct _is_fp_vector : bool_constant<is_floating_point<T>::value && is_vector<T>::value>
+{
+};
+
+template <typename T, typename U, typename _E = void>
+struct _math_binary_func_operand_type
+{
+  using type = void;
+};
+
+// We shipped a version of Metal using overloded functions to implement binary
+// functions instead of template functions. For any pair of scalar or vector
+// types T, U for which a call to the overloaded version of foo
+// `foo(T(x), U(y))` was valid (including via implicit conversion sequences),
+// the call to the templated version must also be valid.
+//
+// The general form of the binary math function is `O foo(T, U)`; O is the
+// floating-point arithmetic type the function operates with. The arguments (of
+// type T and U) are cast to O before being passed to the builtin.
+// The rules to deduce O from the pair <T, U> are as follows:
+//
+// 1) If T and U are both the same floating-point type, identity conversion is
+//    triggered.
+template <typename T>
+struct _math_binary_func_operand_type<T, T, typename enable_if<is_floating_point<T>::value>::type>
+{
+  using type = T;
+};
+
+// 2) If T or U is a floating-point vector type, and the other is a
+//    floating-point or integral scalar type, then O is the floating-point
+//    vector type.
+template <typename T, typename U>
+struct _math_binary_func_operand_type<T, U, typename enable_if<(_is_fp_vector<T>::value ^ _is_fp_vector<U>::value) && (_is_scalar<T>::value ^ _is_scalar<U>::value)>::type>
+{
+  using type = typename conditional<_is_fp_vector<T>::value, T, U>::type;
+};
+
+// 3) If T is a floating-point scalar type, and U is an integral scalar type, or
+//    reciprocally, then O is the floating-point scalar type.
+template <typename T, typename U>
+struct _math_binary_func_operand_type<T, U, typename enable_if<_is_scalar<T>::value && _is_scalar<U>::value && (is_floating_point<T>::value ^ is_floating_point<U>::value)>::type>
+{
+  using type = typename conditional<is_floating_point<T>::value, T, U>::type;
+};
+
+// The rules described above work when half, float, and potentially double
+// versions of a given binary function were available. In the precise or fast
+// namespaces, only `float` versions of functions were available, and an
+// additional rule applies.
+template <typename T, typename U, typename _E = void>
+struct _math_fast_or_precise_binary_func_operand_type : _math_binary_func_operand_type<T, U>
+{
+};
+
+// 4) In the fast or precise namespaces, when T or U is float, and the other is
+//    a scalar type, then O is float.
+template <typename T, typename U>
+struct _math_fast_or_precise_binary_func_operand_type<T, U, typename enable_if<(is_same<float, T>::value && _is_scalar<U>::value) || (is_same<float, U>::value && _is_scalar<T>::value)>::type>
+{
+  using type = float;
+};
+
+// Here are some examples:
+//     // Case 1:
+//     half x1, y1;
+//     half res = foo(x1, y1);
+//     half2 x2, y2;
+//     half2 res = foo(x2, y2);
+//
+//     // Case 2:
+//     int x3;
+//     half2 y3;
+//     half2 res = foo(x3, y3);  // equivalent to `half2 res = foo(half2(x3), y3)`
+//
+//     // Case 3:
+//     half x4;
+//     int y4;
+//     half res = foo(x4, y4);   // equivalent to `half foo(x4, half(y4))`
+//
+//     // Case 4:
+//     float x6;
+//     half y6;
+//     fast::foo(x6, y6);        // equivalent to `float foo(x6, float(y6))`
+//
+// The following are invalid:
+//     // The calls would be ambiguous:
+//     float x6;
+//     half y6;
+//     foo(x6, y6);
+//
+//     half2 x7;
+//     float2 y7;
+//     foo(x7, y7);
+//
+//     char x8;
+//     int y8;
+//     foo(x8, y8);
+//
+//     // This call was and is invalid: no implicit conversion from int2 to half2
+//     half2 x9;
+//     int2 y9;
+//     foo(x9, y9);
+
+template <typename T, typename U>
+using _math_binary_func_operand_type_t = typename _math_binary_func_operand_type<T, U>::type;
+template <typename T, typename U>
+using _math_fast_or_precise_binary_func_operand_type_t = typename _math_fast_or_precise_binary_func_operand_type<T, U>::type;
+template <typename T, typename U>
+struct _math_binary_func_enable : bool_constant<!is_same<void, _math_binary_func_operand_type_t<T, U>>::value>
+{
+};
+template <typename T, typename U>
+struct _math_fast_or_precise_binary_func_enable : bool_constant<!is_same<void, _math_fast_or_precise_binary_func_operand_type_t<T, U>>::value>
+{
+};
+
+template <typename T, typename U, typename V, typename _E = void>
+struct _math_ternary_func_operand_type
+{
+  using type = void;
+};
+
+// We shipped a version of Metal using overloded functions to implement ternary
+// functions instead of template functions. For any tria of scalar or vector
+// types T, U, V for which a call to the overloaded version of foo
+// `foo(T(x), U(y), V(z))` was valid (including via implicit conversion
+// sequences), the call to the templated version must also be valid.
+//
+// The general form of the ternary math function is `O foo(T, U, V)`; O is the
+// floating-point arithmetic type the function operates with. The arguments (of
+// type T, U, and V) are cast to O before being passed to the builtin.
+// The rules to deduce O from the triad <T, U, V> are as follows:
+//
+// 1) If T, U, and V are the same floating-point type, identity conversion is
+//    triggered.
+template <typename T>
+struct _math_ternary_func_operand_type<T, T, T, typename enable_if<is_floating_point<T>::value>::type>
+{
+  using type = T;
+};
+
+// 2) If only one of T, U, V is a floating-point vector type, and the others
+//    are integral scalar types, then O is the floating point vector type.
+template <typename T, typename U, typename V>
+struct _math_ternary_func_operand_type<T, U, V, typename enable_if<(_is_fp_vector<T>::value + _is_fp_vector<U>::value + _is_fp_vector<V>::value) == 1 && (_is_scalar<T>::value + _is_scalar<U>::value + _is_scalar<V>::value) == 2 && (!is_same<T, U>::value && !is_same<T, V>::value && !is_same<U, V>::value)>::type>
+{
+  using type = typename conditional<_is_fp_vector<T>::value, T, U>::type;
+};
+
+// 3) If only one of T, U, V is a floating-point scalar type, and the others
+//    are integral scalar types, then O is the floating point scalar type.
+template <typename T, typename U, typename V>
+struct _math_ternary_func_operand_type<T, U, V, typename enable_if<_is_scalar<T>::value && _is_scalar<U>::value && _is_scalar<V>::value && (is_floating_point<T>::value + is_floating_point<U>::value + is_floating_point<V>::value) == 1 && (!is_same<T, U>::value && !is_same<T, V>::value && !is_same<U, V>::value)>::type>
+{
+  using type = typename conditional<is_floating_point<T>::value, T, typename conditional<is_floating_point<U>::value, U, V>::type>::type;
+};
+
+// 4) If T = U, then O only depends on T and V only; if T = V or U = V, then O
+//    depends on T and U only.
+template <typename T, typename V>
+struct _math_ternary_func_operand_type<T, T, V, typename enable_if<!is_same<T, V>::value>::type> : _math_binary_func_operand_type<T, V>
+{
+};
+template <typename T, typename U>
+struct _math_ternary_func_operand_type<T, U, T, typename enable_if<!is_same<T, U>::value>::type> : _math_binary_func_operand_type<T, U>
+{
+};
+template <typename T, typename U>
+struct _math_ternary_func_operand_type<T, U, U, typename enable_if<!is_same<T, U>::value>::type> : _math_binary_func_operand_type<T, U>
+{
+};
+
+// The rules described above work when half, float, and potentially double
+// versions of a given ternary function were available. In the precise or fast
+// namespaces, only `float` versions of functions were available, and an
+// additional rule applies.
+template <typename T, typename U, typename V, typename _E = void>
+struct _math_fast_or_precise_ternary_func_operand_type : _math_ternary_func_operand_type<T, U, V>
+{
+};
+
+// 5) In the fast or precise namespaces, when at least one of T, U, or V is
+//    float, and all the others are scalar types, then O is float.
+template <typename T, typename U, typename V>
+struct _math_fast_or_precise_ternary_func_operand_type<T, U, V, typename enable_if<(is_same<float, T>::value || is_same<float, U>::value || is_same<float, V>::value) && (_is_scalar<T>::value && _is_scalar<U>::value && _is_scalar<V>::value)>::type>
+{
+  using type = float;
+};
+
+template <typename T, typename U, typename V>
+using _math_ternary_func_operand_type_t = typename _math_ternary_func_operand_type<T, U, V>::type;
+template <typename T, typename U, typename V>
+using _math_fast_or_precise_ternary_func_operand_type_t = typename _math_fast_or_precise_ternary_func_operand_type<T, U, V>::type;
+template <typename T, typename U, typename V>
+struct _math_ternary_func_enable : bool_constant<!is_same<void, _math_ternary_func_operand_type_t<T, U, V>>::value>
+{
+};
+template <typename T, typename U, typename V>
+struct _math_fast_or_precise_ternary_func_enable : bool_constant<!is_same<void, _math_fast_or_precise_ternary_func_operand_type_t<T, U, V>>::value>
+{
+};
+} // namespace metal
+#pragma METAL internals : disable
+
+#endif // __METAL_MATH_UTILS

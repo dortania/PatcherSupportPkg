@@ -1,0 +1,51 @@
+(version 1)
+
+(deny default)
+(debug deny)
+
+(import "system.sb")
+
+(allow file-read-metadata
+    (subpath "/Library")
+    (subpath "/System")
+    (subpath "/usr/local/include")
+    (subpath "/usr/local")
+    (subpath "/usr"))
+
+(allow file-read*
+    (subpath "/Library/GPUBundles"))
+
+(allow file-write*
+    (subpath "/Library/Logs/DiagnosticReports/MTLCompiler")
+    (subpath "/Library/Logs/Metal"))
+
+(allow file-read* file-write*
+    (subpath (param "_TMPDIR")))
+
+(with-filter (system-attribute apple-internal)
+     (subpath "/tmp")
+     (subpath "/private/tmp"))
+
+(allow file-read* file-write*
+    (extension "com.apple.app-sandbox.read-write"))
+
+(allow file-read*
+ (extension "com.apple.app-sandbox.read"))
+
+(allow file-read* (literal "/Library/Preferences/.GlobalPreferences.plist")
+                  (literal "/Library/Preferences/com.apple.Metal.plist"))
+(allow user-preference-read (preference-domain "com.apple.Metal"))
+(allow ipc-posix-sem-create ipc-posix-sem-wait ipc-posix-sem-unlink ipc-posix-sem-open ipc-posix-sem-post
+       (ipc-posix-name-prefix "/MDB"))
+
+; Private legacy compiler/backend and the single native AIR-repair override.
+(allow file-read*
+ (subpath "/System/Library/PrivateFrameworks/MTLCompiler.framework/Versions/3802")
+ (subpath "/System/Library/PrivateFrameworks/GPUCompiler.framework/Versions/3802")
+ (literal "/System/Library/PrivateFrameworks/GPUCompiler.framework/Versions/31001/Libraries/libGPUCompilerImpl.dylib")
+ (subpath "/System/Library/Extensions/AppleIntelHD4000GraphicsMTLDriver.bundle")
+ (subpath "/System/Library/Extensions/AppleIntelGraphicsShared.bundle"))
+
+(allow file-read*
+ (subpath "/System/Library/Extensions/AppleIntelHD5000GraphicsMTLDriver.bundle")
+ (subpath "/System/Library/Extensions/GeForceAIRPlugin.bundle"))
