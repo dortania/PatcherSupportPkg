@@ -2736,6 +2736,39 @@ static unsigned hideSaturatedProducts(LLVMModuleRef module, Gen &g) {
     return (unsigned)todo.size();
 }
 
+// ---- a subtraction of a bitwise not ------------------------------------------------------------------------------------
+// tc[((uint)(int)(char)mulhi(c, x) - ~v0) & 63] read the slot 2 below the right one on 255 of 256 threads, in a kernel
+// that also shifted a 64-bit value by an amount computed from the same ~v0 (mslfuzz2.py VEC=1 ASTYPE=1 LONG=1 seed 1170;
+// the two statements alone are enough). The IR the back end gets is right: sub i32 %x, %neg with %neg = xor %v0, -1, the
+// same %neg feeding the shift amount. x - ~v0 is x + v0 + 1; the back end, folding the not into the subtraction,
+// computes x + v0 - 1. With x + (v0 + 1) written out, or a constant shift amount, it is right. Each 32-bit sub whose
+// second operand is an xor with -1 now becomes x + (y + 1), which is the same value. NVAIR_SUB_NOT_FIX=0 turns it off.
+static unsigned rewriteSubtractedNots(LLVMModuleRef module, Gen &g) {
+    enum { kSub = 10, kXor = 25 };
+    auto allOnes = [](LLVMValueRef c) { return LLVMIsAConstantInt(c) && LLVMConstIntGetZExtValue(c) == 0xffffffffull; };
+    std::vector<LLVMValueRef> subs;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                if (LLVMGetInstructionOpcode(inst) != kSub || !isInt(LLVMTypeOf(inst), 32)) continue;
+                LLVMValueRef y = LLVMGetOperand(inst, 1);
+                if (!LLVMIsAInstruction(y) || LLVMGetInstructionOpcode(y) != kXor) continue;
+                if (allOnes(LLVMGetOperand(y, 0)) || allOnes(LLVMGetOperand(y, 1))) subs.push_back(inst);
+            }
+    if (subs.empty()) return 0;
+    LLVMBuilderRef b = LLVMCreateBuilderInContext(g.context);
+    for (LLVMValueRef inst : subs) {
+        LLVMValueRef y = LLVMGetOperand(inst, 1);
+        LLVMValueRef v = allOnes(LLVMGetOperand(y, 1)) ? LLVMGetOperand(y, 0) : LLVMGetOperand(y, 1);
+        LLVMPositionBuilderBefore(b, inst);
+        LLVMValueRef r = LLVMBuildAdd(b, LLVMGetOperand(inst, 0), LLVMBuildAdd(b, v, g.c32(1), ""), "");
+        LLVMReplaceAllUsesWith(inst, r);
+        LLVMInstructionEraseFromParent(inst);
+    }
+    LLVMDisposeBuilder(b);
+    return (unsigned)subs.size();
+}
+
 // ---- an unsigned division of a sign-extended 8- or 16-bit value ---------------------------------------------------------
 // (uint)((int)(short)x % 28781) / d, with d not a constant, came out wrong whenever the remainder was negative: for d = 1,
 // 0xffffbb78 gave 0xffffb901 (mslfuzz2.py VEC=1 seed 5221, where it was 58 threads' results; the statement alone in a
@@ -2868,6 +2901,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (divisors && logging()) fprintf(stderr, "[nvair] %u remainder(s) guarded for a divisor of 1\n", divisors);
         unsigned sextDividends = disabled("NVAIR_SEXT_DIVIDEND_FIX") ? 0 : hideSignExtendedDividends(module, g);
         if (sextDividends && logging()) fprintf(stderr, "[nvair] %u unsigned division(s) of a sign-extended value given an opaque dividend\n", sextDividends);
+        unsigned subNots = disabled("NVAIR_SUB_NOT_FIX") ? 0 : rewriteSubtractedNots(module, g);
+        if (subNots && logging()) fprintf(stderr, "[nvair] %u subtraction(s) of a bitwise not made x + (y + 1)\n", subNots);
         unsigned satProducts = disabled("NVAIR_SATURATED_PRODUCT_FIX") ? 0 : hideSaturatedProducts(module, g);
         if (satProducts && logging()) fprintf(stderr, "[nvair] %u product(s) given to a saturating add/subtract through an opaque value\n", satProducts);
         unsigned narrowVectors = disabled("NVAIR_NARROW_VECTOR_FIX") ? 0 : scalarizeNarrowVectors(module, g);
