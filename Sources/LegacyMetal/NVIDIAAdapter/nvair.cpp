@@ -1653,7 +1653,11 @@ static unsigned demoteDiscards(LLVMModuleRef module, Gen &g) {
 // is right). One factor goes through llvm.nvvm.min.u.i32(x, ~0u), the value unchanged but its range hidden from the
 // optimizer. The same wrong knowledge of a product made x % (((b | 1) * c) | 1) off by one in 17% of cases (the or taken
 // for an add: mslfuzz GEN=mslfuzz.py seed 645, reduced; a divisor that isn't a product is right): an or that uses a
-// 32-bit product gets it through the same opaque min. NVAIR_NARROW_MULTIPLY_FIX=0 turns both off.
+// 32-bit product gets it through the same opaque min. NVAIR_NARROW_MULTIPLY_FIX=0 turns both off. A narrow factor times
+// a constant wider than 16 bits had the same problem: in VEC=1 seed 8322, v1 = vf(short4(...) & mask), lanes masked to 15
+// bits and multiplied by 65599 and 16777619, then (int)v1 >> 23 | 1 as a divisor, came out wrong on 25 threads; with each
+// such product given to its users through the opaque min it is right, and so it is with the factor hidden instead (which
+// made seed 14028 wrong), so it is the back end's knowledge of the product, not the multiply. NVAIR_WIDE_CONSTANT_PRODUCT_FIX=0.
 enum { LLVMMul = 12, LLVMAnd = 23, LLVMOr = 24, LLVMXor = 25, LLVMSelect = 46 };
 // Known to fit in 16 bits: a constant up to 0xffff, a zero-extended byte or halfword, an and with such a value, an or / xor
 // / select of two such values, a shift right by 16 or more (what LLVM leaves of ushort casts, masks and | 0x8000).
@@ -1676,6 +1680,7 @@ static bool narrowFactor(LLVMValueRef v, int depth = 0) {
     }
 }
 static unsigned hideNarrowProducts(LLVMModuleRef module, Gen &g) {
+    bool wideConstants = !disabled("NVAIR_WIDE_CONSTANT_PRODUCT_FIX");
     unsigned fixed = 0;
     LLVMBuilderRef b = nullptr;
     LLVMTypeRef params[2] = {g.i32, g.i32};
@@ -1704,6 +1709,21 @@ static unsigned hideNarrowProducts(LLVMModuleRef module, Gen &g) {
                     continue;
                 }
                 LLVMValueRef x = LLVMGetOperand(inst, 0), y = LLVMGetOperand(inst, 1);
+                // a narrow factor times a constant wider than 16 bits: the product reaches its users through the opaque min
+                if (wideConstants && LLVMIsAConstantInt(y) && LLVMConstIntGetZExtValue(y) > 0xffffu && !LLVMIsAConstantInt(x) &&
+                    narrowFactor(x)) {
+                    LLVMValueRef next = LLVMGetNextInstruction(inst);
+                    if (!next) continue;
+                    if (!b) b = LLVMCreateBuilderInContext(g.context);
+                    LLVMPositionBuilderBefore(b, next);
+                    LLVMValueRef args[2] = {inst, g.c32(~0u)};
+                    LLVMValueRef hidden = LLVMBuildCall(b, g.intrinsic("llvm.nvvm.min.u.i32", g.i32, params, 2), args, 2, "");
+                    LLVMReplaceAllUsesWith(inst, hidden);
+                    LLVMSetOperand(hidden, 0, inst);
+                    fixed++;
+                    inst = hidden;  // continue after it
+                    continue;
+                }
                 if (!narrowFactor(x) || !narrowFactor(y) || LLVMIsAConstantInt(x)) continue;
                 if (!b) b = LLVMCreateBuilderInContext(g.context);
                 LLVMPositionBuilderBefore(b, inst);
