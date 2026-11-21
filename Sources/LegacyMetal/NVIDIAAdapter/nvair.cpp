@@ -2243,8 +2243,23 @@ static void logBareIntrinsics(LLVMModuleRef module) {
 // NVAIR_PRIVATE_CONSTANT_GRAPHICS_FIX=0 turns that part off. Stores are left alone: the same index on constant-index
 // stores in loops made VEC=1 seed 2603 right but broke seed 3890, and rewriting almost any one of 2603's stores alone made
 // it right, so that was moving a layout-sensitive miscompile, not fixing one (FIXES.md, Known limitations).
+// Loads in the returning block with no store to the array after them are left alone too: no store can come after them, so
+// there is nothing to take them past, and the extra index arithmetic on the 16 loads of the fuzzer's final hash of p[] and
+// pc[] was itself what made VEC=1 seeds 4417, 7105 and 14028 and FRAG=1 VEC=1 seed 2636 wrong (each right with this pass off,
+// or with those loads left alone, while seed 2136, the pass's own case, stays right). NVAIR_PRIVATE_FINAL_LOADS_FIX=0
+// rewrites them as well.
+static bool loadAfterLastStore(LLVMValueRef load, LLVMValueRef array) {
+    LLVMValueRef term = LLVMGetBasicBlockTerminator(LLVMGetInstructionParent(load));
+    if (!term || LLVMGetInstructionOpcode(term) != 1) return false;  // ret
+    for (LLVMValueRef i = LLVMGetNextInstruction(load); i; i = LLVMGetNextInstruction(i)) {
+        if (!LLVMIsAStoreInst(i)) continue;
+        LLVMValueRef ptr = LLVMGetOperand(i, 1);
+        if (ptr == array || (LLVMIsAGetElementPtrInst(ptr) && LLVMGetOperand(ptr, 0) == array)) return false;
+    }
+    return true;
+}
 static unsigned fixPrivateConstantLoads(LLVMModuleRef module, Gen &g) {
-    bool graphics = !disabled("NVAIR_PRIVATE_CONSTANT_GRAPHICS_FIX");
+    bool graphics = !disabled("NVAIR_PRIVATE_CONSTANT_GRAPHICS_FIX"), finalLoads = !disabled("NVAIR_PRIVATE_FINAL_LOADS_FIX");
     unsigned fixed = 0;
     LLVMBuilderRef b = nullptr;
     for (const char *list : {"air.kernel", "air.fragment", "air.vertex"}) {
@@ -2297,6 +2312,7 @@ static unsigned fixPrivateConstantLoads(LLVMModuleRef module, Gen &g) {
                     if (load && LLVMGetOperand(load, 0) == gep) loads.push_back(load);
                 }
                 for (LLVMValueRef load : loads) {
+                    if (finalLoads && loadAfterLastStore(load, a)) continue;
                     if (!b) b = LLVMCreateBuilderInContext(g.context);
                     if (!zero) {  // position.x, once
                         LLVMValueRef at = LLVMGetFirstInstruction(first);
