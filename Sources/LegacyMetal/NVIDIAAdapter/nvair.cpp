@@ -2629,6 +2629,47 @@ static unsigned scalarizeConstantLaneOps(LLVMModuleRef module, Gen &g) {
     return (unsigned)ops.size();
 }
 
+// ---- compares of 8- and 16-bit values -----------------------------------------------------------------------------------
+// The back end got equality and unsigned compares of 8- and 16-bit scalars wrong: in a kernel reduced from VEC=1 seed 13302,
+// a loop exiting when two lanes of a uchar4 select are equal, the narrow vectors done lane by lane (above) left
+// icmp eq i8 (trunc i32 y), 0 and icmp ne/ugt i8 compares of the lanes, and 199 of 256 threads came out wrong; the same
+// condition written with the compares in 32 bits (and y, 255) is right, and so is the kernel with each such compare made
+// 32-bit, while the same added code with the compares left 8-bit (the operand through llvm.nvvm.min.u.i32 and truncated
+// again) is not. Each eq, ne and unsigned icmp of i8 or i16 scalars now compares the operands zero-extended to 32 bits, a
+// non-constant one through llvm.nvvm.min.u.i32(x, ~0) so that the optimizer can't narrow the compare back. That also made
+// VEC=1 seeds 1523, 7501, 11519 and 12616 right (listed as layout-dependent), and seed 4417 wrong again. Signed compares are
+// left alone: widening them as well (sign-extended) changed none of those seeds for the better and made seed 14028 wrong.
+// The kernel of n39 (selects of narrow vectors) is right with either this or the selects done lane by lane.
+// NVAIR_NARROW_COMPARE_FIX=0 turns it off.
+static unsigned widenNarrowCompares(LLVMModuleRef module, Gen &g) {
+    std::vector<LLVMValueRef> cmps;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                if (LLVMGetInstructionOpcode(inst) != 42 || LLVMGetICmpPredicate(inst) >= LLVMIntSGT) continue;  // icmp eq/ne/u*
+                LLVMTypeRef t = LLVMTypeOf(LLVMGetOperand(inst, 0));
+                if (LLVMGetTypeKind(t) == LLVMIntegerTypeKind && (LLVMGetIntTypeWidth(t) == 8 || LLVMGetIntTypeWidth(t) == 16))
+                    cmps.push_back(inst);
+            }
+    if (cmps.empty()) return 0;
+    LLVMBuilderRef b = LLVMCreateBuilderInContext(g.context);
+    LLVMTypeRef params[2] = {g.i32, g.i32};
+    for (LLVMValueRef c : cmps) {
+        LLVMPositionBuilderBefore(b, c);
+        LLVMValueRef ops[2];
+        for (int i = 0; i < 2; i++) {
+            LLVMValueRef x = LLVMGetOperand(c, i);
+            if (LLVMIsAConstantInt(x)) { ops[i] = g.c32((unsigned)LLVMConstIntGetZExtValue(x)); continue; }
+            LLVMValueRef args[2] = {LLVMBuildZExt(b, x, g.i32, ""), g.c32(~0u)};
+            ops[i] = LLVMBuildCall(b, g.intrinsic("llvm.nvvm.min.u.i32", g.i32, params, 2), args, 2, "");
+        }
+        LLVMReplaceAllUsesWith(c, LLVMBuildICmp(b, LLVMGetICmpPredicate(c), ops[0], ops[1], ""));
+        LLVMInstructionEraseFromParent(c);
+    }
+    LLVMDisposeBuilder(b);
+    return (unsigned)cmps.size();
+}
+
 // ---- operations on 2- to 4-lane vectors of 8- or 16-bit integers ---------------------------------------------------------
 // In a loop that runs until all(a != b) for two char4 a and b turned false, nested in a loop the optimizer unrolls, the
 // inner loop stopped at the wrong iteration in a few threads (mslfuzz2.py VEC=1 ASTYPE=1 seed 9923, about 20 threads'
@@ -2932,6 +2973,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (satProducts && logging()) fprintf(stderr, "[nvair] %u product(s) given to a saturating add/subtract through an opaque value\n", satProducts);
         unsigned narrowVectors = disabled("NVAIR_NARROW_VECTOR_FIX") ? 0 : scalarizeNarrowVectors(module, g);
         if (narrowVectors && logging()) fprintf(stderr, "[nvair] %u operation(s) on 2-4 lane 8/16-bit vectors done lane by lane\n", narrowVectors);
+        unsigned wideCompares = disabled("NVAIR_NARROW_COMPARE_FIX") ? 0 : widenNarrowCompares(module, g);
+        if (wideCompares && logging()) fprintf(stderr, "[nvair] %u compare(s) of 8/16-bit values made 32-bit\n", wideCompares);
         unsigned madSats = disabled("NVAIR_MAD_SAT_FIX") ? 0 : lowerMadSat(module, g);
         if (madSats && logging()) fprintf(stderr, "[nvair] %u madsat call(s) given the adapter's own body\n", madSats);
         unsigned overflows = disabled("NVAIR_OVERFLOW_FIX") ? 0 : fixOverflowIntrinsics(module, g);

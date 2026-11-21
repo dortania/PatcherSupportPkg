@@ -5,6 +5,8 @@
 // lane by lane, only the <4 x i8> select was left, and done lane by lane too it is right. The kernel on the fuzzer's inputs
 // (seed 1, 256 threads in groups of 64, compiled without fast math, as the fuzzer does): each thread's 8 output words
 // against the CPU reference (cpuref.py), as one FNV-1a hash per thread.
+// Since the fix for 8-bit compares (n41, NVAIR_NARROW_COMPARE_FIX) the kernel is right with either fix alone: the run
+// without the fix turns both off.
 // Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
 #import "repro.h"
 
