@@ -4,6 +4,7 @@ Postprocess binaries on CI
 
 # TODO: We need a proper way to identify and sign bundles. Unfortunately Apple does not make this easy.
 
+import plistlib
 import subprocess
 import sys
 from pathlib import Path
@@ -25,6 +26,19 @@ UNUSED = [
     "WebDriver-387.10.10.10.40.140/WebDriver-387.10.10.10.40.140.pkg",
     "WebDriver-387.10.10.10.40.140/WebDriver-387.10.10.15.15.108.pkg",
 ]
+BUNDLED_3802_SERVICES = {"13.7.8-3802", "14.8.9-3802", "15.8.2-3802", "26.7.2-3802"}
+BUNDLED_3802_DRIVERS = {
+    "11.7.10-3802":       {"AppleIntelHD4000GraphicsMTLDriver.bundle"},
+    "11.7.10-3802-21":    {"AppleIntelHD4000GraphicsMTLDriver.bundle"},
+    "11.7.10-3802-24":    {"AppleIntelHD4000GraphicsMTLDriver.bundle"},
+    "12.7.6-3802":        {"AppleIntelHD5000GraphicsMTLDriver.bundle"},
+    "12.7.6-3802-24":     {"AppleIntelHD5000GraphicsMTLDriver.bundle"},
+    "12.0 Beta 6":        {"GeForceAIRPlugin.bundle", "GeForceGLDriver.bundle", "GeForceMTLDriver.bundle"},
+    "12.0 Beta 6-21":     {"GeForceMTLDriver.bundle"},
+    "12.0 Beta 6-3802":   {"GeForceAIRPlugin.bundle", "GeForceMTLDriver.bundle"},
+    "12.0 Beta 6-3802-24": {"GeForceAIRPlugin.bundle", "GeForceMTLDriver.bundle"},
+    "12.0 Beta 6-3802-25": {"GeForceMTLDriver.bundle"},
+}
 
 # Constants
 
@@ -68,6 +82,20 @@ def get_machos(directory=TARGET_DIR):
             if magic in MACHO_MAGIC.values():
                 machos[file] = magic
     return dict(sorted(machos.items(), key=lambda item: item[0]))
+
+
+def bundle_3802_for_macho(file: Path) -> Path | None:
+    payload = file.relative_to(TARGET_DIR).parts[0]
+    bundle_names = BUNDLED_3802_DRIVERS.get(payload, set())
+    if payload in BUNDLED_3802_SERVICES:
+        bundle_names = {"MTLCompilerService.xpc"}
+    return next((parent for parent in file.parents if parent.name in bundle_names), None)
+
+
+def bundle_executable(bundle: Path) -> Path:
+    contents = bundle / "Contents"
+    with (contents / "Info.plist").open("rb") as plist:
+        return contents / "MacOS" / plistlib.load(plist)["CFBundleExecutable"]
 
 
 def thin_macho(file: Path, magic: bytes):
@@ -173,11 +201,18 @@ if __name__ == "__main__":
         print("No machos found!")
         sys.exit(1)
     machos_to_sign = []
+    bundles_to_sign = {}
     all_valid = True
-    for macho, _ in machos.items():
+    for macho in machos:
         valid, needs_signing = signing_sanity_checks(macho)
         all_valid &= valid
         if needs_signing:
+            bundle = bundle_3802_for_macho(macho)
+            if bundle is not None:
+                if bundle not in bundles_to_sign:
+                    bundles_to_sign[bundle] = bundle_executable(bundle)
+                if macho == bundles_to_sign[bundle]:
+                    continue
             machos_to_sign.append(macho)
     if not all_valid:
         sys.exit(1)
@@ -187,5 +222,9 @@ if __name__ == "__main__":
 
     for macho in machos_to_sign:
         sign_macho(macho)
+
+    for bundle in sorted(bundles_to_sign):
+        sign_macho(bundle)
+        subprocess.run(["codesign", "--verify", "--deep", "--strict", bundle], check=True)
 
     print("Done!")
