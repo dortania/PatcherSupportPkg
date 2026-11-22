@@ -1,10 +1,10 @@
 // n41-kepler-narrow-compares (Kepler adapter, NVAIR_NARROW_COMPARE_FIX): equality and unsigned compares of 8-bit values. A
 // loop that exits when two lanes of a uchar4 select are equal (vf(select(...)) & 3 == 0), reduced from mslfuzz2.py VEC=1
 // ASTYPE=1 seed 13302: with the narrow vectors done lane by lane, the back end got icmp eq i8 (trunc i32 y), 0 and the
-// icmp ne/ugt i8 compares of the lanes, and 199 of 256 threads came out wrong. The same condition with its compares in 32
-// bits is right; the adapter now makes each such compare 32-bit. The kernel on the fuzzer's inputs (seed 1, 256 threads in
-// groups of 64, compiled without fast math, as the fuzzer does): each thread's 8 output words against the CPU reference
-// (cpuref.py), as one FNV-1a hash per thread.
+// icmp ne/ugt i8 compares of the lanes, and 198 of 256 threads came out wrong. The same condition with its compares in 32
+// bits is right, while the same added code with the compares left 8-bit is not; the adapter now makes each such compare
+// 32-bit. The kernel on the fuzzer's inputs (seed 1, 256 threads in groups of 64, compiled without fast math, as the
+// fuzzer does): each thread's 8 output words against the CPU reference (cpuref.py), as one FNV-1a hash per thread.
 // Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
 #import "repro.h"
 
@@ -45,7 +45,7 @@ static NSString *const src = @
     "        { uint n1 = 0u; while (n1 < 8u) { n1++;\n"
     "            v1 = vf((((char4((char)(1u), (char)(1u), (char)(1u), (char)(1u)) >> char4((char)(1u), (char)(1u), (char)(1u), (char)(1u))) & as_type<char4>(ushort2((ushort)(1u), (ushort)(1u))))));\n"
     "            v0 ^= p[((uint)(-(int)(((uint)((ushort)(1u)) * (uint)((ushort)(1u))) & 0x7fffffffu))) & 7u];\n"
-    "            if (((vf(((select(uchar4((uchar)(1u), (uchar)(1u), (uchar)(1u), (uchar)(1u)), uchar4((uchar)(1u), (uchar)(1u), (uchar)((~(v3 ^ t))), (uchar)((v5 ^ t))), uchar4((uchar)(1u), (uchar)(1u), (uchar)((uint)((int)(in[(t * 4u + 1u)]) / (int)((in[(t * 4u + 0u)] | 1u) & 0x7fffffffu))), (uchar)(1u)) > uchar4((uchar)(1u), (uchar)(1u), (uchar)(1u), (uchar)(((in[(t * 4u + 0u)] & 1u) != 0u ? in[(t * 4u + 3u)] : (v0 ^ t))))) & uchar4((uchar)(1u), (uchar)(1u), (uchar)(1u), (uchar)(1u)))))) & 3u) == 0u) break; } v0 += n1; }\n"
+    "            if (((vf(((select(uchar4((uchar)(1u), (uchar)(1u), (uchar)(1u), (uchar)(1u)), uchar4((uchar)(1u), (uchar)(1u), (uchar)((~(v3 ^ t))), (uchar)(madsat((v5 ^ t), (v2 ^ t), 215u))), uchar4((uchar)(1u), (uchar)(1u), (uchar)((uint)((int)(in[(t * 4u + 1u)]) / (int)((in[(t * 4u + 0u)] | 1u) & 0x7fffffffu))), (uchar)(1u)) > uchar4((uchar)(1u), (uchar)(1u), (uchar)(1u), (uchar)(((in[(t * 4u + 0u)] & 1u) != 0u ? in[(t * 4u + 3u)] : (v0 ^ t))))) & uchar4((uchar)(1u), (uchar)(1u), (uchar)(1u), (uchar)(1u)))))) & 3u) == 0u) break; } v0 += n1; }\n"
     "        { uint4 w = uint4(((65u >= (v4 ^ t) ? 1668322756u : v5) << (((37u % (in[(t * 4u + 3u)] | 1u))) & 31u)), v0, min3(v1, ((v0 ^ t) | 112u), (uint)((ushort)(1u) >> (2762721722u & 7u))), v5); uint wi = ((((v1 & 1u) != 0u ? v2 : v2) <= ((uint)((int)((short)(1u))) - 277754759u) ? (in[(t * 4u + 2u)] / (in[(t * 4u + 3u)] | 1u)) : (uint)(-(int)((v0 ^ t) & 0x7fffffffu)))) & 3u; uint wm = median3(mulhi((v5 ^ t), (v1 ^ t)), ((v2 ^ t) >> (42949835u & 31u)), rhadd((v4 ^ t), v2)); w = uint4(wi == 0u ? wm : w.x, wi == 1u ? wm : w.y, wi == 2u ? wm : w.z, wi == 3u ? wm : w.w); uint wj = ((uint)(-(int)(((v3 ^ t) >> ((v2 ^ t) & 31u)) & 0x7fffffffu))) & 3u; v4 += (wj == 0u ? w.x : (wj == 1u ? w.y : (wj == 2u ? w.z : w.w))) ^ (w.y << 1u) ^ w.w; }\n"
     "    }\n"
     "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
@@ -88,7 +88,7 @@ static const uint32_t want[256] = {
     0xeb2f11e9u, 0xd2b2c75au, 0xde0a166cu, 0x3b5f1c22u, 0x027562e1u, 0x92b0381au, 0x32e2c61fu, 0xf48f5d46u,
     0x806af3c1u, 0x4d8a739cu, 0x7737debbu, 0xbee722a1u, 0x6bd8c7eeu, 0x16e2f6dcu, 0x6ac628dbu, 0x313f7d2fu,
     0x97816cb1u, 0x4f402d1eu, 0x97aca550u, 0x3bd9018eu, 0xf0904de6u, 0x52ea07adu, 0x6268f6dcu, 0x56ae0923u,
-    0xcf3c3365u, 0x778ca1bau, 0xda6c58a1u, 0x1c918223u, 0x71078df1u, 0x73391046u, 0x9550cb62u, 0x92c39329u,
+    0xcf3c3365u, 0x778ca1bau, 0xda6c58a1u, 0x1c918223u, 0x71078df1u, 0x73391046u, 0x9550cb62u, 0xe92b091fu,
     0x4c8f086eu, 0xc92070a8u, 0xa7d9d1beu, 0x144b0172u, 0x4982d3a9u, 0xbe57ae04u, 0x99ba588eu, 0x48dba343u,
     0xd68b34a2u, 0xe223f9d7u, 0xb22b2150u, 0xa254b38bu, 0xb40ca179u, 0xea88f6afu, 0x8c78dfc9u, 0x82832045u,
     0xb20979e6u, 0x40a22774u, 0x4f6ddc14u, 0x9d1b4633u, 0x8a34257fu, 0xf208bc82u, 0x947c0f97u, 0x44493dabu,

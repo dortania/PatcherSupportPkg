@@ -3,7 +3,8 @@
 // loads, and the back end forwarded a stored 32-bit value to such a load without its mask: pc[v3 & 7] kept the bits above
 // its byte where a 64-bit product and a 64-bit min used it, so v3 came out wrong (mslfuzz2 LONG=1 seed 575, reduced; with
 // a uint array, or the byte from a register, right). The same bug as Intel's i47; seed 770 too. Private arrays of 8- and
-// 16-bit integers reached only through element loads and stores are done on 32-bit words. Expected values from the CPU
+// 16-bit integers reached only through element loads and stores have each load's value masked to its width (through an
+// opaque min, so that it stays; they used to be done on 32-bit words instead). Expected values from the CPU
 // reference (cpuref.py, LONG=1) on the fuzzer's input. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
 #import "repro.h"
 

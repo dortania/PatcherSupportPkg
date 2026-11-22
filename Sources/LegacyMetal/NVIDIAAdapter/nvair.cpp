@@ -67,7 +67,7 @@
 // clz and ctz asked for the defined result at 0 (the library's undefined one folds to garbage for a constant 0).
 // NVAIR_COUNT_ZERO_FIX=0.
 //
-// Private arrays of bytes and halfwords done on 32-bit words (a stored word reached their loads unmasked).
+// Loads from private arrays of bytes and halfwords masked to their width (a stored word reached them unmasked).
 // NVAIR_NARROW_PRIVATE_ARRAY_FIX=0.
 //
 // discard_fragment in fragment functions with derivatives made a demote to a helper lane (the lane ended there, and its
@@ -1360,14 +1360,15 @@ static unsigned defineCountOfZero(LLVMModuleRef module, Gen &g) {
 // back end forwarded a stored 32-bit value to such a load without masking it: pc[i] kept the bits above its byte where a
 // 64-bit product and compare used it (mslfuzz2 LONG=1 seeds 575 and 770, reduced: with a uint array, or the byte from a
 // register, right). The same bug as Intel's i47. An array of 8- or 16-bit integers that only GEPs into its elements reach,
-// with only loads and stores of the element type behind them, becomes an array of i32: stores zero-extend, loads
-// truncate. NVAIR_NARROW_PRIVATE_ARRAY_FIX=0 turns it off.
-// Known limit: with the word array, a store and a later load at a variable index inside a loop, with enough other code
-// around them, can give the load the slot's old value (mslfuzz2 VEC=1 seeds 1413 and 1523; right with the byte array or
-// with a statement or two less). Not fixable from here, as far as tried: reaching every element at a constant index
-// (selects or masks) lets the array become registers, where LLVM narrows it to bytes again and the stale upper bits
-// come back (seed 126, and 575's kind); volatile word accesses don't help either. The widening alone has fewer wrong
-// kernels (VEC 1-2000: these two) than any of those.
+// with only loads and stores of the element type behind them, keeps its element type, and each load's value reaches its
+// users masked to its width, through llvm.nvvm.min.u.i32 so that neither optimizer can drop the mask as redundant:
+// trunc(min.u(zext(load), ~0) & 0xff). NVAIR_NARROW_PRIVATE_ARRAY_FIX=0 turns it off.
+// This used to be done by making the array one of i32 (stores zero-extending, loads truncating), which fixed the same
+// kernels, but with the word array a store and a later load at a variable index inside a loop, with enough other code
+// around them, could give the load the slot's old value, and the kernels that went wrong that way shifted with almost
+// any change to the rest of the adapter (FIXES.md, Known limitations: VEC=1 seeds 2603, 3890 and 4417 and FRAG=1 VEC=1
+// seeds 1089 and 2712 at the end). With the masked loads instead, 2603, 3890 and 1089 are right, n02 still passes, and none
+// of the other seeds that ever failed went wrong. NVAIR_PRIVATE_ARRAY_WORDS=1 brings the word array back.
 extern "C" {
 LLVMValueRef LLVMIsAAllocaInst(LLVMValueRef);
 LLVMTypeRef LLVMGetAllocatedType(LLVMValueRef);
@@ -1409,6 +1410,33 @@ static unsigned widenNarrowPrivateArrays(LLVMModuleRef module, Gen &g) {
             geps.push_back(gep);
         }
         if (!plain || geps.empty()) continue;
+        if (!getenv("NVAIR_PRIVATE_ARRAY_WORDS")) {  // keep the byte array, each load's value masked (see above)
+            if (!b) b = LLVMCreateBuilderInContext(g.context);
+            LLVMTypeRef params[2] = {g.i32, g.i32};
+            for (LLVMValueRef gep : geps) {
+                std::vector<LLVMValueRef> loads;
+                for (LLVMUseRef v = LLVMGetFirstUse(gep); v; v = LLVMGetNextUse(v))
+                    if (LLVMIsALoadInst(LLVMGetUser(v))) loads.push_back(LLVMGetUser(v));
+                for (LLVMValueRef load : loads) {
+                    LLVMUseRef first = LLVMGetFirstUse(load);  // already masked by an earlier run: zext feeding the min
+                    LLVMValueRef u0 = first ? LLVMGetUser(first) : nullptr;
+                    if (u0 && LLVMIsAInstruction(u0) && LLVMGetInstructionOpcode(u0) == LLVMZExt && LLVMGetFirstUse(u0) &&
+                        LLVMIsACallInst(LLVMGetUser(LLVMGetFirstUse(u0))))
+                        continue;
+                    LLVMValueRef next = LLVMGetNextInstruction(load);
+                    if (!next) continue;
+                    LLVMPositionBuilderBefore(b, next);
+                    LLVMValueRef z = LLVMBuildZExt(b, load, g.i32, "");
+                    LLVMValueRef args[2] = {z, g.c32(~0u)};
+                    LLVMValueRef m = LLVMBuildCall(b, g.intrinsic("llvm.nvvm.min.u.i32", g.i32, params, 2), args, 2, "");
+                    LLVMValueRef t = LLVMBuildTrunc(b, LLVMBuildAnd(b, m, g.c32(width == 8 ? 0xffu : 0xffffu), ""), element, "");
+                    LLVMReplaceAllUsesWith(load, t);
+                    LLVMSetOperand(z, 0, load);
+                }
+            }
+            fixed++;
+            continue;
+        }
         if (!b) b = LLVMCreateBuilderInContext(g.context);
         LLVMPositionBuilderBefore(b, alloca);
         LLVMValueRef wide = LLVMBuildAlloca(b, LLVMArrayType(g.i32, length), "");
@@ -3018,7 +3046,7 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         unsigned copies = disabled("NVAIR_LARGE_COPY_LOOP") ? 0 : loopLargeCopies(module, g);
         if (copies && logging()) fprintf(stderr, "[nvair] %u large copy(ies) made word loops\n", copies);
         unsigned narrow = disabled("NVAIR_NARROW_PRIVATE_ARRAY_FIX") ? 0 : widenNarrowPrivateArrays(module, g);
-        if (narrow && logging()) fprintf(stderr, "[nvair] %u private byte / halfword array(s) done on 32-bit words\n", narrow);
+        if (narrow && logging()) fprintf(stderr, "[nvair] %u private byte / halfword array(s) with masked loads (or on 32-bit words)\n", narrow);
         unsigned counts = disabled("NVAIR_COUNT_ZERO_FIX") ? 0 : defineCountOfZero(module, g);
         if (counts && logging()) fprintf(stderr, "[nvair] %u clz/ctz call(s) made defined for 0\n", counts);
         unsigned gradients2 = disabled("NVAIR_COMPARE_GRADIENT_FIX") ? 0 : fixGradientCompares(module, g);
