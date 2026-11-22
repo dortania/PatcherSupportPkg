@@ -5578,9 +5578,15 @@ static void interposeCompilerImage(const struct mach_header *mh, intptr_t slide)
         shimLog("[mtlshim] AIR 2.7 retargeting: %d import slot(s) in %s\n", slots, info.dli_fname + dirLength);
 }
 
+// The process that runs the GPU compiler, where items 25, 75 and the read sampler rewrite go: MTLCompilerService, or a
+// test that runs it in-process (Tests/tools/localcc.dylib, which verify.sh uses, exports localcc_hosts_compiler)
+static bool hostsCompiler(void) {
+    return !strcmp(getprogname(), "MTLCompilerService") || dlsym(RTLD_DEFAULT, "localcc_hosts_compiler");
+}
+
 static void installAIR27Retargeting(void) {
     const char *setting = getenv("MTLSHIM_AIR27");
-    if ((setting && !strcmp(setting, "0")) || strcmp(getprogname(), "MTLCompilerService")) return;
+    if ((setting && !strcmp(setting, "0")) || !hostsCompiler()) return;
     _dyld_register_func_for_add_image(interposeCompilerImage);  // also called for the images already loaded
 }
 
@@ -5662,7 +5668,7 @@ static void interposeLLVMWrapper(const struct mach_header *mh, intptr_t slide) {
 
 static void installOldAIRPassThrough(void) {
     const char *setting = getenv("MTLSHIM_OLD_AIR");
-    if ((setting && !strcmp(setting, "0")) || strcmp(getprogname(), "MTLCompilerService")) return;
+    if ((setting && !strcmp(setting, "0")) || !hostsCompiler()) return;
     _dyld_register_func_for_add_image(interposeLLVMWrapper);  // also called for the images already loaded
 }
 
@@ -5940,7 +5946,7 @@ static void hookCoordinateEmulation(const struct mach_header *mh, intptr_t slide
 
 static void installReadSamplerRewrite(void) {
     const char *setting = getenv("MTLSHIM_READ_SAMPLER");
-    if ((setting && !strcmp(setting, "0")) || strcmp(getprogname(), "MTLCompilerService")) return;
+    if ((setting && !strcmp(setting, "0")) || !hostsCompiler()) return;
     _dyld_register_func_for_add_image(hookCoordinateEmulation);  // also called for the images already loaded
 }
 

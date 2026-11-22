@@ -8,6 +8,7 @@
 // still goes to the service. LOCALCC_LOG=1 prints one line per local compile; LOCALCC_PLUGIN=<path> loads that
 // compiler plugin instead of the one the driver names; LOCALCC_DUMP=<dir> writes every reply (the compiled binaries) there.
 #include <dlfcn.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,6 +30,10 @@ struct Compiler {
     std::map<std::string, int> plugins;  // pluginPath + targetData -> plugin index
 };
 
+// MetalOldCompat installs its compiler-service fixes (items 25 and 75) in a process that has this symbol, as it does in
+// MTLCompilerService: here the compiler runs in the test process.
+extern "C" __attribute__((visibility("default"), used)) const int localcc_hosts_compiler = 1;
+
 static std::mutex lock;
 static std::map<uint64_t, Compiler> compilers;  // by llvmVersion
 
@@ -39,10 +44,18 @@ static Compiler *compilerFor(uint64_t version) {
     const std::string base = "/System/Library/PrivateFrameworks/MTLCompiler.framework/Versions/";
     std::string fw;
     void *h = nullptr;
+    // OCLP's 31001 libLLVM wrapper (Tahoe) names libLLVM_helper by a relative path, which dyld resolves against the working
+    // directory: MTLCompilerService runs in "/", a test mostly doesn't, and 31001 then failed to load here and 32023 got
+    // its requests. So the compiler is opened from "/".
+    int cwd = open(".", O_RDONLY);
+    bool moved = cwd >= 0 && chdir("/") == 0;
     for (std::string v : {std::to_string(version), std::string("32023"), std::string("Current")}) {
         fw = base + v + "/MTLCompiler";
         if ((h = dlopen(fw.c_str(), RTLD_NOW))) break;
+        if (getenv("LOCALCC_LOG")) fprintf(stderr, "[localcc] dlopen %s: %s\n", fw.c_str(), dlerror());
     }
+    if (moved) fchdir(cwd);
+    if (cwd >= 0) close(cwd);
     if (!h) { fprintf(stderr, "[localcc] dlopen %s: %s\n", fw.c_str(), dlerror()); return nullptr; }
     if (getenv("LOCALCC_LOG")) fprintf(stderr, "[localcc] using %s for llvmVersion %llu\n", fw.c_str(), (unsigned long long)version);
     auto create = (CreateFn)dlsym(h, "MTLCodeGenServiceCreate");

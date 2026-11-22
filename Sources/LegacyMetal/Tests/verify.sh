@@ -141,9 +141,11 @@ run() {  # <test[@gpu]> <removed fix or "fixed">
     esac
     # s13's fix (item 25) works in MTLCompilerService, which gets the shim under test this way (i05's metallib needs it
     # too, and so does s68's macOS 15.0 Core Image kernel); so does s59's (item 45), whose bug is in Tahoe's out-of-process
-    # compiler only
+    # compiler only, and s74's, s75's and s76's (item 75; s76: Core Image's built-in kernels): the downgrade for the Intel
+    # and Kepler back ends runs in the service even when localcc compiles in the test process
     [ "$t" = s13-new-air-metallib ] || [ "$t" = i05-intel-constexpr-sampler ] || [ "$t" = s59-metal4-texture-reads ] ||
-        [ "$t" = s68-coreimage-metal-kernels ] &&
+        [ "$t" = s68-coreimage-metal-kernels ] || [ "$t" = s74-chromium-angle-libraries ] || [ "$t" = s75-air-version-matrix ] ||
+        [ "$t" = s76-coreimage-builtin-filters ] &&
         env+=("__XPC_DYLD_INSERT_LIBRARIES=$shim")
     # On the AMD GPU the in-process compiler can't load i05's macOS 15.4 library ("image not loaded"), so there it compiles
     # in MTLCompilerService, which takes the build's compiler files by leaf name
@@ -151,6 +153,9 @@ run() {  # <test[@gpu]> <removed fix or "fixed">
     [ "$t" = i05-intel-constexpr-sampler ] && [[ $gpu == *AMD* || $gpu == *NVIDIA* || $gpu == *GeForce* || $gpu == *GTX* ]] && cc= &&
         env+=("__XPC_DYLD_LIBRARY_PATH=$libs:$libs/GeForceAIRPlugin.bundle/Contents/MacOS")
     [ "$t" = s59-metal4-texture-reads ] && cc= && env+=("__XPC_DYLD_LIBRARY_PATH=$libs")
+    # s76 (a sweep) compiles in MTLCompilerService, as apps do: on Tahoe, OCLP's fixIr crashes on Core Image's built-in
+    # kernels when the compiler runs in the test process (it doesn't in the service)
+    [ "$t" = s76-coreimage-builtin-filters ] && cc= && env+=("__XPC_DYLD_LIBRARY_PATH=$libs")
     local inserted
     inserted=$(printf '%s\n' "$shim" "$cc" "$inject" | grep . | paste -sd: -)
     [ "$t" = s64-firefox-angle-display ] && env+=("DYLD_FALLBACK_LIBRARY_PATH=${S64_FIREFOX_APP:-/Applications/Firefox.app}/Contents/MacOS")
