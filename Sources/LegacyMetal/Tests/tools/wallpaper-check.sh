@@ -20,12 +20,15 @@ store=~/Library/Application\ Support/com.apple.wallpaper/Store/Index.plist
 [ -f "$store" ] || { echo "no wallpaper store at $store" >&2; exit 2; }
 out=$(mktemp -d)
 cp -p "$store" "$out/before.plist"
+# the store without its LastUse dates, which WallpaperAgent updates by itself whenever it shows a wallpaper
+content() { plutil -p "$1" 2>/dev/null | grep -v '"LastUse"'; }
 restore() {  # the user's own wallpaper, exactly as it was
     cp -p "$out/before.plist" "$store" && killall WallpaperAgent 2>/dev/null
     sleep 3
-    cmp -s "$out/before.plist" "$store" || echo "WARNING wallpaper-check: the store differs after restoring; the saved copy is $out/before.plist" >&2
+    [ "$(content "$out/before.plist")" = "$(content "$store")" ] ||
+        echo "WARNING wallpaper-check: the store differs after restoring; the saved copy is $out/before.plist" >&2
 }
-trap 'restore; [ -f "$out/before.plist" ] && cmp -s "$out/before.plist" "$store" && rm -rf "$out"' EXIT
+trap 'restore; [ -f "$out/before.plist" ] && [ "$(content "$out/before.plist")" = "$(content "$store")" ] && rm -rf "$out"' EXIT
 "$T/tools/crashwatch.sh" start "$out/reports"
 start=$(date '+%Y-%m-%d %H:%M:%S')
 case $want in
@@ -57,7 +60,7 @@ sleep 5
 cp -p "$store" "$out/set.plist"  # what the wallpaper looks like right after it was set
 sleep "$secs"
 name=$(basename "$want")
-plutil -p "$out/set.plist" > "$out/set.txt" 2>/dev/null; plutil -p "$store" > "$out/now.txt" 2>/dev/null
+content "$out/set.plist" > "$out/set.txt"; content "$store" > "$out/now.txt"
 crashes=$("$T/tools/crashwatch.sh" new "$out/reports" WallpaperAgent Wallpaper MTLCompilerService | tr '\n' ' ')
 errors=$("$T/tools/crashwatch.sh" log "$out/reports")
 /usr/bin/log show --start "$start" --style compact --predicate 'process == "WallpaperAgent" AND (eventMessage CONTAINS "Create new wallpaper" OR eventMessage CONTAINS "Exporting wallpaper")' \
@@ -71,7 +74,7 @@ elif grep -q ': unknown: <com.apple.wallpaper.choice' "$out/agent.txt"; then ech
 elif grep -q 'ERROR - Exporting wallpaper' "$out/agent.txt"; then
     echo "FAIL $name: no snapshot of the wallpaper: $(grep 'ERROR - Exporting wallpaper' "$out/agent.txt" | tail -1 | sed 's/.*ERROR - //' | cut -c1-140)"; result=1
 elif ! grep -q 'END - Exporting wallpaper' "$out/agent.txt"; then echo "FAIL $name: no snapshot exported in ${secs}s (not rendered)"; result=1
-elif cmp -s "$out/set.plist" "$out/before.plist" && [ "${want##*.}" != plist ]; then
+elif [ "$(content "$out/set.plist")" = "$(content "$out/before.plist")" ] && [ "${want##*.}" != plist ]; then
     echo "FAIL $name: the wallpaper store didn't change (not applied)"; result=1
 elif ! diff -q "$out/set.txt" "$out/now.txt" > /dev/null; then
     echo "FAIL $name: the wallpaper changed back by itself within ${secs}s:"; diff "$out/set.txt" "$out/now.txt" | head -8; result=1
