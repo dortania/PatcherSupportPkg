@@ -6,7 +6,7 @@ mkdir -p build
 for src in [a-z][0-9]*.m; do
     name=${src%.m}
     extra=
-    grep -q '<CoreImage/CoreImage.h>' "$src" && extra="-framework CoreImage -framework CoreGraphics"  # s53 and s68 only: the others stay without it
+    grep -q '<CoreImage/CoreImage.h>' "$src" && extra="-framework CoreImage -framework CoreGraphics"  # the Core Image tests only: the others stay without it
     grep -q '<MetalPerformanceShadersGraph/' "$src" && extra="-framework MetalPerformanceShaders -framework MetalPerformanceShadersGraph"  # s57
     grep -q '<MetalFX/' "$src" && extra="-framework MetalFX"  # s58
     clang -arch x86_64 -mmacosx-version-min=12.0 -fobjc-arc -O1 -Wall -Wno-unguarded-availability-new \
@@ -42,6 +42,17 @@ if xcrun -sdk macosx -f metal >/dev/null 2>&1; then
     xcrun -sdk macosx metal -mmacosx-version-min=14.0 -c data/s68-ci-stitchable.metal -o build/s68-stitchable.air
     xcrun -sdk macosx metal build/s68-stitchable.air -framework CoreImage -o build/s68-ci-stitchable.metallib
     rm -f build/s68-stitchable.air
+    # s77: one Core Image kernel of each kind for every macOS target (AIR 2.0 to 2.8), and stitchable ones from macOS 12
+    for version in 10.13 10.14 10.15 11.0 12.0 13.0 14.0 15.0 26.0; do
+        xcrun -sdk macosx metal -fcikernel -mmacosx-version-min="$version" -c data/s77-ci-kernels.metal -o "build/s77-$version.air" &&
+            xcrun -sdk macosx metallib -cikernel "build/s77-$version.air" -o "build/s77-ci-$version.metallib"
+        rm -f "build/s77-$version.air"
+    done
+    for version in 12.0 14.0 15.0 26.0; do
+        xcrun -sdk macosx metal -mmacosx-version-min="$version" -c data/s77-ci-stitchable.metal -o "build/s77-st-$version.air" &&
+            xcrun -sdk macosx metal "build/s77-st-$version.air" -framework CoreImage -o "build/s77-ci-stitchable-$version.metallib"
+        rm -f "build/s77-st-$version.air"
+    done
     # s59: a Metal 4.0 library (Xcode 26), whose texture reads all go through the read sampler
     if xcrun -sdk macosx metal -std=metal4.0 -mmacosx-version-min=26.0 -c data/s59-reads.metal -o build/s59.air 2>/dev/null; then
         xcrun -sdk macosx metallib build/s59.air -o build/s59-metal4.metallib
