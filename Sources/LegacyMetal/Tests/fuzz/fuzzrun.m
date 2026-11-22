@@ -4,6 +4,8 @@
 // completed without writing the output (a dropped dispatch: every kernel writes all 8 words of every thread). If the file
 // also has a vertex function vfull, k is a fragment function instead, run once per pixel of a 256x1 target (t = pixel x).
 // The GPU name substring is matched case-insensitively ("default": the system default GPU). Built by gpu.sh.
+// A k with function constants (mslfuzz2.py ANGLE=1) is specialized with 0, 1: bool true / false, 2, 3: uint 37 / 0x9e3779b9
+// (cpuref.py has the same values); 4 stays undefined. A .metallib (gpu.sh AIRMIN=) is loaded as a prebuilt library.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 int main(int argc, char **argv) { @autoreleasepool {
@@ -13,12 +15,24 @@ int main(int argc, char **argv) { @autoreleasepool {
   for (id<MTLDevice> d in MTLCopyAllDevices()) if ([d.name rangeOfString:@(argv[2]) options:NSCaseInsensitiveSearch].location != NSNotFound) dev = d;
   if (!dev && !strcmp(argv[2], "default")) dev = MTLCreateSystemDefaultDevice();
   if (!dev) { printf("NODEVICE\n"); return 3; }
+  if (!src.length && ![@(argv[1]) hasSuffix:@".metallib"]) { printf("DEVICE %s\n", dev.name.UTF8String); return 0; }  // fuzz.sh's probe (/dev/null): Metal asserts on an empty source
   unsigned seed = argc > 3 ? (unsigned)atoi(argv[3]) : 1;
   NSError *err = nil;
   MTLCompileOptions *opt = [MTLCompileOptions new];
   opt.fastMathEnabled = NO;
-  id<MTLLibrary> lib = [dev newLibraryWithSource:src options:opt error:&err];
+  id<MTLLibrary> lib = [@(argv[1]) hasSuffix:@".metallib"] ? [dev newLibraryWithURL:[NSURL fileURLWithPath:@(argv[1])] error:&err]
+                                                           : [dev newLibraryWithSource:src options:opt error:&err];
   id<MTLFunction> fn = [lib newFunctionWithName:@"k"];
+  if (fn.functionConstantsDictionary.count) {
+    MTLFunctionConstantValues *cv = [MTLFunctionConstantValues new];
+    bool yes = true, no = false;
+    uint32_t c2 = 37, c3 = 0x9e3779b9u;
+    [cv setConstantValue:&yes type:MTLDataTypeBool atIndex:0];
+    [cv setConstantValue:&no type:MTLDataTypeBool atIndex:1];
+    [cv setConstantValue:&c2 type:MTLDataTypeUInt atIndex:2];
+    [cv setConstantValue:&c3 type:MTLDataTypeUInt atIndex:3];
+    fn = [lib newFunctionWithName:@"k" constantValues:cv error:&err];
+  }
   id<MTLFunction> vfull = [lib newFunctionWithName:@"vfull"];
   // Fragment mode (the file has a vertex function vfull): k is the fragment function, one pixel per thread on a 256x1 target.
   id<MTLComputePipelineState> ps = fn && !vfull ? [dev newComputePipelineStateWithFunction:fn error:&err] : nil;

@@ -6,6 +6,10 @@
 # conversions, a private uchar array), vector elements at variable indexes, threadgroup memory at variable indexes,
 # switch statements and while loops with break. Every operation is defined for every input: divisors are odd and
 # positive, shift and bit-field amounts are masked into range, indexes are masked into their arrays.
+# ANGLE=1: also what Chromium's ANGLE writes into the shaders it translates: __asm__("") in every loop body, metal::array
+# instead of C arrays, while (true) loops with the condition as a break, helper functions taking thread references
+# (GLSL inout parameters), and function constants: plain ones, which fuzzrun specializes (0, 1: bool true / false, 2, 3:
+# uint 37 / 0x9e3779b9), and one through is_function_constant_defined, left undefined (ANGLE's optional constants).
 import random, sys
 
 seed = int(sys.argv[1])
@@ -19,6 +23,7 @@ VEC = bool(os.environ.get('VEC'))
 ASTYPE = bool(os.environ.get('ASTYPE'))
 # LONG=1: also 64-bit integers (ulong / long: multiply, high halves, division, remainder, shifts, compares, min/max).
 LONG = bool(os.environ.get('LONG'))
+ANGLE = bool(os.environ.get('ANGLE'))
 R = random.Random(seed * 7919 + 1)
 NV = 6
 lines = []
@@ -34,6 +39,7 @@ def const():
 
 
 def expr(d=0):
+    if ANGLE and d < 3 and R.random() < 0.08: return angleexpr(d)
     if VEC and d < 2 and R.random() < 0.3: return vecexpr(d)
     if LONG and d < 2 and R.random() < 0.3: return longexpr(d)
     k = R.randrange(34 if d < 3 else 4)
@@ -72,6 +78,17 @@ def expr(d=0):
     if k == 31: return f'uint(!({a} > {b}))'
     if k == 32: return f'(~{a})'
     return f'uint(-int({a} & 0x7fffffffu))'
+
+
+def angleexpr(d):  # function constants (ANGLEHEAD; cpuref.py defines them with the values fuzzrun specializes)
+    a, b = expr(d + 1), expr(d + 1)
+    k = R.randrange(6)
+    if k == 0: return f'({R.choice(["fc0", "fc1", "fc4", "!fc0", "!fc1"])} ? {a} : {b})'
+    if k == 1: return f'({a} {R.choice(["^", "+", "*", "&", "|"])} {R.choice(["fc2", "fc3"])})'
+    if k == 2: return f'(({R.choice(["fc0", "fc1", "fc4"])} && ({a} > {b})) ? {expr(d + 1)} : {expr(d + 1)})'
+    if k == 3: return f'(uint({R.choice(["fc0", "fc1", "fc4"])}) << ({a} & 31u))'
+    if k == 4: return f'({a} / ({R.choice(["fc2", "fc3"])} | 1u))'
+    return f'(({a} % {R.choice(["fc2", "fc3"])}) {R.choice(["+", "^"])} {b})'
 
 
 NARROW = {'uchar': (8, False), 'char': (8, True), 'ushort': (16, False), 'short': (16, True)}
@@ -163,8 +180,43 @@ def block(n):
     depth -= 1
 
 
+ASM = '__asm__(""); ' if ANGLE else ''  # ANGLE writes it into every loop it translates
+
+
+def anglestmt():  # ANGLE=1's statements
+    global depth
+    k = R.randrange(5)
+    if k == 0 and depth < 2:
+        emit(f'if ({R.choice(["fc0", "fc1", "fc4", "!fc0", "!fc1"])}) {{')
+        block(R.randrange(1, 3))
+        if R.random() < 0.5:
+            emit('} else {')
+            block(R.randrange(1, 3))
+        emit('}')
+    elif k == 1 and depth < 2:  # ANGLE's loop form: while (true) with the condition as a break, at most 7 trips
+        n = f'n{depth}'
+        emit(f'{{ uint {n} = 0u; while (true) {{ {ASM}if (!({n} < {R.randrange(1, 8)}u)) break; {n}++;')
+        block(R.randrange(1, 3))
+        emit(f'}} {var()} += {n}; }}')
+    elif k == 2:
+        emit(f'angle_inout({var()}, {expr(1)});')
+    elif k == 3:
+        emit(f'angle_inout(p[({expr(1)}) & 7u], {expr(1)});')
+    else:
+        emit(f'angle_swap({var()}, p[({expr(1)}) & 7u]);')
+
+
+ANGLEHEAD = ['constant bool fc0 [[function_constant(0)]];', 'constant bool fc1 [[function_constant(1)]];',
+             'constant uint fc2 [[function_constant(2)]];', 'constant uint fc3 [[function_constant(3)]];',
+             'constant bool fc4v [[function_constant(4)]];',
+             'constant bool fc4 = is_function_constant_defined(fc4v) ? fc4v : true;',
+             'static void angle_inout(thread uint &a, uint b) { a = (a ^ b) * 2654435761u + (a >> 7u); }',
+             'static void angle_swap(thread uint &a, thread uint &b) { uint c = a; a = b ^ 0x5bd1e995u; b = c; }']
+
+
 def stmt():
     global depth
+    if ANGLE and R.random() < 0.12: return anglestmt()
     k = R.randrange(16)
     if k <= 3:
         emit(f'{var()} {R.choice(["=", "+=", "^=", "-="])} {expr()};')
@@ -179,13 +231,14 @@ def stmt():
         i = f'i{depth}'
         emit(f'for (uint {i} = 0; {i} < {R.randrange(1, 6)}u; {i}++) {{')
         depth += 1
+        if ANGLE: emit(ASM.strip())
         emit(f'{var()} += {i} * {R.randrange(1, 9)}u;')
         depth -= 1
         block(R.randrange(1, 3))
         emit('}')
     elif k == 6 and depth < 2:  # while with a data-dependent break, at most 8 trips
         n = f'n{depth}'
-        emit(f'{{ uint {n} = 0u; while ({n} < 8u) {{ {n}++;')
+        emit(f'{{ uint {n} = 0u; while ({n} < 8u) {{ {ASM}{n}++;')
         block(R.randrange(1, 3))
         emit(f'    if ((({expr(1)}) & 3u) == 0u) break; }} {var()} += {n}; }}')
     elif k == 7 and depth < 2:
@@ -231,9 +284,10 @@ if FRAG:
             'fragment float4 k(float4 pos [[position]], device const uint *in [[buffer(0)]], device uint *out [[buffer(1)]]) {',
             '    uint t = uint(pos.x);']
 if VEC: HEAD = HEAD[:2] + VECHELPERS + HEAD[2:]
+if ANGLE: HEAD = HEAD[:2] + ANGLEHEAD + HEAD[2:]
 src = HEAD + [
-       '    uint p[8];', '    for (uint j = 0; j < 8u; j++) p[j] = in[(t * 4u + (j & 3u))] + j;',
-       '    uchar pc[8];', '    for (uint j = 0; j < 8u; j++) pc[j] = uchar(in[(t * 4u + (j & 3u))] >> j);']
+       '    metal::array<uint, 8> p;' if ANGLE else '    uint p[8];', f'    for (uint j = 0; j < 8u; j++) {{ {ASM}p[j] = in[(t * 4u + (j & 3u))] + j; }}' if ANGLE else '    for (uint j = 0; j < 8u; j++) p[j] = in[(t * 4u + (j & 3u))] + j;',
+       '    metal::array<uchar, 8> pc;' if ANGLE else '    uchar pc[8];', '    for (uint j = 0; j < 8u; j++) pc[j] = uchar(in[(t * 4u + (j & 3u))] >> j);']
 src += [f'    uint v{i} = in[(t * 4u + {i % 4}u)] * {2 * i + 1}u + t;' for i in range(NV)]
 for _ in range(nstmts): stmt()
 # C-style casts: nested functional casts like uint(short(in[i])) parse as declarations in C++ (and MSL).

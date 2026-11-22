@@ -5,8 +5,17 @@
 # ../../build.sh instead, without installing it, as verify.sh's "with the fixes" column does: the compiler runs in the
 # fuzzrun process (../tools/localcc.dylib) and takes the adapters and patched compiler files from that build.
 # Other VAR=val settings in the environment reach the compiler too (an adapter's fix switch, e.g. INTEL_NARROW_SHIFT_FIX=0).
+# AIRMIN=<macOS version>: the kernel is compiled by Xcode's metal for that deployment target first (10.14: AIR 2.1, as
+# Chromium's prebuilt ANGLE library) and loaded as a prebuilt metallib, as apps that ship one load it.
 set -u
 H=$(cd "$(dirname "$0")" && pwd)
+if [ -n "${AIRMIN:-}" ] && [ "$1" != /dev/null ]; then
+    lib=$(mktemp -d); trap 'rm -rf "$lib"' EXIT
+    if ! err=$(xcrun -sdk macosx metal -mmacosx-version-min="$AIRMIN" -fno-fast-math "$1" -o "$lib/k.metallib" 2>&1); then
+        echo "COMPILE xcrun metal: $(tr '\n' ' ' <<< "$err" | cut -c1-300)"; exit 0
+    fi
+    set -- "$lib/k.metallib" "${@:2}"
+fi
 mkdir -p "$H/build"
 if [ ! -x "$H/build/fuzzrun" ] || [ "$H/fuzzrun.m" -nt "$H/build/fuzzrun" ]; then
     clang -mmacosx-version-min=12.0 -fobjc-arc -O1 -framework Foundation -framework Metal "$H/fuzzrun.m" \

@@ -101,6 +101,12 @@ static uint insert_bits(uint base, uint insert, uint offset, uint bits) {
     return (base & ~mask) | ((insert << offset) & mask);
 }
 static int select(int a, int b, bool c) { return c ? b : a; }
+// mslfuzz2.py ANGLE=1: the function constants as fuzzrun specializes them (fc4: is_function_constant_defined of an
+// undefined one, so its default), and the helpers taking thread references
+static const bool fc0 = true, fc1 = false, fc4 = true;
+static const uint fc2 = 37u, fc3 = 0x9e3779b9u;
+static void angle_inout(uint &a, uint b) { a = (a ^ b) * 2654435761u + (a >> 7u); }
+static void angle_swap(uint &a, uint &b) { uint c = a; a = b ^ 0x5bd1e995u; b = c; }
 // ASTYPE=1: as_type reinterpretations between narrow vectors and uint
 template <typename T, typename F> static T as_type(F f) { static_assert(sizeof(T) == sizeof(F), "as_type size"); T r; memcpy(&r, &f, sizeof r); return r; }
 typedef std::atomic<uint> atomic_uint;
@@ -141,6 +147,7 @@ def translate(src):
     body = body.replace('&ta', '&G->ta')
     body = body.replace('threadgroup_barrier(mem_flags::mem_threadgroup);', 'G->bar.arrive_and_wait();')
     body = body.replace('thread uint *', 'uint *')
+    body = re.sub(r'metal::array<(\w+), (\d+)> (\w+);', r'\1 \3[\2];', body)  # ANGLE=1's arrays
     body = re.sub(r'\.([xyzw]{4})\b', lambda m: '.swz(' + ','.join(str('xyzw'.index(c)) for c in m.group(1)) + ')', body)
     # Functional casts as C-style casts: nested ones like uint(ushort(x)) can parse as declarations in C++.
     body = re.sub(r'\b(uint|int|uchar|ushort|char|short|bool|float|ulong|long)\(', r'(\1)(', body)

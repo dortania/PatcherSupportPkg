@@ -34,6 +34,36 @@ substring to run every test on one GPU: on a Mac without the AMD GPU, use `./ver
 Without OCLP's MetalOld wrapper (GCN-only Macs), MetalOldCompat can't load, so `verify.sh` reports SKIP for its tests
 and runs the rest without it.
 
+### Real apps and runtimes
+
+The repro tests and the fuzzer (`Tests/fuzz`) check what we thought of. Apps reach Metal in other ways (different shader
+translators, years-old Chromium builds inside Electron apps, prebuilt metallibs), and two compiler-service crashes that a
+tester found in minutes by using Chromium-based apps on Tahoe had gone through all of them. So:
+
+    cd Tests && tools/fetch-apps.sh && ./apps.sh
+
+`tools/fetch-apps.sh` downloads into `Tests/apps/` (gitignored; nothing is installed): the latest patch of each of the last
+18 Electron majors (one Chromium and ANGLE version each), Chrome for Testing builds of older Chrome milestones, VS Code,
+Firefox and Firefox ESR, Blender, Godot, Obsidian, Discord, Slack, Signal and Anki, chosen for how they reach Metal
+(Chromium's ANGLE at many versions, Qt WebEngine, Firefox's own ANGLE and wgpu, native Metal renderers). Single apps or
+ranges can be named: `tools/fetch-apps.sh electron 28 45`, `tools/fetch-apps.sh chrome 120 158 4`, `tools/fetch-apps.sh firefox`.
+
+`apps.sh [seconds]` starts each Chromium-based app found there (and in `/Applications`, `~/Applications`), and Godot's
+editor (MoltenVK), Blender and Firefox, in a throwaway profile with this build injected, as `verify.sh` does; browsers and bare Electron runtimes open `apps-page.html`, which makes
+their GPU process build ANGLE's pipelines (WebGL 2 with loops, texture reads, mipmaps, copies, a multisample resolve, 2D canvas
+blits, CSS blurs). An app fails if `MTLCompilerService` or one of its processes writes a crash report meanwhile, if the log
+has a compiler failure (a client's "Compiler failed with XPC_ERROR", once per crashed request even when ReportCrash, which
+throttles repeats, writes no report; "Compiler encountered an internal error"), or if the page doesn't finish. Each app's
+Metal shader cache is cleared first, since a failed pipeline otherwise comes back as a cached failure without a crash.
+`INSTALLED=1 ./apps.sh` checks the installed stack after a root patch; `APPS_IGPU=1` gives Chromium the integrated GPU on a
+dual-GPU Mac (`MTLSHIM_TEST_IGPU_ONLY`), to run it once per GPU.
+
+`verify.sh` runs two related tests: `s74` loads the prebuilt ANGLE library of every Chromium-based app found and builds every
+pipeline ANGLE builds from it, and `s75` builds and runs one shader set compiled for each macOS target from 10.14 (AIR 2.1,
+what Chromium's library is built for) to 26, as an app with a prebuilt metallib would bring it. `verify.sh` and `fuzz/fuzz.sh`
+also count the crash reports `MTLCompilerService` writes during a run (`tools/crashwatch.sh`): with the fixes, a test that
+passes while the compiler service crashed fails. Run `apps.sh` and `verify.sh` on every machine in the matrix below.
+
 ### Test matrix
 
 A bug can live in one combination of macOS, GPU and client only: Chromium's ANGLE crashed the compiler service on

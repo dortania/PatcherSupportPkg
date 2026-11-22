@@ -1,0 +1,57 @@
+<!doctype html>
+<!-- apps.sh's page: makes a Chromium GPU process build ANGLE's pipelines (WebGL 2 with loops, texture reads and mipmaps,
+     2D canvas blits, a CSS blur and a filter), then logs "apps.sh: done" or "apps.sh: error: ..." to the console (apps.sh reads the browser's log). -->
+<html><head><meta charset="utf-8"><title>running</title>
+<style>
+  #blur { width: 200px; height: 120px; background: linear-gradient(90deg, red, blue); filter: blur(6px); }
+  #shadow { width: 200px; height: 60px; margin: 20px; box-shadow: 0 0 18px 6px rgba(0,0,0,.6); }
+</style></head>
+<body>
+<div id="blur"></div><div id="shadow"></div>
+<canvas id="gl" width="128" height="128"></canvas><canvas id="c2d" width="128" height="128"></canvas>
+<script>
+function fail(m) { document.title = 'error: ' + m; console.log('apps.sh: error: ' + m); }
+try {
+  // WebGL 2: a fragment shader with a loop over texture taps (ANGLE writes __asm__("") into such loops), a texture with mipmaps
+  const gl = document.getElementById('gl').getContext('webgl2', { antialias: false });  // the blit below needs a single-sampled target
+  if (!gl) throw new Error('no webgl2');
+  const vs = `#version 300 es
+in vec2 p; out vec2 uv; void main() { uv = p * 0.5 + 0.5; gl_Position = vec4(p, 0.0, 1.0); }`;
+  const fs = `#version 300 es
+precision highp float; uniform sampler2D t; in vec2 uv; out vec4 o;
+void main() { vec4 s = vec4(0.0); int i = 0;
+  while (i < 4) { s += texture(t, uv + vec2(float(i) * 0.01, 0.0), -0.475); i++; }
+  for (int j = 0; j < 3; j++) { s += textureLod(t, uv, float(j)) * 0.1; }
+  o = s * 0.25; }`;
+  function sh(type, src) { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; }
+  const prog = gl.createProgram(); gl.attachShader(prog, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(prog); if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+  const tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex);
+  const px = new Uint8Array(64 * 64 * 4); for (let i = 0; i < px.length; i++) px[i] = (i * 37) & 255;
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 64, 64, 0, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  gl.generateMipmap(gl.TEXTURE_2D);  // ANGLE's mipmap path
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  gl.useProgram(prog); const loc = gl.getAttribLocation(prog, 'p'); gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0); gl.drawArrays(gl.TRIANGLES, 0, 3);
+  // a blit: copy the drawn buffer into another texture, and a multisampled framebuffer resolved by blitFramebuffer
+  const tex2 = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex2); gl.copyTexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 0, 0, 64, 64, 0);
+  const rb = gl.createRenderbuffer(); gl.bindRenderbuffer(gl.RENDERBUFFER, rb);
+  gl.renderbufferStorageMultisample(gl.RENDERBUFFER, 4, gl.RGBA8, 64, 64);
+  const msfb = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, msfb);
+  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, rb);
+  gl.clearColor(0.2, 0.4, 0.6, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.bindFramebuffer(gl.READ_FRAMEBUFFER, msfb); gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+  gl.blitFramebuffer(0, 0, 64, 64, 0, 0, 64, 64, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+  const out = new Uint8Array(4); gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, out);
+  const err = gl.getError(); if (err !== gl.NO_ERROR) throw new Error('gl error 0x' + err.toString(16));
+  if (gl.isContextLost()) throw new Error('context lost');
+  // 2D canvas: drawImage of the WebGL canvas, scaled (a blit), and a blur filter
+  const c = document.getElementById('c2d').getContext('2d');
+  c.filter = 'blur(3px)'; c.drawImage(document.getElementById('gl'), 0, 0, 96, 96); c.filter = 'none';
+  c.drawImage(document.getElementById('gl'), 32, 32, 64, 64, 0, 0, 128, 128);
+  requestAnimationFrame(() => requestAnimationFrame(() => { document.title = 'done'; console.log('apps.sh: done'); }));
+} catch (e) { fail(e.message || String(e)); }
+</script></body></html>

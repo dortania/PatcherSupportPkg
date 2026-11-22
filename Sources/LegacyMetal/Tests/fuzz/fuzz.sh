@@ -5,6 +5,8 @@
 #   VEC=1 ASTYPE=1   narrow vectors and as_type (the PR's "VEC" seeds)
 #   LONG=1           64-bit integers (the PR's "LONG" seeds); none of the three: the "plain" seeds
 #   FRAG=1           fragment functions instead of kernels
+#   ANGLE=1          what Chromium's ANGLE writes: __asm__("") in loops, metal::array, function constants (mslfuzz2.py)
+#   AIRMIN=10.14     each kernel built by Xcode's metal for that macOS target and loaded as a prebuilt metallib (gpu.sh)
 #   BUILD=1          the payload built by ../../build.sh instead of the installed Metal stack (see gpu.sh)
 #   GEN=mslfuzz.py   the first generator (pointer selects, threadgroup bools, uint4 swizzles) instead of mslfuzz2.py
 #   an adapter's fix switch, e.g. INTEL_SIGNED_DIV_NEG_FIX=0, to see what a fix is for
@@ -12,10 +14,11 @@
 # diffs.txt ("<seed> [<GPU's first line>|<CPU's first line>]") and k<seed>.metal for every kernel that differed.
 # Run one GPU job at a time: two at once can make the GPU drop work.
 set -u
-[ $# -ge 3 ] || { sed -n '2,13s/^# \{0,1\}//p' "$0" >&2; exit 2; }
+[ $# -ge 3 ] || { sed -n '2,15s/^# \{0,1\}//p' "$0" >&2; exit 2; }
 H=$(cd "$(dirname "$0")" && pwd)
 gpu=$1 first=$2 count=$3; shift 3
 gen=mslfuzz2.py tag=$gpu
+mark=$(mktemp); "$H/../tools/crashwatch.sh" start "$mark"  # crash reports written during the run are counted at the end
 for kv in "$@"; do tag=$tag-$kv; case $kv in GEN=*) gen=${kv#GEN=} ;; esac; done
 [ -f "$H/$gen" ] || { echo "no generator $gen" >&2; exit 2; }
 [ "$(env "$@" "$H/gpu.sh" /dev/null "$gpu" | head -1)" = NODEVICE ] &&
@@ -47,4 +50,6 @@ for ((c = first; c < first + count; c += 50)); do
         fi
     done
 done
-echo "$gpu $first..$((first + count - 1))${*:+ $*}: $wrong of $n differ (runs/${d##*/runs/})"
+crashes=$("$H/../tools/crashwatch.sh" new "$mark" MTLCompilerService fuzzrun | wc -l | tr -d ' '); rm -f "$mark"
+note=; [ "${crashes:-0}" != 0 ] && note=", $crashes crash report(s) from MTLCompilerService or fuzzrun written meanwhile"
+echo "$gpu $first..$((first + count - 1))${*:+ $*}: $wrong of $n differ (runs/${d##*/runs/})$note"
