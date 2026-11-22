@@ -117,6 +117,7 @@ exports:
                    _LLVMGetParamTypes,
                    _LLVMGetPointerAddressSpace,
                    _LLVMGetReturnType,
+                   _LLVMGetStructElementTypes,
                    _LLVMGetStructName,
                    _LLVMGetSuccessor,
                    _LLVMGetTypeKind,

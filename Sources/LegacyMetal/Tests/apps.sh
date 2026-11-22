@@ -96,7 +96,7 @@ for dir in "${dirs[@]}"; do
         page=; [ -n "$browser" ] && page=$(grep -o 'apps.sh: [^"]*' "$out/log" | tail -1)
         # compiler failures the log had meanwhile, crash report or not: a client's "Compiler failed with XPC_ERROR" (one per crashed
         # request; ReportCrash throttles repeated crashes), "Compiler encountered an internal error", "LLVM ERROR"
-        errors=$("$T/tools/crashwatch.sh" log "$out/reports")
+        errors=$("$T/tools/crashwatch.sh" log "$out/reports" "$exe")  # the app's own processes (and its helpers, "<exe> Helper ...")
         [ "$id" = org.blenderfoundation.blender ] && grep -q 'does not support metal 2.2' "$out/log" && crashes=0  # see below
         if [ "$crashes" != 0 ]; then
             echo "FAIL $name: $crashes crash report(s): $(head -3 <<< "$crashlist" | tr '\n' ' ')"

@@ -1378,6 +1378,75 @@ LLVMTypeRef LLVMArrayType(LLVMTypeRef, unsigned);
 LLVMValueRef LLVMBuildGEP(LLVMBuilderRef, LLVMValueRef, LLVMValueRef *, unsigned, const char *);
 }
 
+// Private arrays wrapped in a struct: ANGLE writes GLSL arrays as metal::array<T, N>, a struct holding the array, so such a
+// private array reaches the back end as alloca {[N x T]} with GEPs (s, 0, 0, i), where the C arrays the private-array fixes
+// match (fixPrivateConstantLoads, widenNarrowPrivateArrays, ...) are alloca [N x T] with GEPs (a, 0, i). Their bugs came
+// back in that form, which every WebGL shader with a GLSL array has (Chrome, Safari, Firefox): n02, n26 and n31 written
+// with metal::array failed (57 of 256 threads, 11 of 2048 words, 71 of 256 pixels) where the C-array versions pass; the
+// AMD adapter had the same gap (item 78). Such an alloca becomes the array itself, before the other passes: each GEP
+// (s, 0, 0, rest) becomes (a, 0, rest), (s, 0, 0) becomes a, and any other use (lifetime markers, a memcpy, (s, 0)) gets
+// the array's address cast to the struct's pointer type: the same memory. NVAIR_ARRAY_STRUCT_FIX=0 turns it off.
+// Tests: n44, n45, n46 (n26, n02 and n31 with metal::array).
+extern "C" {
+unsigned LLVMCountStructElementTypes(LLVMTypeRef);
+void LLVMGetStructElementTypes(LLVMTypeRef, LLVMTypeRef *);
+void LLVMSetAlignment(LLVMValueRef, unsigned);
+LLVMValueRef LLVMBuildBitCast(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
+}
+
+static unsigned unwrapArrayStructs(LLVMModuleRef module, Gen &g) {
+    enum { kStructKind = 10, kArrayKind = 11 };
+    std::vector<LLVMValueRef> allocas;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst))
+                if (LLVMIsAAllocaInst(inst)) allocas.push_back(inst);
+    LLVMBuilderRef b = nullptr;
+    unsigned fixed = 0;
+    for (LLVMValueRef alloca : allocas) {
+        LLVMTypeRef wrapper = LLVMGetAllocatedType(alloca);
+        if (LLVMGetTypeKind(wrapper) != kStructKind || LLVMCountStructElementTypes(wrapper) != 1) continue;
+        LLVMTypeRef array;
+        LLVMGetStructElementTypes(wrapper, &array);
+        if (LLVMGetTypeKind(array) != kArrayKind) continue;
+        // the GEPs that step into the array: (s, 0, 0, ...) with constant zeros
+        std::vector<LLVMValueRef> geps;
+        for (LLVMUseRef u = LLVMGetFirstUse(alloca); u; u = LLVMGetNextUse(u)) {
+            LLVMValueRef gep = LLVMGetUser(u);
+            if (LLVMIsAGetElementPtrInst(gep) && LLVMGetOperand(gep, 0) == alloca && LLVMGetNumOperands(gep) >= 3 &&
+                LLVMIsAConstantInt(LLVMGetOperand(gep, 1)) && !LLVMConstIntGetZExtValue(LLVMGetOperand(gep, 1)) &&
+                LLVMIsAConstantInt(LLVMGetOperand(gep, 2)) && !LLVMConstIntGetZExtValue(LLVMGetOperand(gep, 2)))
+                geps.push_back(gep);
+        }
+        if (geps.empty()) continue;
+        if (!b) b = LLVMCreateBuilderInContext(g.context);
+        LLVMPositionBuilderBefore(b, alloca);
+        LLVMValueRef plain = LLVMBuildAlloca(b, array, "");
+        LLVMSetAlignment(plain, LLVMGetAlignment(alloca));
+        for (LLVMValueRef gep : geps) {
+            unsigned n = LLVMGetNumOperands(gep);
+            LLVMValueRef replacement = plain;  // (s, 0, 0): the array
+            if (n > 3) {
+                std::vector<LLVMValueRef> indices;
+                indices.push_back(LLVMGetOperand(gep, 1));
+                for (unsigned i = 3; i < n; i++) indices.push_back(LLVMGetOperand(gep, i));
+                LLVMPositionBuilderBefore(b, gep);
+                replacement = LLVMBuildGEP(b, plain, indices.data(), (unsigned)indices.size(), "");
+            }
+            LLVMReplaceAllUsesWith(gep, replacement);
+            LLVMInstructionEraseFromParent(gep);
+        }
+        if (LLVMGetFirstUse(alloca)) {  // the rest see the same memory through the struct's pointer type
+            LLVMPositionBuilderBefore(b, alloca);
+            LLVMReplaceAllUsesWith(alloca, LLVMBuildBitCast(b, plain, LLVMTypeOf(alloca), ""));
+        }
+        LLVMInstructionEraseFromParent(alloca);
+        fixed++;
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
 static unsigned widenNarrowPrivateArrays(LLVMModuleRef module, Gen &g) {
     enum { kArrayKind = 11 };
     std::vector<LLVMValueRef> allocas;
@@ -3064,6 +3133,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         unsigned inlineAsm = disabled("NVAIR_INLINE_ASM_FIX") ? 0 : dropInlineAsm(module);
         if (inlineAsm && logging()) fprintf(stderr, "[nvair] %u inline asm call(s) dropped\n", inlineAsm);
         Gen g = makeGen(module);
+        unsigned unwrapped = disabled("NVAIR_ARRAY_STRUCT_FIX") ? 0 : unwrapArrayStructs(module, g);  // before the private-array fixes
+        if (unwrapped && logging()) fprintf(stderr, "[nvair] %u private array(s) in a struct (metal::array) made plain arrays\n", unwrapped);
         unsigned atomics = disabled("NVAIR_TEXTURE_ATOMICS") ? 0 : lowerTextureAtomics(module, g);
         if (atomics && logging()) fprintf(stderr, "[nvair] %u texture atomic(s) made global atomics on linear texture buffers\n", atomics);
         unsigned depthChannels = disabled("NVAIR_DEPTH_CHANNELS") ? 0 : fixDepthChannels(module, g);
