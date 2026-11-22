@@ -1354,22 +1354,53 @@ static unsigned exactUnpackNorm(void *module) {
 // constant-index writes, and each variable-index load of the same arrays as a chain of selects, `v = i == k ? p[k] : v`:
 // with the loads left indexed, SC merges them across the constant-index stores between them once a loop is unrolled
 // (`for (...) { p[k & 7] = a; s ^= p[i]; }` with k known: four of five loads read one value). Arrays only read at
-// variable indexes (lookup tables) stay as they are. AMD_PRIVATE_STORE_FIX=0 turns this off.
+// variable indexes (lookup tables) stay as they are. MSL's metal::array, which Chromium's ANGLE writes for every GLSL
+// array, is a struct around the array (its element pointers have one index more): handled the same way, it lost updates
+// the same way before (ANGLE-style fuzzing: `for (...) { inout(p[i]); p[1] = g; }` applied the update twice, not 3 times).
+// AMD_PRIVATE_STORE_FIX=0 turns this off.
 enum { kOpcodeStore = 31, kMaxArrayLength = 32, kMaxIndexed = 64, kAllocaAllocatedType = 0x38, kGEPSourceType = 0x38 };
 typedef struct { void *access, *array; } IndexedAccess;
 
 static bool isAllocaInstruction(void *v) { return isInstruction(v, kOpcodeAlloca); }
+static unsigned numContainedTypes(void *type) { return *(unsigned *)((char *)type + 12); }  // Type::NumContainedTys
+
+// The [N x T] an array alloca holds: its own type, or the one field of a struct around it (metal::array; *wrapped).
+static void *privateArrayType(void *alloca, bool *wrapped) {
+    void *type = *(void **)((char *)alloca + kAllocaAllocatedType);
+    *wrapped = false;
+    if (typeID(type) == kTypeArray) return type;
+    if (typeID(type) == kTypeStruct && numContainedTypes(type) == 1 && typeID(elementType(type)) == kTypeArray) {
+        *wrapped = true;
+        return elementType(type);
+    }
+    return NULL;
+}
+
+// The element pointer &p[k]: (p, 0, k), or (p, 0, 0, k) for a struct around the array.
+static void *privateArraySlot(void *array, void *indexType, unsigned k, void *before) {
+    bool wrapped;
+    privateArrayType(array, &wrapped);
+    void *allocated = *(void **)((char *)array + kAllocaAllocatedType), *zero = api.constantIntGet(indexType, 0, false);
+    void *element = api.constantIntGet(indexType, k, false);
+    void *field = wrapped ? api.constantIntGet(api.getInt32Ty(api.getContext(before)), 0, false) : NULL;
+    void *indices[3] = {zero, wrapped ? field : element, element};
+    return api.gepCreate(allocated, array, (ArrayRef){indices, wrapped ? 3 : 2}, &kNoName, before);
+}
 
 // The array alloca a store's pointer addresses, and the element index: a constant (*constant) or a value (*index).
 static void *storedArrayElement(void *pointer, void *i64, void **index, int *constant, void *before) {
     *index = NULL;
     *constant = -1;
-    if (isInstruction(pointer, kOpcodeGEP) && !hungOffUses(pointer) && numOperands(pointer) == 3) {
-        void *array = operand(pointer, 0), *zero = operand(pointer, 1), *element = operand(pointer, 2);
+    if (isInstruction(pointer, kOpcodeGEP) && !hungOffUses(pointer) && (numOperands(pointer) == 3 || numOperands(pointer) == 4)) {
+        unsigned n = numOperands(pointer);
+        void *array = operand(pointer, 0), *zero = operand(pointer, 1), *element = operand(pointer, n - 1);
         if (!isAllocaInstruction(array) || zero != api.constantIntGet(typeOf(zero), 0, false)) return NULL;
-        void *type = *(void **)((char *)array + kAllocaAllocatedType);
-        if (typeID(type) != kTypeArray || arrayLength(type) > kMaxArrayLength || *(void **)((char *)pointer + kGEPSourceType) != type)
+        bool wrapped;
+        void *type = privateArrayType(array, &wrapped);
+        if (!type || wrapped != (n == 4) || arrayLength(type) > kMaxArrayLength ||
+            *(void **)((char *)pointer + kGEPSourceType) != *(void **)((char *)array + kAllocaAllocatedType))
             return NULL;
+        if (wrapped && operand(pointer, 2) != api.constantIntGet(typeOf(operand(pointer, 2)), 0, false)) return NULL;
         unsigned elementKind = typeID(elementType(type));  // Type::TypeID: half 1, float 2, double 3, integer 11, vector 16
         if (elementKind != 1 && elementKind != 2 && elementKind != 3 && elementKind != 11 && elementKind != 16) return NULL;
         for (unsigned k = 0; k < arrayLength(type); k++)
@@ -1435,18 +1466,18 @@ static unsigned privateArrayIndexedStores(void *module) {
         }
         for (unsigned s = 0; s < numStores; s++) {
             void *store = stores[s].access, *array = stores[s].array, *value = operand(store, 0);
-            void *type = *(void **)((char *)array + kAllocaAllocatedType), *element = elementType(type);
+            bool wrapped;
+            void *type = privateArrayType(array, &wrapped), *element = elementType(type);
             void *index;
             int constant;
             storedArrayElement(operand(store, 1), i64, &index, &constant, store);  // builds the select of indexes if needed
             if (!index) continue;
             void *indexType = typeOf(index);
             for (unsigned k = 0; k < arrayLength(type); k++) {  // p[k] = i == k ? v : p[k]
-                void *indices[2] = {api.constantIntGet(indexType, 0, false), api.constantIntGet(indexType, k, false)};
-                void *slot = api.gepCreate(type, array, (ArrayRef){indices, 2}, &kNoName, store);
+                void *slot = privateArraySlot(array, indexType, k, store);
                 char *old = api.userNew(96, 1);
                 api.loadInst(old, element, slot, &kNoName, false, store);
-                void *hit = api.cmpCreate(kOpcodeICmp, kPredicateEQ, index, indices[1], &kNoName, store);
+                void *hit = api.cmpCreate(kOpcodeICmp, kPredicateEQ, index, api.constantIntGet(indexType, k, false), &kNoName, store);
                 char *merged = api.userNew(96, 3);
                 api.selectInit(merged, hit, value, old, &kNoName, store);
                 char *write = api.userNew(96, 2);
@@ -1460,7 +1491,8 @@ static unsigned privateArrayIndexedStores(void *module) {
             unsigned a = 0;
             while (a < numArrays && arrays[a] != array) a++;
             if (a == numArrays) continue;  // only read at variable indexes: SC handles that
-            void *type = *(void **)((char *)array + kAllocaAllocatedType), *element = elementType(type);
+            bool wrapped;
+            void *type = privateArrayType(array, &wrapped), *element = elementType(type);
             if (typeOf(load) != element) continue;
             void *index;
             int constant;
@@ -1468,15 +1500,14 @@ static unsigned privateArrayIndexedStores(void *module) {
             if (!index) continue;
             void *indexType = typeOf(index), *value = NULL;
             for (unsigned k = 0; k < arrayLength(type); k++) {  // v = p[0]; v = i == k ? p[k] : v
-                void *indices[2] = {api.constantIntGet(indexType, 0, false), api.constantIntGet(indexType, k, false)};
-                void *slot = api.gepCreate(type, array, (ArrayRef){indices, 2}, &kNoName, load);
+                void *slot = privateArraySlot(array, indexType, k, load);
                 char *read = api.userNew(96, 1);
                 api.loadInst(read, element, slot, &kNoName, false, load);
                 if (!value) {
                     value = read;
                     continue;
                 }
-                void *hit = api.cmpCreate(kOpcodeICmp, kPredicateEQ, index, indices[1], &kNoName, load);
+                void *hit = api.cmpCreate(kOpcodeICmp, kPredicateEQ, index, api.constantIntGet(indexType, k, false), &kNoName, load);
                 char *merged = api.userNew(96, 3);
                 api.selectInit(merged, hit, read, value, &kNoName, load);
                 value = merged;

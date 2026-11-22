@@ -7,6 +7,8 @@
 // The fix makes every access to such an array a constant-index one, loads too: with the stores done per element and the
 // loads left indexed, SC merges indexed loads across the stores between them once a loop is unrolled:
 //   unrolled: k = constant; for (5 times) { k += n * 7; p[k & 7] = a; s ^= p[i]; }   four of the five loads read one value
+//   metalarray: metal::array (what Chromium's ANGLE writes for GLSL arrays, a struct around the array), updated through
+//            a reference in a loop: for (3 times) { inout(p[i]); p[1] = g; }   the update applied twice, not 3 times
 // Each kernel runs on 256 threads with different indexes and is checked against the same code on the CPU.
 // Stock OCLP: FAIL. Fixed: PASS.
 // Argument: GPU name substring (default: AMD).
@@ -30,6 +32,13 @@ static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n
     "    INIT uint s = in[t * 4u + 3u] * 7u + t; uint k = 1597821222u; uint a = min(in[t * 4u + 2u] * 5u + t, v);\n"
     "    for (uint n = 0; n < 5u; n++) { k += n * 7u; p[k & 7u] = a; s ^= p[in[t * 4u] & 7u]; }\n"
     "    DONE out[t * 9u + 8u] = s;\n"
+    "}\n"
+    "static void inout(thread uint &a, uint b) { a = (a ^ b) * 2654435761u + (a >> 7u); }\n"
+    "kernel void metalarray(device const uint *in [[buffer(0)]], device uint *out [[buffer(1)]], uint t [[thread_position_in_grid]]) {\n"
+    "    metal::array<uint, 8> p; for (uint j = 0; j < 8u; j++) p[j] = in[t * 4u + (j & 3u)] + j;\n"
+    "    uint i = popcount(in[t * 4u + 1u]) & 7u, b = in[t * 4u + 2u] & 1u, g = in[t * 4u + 3u];\n"
+    "    for (uint n = 0; n < 3u; n++) { inout(p[i], b); p[1] = g; }\n"
+    "    DONE out[t * 9u + 8u] = i;\n"
     "}\n";
 
 // The same kernels on the CPU.
@@ -46,6 +55,10 @@ static void reference(const char *kernel, const uint32_t *in, uint32_t *out, uin
     } else if (!strcmp(kernel, "loop")) {
         uint32_t i = in[t * 4 + 1] & 7;
         for (int n = 0; n < 5; n++) { p[i] += 1; s += p[i]; p[v & 7] = 1; }
+    } else if (!strcmp(kernel, "metalarray")) {
+        uint32_t i = (uint32_t)__builtin_popcount(in[t * 4 + 1]) & 7, b = in[t * 4 + 2] & 1, g = in[t * 4 + 3];
+        for (int n = 0; n < 3; n++) { p[i] = (p[i] ^ b) * 2654435761u + (p[i] >> 7); p[1] = g; }
+        s = i;
     } else {
         uint32_t k = 1597821222u, a = in[t * 4 + 2] * 5 + t;
         s = in[t * 4 + 3] * 7 + t;
@@ -74,8 +87,8 @@ int main(int argc, char **argv) {
         }
         id<MTLCommandQueue> queue = [dev newCommandQueue];
         char report[500] = "";
-        const char *const kernels[] = {"branch", "select", "loop", "unrolled"};
-        for (size_t k = 0; k < 4; k++) {
+        const char *const kernels[] = {"branch", "select", "loop", "unrolled", "metalarray"};
+        for (size_t k = 0; k < 5; k++) {
             const char *kernel = kernels[k];
             id<MTLComputePipelineState> ps = [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@(kernel)] error:&err];
             if (!ps) return FAIL(bug, "%s: %s: %s", dev.name.UTF8String, kernel, err.localizedDescription.UTF8String);
@@ -101,6 +114,6 @@ int main(int argc, char **argv) {
             }
         }
         if (report[0]) return FAIL(bug, "%s: %s", dev.name.UTF8String, report);
-        return PASS(bug, "%s: private arrays written at variable indexes in branches and loops keep every write and read", dev.name.UTF8String);
+        return PASS(bug, "%s: private arrays written at variable indexes in branches and loops (metal::array too) keep every write and read", dev.name.UTF8String);
     }
 }
