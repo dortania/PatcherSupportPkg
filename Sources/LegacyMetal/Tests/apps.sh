@@ -70,6 +70,12 @@ for dir in "${dirs[@]}"; do
                 extra=(BLENDER_USER_CONFIG="$prof/config" BLENDER_USER_SCRIPTS="$prof/scripts" BLENDER_USER_DATAFILES="$prof/data")
                 args=(--factory-startup --gpu-backend metal --debug-gpu) ;;  # --debug-gpu: it then says why it refuses a GPU
             org.mozilla.firefox)  # console.log to stdout, so that the page's result reaches the log
+                # Firefox 160's GPU-process sandbox allows reading its own bundle only on the volume it was started from
+                # as the kernel resolves it: run from another volume than the boot one (a repo on a second macOS
+                # install's volume), the GPU process can't load ANGLE and the page gets no WebGL 2, whatever the GPU
+                # stack does. That copy runs without the GPU sandbox (copies on the boot volume keep it).
+                [ "$(stat -f %d "$app/Contents/MacOS/$exe")" = "$(stat -f %d /System/Volumes/Data)" ] ||
+                    [ "$(stat -f %d "$app/Contents/MacOS/$exe")" = "$(stat -f %d /)" ] || { extra=(MOZ_DISABLE_GPU_SANDBOX=1); name="$name (GPU sandbox off: not on the boot volume)"; }
                 browser=1; mkdir -p "$prof"
                 printf 'user_pref("devtools.console.stdout.content", true);\nuser_pref("browser.shell.checkDefaultBrowser", false);\nuser_pref("app.update.enabled", false);\n' > "$prof/user.js"
                 args=(-profile "$prof" -no-remote "file://$T/apps-page.html") ;;
