@@ -458,9 +458,15 @@ static void setLanguageVersion(id self, SEL _cmd, NSUInteger version) {
 // on these GPUs 3.1 code means the same; rewrite it the way SPIRV-Cross (MoltenVK) writes Coherent for MSL < 3.2:
 // `coherent device` / `coherent(device)` -> `volatile`, `coherent(threadgroup)` (the default) and the texture argument
 // `memory_coherence_device` / `_threadgroup` dropped.
+// And fences: from MSL 3.2 SPIRV-Cross writes a SPIR-V memory barrier as atomic_thread_fence(flags, order, scope), which
+// this front end doesn't have in any form (MoltenVK picks 3.2 on macOS 15 and 4.0 on 26 from the OS version alone; Godot
+// 4.7's compute shaders failed to build). Before 3.2 it wrote threadgroup_barrier(flags), or simdgroup_barrier(flags) for
+// a simdgroup or thread scope, and so does this rewrite: a barrier is a fence too, and SPIRV-Cross only writes fences in
+// kernels, where barriers are allowed. A control barrier after the fence stays, as a second barrier. Test: s80.
 static NSString *downgradeSource(NSString *source, id options) {
     if (!source || !options || !objc_getAssociatedObject(options, kNewerVersionRequested)) return source;
-    if ([source rangeOfString:@"coheren"].location == NSNotFound) return source;
+    if ([source rangeOfString:@"coheren"].location == NSNotFound && [source rangeOfString:@"atomic_thread_fence"].location == NSNotFound)
+        return source;
     static NSArray<NSArray *> *rules;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
@@ -469,6 +475,10 @@ static NSString *downgradeSource(NSString *source, id options) {
             @[@"\\bcoherent\\s*\\(\\s*device\\s*\\)", @"volatile"],
             @[@"\\bcoherent\\s*\\(\\s*threadgroup\\s*\\)\\s*", @""],
             @[@"\\bcoherent(?=\\s+(?:device|threadgroup)\\b)", @"volatile"],
+            @[@"\\batomic_thread_fence\\s*\\(\\s*([^,;()]+?)\\s*,\\s*memory_order_\\w+\\s*,\\s*(?:metal::)?thread_scope_(?:simdgroup|thread)\\s*\\)",
+              @"simdgroup_barrier($1)"],
+            @[@"\\batomic_thread_fence\\s*\\(\\s*([^,;()]+?)\\s*,\\s*memory_order_\\w+\\s*(?:,\\s*(?:metal::)?thread_scope_\\w+\\s*)?\\)",
+              @"threadgroup_barrier($1)"],
         ];
         NSMutableArray *compiled = [NSMutableArray array];
         for (NSArray *p in patterns)
@@ -478,7 +488,7 @@ static NSString *downgradeSource(NSString *source, id options) {
     NSString *out = source;
     for (NSArray *rule in rules)
         out = [rule[0] stringByReplacingMatchesInString:out options:0 range:NSMakeRange(0, out.length) withTemplate:rule[1]];
-    if (getenv("MTLSHIM_VERBOSE") && ![out isEqualToString:source]) shimLog("[mtlshim] MSL 3.2 coherence qualifiers rewritten for 3.1\n");
+    if (getenv("MTLSHIM_VERBOSE") && ![out isEqualToString:source]) shimLog("[mtlshim] MSL 3.2 coherence qualifiers / fences rewritten for 3.1\n");
     return out;
 }
 
@@ -1601,8 +1611,86 @@ static MTLRenderPipelineDescriptor *withCoverageWrite(id<MTLDevice> device, MTLR
     return copy;
 }
 
+// 73. Rendering without attachments: a render pipeline with no color, depth or stencil attachment, drawn in a pass that
+// has only a render target size (Vulkan subpasses without attachments, which MoltenVK always takes Metal to support; Godot
+// 4.7's editor makes them at start). On the family-1 GPUs MetalOld's validation aborts the app when such a pipeline is
+// made ("No valid pixelFormats set"; Kepler, and the 12.x Intel driver). Such pipelines get a color attachment 0 of
+// R8Unorm with writeMask none, and such passes a private R8Unorm texture of the render target's size, layer count and
+// sample count (kept per device), loaded and stored as don't-care. The fragment function, its buffer and texture writes
+// and visibility results stay as they are (item 66 makes Kepler count samples for the masked attachment). Family-2 GPUs
+// are left alone. MTLSHIM_NO_ATTACHMENTS=0 turns it off. Test: s79.
+static BOOL familyTwo(const void *device);
+static BOOL attachmentsEmulated(id<MTLDevice> device) {
+    static int setting;  // 1 on, -1 off
+    if (!setting) {
+        const char *value = getenv("MTLSHIM_NO_ATTACHMENTS");
+        setting = value && !strcmp(value, "0") ? -1 : 1;
+    }
+    return setting > 0 && device && !familyTwo((__bridge const void *)device);
+}
+
+static MTLRenderPipelineDescriptor *withDummyAttachment(id<MTLDevice> device, MTLRenderPipelineDescriptor *descriptor) {
+    if (!descriptor || !descriptor.rasterizationEnabled || descriptor.depthAttachmentPixelFormat != MTLPixelFormatInvalid ||
+        descriptor.stencilAttachmentPixelFormat != MTLPixelFormatInvalid)
+        return descriptor;
+    for (NSUInteger i = 0; i < 8; i++)
+        if (descriptor.colorAttachments[i].pixelFormat != MTLPixelFormatInvalid) return descriptor;
+    if (!attachmentsEmulated(device)) return descriptor;
+    MTLRenderPipelineDescriptor *copy = [descriptor copy];
+    copy.colorAttachments[0].pixelFormat = MTLPixelFormatR8Unorm;
+    copy.colorAttachments[0].writeMask = MTLColorWriteMaskNone;
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] render pipeline without attachments: a masked R8Unorm color attachment added\n");
+    return copy;
+}
+
+static const void *kDummyTargetsKey = &kDummyTargetsKey;
+static MTLRenderPassDescriptor *withDummyTarget(id<MTLCommandBuffer> buffer, MTLRenderPassDescriptor *descriptor) {
+    if (!descriptor || !descriptor.renderTargetWidth || !descriptor.renderTargetHeight || descriptor.depthAttachment.texture ||
+        descriptor.stencilAttachment.texture)
+        return descriptor;
+    for (NSUInteger i = 0; i < 8; i++)
+        if (descriptor.colorAttachments[i].texture) return descriptor;
+    id<MTLDevice> device = buffer.device;
+    if (!attachmentsEmulated(device)) return descriptor;
+    NSUInteger width = descriptor.renderTargetWidth, height = descriptor.renderTargetHeight;
+    NSUInteger layers = MAX(descriptor.renderTargetArrayLength, 1), samples = MAX(descriptor.defaultRasterSampleCount, 1);
+    NSString *key = [NSString stringWithFormat:@"%lux%lux%lux%lu", (unsigned long)width, (unsigned long)height, (unsigned long)layers, (unsigned long)samples];
+    NSCache *cache;
+    @synchronized((id)device) {
+        cache = objc_getAssociatedObject(device, kDummyTargetsKey);
+        if (!cache) {
+            cache = [NSCache new];
+            cache.countLimit = 8;
+            objc_setAssociatedObject(device, kDummyTargetsKey, cache, OBJC_ASSOCIATION_RETAIN);
+        }
+    }
+    id<MTLTexture> target = [cache objectForKey:key];
+    if (!target) {
+        MTLTextureDescriptor *td = [MTLTextureDescriptor new];
+        td.pixelFormat = MTLPixelFormatR8Unorm;
+        td.width = width;
+        td.height = height;
+        td.arrayLength = layers;
+        td.sampleCount = samples;
+        td.textureType = samples > 1 ? (layers > 1 ? MTLTextureType2DMultisampleArray : MTLTextureType2DMultisample)
+                                     : (layers > 1 ? MTLTextureType2DArray : MTLTextureType2D);
+        td.usage = MTLTextureUsageRenderTarget;
+        td.storageMode = MTLStorageModePrivate;
+        target = [device newTextureWithDescriptor:td];
+        if (!target) return descriptor;
+        [cache setObject:target forKey:key];
+    }
+    MTLRenderPassDescriptor *copy = [descriptor copy];
+    copy.colorAttachments[0].texture = target;
+    copy.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+    copy.colorAttachments[0].storeAction = MTLStoreActionDontCare;
+    if (getenv("MTLSHIM_VERBOSE"))
+        shimLog("[mtlshim] render pass without attachments: an R8Unorm target of %s added\n", key.UTF8String);
+    return copy;
+}
+
 static MTLRenderPipelineDescriptor *adjustedPipeline(id<MTLDevice> device, MTLRenderPipelineDescriptor *descriptor) {
-    return withCoverageWrite(device, withEmptyFragment(device, descriptor));  // items 21 and 34
+    return withCoverageWrite(device, withEmptyFragment(device, withDummyAttachment(device, descriptor)));  // items 73, 21 and 34
 }
 
 static id newRenderPipeline(id self, SEL _cmd, MTLRenderPipelineDescriptor *descriptor, NSError **error) RETURNS_RETAINED;
@@ -1704,8 +1792,10 @@ static void patchDeviceBase(void) {
 // context that needs one (alpha:false, multisample resolves, canvas copies) fails, and WebKit's GPU process hangs.
 // Chromium's ANGLE loads the same shaders built for macOS 10.14 (isTooOldANGLELibrary). When ANGLE loads that metallib,
 // compile ANGLE's internal-shader source (ANGLEInternalShaders.h, generated by make_angle_shaders.py from WebKit's
-// mtl_internal_shaders_autogen.metal) and return that library if it has the same functions with the same function
-// constants; otherwise the prebuilt library is returned as before. Safari 18.6 on Sequoia has an older ANGLE (early
+// mtl_internal_shaders_autogen.metal) and return that library if it has every function of the prebuilt one, with the same
+// function type and function constants (functions only the source has are fine: ANGLE asks for the names it knows; Chromium
+// 120's library lacks saturateDepth, and its blits aborted the compiler on Tahoe, s74 on the Iris Pro); otherwise the
+// prebuilt library is returned as before. Safari 18.6 on Sequoia has an older ANGLE (early
 // 2025), whose library targets air64-apple-macosx15.8.0 (AIR 2.7: "air version set to 2.7.0, but expecting 2.6") and
 // does texture/buffer copies with kernels the newer source replaced (readFromBufferToFloatTexture, ...): every
 // antialiased WebGL context failed its multisample resolve, so nothing drew. That library gets the source of WebKit's
@@ -1769,10 +1859,12 @@ static NSString *functionSignature(id<MTLFunction> function) {
     return [NSString stringWithFormat:@"%lu %@", (unsigned long)function.functionType, [constants componentsJoinedByString:@" "]];
 }
 
-static BOOL sameFunctions(id<MTLLibrary> a, id<MTLLibrary> b) {
-    if (![[NSSet setWithArray:a.functionNames] isEqualToSet:[NSSet setWithArray:b.functionNames]]) return NO;
-    for (NSString *name in a.functionNames)
-        if (![functionSignature([a newFunctionWithName:name]) isEqualToString:functionSignature([b newFunctionWithName:name])]) return NO;
+static BOOL hasFunctionsOf(id<MTLLibrary> compiled, id<MTLLibrary> prebuilt) {  // every function of prebuilt, the same way
+    NSSet *names = [NSSet setWithArray:compiled.functionNames];
+    for (NSString *name in prebuilt.functionNames) {
+        if (![names containsObject:name]) return NO;
+        if (![functionSignature([prebuilt newFunctionWithName:name]) isEqualToString:functionSignature([compiled newFunctionWithName:name])]) return NO;
+    }
     return YES;
 }
 
@@ -1801,7 +1893,7 @@ static id newLibraryData(id self, SEL _cmd, dispatch_data_t data, NSError **erro
     BOOL safari18 = [((id<MTLLibrary>)library).functionNames containsObject:@"readFromBufferToFloatTexture"];  // a kernel there
     id<MTLLibrary> compiled = [self newLibraryWithSource:@(safari18 ? kANGLEInternalShadersSafari18 : kANGLEInternalShaders)
                                                  options:[MTLCompileOptions new] error:&failure];
-    BOOL usable = compiled && sameFunctions(library, compiled);
+    BOOL usable = compiled && hasFunctionsOf(compiled, library);
     if (getenv("MTLSHIM_VERBOSE"))
         shimLog("[mtlshim] ANGLE internal shaders: prebuilt library too %s; source-compiled one (%s) %s%s\n", tooNew ? "new" : "old", safari18 ? "Safari 18" : "current",
                 usable ? "used" : compiled ? "differs, kept the prebuilt one" : "failed: ",
@@ -2115,6 +2207,7 @@ static void repairDepthLevels(id<MTLCommandBuffer> commandBuffer, id<MTLTexture>
 }
 
 static id igRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor) {
+    descriptor = withDummyTarget(self, descriptor);  // item 73
     MTLRenderPassDescriptor *redirected = nil;
     NSMutableArray *copies = nil;  // {temporary, destination, level, slice, depth plane}
     for (NSUInteger i = 0; descriptor && i < 8; i++) {
@@ -2354,10 +2447,12 @@ static void igRenderEndEncoding(id self, SEL _cmd) {
 // not changed. MTLSHIM_NV_RESOLVE_LEVEL=0 turns it off. Test: s25 on the GTX 770.
 static RenderEncoderIMP origNVRenderEncoder;
 static EndEncodingIMP origNVRenderEndEncoding;
+static BOOL nvResolveLevels;  // item 55 on
 static id nvRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor) {
+    descriptor = withDummyTarget(self, descriptor);  // item 73
     MTLRenderPassDescriptor *redirected = nil;
     NSMutableArray *copies = nil;  // {temporary, destination, level, slice, depth plane}
-    for (NSUInteger i = 0; descriptor && i < 8; i++) {
+    for (NSUInteger i = 0; descriptor && nvResolveLevels && i < 8; i++) {
         MTLRenderPassColorAttachmentDescriptor *a = descriptor.colorAttachments[i];
         id<MTLTexture> resolve = a.resolveTexture;
         if (!resolve || (a.storeAction != MTLStoreActionMultisampleResolve && a.storeAction != MTLStoreActionStoreAndMultisampleResolve))
@@ -2395,9 +2490,9 @@ static void nvRenderEndEncoding(id self, SEL _cmd) {
 static void keplerResolveLevels(void) {
     static const char *const kBuffer = "NVMTLCommandBuffer", *const kEncoder = "NVMTLRenderCommandEncoder_KEPLER_A";
     const char *setting = getenv("MTLSHIM_NV_RESOLVE_LEVEL");
-    if (origNVRenderEncoder || (setting && !strcmp(setting, "0")) || !definesMethod(kBuffer, "renderCommandEncoderWithDescriptor:") ||
-        !definesMethod(kEncoder, "endEncoding"))
+    if (origNVRenderEncoder || !definesMethod(kBuffer, "renderCommandEncoderWithDescriptor:") || !definesMethod(kEncoder, "endEncoding"))
         return;
+    nvResolveLevels = !(setting && !strcmp(setting, "0"));  // the hook stays for item 73
     origNVRenderEndEncoding = (EndEncodingIMP)keplerSwizzle(kEncoder, "endEncoding", (IMP)nvRenderEndEncoding);
     origNVRenderEncoder = (RenderEncoderIMP)swizzle(kBuffer, "renderCommandEncoderWithDescriptor:", (IMP)nvRenderEncoder);
 }
@@ -6101,9 +6196,20 @@ __attribute__((used, section("__DATA,__interpose"))) static const struct { const
 // This library links MetalOld.dylib, so dyld has registered MetalOld's classes and run its initializers before this
 // one; patching here needs no dyld callbacks (calling into the ObjC runtime from those risks lock-order deadlocks).
 // Build with -DMETALOLDCOMPAT_NOOP for a copy that loads the same way but changes nothing.
+// 74. MoltenVK 1.4.0 and 1.4.1 (Godot 4.7, apps built with Vulkan SDK 1.4.3xx) take every Mac GPU for a family-2 one and
+// put Vulkan memory in placement heaps, which the family-1 GPUs don't have: MetalOld's validation aborts the app at the
+// first allocation ("Placement heap type is not supported"; Kepler, Ivy Bridge, Haswell). MoltenVK 1.4.2 asks the GPU
+// again, and keeps heaps off on AMD by default. On this stack every GPU is one or the other, so MVK_CONFIG_USE_MTLHEAP
+// gets the value 0 (never) unless the environment sets it. Test: s81.
+static void preferNoMTLHeaps(void) {
+    if (getenv("MVK_CONFIG_USE_MTLHEAP")) return;
+    setenv("MVK_CONFIG_USE_MTLHEAP", "0", 0);
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MoltenVK: MVK_CONFIG_USE_MTLHEAP=0 (no placement heaps on these GPUs)\n");
+}
+
 __attribute__((constructor)) static void init(void) {
 #ifndef METALOLDCOMPAT_NOOP
-    if (onMetalOld()) dropValidationLayers();
+    if (onMetalOld()) dropValidationLayers(), preferNoMTLHeaps();
     patchDeviceBase();
     installAIR27Retargeting();
     installReadSamplerRewrite();
@@ -6112,6 +6218,7 @@ __attribute__((constructor)) static void init(void) {
     if (onMetalOld()) installMPSMatmulFallback(), installMPSGraphSoftMax(), installMetalFXTemporalLimit(), installStitchingReflection();
 #else
     (void)dropValidationLayers;
+    (void)preferNoMTLHeaps;
     (void)keepPortraitLibraries;
     (void)installStitchingReflection;
     (void)installMPSMatmulFallback;

@@ -65,7 +65,7 @@ for dir in "${dirs[@]}"; do
                 args=(--editor --path "$out/project" --rendering-driver vulkan) ;;
             org.blenderfoundation.blender)
                 extra=(BLENDER_USER_CONFIG="$prof/config" BLENDER_USER_SCRIPTS="$prof/scripts" BLENDER_USER_DATAFILES="$prof/data")
-                args=(--factory-startup --gpu-backend metal) ;;
+                args=(--factory-startup --gpu-backend metal --debug-gpu) ;;  # --debug-gpu: it then says why it refuses a GPU
             org.mozilla.firefox)  # console.log to stdout, so that the page's result reaches the log
                 browser=1; mkdir -p "$prof"
                 printf 'user_pref("devtools.console.stdout.content", true);\nuser_pref("browser.shell.checkDefaultBrowser", false);\nuser_pref("app.update.enabled", false);\n' > "$prof/user.js"
@@ -83,12 +83,16 @@ for dir in "${dirs[@]}"; do
         # compiler failures the log had meanwhile, crash report or not: a client's "Compiler failed with XPC_ERROR" (one per crashed
         # request; ReportCrash throttles repeated crashes), "Compiler encountered an internal error", "LLVM ERROR"
         errors=$("$T/tools/crashwatch.sh" log "$out/reports")
+        [ "$id" = org.blenderfoundation.blender ] && grep -q 'does not support metal 2.2' "$out/log" && crashes=0  # see below
         if [ "$crashes" != 0 ]; then
             echo "FAIL $name: $crashes crash report(s): $(head -3 <<< "$crashlist" | tr '\n' ' ')"
             fail=$((fail + 1))
         elif [ "${errors:-0}" != 0 ]; then
             echo "FAIL $name: $errors compiler failure(s) in the log (Compiler failed with XPC_ERROR / internal error / LLVM ERROR)"
             fail=$((fail + 1))
+        elif [ "$id" = org.blenderfoundation.blender ] && grep -q 'does not support metal 2.2' "$out/log"; then
+            # Blender 4 is Metal-only on macOS and needs a Metal family-2 GPU; on family 1 it says so and then crashes
+            echo "SKIP $name: needs a Metal family-2 GPU (Blender 3.6 LTS still has OpenGL)"; skip=$((skip + 1))
         elif [ -n "$native" ] && [ -z "$alive" ]; then
             echo "FAIL $name: quit before ${secs}s: $(grep -v '^\s*$' "$out/log" | tail -2 | tr '\n' ' ' | cut -c1-200)"; fail=$((fail + 1))
         elif [ -n "$browser" ] && [ "$page" != "apps.sh: done" ]; then
