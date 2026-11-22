@@ -60,7 +60,23 @@ int main(int argc, char **argv) {
             pd.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA8Unorm;
             if (![dev newRenderPipelineStateWithDescriptor:pd error:&error])
                 return FAIL(bug, "%s: ANGLE's clear pipeline from S63_METALLIB: %s", dev.name.UTF8String, error.localizedDescription.UTF8String);
-            return PASS(bug, "%s: ANGLE library from S63_METALLIB (%lu functions) specializes and builds ANGLE's clear pipeline",
+            // The clear shaders read no texture. The blit shaders sample one (and so does the mipmap kernel, which has no
+            // function constants), and those are what a library built for macOS 10.14 (Chromium's: Chrome, Electron apps)
+            // can't get through Tahoe's compiler: "Compiler encountered an internal error" after three MTLCompilerService aborts.
+            int sourceType = 0;  // kSourceTextureType: 2D
+            bool no = false;
+            [constants setConstantValue:&no type:MTLDataTypeBool atIndex:1];        // kPremultiplyAlpha
+            [constants setConstantValue:&no type:MTLDataTypeBool atIndex:2];        // kUnmultiplyAlpha
+            [constants setConstantValue:&no type:MTLDataTypeBool atIndex:3];        // kTransformLinearToSrgb
+            [constants setConstantValue:&sourceType type:MTLDataTypeInt atIndex:4];
+            pd.vertexFunction = [library newFunctionWithName:@"blitVS"];
+            pd.fragmentFunction = [library newFunctionWithName:@"blitFloatFS" constantValues:constants error:&error];
+            if (!pd.vertexFunction || !pd.fragmentFunction || ![dev newRenderPipelineStateWithDescriptor:pd error:&error])
+                return FAIL(bug, "%s: ANGLE's blit pipeline from S63_METALLIB: %s", dev.name.UTF8String, error.localizedDescription.UTF8String);
+            id<MTLFunction> mipmaps = [library newFunctionWithName:@"generate2DMipmaps"];
+            if (mipmaps && ![dev newComputePipelineStateWithFunction:mipmaps error:&error])
+                return FAIL(bug, "%s: ANGLE's mipmap kernel from S63_METALLIB: %s", dev.name.UTF8String, error.localizedDescription.UTF8String);
+            return PASS(bug, "%s: ANGLE library from S63_METALLIB (%lu functions) specializes and builds ANGLE's clear and blit pipelines and its mipmap kernel",
                         dev.name.UTF8String, (unsigned long)library.functionNames.count);
         }
         MTLCreateSystemDefaultDevice();  // as WebCore does in Safari's GPU process before ANGLE starts

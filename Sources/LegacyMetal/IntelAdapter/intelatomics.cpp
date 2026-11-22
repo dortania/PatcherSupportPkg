@@ -6002,6 +6002,28 @@ static unsigned expandConstantCopies(LLVMModuleRef module) {
     return (unsigned)copies.size();
 }
 
+// ---- inline asm ---------------------------------------------------------------------------------------------------
+// ANGLE (Chromium, Electron) writes __asm__("") into the body of every loop it translates, so that the front end can't
+// take the loop for one that ends. It reaches the back end as `call void asm sideeffect "", ""()`, a call whose callee
+// is not a function: IGILInstructionCleanup asks every call for its called function's name and dereferences null
+// (Value::getName), the compiler service crashes, and MetalOld sends the request again. Skia's blur shaders have such a
+// loop, so an Electron window that draws a shadow stays blank. Metal has no inline asm to run, and by now the front
+// end's loop passes are done: the call is dropped. INTEL_INLINE_ASM_FIX=0 turns it off.
+extern "C" LLVMValueRef LLVMIsAInlineAsm(LLVMValueRef);
+static unsigned dropInlineAsm(LLVMModuleRef module) {
+    if (disabled("INTEL_INLINE_ASM_FIX")) return 0;
+    unsigned dropped = 0;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef block = LLVMGetFirstBasicBlock(f); block; block = LLVMGetNextBasicBlock(block))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(block), next; inst; inst = next) {
+                next = LLVMGetNextInstruction(inst);
+                if (!LLVMIsACallInst(inst) || !LLVMIsAInlineAsm(LLVMGetCalledValue(inst)) || LLVMGetFirstUse(inst)) continue;
+                LLVMInstructionEraseFromParent(inst);
+                dropped++;
+            }
+    return dropped;
+}
+
 static int hookedRun(void *self, LLVMModuleRef module) {
     pthread_mutex_lock(&installLock);
     installIntoPlugin(false);  // test process: the plugin was dlopened after we were inserted
@@ -6023,7 +6045,9 @@ static int hookedRun(void *self, LLVMModuleRef module) {
             unsigned rewritten = ivbArgumentBuffers(module);
             if (rewritten && logging()) fprintf(stderr, "[inteltex] %u function(s): argument-buffer pointers made hidden buffers\n", rewritten);
         }
-        unsigned n = dropMaxWorkGroupSize(module);
+        unsigned n = dropInlineAsm(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u inline asm call(s) dropped\n", n);
+        n = dropMaxWorkGroupSize(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u air.max_work_group_size attribute(s) dropped\n", n);
         n = returnFromEndlessLoops(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u loop(s) that never exit made returns\n", n);

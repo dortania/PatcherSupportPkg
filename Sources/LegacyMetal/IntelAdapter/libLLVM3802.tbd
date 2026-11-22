@@ -32,7 +32,7 @@ exports:
                    _LLVMGetIncomingValue, _LLVMGetIncomingBlock, _LLVMDeleteBasicBlock, _LLVMPositionBuilderAtEnd,
                    _LLVMGetEnumAttributeKindForName, _LLVMGetEnumAttributeAtIndex, _LLVMGetCallSiteEnumAttribute,
                    _LLVMGetInstructionParent, _LLVMGetBasicBlockParent, _LLVMConstReal, _LLVMConstVector, _LLVMFloatTypeInContext, _LLVMHalfTypeInContext,
-                   _LLVMIsACallInst, _LLVMIntTypeInContext, _LLVMGetTypeContext, _LLVMIsAExtractElementInst, _LLVMSetOperand, _LLVMIsAConstantFP, _LLVMConstRealGetDouble, _LLVMBuildFAdd, _LLVMBuildFPToSI, _LLVMBuildUIToFP,
+                   _LLVMIsACallInst, _LLVMIsAInlineAsm, _LLVMIntTypeInContext, _LLVMGetTypeContext, _LLVMIsAExtractElementInst, _LLVMSetOperand, _LLVMIsAConstantFP, _LLVMConstRealGetDouble, _LLVMBuildFAdd, _LLVMBuildFPToSI, _LLVMBuildUIToFP,
                    _LLVMIsAConstantAggregateZero, _LLVMGetInitializer, _LLVMSetInitializer, _LLVMAddGlobalInAddressSpace,
                    _LLVMSetGlobalConstant, _LLVMGetLinkage, _LLVMSetLinkage, _LLVMSetAlignment, _LLVMGetPointerAddressSpace,
                    _LLVMIsAGlobalVariable, _LLVMIsAConstantDataArray, _LLVMGetElementAsConstant, _LLVMConstBitCast,

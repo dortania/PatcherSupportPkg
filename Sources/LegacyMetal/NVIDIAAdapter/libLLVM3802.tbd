@@ -148,6 +148,7 @@ exports:
                    _LLVMIsAGetElementPtrInst,
                    _LLVMIsAGlobalVariable,
                    _LLVMIsAICmpInst,
+                   _LLVMIsAInlineAsm,
                    _LLVMIsAInstruction,
                    _LLVMIsALoadInst,
                    _LLVMIsAMDNode,

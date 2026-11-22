@@ -3026,6 +3026,24 @@ static unsigned scalarizeOddVectors(LLVMModuleRef module, Gen &g) {
     return (unsigned)ops.size();
 }
 
+// ---- inline asm (IntelAdapter's dropInlineAsm) -------------------------------------------------------------------------
+// ANGLE writes __asm__("") into every loop body it translates; it arrives as `call void asm sideeffect "", ""()`, a call
+// without a called function, and the plugin reads that function's name (null: the compiler service crashes, as on
+// Intel). The call is dropped. NVAIR_INLINE_ASM_FIX=0 turns it off.
+extern "C" LLVMValueRef LLVMIsAInlineAsm(LLVMValueRef);
+static unsigned dropInlineAsm(LLVMModuleRef module) {
+    unsigned dropped = 0;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef block = LLVMGetFirstBasicBlock(f); block; block = LLVMGetNextBasicBlock(block))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(block), next; inst; inst = next) {
+                next = LLVMGetNextInstruction(inst);
+                if (!LLVMIsACallInst(inst) || !LLVMIsAInlineAsm(LLVMGetCalledValue(inst)) || LLVMGetFirstUse(inst)) continue;
+                LLVMInstructionEraseFromParent(inst);
+                dropped++;
+            }
+    return dropped;
+}
+
 static int hookedRun(void *self, LLVMModuleRef module) {
 #ifdef NVAIR_INTERPOSE  // the test build catches every PassManager::run in the process: act for the GeForce plugin's only
     {
@@ -3043,6 +3061,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (FILE *f = fopen(path, "w")) { char *text = LLVMPrintModuleToString(module); fputs(text, f); LLVMDisposeMessage(text); fclose(f); }
     }
     if (module) {
+        unsigned inlineAsm = disabled("NVAIR_INLINE_ASM_FIX") ? 0 : dropInlineAsm(module);
+        if (inlineAsm && logging()) fprintf(stderr, "[nvair] %u inline asm call(s) dropped\n", inlineAsm);
         Gen g = makeGen(module);
         unsigned atomics = disabled("NVAIR_TEXTURE_ATOMICS") ? 0 : lowerTextureAtomics(module, g);
         if (atomics && logging()) fprintf(stderr, "[nvair] %u texture atomic(s) made global atomics on linear texture buffers\n", atomics);

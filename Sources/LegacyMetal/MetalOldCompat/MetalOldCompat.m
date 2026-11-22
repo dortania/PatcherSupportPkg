@@ -1736,6 +1736,30 @@ static BOOL isTooNewANGLELibrary(dispatch_data_t data) {
     return found;
 }
 
+// Chromium's ANGLE (Chrome, Electron apps) ships the same library built for macOS 10.14 (air64-apple-macosx10.14.0, AIR 2.1),
+// whose texture reads and samples return the texel alone, where the 14.2 front end's own modules (AIR 2.6) have them return
+// { texel, i8 }. Tahoe's compiler for this stack can't take such a library down to the 3802 back ends: OCLP's libLLVM
+// wrapper (libLLVM_helper's fixIr) relabels every module the front end reads AIR 2.5 / macOS 13.2 without touching its
+// calls, specializing makes that 2.6, and the downgrade then rewrites calls that already have the old form (an insertvalue
+// into a <4 x float>, an argument dropped). The 3802 reader aborts MTLCompilerService on what was written ("INSERTVAL:
+// Invalid type", "Invalid record"), three times per pipeline. Functions without function constants (the mipmap kernels) go
+// to the downgrade as they are and come out the same way. Every blit pipeline ANGLE builds fails. Such a library gets the
+// source too. MTLSHIM_OLD_ANGLE_LIBRARY=0 turns it off.
+static BOOL isTooOldANGLELibrary(dispatch_data_t data) {
+    const void *bytes = NULL;
+    size_t size = 0;
+    dispatch_data_t map = dispatch_data_create_map(data, &bytes, &size);
+    BOOL found = NO;
+    if (memmem(bytes, size, "mtl_internal_shaders_autogen", 28) || memmem(bytes, size, "rx10mtl_shader", 14)) {
+        const char *p = memmem(bytes, size, "air64-apple-macosx", 18), *end = (const char *)bytes + size;
+        int major = 0;
+        for (const char *q = p ? p + 18 : end; q < end && isdigit(*q); q++) major = major * 10 + (*q - '0');
+        found = p && major > 0 && major < 13;
+    }
+    (void)map;
+    return found;
+}
+
 static NSString *functionSignature(id<MTLFunction> function) {
     NSMutableArray *constants = [NSMutableArray array];
     for (NSString *name in [function.functionConstantsDictionary.allKeys sortedArrayUsingSelector:@selector(compare:)]) {
@@ -1757,9 +1781,9 @@ static id newLibraryData(id self, SEL _cmd, dispatch_data_t data, NSError **erro
     if (getenv("MTLSHIM_VERBOSE")) {
         Dl_info info;
         const char *caller = dladdr(__builtin_return_address(0), &info) && info.dli_fname ? info.dli_fname : "?";
-        shimLog("[mtlshim] newLibraryWithData: %zu bytes from %s: %s, Chromium/WebKit caller %d, too new for this compiler %d\n",
+        shimLog("[mtlshim] newLibraryWithData: %zu bytes from %s: %s, Chromium/WebKit caller %d, too new for this compiler %d, too old %d\n",
                 dispatch_data_get_size(data), strrchr(caller, '/') ? strrchr(caller, '/') + 1 : caller, library ? "loaded" : "failed",
-                fromChromium(__builtin_return_address(0)), isTooNewANGLELibrary(data));
+                fromChromium(__builtin_return_address(0)), isTooNewANGLELibrary(data), isTooOldANGLELibrary(data));
         if (getenv("MTLSHIM_DUMP_SOURCES")) {
             const void *bytes = NULL;
             size_t size = 0;
@@ -1770,14 +1794,16 @@ static id newLibraryData(id self, SEL _cmd, dispatch_data_t data, NSError **erro
             shimLog("[mtlshim] library written: %s\n", path.UTF8String);
         }
     }
-    if (!library || !fromChromium(__builtin_return_address(0)) || !isTooNewANGLELibrary(data)) return library;
+    const char *oldSetting = getenv("MTLSHIM_OLD_ANGLE_LIBRARY");
+    BOOL tooNew = isTooNewANGLELibrary(data), tooOld = !tooNew && !(oldSetting && !strcmp(oldSetting, "0")) && isTooOldANGLELibrary(data);
+    if (!library || !fromChromium(__builtin_return_address(0)) || !(tooNew || tooOld)) return library;
     NSError *failure = nil;
     BOOL safari18 = [((id<MTLLibrary>)library).functionNames containsObject:@"readFromBufferToFloatTexture"];  // a kernel there
     id<MTLLibrary> compiled = [self newLibraryWithSource:@(safari18 ? kANGLEInternalShadersSafari18 : kANGLEInternalShaders)
                                                  options:[MTLCompileOptions new] error:&failure];
     BOOL usable = compiled && sameFunctions(library, compiled);
     if (getenv("MTLSHIM_VERBOSE"))
-        shimLog("[mtlshim] ANGLE internal shaders: prebuilt library too new; source-compiled one (%s) %s%s\n", safari18 ? "Safari 18" : "current",
+        shimLog("[mtlshim] ANGLE internal shaders: prebuilt library too %s; source-compiled one (%s) %s%s\n", tooNew ? "new" : "old", safari18 ? "Safari 18" : "current",
                 usable ? "used" : compiled ? "differs, kept the prebuilt one" : "failed: ",
                 compiled ? "" : failure.localizedDescription.UTF8String ?: "?");
     return usable ? compiled : library;
