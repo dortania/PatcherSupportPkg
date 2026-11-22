@@ -5108,11 +5108,21 @@ static BOOL familyTwo(const void *device) {
     return ((BOOL (*)(id, SEL, NSInteger))objc_msgSend)(object, selector, MTLGPUFamilyMac2);
 }
 
-static CFArrayRef familyTwoOnly(CFArrayRef all) {  // consumes all; unchanged if no device qualifies
+// Test only: MTLSHIM_TEST_IGPU_ONLY=1 makes a Mac with an AMD or NVIDIA card look, to ANGLE's and Dawn's callers, like one
+// whose only GPU is the Intel one: they get the iGPU, as family 2 (item 11), so the Intel path of Chromium and WebKit can
+// be tested on a dual-GPU Mac too (Chromium runs on the Iris Pro on a MacBookPro11,3, but on the R9 on a MacBookPro11,5).
+// Off by default.
+static BOOL testIGPUOnly(void) {
+    static int state = -1;
+    if (state < 0) state = getenv("MTLSHIM_TEST_IGPU_ONLY") && strcmp(getenv("MTLSHIM_TEST_IGPU_ONLY"), "0");
+    return state;
+}
+
+static CFArrayRef familyTwoOnly(CFArrayRef all) {  // consumes all; unchanged if no device qualifies (with MTLSHIM_TEST_IGPU_ONLY: the others)
     if (!all) return all;
     CFMutableArrayRef out = CFArrayCreateMutable(kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks);
     for (CFIndex i = 0; i < CFArrayGetCount(all); i++)
-        if (familyTwo(CFArrayGetValueAtIndex(all, i))) CFArrayAppendValue(out, CFArrayGetValueAtIndex(all, i));
+        if (familyTwo(CFArrayGetValueAtIndex(all, i)) != testIGPUOnly()) CFArrayAppendValue(out, CFArrayGetValueAtIndex(all, i));
     if (!CFArrayGetCount(out)) {
         CFRelease(out);
         return all;
@@ -5129,6 +5139,7 @@ static const char *callerImage(const void *returnAddress) {
 }
 
 static BOOL anyFamilyTwo(void) {
+    if (testIGPUOnly()) return NO;
     static dispatch_once_t once;
     static BOOL any;
     dispatch_once(&once, ^{
@@ -5284,9 +5295,9 @@ static id<MTLDevice> compatCreateSystemDefaultDevice(void) {
     id<MTLDevice> device = MTLCreateSystemDefaultDevice();
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MTLCreateSystemDefaultDevice from %s -> %s\n", callerImage(__builtin_return_address(0)), device.name.UTF8String);
     pinDevice((__bridge const void *)device);
-    if (device && fromChromium(__builtin_return_address(0)) && !familyTwo((__bridge const void *)device)) {
+    if (device && fromChromium(__builtin_return_address(0)) && familyTwo((__bridge const void *)device) == testIGPUOnly()) {
         for (id<MTLDevice> other in MTLCopyAllDevices())
-            if (familyTwo((__bridge const void *)other)) {
+            if (familyTwo((__bridge const void *)other) != testIGPUOnly()) {
                 pinDevice((__bridge const void *)other);
                 if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Chromium: default device %s -> %s\n", device.name.UTF8String, other.name.UTF8String);
                 return other;
