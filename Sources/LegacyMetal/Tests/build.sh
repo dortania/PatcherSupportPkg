@@ -9,6 +9,12 @@ for src in [a-z][0-9]*.m; do
     grep -q '<CoreImage/CoreImage.h>' "$src" && extra="-framework CoreImage -framework CoreGraphics"  # the Core Image tests only: the others stay without it
     grep -q '<MetalPerformanceShadersGraph/' "$src" && extra="-framework MetalPerformanceShaders -framework MetalPerformanceShadersGraph"  # s57
     grep -q '<MetalFX/' "$src" && extra="-framework MetalFX"  # s58
+    # "// Info.plist: <bundle id>": an embedded Info.plist, so that Metal treats the program as that app (s82: function caches)
+    id=$(sed -n 's|^// Info.plist: ||p' "$src")
+    if [ -n "$id" ]; then
+        printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>%s</string></dict></plist>\n' "$id" > "build/$name.plist"
+        extra="-sectcreate __TEXT __info_plist build/$name.plist"
+    fi
     clang -arch x86_64 -mmacosx-version-min=12.0 -fobjc-arc -O1 -Wall -Wno-unguarded-availability-new \
         -framework Foundation -framework Metal $extra -o "build/$name" "$src"
 done

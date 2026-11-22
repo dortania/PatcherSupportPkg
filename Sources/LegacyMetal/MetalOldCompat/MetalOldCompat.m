@@ -5666,6 +5666,78 @@ static void installOldAIRPassThrough(void) {
     _dyld_register_func_for_add_image(interposeLLVMWrapper);  // also called for the images already loaded
 }
 
+// 76. MetalOld's function cache with the AMD GPUs' compiler. The 14.2-era compiler that compiles for them returns a
+// reflection block with every render stage, where the 13.2 compiler MetalOld was written for returned one only when the
+// app asked for reflection. -[MTLCompiler cacheCompilerData:cachedData:hashMap:libraryData:functionCache:] stores every
+// block it got under hashMap[type], and MetalOld computes a reflection key only for reflection it asked for: operator[]
+// then adds a key that isn't initialized, mostly on the memory of the key freed just before, which is the linking key of
+// the fragment stage compiled for the same pipeline. So the vertex stage's reflection replaced the fragment stage's
+// fragment-input list in the cache, and the next pipeline that took that fragment stage from the cache sent the
+// reflection block as its input list: the compiler's parser wrote past a fixed array and MTLCompilerService crashed
+// (Chrome for Testing 124's WebGL on the R9). Only blocks whose type had a key are cached now, and each app's function
+// caches, which may hold such entries, are cleared once. MTLSHIM_CACHE_KEYS=0 turns this off.
+typedef void (*CacheCompilerDataIMP)(id, SEL, void *, void *, void *, void *, const void *);
+typedef void (*AddCompiledOutputIMP)(id, SEL, id, id, id, id, const void *, int, const void *);
+static CacheCompilerDataIMP origCacheCompilerData;
+static AddCompiledOutputIMP origAddCompiledOutput;
+static __thread unsigned cacheableTypes;
+static __thread bool inCacheCompilerData;
+
+static void cacheCompilerData(id self, SEL _cmd, void *outputs, void *cached, void *hashMap, void *libraryData, const void *functionCache) {
+    // hashMap is a std::unordered_map<CompilerOutputType, MTLMultiHashKey>; libc++ keeps its first node at +0x10, and
+    // each node is {next, hash, key (u32) at +0x10, value}
+    unsigned types = 0;
+    for (void *const *node = hashMap ? *(void *const *const *)((const char *)hashMap + 0x10) : NULL; node; node = *node) {
+        unsigned type = *(const unsigned *)((const char *)node + 0x10);
+        if (type < 32) types |= 1u << type;
+    }
+    unsigned savedTypes = cacheableTypes;
+    bool savedIn = inCacheCompilerData;
+    cacheableTypes = types, inCacheCompilerData = true;
+    origCacheCompilerData(self, _cmd, outputs, cached, hashMap, libraryData, functionCache);
+    cacheableTypes = savedTypes, inCacheCompilerData = savedIn;
+}
+
+static void addCompiledOutput(id self, SEL _cmd, id output, id cachedOutput, id symbols, id libraries, const void *hashKey, int type,
+                              const void *functionCache) {
+    if (inCacheCompilerData && (type < 0 || type >= 32 || !(cacheableTypes & (1u << type)))) {
+        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] function cache: block type %d had no key, not cached\n", type);
+        return;
+    }
+    origAddCompiledOutput(self, _cmd, output, cachedOutput, symbols, libraries, hashKey, type, functionCache);
+}
+
+// <user cache folder>/<bundle id>/com.apple.metal/<GPU>/functions.{data,list}; a marker file records that it was done
+static void clearFunctionCachesOnce(void) {
+    NSString *bundle = NSBundle.mainBundle.bundleIdentifier;
+    char dir[PATH_MAX];
+    if (!bundle || !confstr(_CS_DARWIN_USER_CACHE_DIR, dir, sizeof dir)) return;
+    NSString *root = [[@(dir) stringByAppendingPathComponent:bundle] stringByAppendingPathComponent:@"com.apple.metal"];
+    NSString *marker = [root stringByAppendingPathComponent:@"mtlshim-function-cache-keys"];
+    NSFileManager *files = NSFileManager.defaultManager;
+    BOOL isDir = NO;
+    if (![files fileExistsAtPath:root isDirectory:&isDir] || !isDir || [files fileExistsAtPath:marker]) return;
+    int cleared = 0;
+    for (NSString *gpu in [files contentsOfDirectoryAtPath:root error:nil])
+        for (NSString *name in @[@"functions.data", @"functions.list"])
+            cleared += [files removeItemAtPath:[[root stringByAppendingPathComponent:gpu] stringByAppendingPathComponent:name] error:nil];
+    [files createFileAtPath:marker contents:nil attributes:nil];
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] function cache: %d file(s) cleared in %s\n", cleared, root.UTF8String);
+}
+
+static void installFunctionCacheKeys(void) {
+    const char *setting = getenv("MTLSHIM_CACHE_KEYS");
+    if (setting && !strcmp(setting, "0")) return;
+    Class compiler = objc_getClass("MTLCompiler");
+    Method store = class_getInstanceMethod(compiler, sel_registerName("cacheCompilerData:cachedData:hashMap:libraryData:functionCache:"));
+    Method add = class_getInstanceMethod(compiler,
+        sel_registerName("addCompiledOutput:cachedCompiledOutput:importedSymbols:importedLibraries:hashKey:type:functionCache:"));
+    if (!store || !add) return;
+    origAddCompiledOutput = (AddCompiledOutputIMP)method_setImplementation(add, (IMP)addCompiledOutput);
+    origCacheCompilerData = (CacheCompilerDataIMP)method_setImplementation(store, (IMP)cacheCompilerData);
+    clearFunctionCachesOnce();
+}
+
 // 45. Texture reads through the read sampler. Xcode 26's front end builds every texture read of a Metal 4.0 library, and
 // depth, cube and 1D reads in some of macOS 26's own libraries (SceneKit, VFX, CoreComposite), as
 // air.read_<texture>(texture, air.get_read_sampler(), ...): the older form's arguments with the sampler second and, for
@@ -6302,6 +6374,7 @@ __attribute__((constructor)) static void init(void) {
     installWebKitRouting();
     keepPortraitLibraries();
     if (onMetalOld()) installMPSMatmulFallback(), installMPSGraphSoftMax(), installMetalFXTemporalLimit(), installStitchingReflection();
+    if (onMetalOld()) installFunctionCacheKeys();
 #else
     (void)dropValidationLayers;
     (void)preferNoMTLHeaps;
@@ -6314,6 +6387,7 @@ __attribute__((constructor)) static void init(void) {
     (void)patchDeviceBase;
     (void)installAIR27Retargeting;
     (void)installOldAIRPassThrough;
+    (void)installFunctionCacheKeys;
     (void)installReadSamplerRewrite;
 #endif
 }
