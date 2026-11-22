@@ -41,12 +41,16 @@ static CIImage *pattern(int seed) {
     return [CIImage imageWithBitmapData:d bytesPerRow:n * 16 size:CGSizeMake(n, n) format:kCIFormatRGBAf colorSpace:nil];
 }
 
-static BOOL render(CIContext *ctx, CIImage *img, float *out) {
+// Renders the part of the output inside the 64x64 region at the origin: where a filter's extent is smaller (area
+// reductions give 1x1 to 64x1), Core Image's CPU and GPU paths disagree outside it, and the software renderer even
+// zeroes the inside when the bounds go past the extent. *n gets the number of values written.
+static BOOL render(CIContext *ctx, CIImage *img, float *out, int *n) {
     if (!img) return NO;
-    CGRect r = CGRectMake(0, 0, 64, 64);
-    if (CGRectIsEmpty(CGRectIntersection(img.extent, r))) return NO;
+    CGRect r = CGRectIntegral(CGRectIntersection(img.extent, CGRectMake(0, 0, 64, 64)));
+    if (CGRectIsEmpty(r) || CGRectIsNull(r)) return NO;
     memset(out, 0, 64 * 64 * 16);
-    [ctx render:img toBitmap:out rowBytes:64 * 16 bounds:r format:kCIFormatRGBAf colorSpace:nil];
+    [ctx render:img toBitmap:out rowBytes:(size_t)r.size.width * 16 bounds:r format:kCIFormatRGBAf colorSpace:nil];
+    *n = (int)(r.size.width * r.size.height * 4);
     return YES;
 }
 
@@ -79,10 +83,10 @@ int main(int argc, char **argv) { @autoreleasepool {
             }
             CIImage *outImg = nil;
             @try { outImg = f.outputImage; } @catch (NSException *e) { outImg = nil; }
-            BOOL g = NO, c = NO;
-            @try { g = render(gpu, outImg, a); } @catch (NSException *e) { g = NO; }
+            BOOL g = NO, c = NO; int na = 0, nb = 0;
+            @try { g = render(gpu, outImg, a, &na); } @catch (NSException *e) { g = NO; }
             if ([notCompared containsObject:name]) {
-                @try { c = render(cpu, outImg, b); } @catch (NSException *e) { c = NO; }
+                @try { c = render(cpu, outImg, b, &nb); } @catch (NSException *e) { c = NO; }
                 if (c && !g) [bad addObject:[NSString stringWithFormat:@"%@ (no GPU output)", name]];
                 onlyGPUChecked++;
                 continue;
@@ -93,12 +97,13 @@ int main(int argc, char **argv) { @autoreleasepool {
                 onlyGPUChecked++;
                 continue;
             }
-            @try { c = render(vsOther ? otherCtx : cpu, outImg, b); } @catch (NSException *e) { c = NO; }
+            @try { c = render(vsOther ? otherCtx : cpu, outImg, b, &nb); } @catch (NSException *e) { c = NO; }
             if (vsOther) againstOther++;
             if (!g && !c) { neither++; continue; }
             if (g != c) { [bad addObject:[NSString stringWithFormat:@"%@ (%s output only)", name, g ? "GPU" : "CPU"]]; continue; }
             float maxd = 0; int far = 0;
-            for (int i = 0; i < 64 * 64 * 4; i++) {
+            int nv = na < nb ? na : nb;
+            for (int i = 0; i < nv; i++) {
                 float x = isfinite(a[i]) ? a[i] : 1e9f, y = isfinite(b[i]) ? b[i] : 1e9f, d = x == y ? 0 : fabsf(x - y);
                 if (d > maxd) maxd = d;
                 if (d > 0.02f * fmaxf(1.0f, fabsf(y))) far++;   // relative where values exceed 1 (HDR generators)
@@ -106,9 +111,9 @@ int main(int argc, char **argv) { @autoreleasepool {
             compared++;
             // most filters agree to rounding; a few resample, so a handful of pixels may differ near edges
             // thresholded and HDR filters flip a few values on rounding between two GPUs: up to 3% then, else 1%
-            BOOL ok = maxd <= 0.004f || far <= 64 * 64 * 4 * (vsOther ? 3 : 1) / 100;
+            BOOL ok = maxd <= 0.004f || far <= nv * (vsOther ? 3 : 1) / 100;
             if (ok) same++; else [bad addObject:[NSString stringWithFormat:@"%@ (max diff %.3f from %s, %d of %d values off by > 2%%)", name, maxd,
-                                                  vsOther ? other.name.UTF8String : "the software renderer", far, 64 * 64 * 4]];
+                                                  vsOther ? other.name.UTF8String : "the software renderer", far, nv]];
             if (verbose) printf("  %-40s max %.4f far %d%s\n", name.UTF8String, maxd, far, ok ? "" : "  <- differs");
         }
     }

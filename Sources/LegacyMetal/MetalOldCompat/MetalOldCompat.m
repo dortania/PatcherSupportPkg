@@ -154,6 +154,7 @@
 #include <mach/mach.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
+#include <mach-o/nlist.h>
 #include <mach-o/getsect.h>
 #include <sys/mman.h>
 #include <os/lock.h>
@@ -5555,7 +5556,9 @@ static int rebindImports(const struct mach_header *mh, intptr_t slide, const voi
         for (; slot < end; slot++) {
             if (*slot != from) continue;
             uintptr_t page = (uintptr_t)slot & ~(uintptr_t)(getpagesize() - 1);
-            bool writable = segment->initprot & VM_PROT_WRITE;
+            // __DATA_CONST starts writable (initprot) but dyld makes it read-only once its fixups are done
+            bool writable = (segment->initprot & VM_PROT_WRITE) && strcmp(segment->segname, "__DATA_CONST") &&
+                            strcmp(segment->segname, "__AUTH_CONST");
             if (!writable && mprotect((void *)page, getpagesize(), PROT_READ | PROT_WRITE)) continue;
             *slot = to;
             if (!writable) mprotect((void *)page, getpagesize(), PROT_READ);
@@ -5579,6 +5582,88 @@ static void installAIR27Retargeting(void) {
     const char *setting = getenv("MTLSHIM_AIR27");
     if ((setting && !strcmp(setting, "0")) || strcmp(getprogname(), "MTLCompilerService")) return;
     _dyld_register_func_for_add_image(interposeCompilerImage);  // also called for the images already loaded
+}
+
+// 75. Shader libraries built for macOS 13.1 or older, on Tahoe. Tahoe's compiler for this stack (the macOS 14.2 front end,
+// installed as GPUCompiler 31001) reads every module through OCLP's libLLVM wrapper, whose libLLVM_helper fixIr()
+// relabels it air64-apple-macosx13.2.0 / AIR 2.5 so that Tahoe's AIR 2.8 libraries load. On an older module that hides
+// its version from 31001's own upgrade pass (MTLCompilerObject::upgradeAIRModule, which runs on every module a request
+// reads, the downgrade request's too): it takes the module for AIR 2.5 and leaves its texture calls in their AIR 2.1-era
+// form (the texel alone, where AIR 2.6 returns { texel, i8 }), which the downgrade for the 3802 back ends then rewrites
+// into invalid IR ("INSERTVAL: Invalid type", "Invalid record") and the 3802 reader aborts MTLCompilerService. So any
+// app's library built for macOS 10.14 that reads textures crashed the compiler service on Intel and Kepler (s75), and
+// so did Chromium's prebuilt ANGLE library, which item 13 replaces for that reason too (s74); Gabriel-AGH traced the
+// mechanism. fixIr now returns modules whose triple is older than macOS 13.2 as they are, and the upgrade pass converts
+// them. Hooked by pointing the wrapper's import slot for fixIr (in its __got) at a wrapper, fixIr resolved with dlsym (no
+// link-time dependency). MTLSHIM_OLD_AIR=0 turns this off.
+static NSData *(*origFixIr)(NSData *);
+static const char kLLVMWrapper31001[] = "/System/Library/PrivateFrameworks/GPUCompiler.framework/Versions/31001/Libraries/libLLVM.dylib";
+
+static bool olderThanMacOS132(NSData *module) {  // the "-apple-macosxMAJOR.MINOR" of the module's triple
+    static const char key[] = "-apple-macosx";
+    const char *p = module.bytes, *end = p + module.length;
+    for (const char *q = p; q + sizeof key + 4 < end; q++) {
+        if (*q != '-' || memcmp(q, key, sizeof key - 1)) continue;
+        const char *version = q + sizeof key - 1, *dot = memchr(version, '.', (size_t)(end - version));
+        int major = atoi(version), minor = dot ? atoi(dot + 1) : 0;
+        return major < 13 || (major == 13 && minor < 2);
+    }
+    return false;
+}
+
+static NSData *fixIrKeepingOldModules(NSData *module) {
+    if (module && olderThanMacOS132(module)) {
+        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] module older than macOS 13.2 left as it is for the upgrade pass\n");
+        return module;
+    }
+    return origFixIr(module);
+}
+
+// The address of `name` in an image's symbol table (LC_SYMTAB in its __LINKEDIT), without dyld: the add-image callback
+// runs under dyld's lock, where dlopen or dlsym on these privately opened (RTLD_LOCAL) libraries hangs or finds nothing.
+static const void *symbolInImage(const struct mach_header *mh, intptr_t slide, const char *name) {
+    const struct mach_header_64 *header = (const struct mach_header_64 *)mh;
+    const struct load_command *command = (const struct load_command *)(header + 1);
+    const struct segment_command_64 *linkedit = NULL;
+    const struct symtab_command *symtab = NULL;
+    for (uint32_t i = 0; i < header->ncmds; i++, command = (const void *)((const char *)command + command->cmdsize)) {
+        if (command->cmd == LC_SEGMENT_64 && !strcmp(((const struct segment_command_64 *)command)->segname, SEG_LINKEDIT))
+            linkedit = (const struct segment_command_64 *)command;
+        else if (command->cmd == LC_SYMTAB) symtab = (const struct symtab_command *)command;
+    }
+    if (!linkedit || !symtab) return NULL;
+    const char *base = (const char *)(linkedit->vmaddr + slide - linkedit->fileoff);
+    const struct nlist_64 *symbols = (const struct nlist_64 *)(base + symtab->symoff);
+    const char *strings = base + symtab->stroff;
+    for (uint32_t i = 0; i < symtab->nsyms; i++)
+        if ((symbols[i].n_type & N_TYPE) == N_SECT && symbols[i].n_un.n_strx && !strcmp(strings + symbols[i].n_un.n_strx, name))
+            return (const void *)(symbols[i].n_value + slide);
+    return NULL;
+}
+
+// The wrapper and libLLVM_helper (which OCLP's wrapper names by a relative path) can arrive in either order.
+static struct { const struct mach_header *mh; intptr_t slide; } llvmWrapper31001, llvmHelper31001;
+static void interposeLLVMWrapper(const struct mach_header *mh, intptr_t slide) {
+    Dl_info info;
+    if (!dladdr(mh, &info) || !info.dli_fname) return;
+    if (!strcmp(info.dli_fname, kLLVMWrapper31001)) llvmWrapper31001.mh = mh, llvmWrapper31001.slide = slide;
+    else if (strstr(info.dli_fname, "GPUCompiler.framework/Versions/31001/Libraries/libLLVM_helper.dylib"))
+        llvmHelper31001.mh = mh, llvmHelper31001.slide = slide;
+    else return;
+    if (origFixIr || !llvmWrapper31001.mh || !llvmHelper31001.mh) return;
+    origFixIr = (NSData *(*)(NSData *))symbolInImage(llvmHelper31001.mh, llvmHelper31001.slide, "__Z5fixIrP6NSData");
+    if (!origFixIr) {
+        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] old modules past fixIr: no fixIr in libLLVM_helper\n");
+        return;
+    }
+    int slots = rebindImports(llvmWrapper31001.mh, llvmWrapper31001.slide, (const void *)origFixIr, (const void *)fixIrKeepingOldModules);
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] old modules past fixIr: %d import slot(s) in libLLVM 31001\n", slots);
+}
+
+static void installOldAIRPassThrough(void) {
+    const char *setting = getenv("MTLSHIM_OLD_AIR");
+    if ((setting && !strcmp(setting, "0")) || strcmp(getprogname(), "MTLCompilerService")) return;
+    _dyld_register_func_for_add_image(interposeLLVMWrapper);  // also called for the images already loaded
 }
 
 // 45. Texture reads through the read sampler. Xcode 26's front end builds every texture read of a Metal 4.0 library, and
@@ -6212,6 +6297,7 @@ __attribute__((constructor)) static void init(void) {
     if (onMetalOld()) dropValidationLayers(), preferNoMTLHeaps();
     patchDeviceBase();
     installAIR27Retargeting();
+    installOldAIRPassThrough();
     installReadSamplerRewrite();
     installWebKitRouting();
     keepPortraitLibraries();
@@ -6227,6 +6313,7 @@ __attribute__((constructor)) static void init(void) {
     (void)installWebKitRouting;
     (void)patchDeviceBase;
     (void)installAIR27Retargeting;
+    (void)installOldAIRPassThrough;
     (void)installReadSamplerRewrite;
 #endif
 }

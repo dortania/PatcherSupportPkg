@@ -2,8 +2,9 @@
 // (colour, warp, blend, general, and [[stitchable]] colour), from libraries built for every macOS target an app may have
 // shipped (10.13 to 26.0: AIR 2.0 to 2.8), loaded with +kernelWithFunctionName:fromMetalLibraryData:error: as third-party
 // apps do and rendered on the GPU under test; each pixel is checked against the value computed here. Office's picture
-// corrections (s68) took one kind from two targets; this covers the rest of the public loading path. Libraries a newer
-// compiler than the stack's is needed for are reported, not failed. Inputs: s77-ci-<target>.metallib and
+// corrections (s68) took one kind from two targets; this covers the rest of the public loading path. A library built
+// for a newer macOS than the one running is reported, not failed: no app can ship one to this Mac (it would require that
+// macOS), and this stack's compiler can't build AIR 2.8 on Sequoia. Inputs: s77-ci-<target>.metallib and
 // s77-ci-stitchable-<target>.metallib (build.sh, with Xcode's metal); none present: SKIP.
 // Argument: GPU name substring (default: Intel).
 #import "repro.h"
@@ -46,6 +47,7 @@ int main(int argc, char **argv) { @autoreleasepool {
         kCIContextOutputColorSpace: [NSNull null], kCIContextWorkingFormat: @(kCIFormatRGBAf), kCIContextCacheIntermediates: @NO}];
     CIImage *a = pattern(in0, 0), *b = pattern(in1, 1);
     NSArray *targets = @[@"10.13", @"10.14", @"10.15", @"11.0", @"12.0", @"13.0", @"14.0", @"15.0", @"26.0"];
+    NSOperatingSystemVersion os = NSProcessInfo.processInfo.operatingSystemVersion;
     int checked = 0, found = 0; NSMutableArray *bad = [NSMutableArray array], *newer = [NSMutableArray array];
     static float out[64 * 64 * 4];
     for (NSString *t in targets) for (NSString *kind in @[@"color", @"warp", @"blend", @"general", @"stitchable"]) {
@@ -55,6 +57,8 @@ int main(int argc, char **argv) { @autoreleasepool {
         NSData *lib = [NSData dataWithContentsOfFile:file];
         if (!lib) continue;
         found++;
+        BOOL newerThanOS = t.integerValue > os.majorVersion ||
+                           (t.integerValue == os.majorVersion && [[t componentsSeparatedByString:@"."].lastObject integerValue] > os.minorVersion);
         NSString *fn = [@"s77_" stringByAppendingString:kind];
         NSError *err = nil; CIImage *img = nil; CIKernel *k = nil;
         @try {
@@ -69,6 +73,7 @@ int main(int argc, char **argv) { @autoreleasepool {
         } @catch (NSException *e) { err = [NSError errorWithDomain:@"s77" code:1 userInfo:@{NSLocalizedDescriptionKey: e.reason ?: e.name}]; }
         if (!k || !img) {
             NSString *why = err.localizedDescription ?: @"nil kernel, no error";
+            if (newerThanOS) { [newer addObject:[NSString stringWithFormat:@"%@ %@", kind, t]]; continue; }
             if ([why containsString:@"newer"] || [why containsString:@"not compatible"]) [newer addObject:[NSString stringWithFormat:@"%@ %@", kind, t]];
             else [bad addObject:[NSString stringWithFormat:@"%@ from %@: %@ (%@)", kind, t, k ? @"no output image" : @"no kernel", why]];
             continue;
@@ -81,12 +86,13 @@ int main(int argc, char **argv) { @autoreleasepool {
             float d = fabsf(out[(y * 64 + x) * 4 + c] - e); if (!(d <= worst)) { worst = d; wx = x; wy = y; wc = c; }
         }
         checked++;
+        if (!(worst <= 0.002f) && newerThanOS) { [newer addObject:[NSString stringWithFormat:@"%@ %@", kind, t]]; continue; }
         if (!(worst <= 0.002f))
             [bad addObject:[NSString stringWithFormat:@"%@ from %@: pixel (%d, %d) channel %d is %.4f, want %.4f", kind, t, wx, wy, wc,
                             out[(wy * 64 + wx) * 4 + wc], expected(kind.UTF8String, wx, wy, wc)]];
     }
     if (!found) return SKIP(bug, "no s77-ci-*.metallib next to the test (build.sh needs Xcode's metal compiler)");
-    NSString *note = newer.count ? [NSString stringWithFormat:@"; need a newer compiler (reported): %@", [newer componentsJoinedByString:@", "]] : @"";
+    NSString *note = newer.count ? [NSString stringWithFormat:@"; built for a newer macOS than this one (reported): %@", [newer componentsJoinedByString:@", "]] : @"";
     if (bad.count) {
         printf("  %s\n", [[bad componentsJoinedByString:@"\n  "] UTF8String]);
         return FAIL(bug, "%s: %lu of %d precompiled Core Image kernels wrong or not loaded%s", dev.name.UTF8String, (unsigned long)bad.count, found, note.UTF8String);
