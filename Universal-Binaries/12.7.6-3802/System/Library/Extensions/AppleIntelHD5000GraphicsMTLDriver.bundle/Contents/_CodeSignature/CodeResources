@@ -36,10 +36,10 @@
 		<dict>
 			<key>cdhash</key>
 			<data>
-			MrxyzP32JqkTy7Fo+zL+QXFSYI8=
+			aPdDwF0xHh8bUqodTbVaS1b1Na8=
 			</data>
 			<key>requirement</key>
-			<string>cdhash H"1c839a9cd82836b4bc7a1d6fd258cba207fd87f2" or cdhash H"32bc72ccfdf626a913cbb168fb32fe417152608f"</string>
+			<string>cdhash H"2aaed1d8bf0e389362763f02e6e8cd0a984c19e8" or cdhash H"68f743c05d311e1f1b52aa1d4db55a4b56f535af"</string>
 		</dict>
 		<key>MacOS/libigdmd.dylib</key>
 		<dict>
