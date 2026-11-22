@@ -80,3 +80,8 @@ Disable Library Validation instead; a tester's MacBookPro11,3 boots that way). R
 reaches, and on a dual-GPU Mac run the browser and app tests once per GPU. A test passes only if it fails without its
 fix, and only if the compiler service didn't crash during it (a crash counts as a FAIL even when the test's own check
 passed: MetalOld retries a crashed request, and the page may still draw).
+
+Before restarting a test Mac, run `Tests/tools/preflight.sh`. Preparing the macOS 26 update with automatic downloads on
+deleted OCLP's kexts from /Library/Extensions on two Sequoia test Macs (the HD 4000 and Kepler ones); each kept running
+from the loaded kext collection, and the next boot came up without acceleration. The script names any kext the
+auxiliary kext collection loads whose bundle is gone, a staged update, and automatic downloads left on.
