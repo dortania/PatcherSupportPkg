@@ -36,11 +36,15 @@ pass=0 fail=0 skip=0
 # the logs of apps that fail are kept here
 logs=${APPS_LOGS:-$T/build/apps-logs}; mkdir -p "$logs"
 IFS=: read -r -a dirs <<< "${APPS:-$T/apps:/Applications:$HOME/Applications}"  # Tests/apps: tools/fetch-apps.sh
+# with INSTALLED=1 also Apple's own Metal apps (they ignore injection, so only an installed stack reaches them):
+# Chess (a SceneKit board)
+[ -n "${INSTALLED:-}" ] && [ -z "${APPS:-}" ] && dirs+=(/System/Applications/Chess.app)
 for dir in "${dirs[@]}"; do
-    for app in "$dir"/*.app; do
+    for app in "$dir"/*.app "$dir"; do
+        [[ $app == *.app ]] || continue; [ "$app" = "$dir" ] && [[ $dir != *.app ]] && continue
         [ -d "$app" ] || continue
         id=$(defaults read "$app/Contents/Info.plist" CFBundleIdentifier 2>/dev/null)
-        native=; case "$id" in org.godotengine.godot|org.blenderfoundation.blender|org.mozilla.firefox) native=1 ;; esac
+        native=; case "$id" in org.godotengine.godot|org.blenderfoundation.blender|org.mozilla.firefox|com.apple.Chess) native=1 ;; esac
         fw=$(ls -d "$app"/Contents/Frameworks/*" Framework.framework" 2>/dev/null | head -1)
         [ -n "$native$fw" ] || [ -f "$app/Contents/Frameworks/libGLESv2.dylib" ] || continue  # neither Chromium-based nor known
         name=$(basename "$app" .app)
@@ -69,6 +73,7 @@ for dir in "${dirs[@]}"; do
             org.blenderfoundation.blender)
                 extra=(BLENDER_USER_CONFIG="$prof/config" BLENDER_USER_SCRIPTS="$prof/scripts" BLENDER_USER_DATAFILES="$prof/data")
                 args=(--factory-startup --gpu-backend metal --debug-gpu) ;;  # --debug-gpu: it then says why it refuses a GPU
+            com.apple.Chess) args=() ;;  # a new game on its SceneKit board
             org.mozilla.firefox)  # console.log to stdout, so that the page's result reaches the log
                 # Firefox 160's GPU-process sandbox allows reading its own bundle only on the volume it was started from
                 # as the kernel resolves it: run from another volume than the boot one (a repo on a second macOS
@@ -80,7 +85,7 @@ for dir in "${dirs[@]}"; do
                 printf 'user_pref("devtools.console.stdout.content", true);\nuser_pref("browser.shell.checkDefaultBrowser", false);\nuser_pref("app.update.enabled", false);\n' > "$prof/user.js"
                 args=(-profile "$prof" -no-remote "file://$T/apps-page.html") ;;
         esac
-        env ${inject[@]+"${inject[@]}"} ${extra[@]+"${extra[@]}"} "$app/Contents/MacOS/$exe" "${args[@]}" > "$out/log" 2>&1 & pid=$!
+        env ${inject[@]+"${inject[@]}"} ${extra[@]+"${extra[@]}"} "$app/Contents/MacOS/$exe" ${args[@]+"${args[@]}"} > "$out/log" 2>&1 & pid=$!
         sleep "$secs"
         alive=1; kill -0 "$pid" 2>/dev/null || alive=
         kill "$pid" 2>/dev/null; pkill -f "$prof" 2>/dev/null; pkill -f "$out/project" 2>/dev/null; sleep 2

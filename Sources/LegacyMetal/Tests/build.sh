@@ -9,6 +9,7 @@ for src in [a-z][0-9]*.m; do
     grep -q '<CoreImage/CoreImage.h>' "$src" && extra="-framework CoreImage -framework CoreGraphics"  # the Core Image tests only: the others stay without it
     grep -q '<MetalPerformanceShadersGraph/' "$src" && extra="-framework MetalPerformanceShaders -framework MetalPerformanceShadersGraph"  # s57
     grep -q '<MetalFX/' "$src" && extra="-framework MetalFX"  # s58
+    grep -q '<SceneKit/' "$src" && extra="-framework SceneKit -framework SpriteKit -framework AppKit"  # s84
     # "// Info.plist: <bundle id>": an embedded Info.plist, so that Metal treats the program as that app (s82: function caches)
     id=$(sed -n 's|^// Info.plist: ||p' "$src")
     if [ -n "$id" ]; then

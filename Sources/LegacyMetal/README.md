@@ -61,11 +61,14 @@ Metal shader cache is cleared first, since a failed pipeline otherwise comes bac
 in Safari (which only an installed build reaches; `tools/pageserver.py` takes the page's result back);
 `tools/wallpaper-check.sh <image or saved store> [seconds]` sets a wallpaper (a dynamic HEIC such as Sonoma, or a store
 captured after choosing one in System Settings), fails if it changes back by itself, crashes a wallpaper process or the
-compiler service, and puts the user's wallpaper back; `APPS_IGPU=1` gives Chromium the integrated GPU on a
+compiler service, and puts the user's wallpaper back;
+`tools/quicklook-check.sh` has Quick Look make thumbnails (a 3D USDZ, HEIC, MOV, PDF) and fails on a blank or missing one;
+with `INSTALLED=1`, `apps.sh` also starts Chess (a SceneKit board); `APPS_IGPU=1` gives Chromium the integrated GPU on a
 dual-GPU Mac (`MTLSHIM_TEST_IGPU_ONLY`), to run it once per GPU.
 
-`verify.sh` runs two related tests: `s74` loads the prebuilt ANGLE library of every Chromium-based app found and builds every
-pipeline ANGLE builds from it, and `s75` builds and runs one shader set compiled for each macOS target from 10.14 (AIR 2.1,
+`verify.sh` runs related tests: `s74` loads the prebuilt ANGLE library of every Chromium-based app found and builds every
+pipeline ANGLE builds from it, `s84` renders SceneKit and SpriteKit scenes (their own runtime-generated shaders) at every sample count,
+and `s75` builds and runs one shader set compiled for each macOS target from 10.14 (AIR 2.1,
 what Chromium's library is built for) to 26, as an app with a prebuilt metallib would bring it. `verify.sh` and `fuzz/fuzz.sh`
 also count the crash reports `MTLCompilerService` writes during a run (`tools/crashwatch.sh`): with the fixes, a test that
 passes while the compiler service crashed fails. Run `apps.sh` and `verify.sh` on every machine in the matrix below.

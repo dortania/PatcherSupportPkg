@@ -7,6 +7,10 @@
 # (an Index.plist captured after choosing the wallpaper in System Settings), or builtin:<name> for one of macOS's own:
 # builtin:sequoia (Sequoia's 3D scene, which its extension renders with Metal), builtin:sonoma, builtin:ventura,
 # builtin:monterey, builtin:macintosh; the user's store gets that wallpaper (dynamic style) in each of its desktop slots.
+# builtin:all runs sequoia and sonoma (exit status: the number of FAILs): on the GTX 770 under Sequoia, ventura's
+# extension crashed and monterey's renderer failed to load, both looking for their screen saver's assets under
+# ScreenSaver.framework/PlugIns (the savers are in ExtensionKit/Extensions) before any Metal work, and macintosh came out
+# as unknown content with this configuration; they stay available by name until a genuine Mac shows what they should do.
 # FAIL: the store changed back by itself (the wallpaper didn't stick: macOS falls back to its default), WallpaperAgent
 # didn't recognize it ("unknown" content) or couldn't snapshot it (the export macOS makes of every wallpaper, which
 # needs the wallpaper's extension to render it), a crash report from WallpaperAgent, a wallpaper extension or
@@ -16,6 +20,11 @@ set -u
 T=$(cd "$(dirname "$0")/.." && pwd)
 want=${1:-} secs=${2:-30}
 [ -n "$want" ] && { [ -e "$want" ] || [[ $want == builtin:* ]]; } || { sed -n '2,15s/^# \{0,1\}//p' "$0" >&2; exit 2; }
+if [ "$want" = builtin:all ]; then
+    fails=0
+    for n in sequoia sonoma; do "$0" "builtin:$n" "$secs" || fails=$((fails + 1)); done
+    exit $fails
+fi
 store=~/Library/Application\ Support/com.apple.wallpaper/Store/Index.plist
 [ -f "$store" ] || { echo "no wallpaper store at $store" >&2; exit 2; }
 out=$(mktemp -d)
