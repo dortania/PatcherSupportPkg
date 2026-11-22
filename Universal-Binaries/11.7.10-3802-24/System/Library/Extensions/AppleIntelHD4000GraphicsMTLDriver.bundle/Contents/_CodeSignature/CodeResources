@@ -15,10 +15,10 @@
 		<dict>
 			<key>cdhash</key>
 			<data>
-			murfefFbIhdHV0S09fkeLvGhZko=
+			Z4tT+n90/FzCMrSK2NE3YCizhwA=
 			</data>
 			<key>requirement</key>
-			<string>cdhash H"9aeadf79f15b2217475744b4f5f91e2ef1a1664a"</string>
+			<string>cdhash H"678b53fa7f74fc5cc232b48ad8d1376028b38700"</string>
 		</dict>
 		<key>MacOS/libMTLIntelCompilerPlugin_real.dylib</key>
 		<dict>
