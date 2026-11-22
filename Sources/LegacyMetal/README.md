@@ -33,3 +33,20 @@ Each test uses the GPU its bug is about and reports SKIP where that GPU is missi
 substring to run every test on one GPU: on a Mac without the AMD GPU, use `./verify.sh Intel` and `./run.sh Intel`.
 Without OCLP's MetalOld wrapper (GCN-only Macs), MetalOldCompat can't load, so `verify.sh` reports SKIP for its tests
 and runs the rest without it.
+
+### Test matrix
+
+A bug can live in one combination of macOS, GPU and client only: Chromium's ANGLE crashed the compiler service on
+Intel under Tahoe, and nowhere else. Which machine covers which combination:
+
+| Mac | macOS | GPUs | Chromium's ANGLE runs on | Boot flags |
+| --- | --- | --- | --- | --- |
+| MacBookPro11,5 | Tahoe 26.7 | Iris Pro + R9 M370X | R9; the Iris Pro with `MTLSHIM_TEST_IGPU_ONLY=1` | `amfi=0x80` |
+| OptiPlex 3010 (iMac13,1) | Sequoia 15.8 | HD 4000 | HD 4000 | `amfi=0x80` |
+| Z77 desktop | Sequoia 15.8 | GTX 770 | GTX 770 | `amfi=0x80` |
+
+Not covered: Ivy Bridge and Kepler under Tahoe, Kepler laptops (GT 750M), and a boot without `amfi=0x80` (OCLP's
+Disable Library Validation instead; a tester's MacBookPro11,3 boots that way). Run a change on every machine its code
+reaches, and on a dual-GPU Mac run the browser and app tests once per GPU. A test passes only if it fails without its
+fix, and only if the compiler service didn't crash during it (a crash counts as a FAIL even when the test's own check
+passed: MetalOld retries a crashed request, and the page may still draw).
