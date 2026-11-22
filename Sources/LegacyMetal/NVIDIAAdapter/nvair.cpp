@@ -2677,6 +2677,57 @@ static unsigned scalarizeConstantLaneOps(LLVMModuleRef module, Gen &g) {
     return (unsigned)ops.size();
 }
 
+// ---- divisions and remainders of 8- and 16-bit values ---------------------------------------------------------------------
+// The back end got divisions and remainders of 8- and 16-bit scalars wrong, the way it got their compares wrong (below): in
+// FRAG=1 VEC=1 ASTYPE=1 seed 2712, a loop exiting on (ushort4(1, 1, ushort(v3), 1) / (ushort4(1, 1, ushort(x), 1) | 1)) & 3,
+// the narrow vectors done lane by lane left udiv i16 (trunc i32 product), (or (trunc i32 x), 1), and up to 55 of 256 pixels
+// came out wrong per word, under every other switch; the same lane written as a 32-bit or as a scalar ushort division in
+// the source is right, and so is the shader with the division made 32-bit, while the same added code with the division
+// left 16-bit (the operands through the opaque min and truncated again) is not. Each udiv and urem (zero-extended) and
+// sdiv and srem (sign-extended) of i8 or i16 scalars is now done in 32 bits on the extended operands, each non-constant one
+// through llvm.nvvm.min.u.i32(x, ~0) so that the optimizer can't narrow it back, and truncated. That also made VEC=1 seed
+// 4417 and VEC=1 ASTYPE=1 LONG=1 seed 4339 right (a uchar4 remainder by a select of lanes), both listed as layout-dependent,
+// and no other seed that ever failed wrong. NVAIR_NARROW_DIVISION_FIX=0 turns it off.
+static unsigned widenNarrowDivisions(LLVMModuleRef module, Gen &g) {
+    std::vector<LLVMValueRef> ops;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                int op = LLVMGetInstructionOpcode(inst);
+                if (op != LLVMUDiv && op != LLVMSDiv && op != LLVMURem && op != LLVMSRem) continue;
+                LLVMTypeRef t = LLVMTypeOf(inst);
+                if (LLVMGetTypeKind(t) == LLVMIntegerTypeKind && (LLVMGetIntTypeWidth(t) == 8 || LLVMGetIntTypeWidth(t) == 16))
+                    ops.push_back(inst);
+            }
+    if (ops.empty()) return 0;
+    LLVMBuilderRef b = LLVMCreateBuilderInContext(g.context);
+    LLVMTypeRef params[2] = {g.i32, g.i32};
+    for (LLVMValueRef inst : ops) {
+        int op = LLVMGetInstructionOpcode(inst);
+        bool sgn = op == LLVMSDiv || op == LLVMSRem;
+        unsigned w = LLVMGetIntTypeWidth(LLVMTypeOf(inst));
+        LLVMPositionBuilderBefore(b, inst);
+        LLVMValueRef v[2];
+        for (int i = 0; i < 2; i++) {
+            LLVMValueRef x = LLVMGetOperand(inst, i);
+            if (LLVMIsAConstantInt(x)) {
+                unsigned long long c = LLVMConstIntGetZExtValue(x);
+                if (sgn && (c >> (w - 1)) & 1) c |= ~((1ull << w) - 1);
+                v[i] = g.c32((unsigned)c);
+                continue;
+            }
+            LLVMValueRef args[2] = {sgn ? LLVMBuildSExt(b, x, g.i32, "") : LLVMBuildZExt(b, x, g.i32, ""), g.c32(~0u)};
+            v[i] = LLVMBuildCall(b, g.intrinsic("llvm.nvvm.min.u.i32", g.i32, params, 2), args, 2, "");
+        }
+        LLVMValueRef r = op == LLVMUDiv ? LLVMBuildUDiv(b, v[0], v[1], "") : op == LLVMSDiv ? LLVMBuildSDiv(b, v[0], v[1], "")
+                       : op == LLVMURem ? LLVMBuildURem(b, v[0], v[1], "") : LLVMBuildSRem(b, v[0], v[1], "");
+        LLVMReplaceAllUsesWith(inst, LLVMBuildTrunc(b, r, LLVMTypeOf(inst), ""));
+        LLVMInstructionEraseFromParent(inst);
+    }
+    LLVMDisposeBuilder(b);
+    return (unsigned)ops.size();
+}
+
 // ---- compares of 8- and 16-bit values -----------------------------------------------------------------------------------
 // The back end got equality and unsigned compares of 8- and 16-bit scalars wrong: in a kernel reduced from VEC=1 seed 13302,
 // a loop exiting when two lanes of a uchar4 select are equal, the narrow vectors done lane by lane (above) left
@@ -3021,6 +3072,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (satProducts && logging()) fprintf(stderr, "[nvair] %u product(s) given to a saturating add/subtract through an opaque value\n", satProducts);
         unsigned narrowVectors = disabled("NVAIR_NARROW_VECTOR_FIX") ? 0 : scalarizeNarrowVectors(module, g);
         if (narrowVectors && logging()) fprintf(stderr, "[nvair] %u operation(s) on 2-4 lane 8/16-bit vectors done lane by lane\n", narrowVectors);
+        unsigned wideDivisions = disabled("NVAIR_NARROW_DIVISION_FIX") ? 0 : widenNarrowDivisions(module, g);
+        if (wideDivisions && logging()) fprintf(stderr, "[nvair] %u division(s)/remainder(s) of 8/16-bit values made 32-bit\n", wideDivisions);
         unsigned wideCompares = disabled("NVAIR_NARROW_COMPARE_FIX") ? 0 : widenNarrowCompares(module, g);
         if (wideCompares && logging()) fprintf(stderr, "[nvair] %u compare(s) of 8/16-bit values made 32-bit\n", wideCompares);
         unsigned madSats = disabled("NVAIR_MAD_SAT_FIX") ? 0 : lowerMadSat(module, g);

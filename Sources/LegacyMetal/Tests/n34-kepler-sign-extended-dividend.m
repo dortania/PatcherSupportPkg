@@ -5,6 +5,8 @@
 // significant bits, which as an unsigned number a sign-extended negative value doesn't. That and the other shapes that
 // reach the back end the same way (a remainder by 7, urem, 8 bits, a narrowed division, and three lanes at once) for 256
 // threads of random inputs, against the CPU.
+// Since the fix for 8/16-bit divisions (n43, NVAIR_NARROW_DIVISION_FIX), which makes the narrowed remainder 32-bit, the
+// kernel is right with either fix alone: the run without the fix turns both off.
 // Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
 #import "repro.h"
 
