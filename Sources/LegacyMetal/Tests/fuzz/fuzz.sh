@@ -20,6 +20,9 @@ gpu=$1 first=$2 count=$3; shift 3
 gen=mslfuzz2.py tag=$gpu
 mark=$(mktemp); "$H/../tools/crashwatch.sh" start "$mark"  # crash reports written during the run are counted at the end
 for kv in "$@"; do tag=$tag-$kv; case $kv in GEN=*) gen=${kv#GEN=} ;; esac; done
+# AIRMIN needs Xcode's metal; with only the command-line tools selected every kernel would come back as a "difference"
+case " $* " in *" AIRMIN="*) xcrun -sdk macosx -f metal > /dev/null 2>&1 ||
+    { echo "AIRMIN: Xcode's metal compiler isn't selected (set DEVELOPER_DIR to Xcode's Contents/Developer, or xcode-select)" >&2; exit 2; } ;; esac
 [ -f "$H/$gen" ] || { echo "no generator $gen" >&2; exit 2; }
 [ "$(env "$@" "$H/gpu.sh" /dev/null "$gpu" | head -1)" = NODEVICE ] &&
     { echo "no GPU named like \"$gpu\" (see system_profiler SPDisplaysDataType)" >&2; exit 2; }
