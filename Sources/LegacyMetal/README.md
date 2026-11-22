@@ -55,7 +55,11 @@ blits, CSS blurs). An app fails if `MTLCompilerService` or one of its processes 
 has a compiler failure (a client's "Compiler failed with XPC_ERROR", once per crashed request even when ReportCrash, which
 throttles repeats, writes no report; "Compiler encountered an internal error"), or if the page doesn't finish. Each app's
 Metal shader cache is cleared first, since a failed pipeline otherwise comes back as a cached failure without a crash.
-`INSTALLED=1 ./apps.sh` checks the installed stack after a root patch; `APPS_IGPU=1` gives Chromium the integrated GPU on a
+`INSTALLED=1 ./apps.sh` checks the installed stack after a root patch, and `tools/safari-page.sh` runs the same page
+in Safari (which only an installed build reaches; `tools/pageserver.py` takes the page's result back);
+`tools/wallpaper-check.sh <image or saved store> [seconds]` sets a wallpaper (a dynamic HEIC such as Sonoma, or a store
+captured after choosing one in System Settings), fails if it changes back by itself, crashes a wallpaper process or the
+compiler service, and puts the user's wallpaper back; `APPS_IGPU=1` gives Chromium the integrated GPU on a
 dual-GPU Mac (`MTLSHIM_TEST_IGPU_ONLY`), to run it once per GPU.
 
 `verify.sh` runs two related tests: `s74` loads the prebuilt ANGLE library of every Chromium-based app found and builds every

@@ -10,7 +10,10 @@
 <div id="blur"></div><div id="shadow"></div>
 <canvas id="gl" width="128" height="128"></canvas><canvas id="c2d" width="128" height="128"></canvas>
 <script>
-function fail(m) { document.title = 'error: ' + m; console.log('apps.sh: error: ' + m); }
+// Served by tools/pageserver.py with ?report=1 (browsers whose console apps.sh can't read, such as Safari): the result
+// also goes back to the server.
+function send(m) { console.log(m); if (location.search.includes('report=1')) fetch('/result', {method: 'POST', body: m}).catch(() => {}); }
+function fail(m) { document.title = 'error: ' + m; send('apps.sh: error: ' + m); }
 try {
   // WebGL 2: a fragment shader with a loop over texture taps (ANGLE writes __asm__("") into such loops), a texture with mipmaps
   const gl = document.getElementById('gl').getContext('webgl2', { antialias: false });  // the blit below needs a single-sampled target
@@ -52,6 +55,6 @@ void main() { vec4 s = vec4(0.0); int i = 0;
   const c = document.getElementById('c2d').getContext('2d');
   c.filter = 'blur(3px)'; c.drawImage(document.getElementById('gl'), 0, 0, 96, 96); c.filter = 'none';
   c.drawImage(document.getElementById('gl'), 32, 32, 64, 64, 0, 0, 128, 128);
-  requestAnimationFrame(() => requestAnimationFrame(() => { document.title = 'done'; console.log('apps.sh: done'); }));
+  requestAnimationFrame(() => requestAnimationFrame(() => { document.title = 'done'; send('apps.sh: done'); }));
 } catch (e) { fail(e.message || String(e)); }
 </script></body></html>

@@ -33,6 +33,8 @@ fi
 # APPS_IGPU=1: the shim gives Chromium the integrated GPU on a dual-GPU Mac (MTLSHIM_TEST_IGPU_ONLY), to run once per GPU
 [ -n "${APPS_IGPU:-}" ] && inject+=(MTLSHIM_TEST_IGPU_ONLY=1)
 pass=0 fail=0 skip=0
+# the logs of apps that fail are kept here
+logs=${APPS_LOGS:-$T/build/apps-logs}; mkdir -p "$logs"
 IFS=: read -r -a dirs <<< "${APPS:-$T/apps:/Applications:$HOME/Applications}"  # Tests/apps: tools/fetch-apps.sh
 for dir in "${dirs[@]}"; do
     for app in "$dir"/*.app; do
@@ -46,6 +48,7 @@ for dir in "${dirs[@]}"; do
         [ -n "$exe" ] && [ -x "$app/Contents/MacOS/$exe" ] || { echo "SKIP $name: no executable"; skip=$((skip + 1)); continue; }
         # browsers, and a bare Electron runtime (its default app opens a file or URL given to it), get the page
         browser=; case "$id" in *chrome*|*Chrome*|*edgemac*|*brave*|*chromium*|*Chromium*|*vivaldi*|*opera*|com.github.Electron) browser=1 ;; esac
+        before=$fail
         out=$(mktemp -d); prof=$out/profile; marker=$out/started; touch "$marker"; "$T/tools/crashwatch.sh" start "$out/reports"
         # the app's Metal shader cache: a pipeline that failed before comes back as a cached failure, without a compile or a crash
         rm -rf "$(getconf DARWIN_USER_CACHE_DIR)$id/com.apple.metal" "$(getconf DARWIN_USER_CACHE_DIR)$id.helper/com.apple.metal"
@@ -71,7 +74,7 @@ for dir in "${dirs[@]}"; do
                 printf 'user_pref("devtools.console.stdout.content", true);\nuser_pref("browser.shell.checkDefaultBrowser", false);\nuser_pref("app.update.enabled", false);\n' > "$prof/user.js"
                 args=(-profile "$prof" -no-remote "file://$T/apps-page.html") ;;
         esac
-        env "${inject[@]}" ${extra[@]+"${extra[@]}"} "$app/Contents/MacOS/$exe" "${args[@]}" > "$out/log" 2>&1 & pid=$!
+        env ${inject[@]+"${inject[@]}"} ${extra[@]+"${extra[@]}"} "$app/Contents/MacOS/$exe" "${args[@]}" > "$out/log" 2>&1 & pid=$!
         sleep "$secs"
         alive=1; kill -0 "$pid" 2>/dev/null || alive=
         kill "$pid" 2>/dev/null; pkill -f "$prof" 2>/dev/null; pkill -f "$out/project" 2>/dev/null; sleep 2
@@ -93,13 +96,14 @@ for dir in "${dirs[@]}"; do
         elif [ "$id" = org.blenderfoundation.blender ] && grep -q 'does not support metal 2.2' "$out/log"; then
             # Blender 4 is Metal-only on macOS and needs a Metal family-2 GPU; on family 1 it says so and then crashes
             echo "SKIP $name: needs a Metal family-2 GPU (Blender 3.6 LTS still has OpenGL)"; skip=$((skip + 1))
-        elif [ -n "$native" ] && [ -z "$alive" ]; then
+        elif [ -n "$native" ] && [ -z "$alive" ] && [ "$page" != "apps.sh: done" ]; then  # a browser may relaunch itself once its page is done
             echo "FAIL $name: quit before ${secs}s: $(grep -v '^\s*$' "$out/log" | tail -2 | tr '\n' ' ' | cut -c1-200)"; fail=$((fail + 1))
         elif [ -n "$browser" ] && [ "$page" != "apps.sh: done" ]; then
             echo "FAIL $name: page: ${page:-no result in ${secs}s (stuck?)}"; fail=$((fail + 1))
         else
             echo "PASS $name: ${page:+page done, }no crash report in ${secs}s"; pass=$((pass + 1))
         fi
+        [ "$fail" != "$before" ] && cp "$out/log" "$logs/$name.log" && echo "  (log: $logs/$name.log)"
         rm -rf "$out"
     done
 done
