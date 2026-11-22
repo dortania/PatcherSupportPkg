@@ -27,10 +27,10 @@
 		<dict>
 			<key>cdhash</key>
 			<data>
-			omM4wtG/ETok2FK2SsKvxSzSC3o=
+			/lAQlJGF8Y5Ijvqklpv89TMDXr8=
 			</data>
 			<key>requirement</key>
-			<string>cdhash H"a26338c2d1bf113a24d852b64ac2afc52cd20b7a"</string>
+			<string>cdhash H"fe5010949185f18e488efaa4969bfcf533035ebf"</string>
 		</dict>
 		<key>MacOS/libMTLIntelCompilerPlugin_real.dylib</key>
 		<dict>
