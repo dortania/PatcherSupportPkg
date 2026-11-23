@@ -4972,37 +4972,55 @@ static void keplerZeroBuffers(void) {
         origNVNewCounterBuffer = (NVNewCounterBufferIMP)swizzle("NVMTLDevice", "newCounterSampleBufferWithDescriptor:error:", (IMP)nvNewCounterBuffer);
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Kepler private buffers: zero-filled at creation\n");
 }
-// 82. Managed buffers freed before a commit uploads them, on the Kepler driver. -[NVMTLBuffer didModifyRange:] puts the
-// buffer on its device's list of CPU writes to upload (under the device's mutex, with a "pending" flag), and the next
-// -[NVMTLCommandBuffer commit] on any queue walks that list and copies each range to the GPU. A buffer released after
-// didModifyRange: and before it was uploaded, while another thread committed, was freed under that commit, which then
-// read a nil _res (EXC_BAD_ACCESS at 0x2f0 in -[NVMTLCommandBuffer commit]) or over-released it in the command buffer's
-// resource list (objc_release in MTLResourceListChunkFreeEntries). Safari's WebGPU crashed its GPU process that way
-// (WebKit writes its managed buffers and frees them from any thread). On the stock driver, two threads making, writing
-// and freeing managed buffers while another commits crashed within 8-19 s, with two committing threads within half a
-// second; serializing commits didn't help, and freeing them between commits on one thread never crashed. Each buffer
-// given to didModifyRange: is now kept (retained in a set of its device's) until a commit that starts after that call
-// has returned, so the driver never frees a buffer still on its list; buffers the app frees in between are freed then,
-// on the committing thread. No lock is held across a call into the driver. MTLSHIM_NV_MODIFIED_RETAIN=0 turns it off.
-// Test: n50 on the GTX 770.
+// 82. Managed buffers and textures freed before a commit uploads them, on the Kepler driver. -[NVMTLBuffer
+// didModifyRange:] puts the buffer on its device's list of CPU writes to upload (under the device's mutex, with a
+// "pending" flag), and the next -[NVMTLCommandBuffer commit] on any queue walks that list and copies each range to the
+// GPU. A buffer released after didModifyRange: and before it was uploaded, while another thread committed, was freed
+// under that commit, which then read a nil _res (EXC_BAD_ACCESS at 0x2f0 in -[NVMTLCommandBuffer commit]) or
+// over-released it in the command buffer's resource list (objc_release in MTLResourceListChunkFreeEntries). Safari's
+// WebGPU crashed its GPU process that way (WebKit writes its managed buffers and frees them from any thread). On the
+// stock driver, two threads making, writing and freeing managed buffers while another commits crashed within 8-19 s,
+// with two committing threads within half a second; serializing commits didn't help, and freeing them between commits
+// on one thread never crashed. Managed textures written with replaceRegion: (which takes the device's mutex too, but
+// not through didModifyData) and freed the same way crashed in the resource list as well. Each buffer given to
+// didModifyRange: and each texture given to replaceRegion: is now kept (retained in a set of its device's) until a
+// commit that starts after that call has returned, so the driver never frees one still queued; those the app frees in
+// between are freed then, on the committing thread. No lock is held across a call into the driver.
+// MTLSHIM_NV_MODIFIED_RETAIN=0 turns it off. Test: n50 on the GTX 770 (buffers and textures).
 typedef void (*NVModifyIMP)(id, SEL, NSRange);
 typedef void (*NVCommitIMP)(id, SEL);
 static NVModifyIMP origNVModify;
 static NVCommitIMP origNVCommit;
 static pthread_mutex_t nvModifiedLock = PTHREAD_MUTEX_INITIALIZER;
-static struct { void *device; CFMutableSetRef buffers; } nvModified[4];  // per device (a Mac Pro can have two Kepler cards)
-static void nvModifyRange(id self, SEL _cmd, NSRange range) {
-    origNVModify(self, _cmd, range);
-    void *device = (__bridge void *)((id<MTLBuffer>)self).device;
+static struct { void *device; CFMutableSetRef buffers; } nvModified[4];  // buffers and textures  // per device (a Mac Pro can have two Kepler cards)
+typedef void (*NVReplace4IMP)(id, SEL, MTLRegion, NSUInteger, const void *, NSUInteger);
+typedef void (*NVReplace6IMP)(id, SEL, MTLRegion, NSUInteger, NSUInteger, const void *, NSUInteger, NSUInteger);
+static NVReplace4IMP origNVReplace4;
+static NVReplace6IMP origNVReplace6;
+static void nvKeepModified(id resource) {  // until a commit that starts after this has returned
+    void *device = (__bridge void *)((id<MTLResource>)resource).device;
     pthread_mutex_lock(&nvModifiedLock);
     for (int i = 0; i < 4; i++) {
         if (nvModified[i].device && nvModified[i].device != device) continue;
         nvModified[i].device = device;  // devices live as long as the process: the pointer is never reused for another
         if (!nvModified[i].buffers) nvModified[i].buffers = CFSetCreateMutable(NULL, 0, &kCFTypeSetCallBacks);
-        CFSetAddValue(nvModified[i].buffers, (__bridge const void *)self);
+        CFSetAddValue(nvModified[i].buffers, (__bridge const void *)resource);
         break;
     }
     pthread_mutex_unlock(&nvModifiedLock);
+}
+static void nvModifyRange(id self, SEL _cmd, NSRange range) {
+    origNVModify(self, _cmd, range);
+    nvKeepModified(self);
+}
+static void nvReplace4(id self, SEL _cmd, MTLRegion region, NSUInteger level, const void *bytes, NSUInteger bytesPerRow) {
+    origNVReplace4(self, _cmd, region, level, bytes, bytesPerRow);
+    nvKeepModified(self);
+}
+static void nvReplace6(id self, SEL _cmd, MTLRegion region, NSUInteger level, NSUInteger slice, const void *bytes,
+                       NSUInteger bytesPerRow, NSUInteger bytesPerImage) {
+    origNVReplace6(self, _cmd, region, level, slice, bytes, bytesPerRow, bytesPerImage);
+    nvKeepModified(self);
 }
 static void nvCommit(id self, SEL _cmd) {
     CFMutableSetRef kept = NULL;
@@ -5025,7 +5043,11 @@ static void keplerModifiedRetain(void) {
     done = YES;
     origNVModify = (NVModifyIMP)swizzle("NVMTLBuffer", "didModifyRange:", (IMP)nvModifyRange);
     origNVCommit = (NVCommitIMP)swizzle("NVMTLCommandBuffer", "commit", (IMP)nvCommit);
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Kepler managed buffers: kept from didModifyRange: until the next commit\n");
+    if (definesMethod("NVMTLTexture", "replaceRegion:mipmapLevel:withBytes:bytesPerRow:"))
+        origNVReplace4 = (NVReplace4IMP)swizzle("NVMTLTexture", "replaceRegion:mipmapLevel:withBytes:bytesPerRow:", (IMP)nvReplace4);
+    if (definesMethod("NVMTLTexture", "replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:"))
+        origNVReplace6 = (NVReplace6IMP)swizzle("NVMTLTexture", "replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:", (IMP)nvReplace6);
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Kepler managed buffers and textures: kept from didModifyRange: / replaceRegion: until the next commit\n");
 }
 // 61. The Kepler driver's -resolveCounters:inRange:destinationBuffer:destinationOffset: reads the samples from the sample
 // buffer's own result buffer (counterResultBuffer, 16 bytes a sample) but leaves it out of the command buffer's resources,
