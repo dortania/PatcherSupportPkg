@@ -23,6 +23,9 @@
     }
     double limit = args.count > 2 ? [args[2] doubleValue] : 7200;
     WKWebViewConfiguration *config = [WKWebViewConfiguration new];
+    // no disk cache between runs: a page whose scripts change upstream (the hosted CTS) otherwise mixes cached old files
+    // with new ones (a stale test_config.js broke every case after one deploy)
+    config.websiteDataStore = [WKWebsiteDataStore nonPersistentDataStore];
     // WebKit before Safari 26 (Sequoia's 18.x) leaves WebGPU off for apps: switch on every feature flag named WebGPU*, as
     // Safari's Feature Flags menu does (WKPreferences' private feature API)
     if ([WKPreferences respondsToSelector:NSSelectorFromString(@"_features")]) {
