@@ -143,6 +143,8 @@
 //      wallpaper): 2 samples become 4 in textures, heap sizes, render pipelines and attachment-less passes
 //  79. textures and samplers in item 47's argument buffers (Safari's WebGPU bind groups, whose fragment functions crashed
 //      the compiler service): bound at the adapter's hidden texture / sampler indices around each draw or dispatch
+//  83. blits from two threads at once on the Ivy Bridge driver, which crashed it (SIGFPE in its fixed-function kernel
+//      setup): its blit methods run one at a time
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -5404,6 +5406,65 @@ static void compatSetSampleMask(id self, SEL _cmd, NSUInteger mask) {
     origSetSampleMask(self, _cmd, mask ? mask : 0x100);
 }
 
+// 83. Blits from two threads at once on the Ivy Bridge driver: every buffer fill and copy (and texture copy) runs one of
+// the driver's fixed-function kernels, set up in CHAL_INTEL::ChalContext::SetupFixedFunctionKernelExecute from state the
+// driver shares between command buffers, and two threads encoding such blits at the same time (each on its own queue)
+// read it half written: a division by zero, and the process died with SIGFPE in the middle of -[MTLIGAccelBlitCommandEncoder
+// fillBuffer:range:value:] or copyFromBuffer:... (two threads filling 256-byte buffers crashed within a second; one thread
+// ran 50,000 fills). Apps that stream resources on a thread of their own while another blits, or a GPU process serving
+// several pages, do that. The driver's blit methods run one at a time here (a recursive lock: the shim's own blit hooks
+// call others). Ivy Bridge only. MTLSHIM_IVB_BLIT_LOCK=0 turns it off. Test: s87.
+static pthread_mutex_t ivbBlitLock = PTHREAD_RECURSIVE_MUTEX_INITIALIZER;
+#define IVB_LOCKED_BLIT(name, params, args)                                                                              \
+    typedef void (*IvbBlit##name##IMP) params;                                                                           \
+    static IvbBlit##name##IMP ivbOrigBlit##name;                                                                         \
+    static void ivbBlit##name params {                                                                                   \
+        pthread_mutex_lock(&ivbBlitLock);                                                                                \
+        ivbOrigBlit##name args;                                                                                          \
+        pthread_mutex_unlock(&ivbBlitLock);                                                                              \
+    }
+IVB_LOCKED_BLIT(Fill, (id self, SEL _cmd, id b, NSRange r, uint8_t v), (self, _cmd, b, r, v))
+IVB_LOCKED_BLIT(B2B, (id self, SEL _cmd, id a, NSUInteger ao, id b, NSUInteger bo, NSUInteger n), (self, _cmd, a, ao, b, bo, n))
+IVB_LOCKED_BLIT(B2T, (id self, SEL _cmd, id a, NSUInteger o, NSUInteger bpr, NSUInteger bpi, MTLSize s, id t, NSUInteger sl, NSUInteger l, MTLOrigin og),
+                (self, _cmd, a, o, bpr, bpi, s, t, sl, l, og))
+IVB_LOCKED_BLIT(B2TO, (id self, SEL _cmd, id a, NSUInteger o, NSUInteger bpr, NSUInteger bpi, MTLSize s, id t, NSUInteger sl, NSUInteger l, MTLOrigin og,
+                       MTLBlitOption opt), (self, _cmd, a, o, bpr, bpi, s, t, sl, l, og, opt))
+IVB_LOCKED_BLIT(T2B, (id self, SEL _cmd, id t, NSUInteger sl, NSUInteger l, MTLOrigin og, MTLSize s, id b, NSUInteger o, NSUInteger bpr, NSUInteger bpi),
+                (self, _cmd, t, sl, l, og, s, b, o, bpr, bpi))
+IVB_LOCKED_BLIT(T2BO, (id self, SEL _cmd, id t, NSUInteger sl, NSUInteger l, MTLOrigin og, MTLSize s, id b, NSUInteger o, NSUInteger bpr, NSUInteger bpi,
+                       MTLBlitOption opt), (self, _cmd, t, sl, l, og, s, b, o, bpr, bpi, opt))
+IVB_LOCKED_BLIT(T2T, (id self, SEL _cmd, id a, NSUInteger sl, NSUInteger l, MTLOrigin og, MTLSize s, id b, NSUInteger dsl, NSUInteger dl, MTLOrigin dog),
+                (self, _cmd, a, sl, l, og, s, b, dsl, dl, dog))
+IVB_LOCKED_BLIT(Mips, (id self, SEL _cmd, id t), (self, _cmd, t))
+static void ivbSerializedBlits(void) {
+    static BOOL done;
+    const char *setting = getenv("MTLSHIM_IVB_BLIT_LOCK"), *image = class_getImageName(objc_getClass("MTLIGAccelBlitCommandEncoder"));
+    if (done || !image || !strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") || (setting && !strcmp(setting, "0"))) return;
+    done = YES;
+    const struct { const char *sel; IMP imp; IMP *orig; } blits[] = {
+        {"fillBuffer:range:value:", (IMP)ivbBlitFill, (IMP *)&ivbOrigBlitFill},
+        {"copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:", (IMP)ivbBlitB2B, (IMP *)&ivbOrigBlitB2B},
+        {"copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:",
+         (IMP)ivbBlitB2T, (IMP *)&ivbOrigBlitB2T},
+        {"copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:options:",
+         (IMP)ivbBlitB2TO, (IMP *)&ivbOrigBlitB2TO},
+        {"copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:",
+         (IMP)ivbBlitT2B, (IMP *)&ivbOrigBlitT2B},
+        {"copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:options:",
+         (IMP)ivbBlitT2BO, (IMP *)&ivbOrigBlitT2BO},
+        {"copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:",
+         (IMP)ivbBlitT2T, (IMP *)&ivbOrigBlitT2T},
+        {"generateMipmapsForTexture:", (IMP)ivbBlitMips, (IMP *)&ivbOrigBlitMips},
+    };
+    int n = 0;
+    for (size_t i = 0; i < sizeof blits / sizeof *blits; i++)
+        if (definesMethod("MTLIGAccelBlitCommandEncoder", blits[i].sel)) {
+            *blits[i].orig = swizzle("MTLIGAccelBlitCommandEncoder", blits[i].sel, blits[i].imp);
+            n++;
+        }
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Ivy Bridge: %d blit methods run one at a time\n", n);
+}
+
 static void patchDriverClasses(void) {
     if (patched) restoreArgumentEncoders();  // item 14: after the wrapper's initializer
     if (patched) ivbDrawParameters();  // item 48, under item 47's draw hooks
@@ -5464,6 +5525,7 @@ static void patchDriverClasses(void) {
         origSetSampleMask = (SetSampleMaskIMP)swizzle("MTLRenderPipelineDescriptorInternal", "setSampleMask:", (IMP)compatSetSampleMask);
     if (!origIGFillBuffer && definesMethod("MTLIGAccelBlitCommandEncoder", "fillBuffer:range:value:"))
         origIGFillBuffer = (FillBufferIMP)swizzle("MTLIGAccelBlitCommandEncoder", "fillBuffer:range:value:", (IMP)igFillBuffer);
+    ivbSerializedBlits();  // item 83: last, so that its lock wraps the other blit hooks
     os_unfair_lock_unlock(&lock);
 }
 
