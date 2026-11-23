@@ -5263,11 +5263,17 @@ static void disableFeaturesFamilyOneLacks(void) {
         // disableMetalOnNvidia: ANGLE turns its Metal display off on NVIDIA GPUs (upstream had none to test on), and on this
         // stack there is no other backend for WebGL in Firefox and Safari; Kepler (GTX 770) passes s63 and s64 with it off.
         // ANGLE only reads it for NVIDIA GPUs.
-        static const char kLacking[] = "hasTextureSwizzle:hasStencilAutoResolve:allowRenderpassWithoutAttachment:allowSamplerCompareGradient:"
-                                       "disableMetalOnNvidia";
+        // allowRenderpassWithoutAttachment only when item 73 is off: with it, passes and pipelines without attachments get
+        // a dummy target, and ANGLE needs them for WEBGL_shader_pixel_local_storage (Chrome 158 offers it; its planes are
+        // read_write textures here, so a PLS draw has no attachment, and ANGLE refused the pipeline and lost the context).
+        static const char kLacking[] = "hasTextureSwizzle:hasStencilAutoResolve:allowSamplerCompareGradient:disableMetalOnNvidia";
+        const char *attachments = getenv("MTLSHIM_NO_ATTACHMENTS");
+        BOOL emulated = !(attachments && !strcmp(attachments, "0"));
         const char *set = getenv("ANGLE_FEATURE_OVERRIDES_DISABLED");
         char *value = NULL;
-        if (set && *set && asprintf(&value, "%s:%s", set, kLacking) < 0) value = NULL;
+        if (asprintf(&value, "%s%s%s%s", set && *set ? set : "", set && *set ? ":" : "", kLacking,
+                     emulated ? "" : ":allowRenderpassWithoutAttachment") < 0)
+            value = NULL;
         setenv("ANGLE_FEATURE_OVERRIDES_DISABLED", value ? value : kLacking, 1);
         free(value);
         if (getenv("MTLSHIM_VERBOSE"))
