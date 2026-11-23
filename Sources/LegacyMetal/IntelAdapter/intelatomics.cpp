@@ -2066,6 +2066,9 @@ static ArgumentBufferSlot *slotOf(LLVMValueRef gep, LLVMValueRef param, unsigned
 extern "C" int LLVMGetInstructionOpcode(LLVMValueRef);
 extern "C" LLVMValueRef LLVMBuildBitCast(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
 enum { kOpIntToPtr = 40 };  // LLVMOpcode
+extern "C" LLVMTypeRef LLVMInt8TypeInContext(LLVMContextRef);
+extern "C" LLVMTypeRef LLVMPointerType(LLVMTypeRef, unsigned);
+extern "C" unsigned LLVMGetPointerAddressSpace(LLVMTypeRef);
 // A load the rewrite can replace: of the pointer itself, or of a 64-bit integer through a bitcast.
 static bool slotLoad(LLVMValueRef load, LLVMValueRef from) {
     if (!LLVMIsALoadInst(load) || LLVMGetOperand(load, 0) != from) return false;
@@ -2406,6 +2409,76 @@ static unsigned ivbArgumentBuffers(LLVMModuleRef module) {
     return rewritten;
 }
 
+
+// ---- argument-buffer member offsets in vertex and fragment functions on Ivy Bridge ----------------------------------
+// In vertex and fragment functions the 11.7.10 back end lays an argument buffer's struct out with 4-byte pointers, where
+// the C layout (the one compute kernels read, and MetalOldCompat item 47's encoder writes) has 8: every member after a
+// buffer, texture or sampler was read 4 bytes early per pointer before it. WebKit's WebGPU writes each storage buffer's
+// length right after its reference, so a fragment function read the high half of the buffer's token (the shim's id
+// for it) as the length: once that id was 4 or more, its bounds clamp sent every write to element 0 (CTS
+// rendering,draw:vertex_attributes,basic failed after the first three pipelines of a page). Here each member access of
+// an argument buffer in a vertex or fragment function, GEP(argument buffer, 0, element, ...), addresses the member at its
+// byte offset in the module's data layout instead (an i8 GEP, cast to the member's type), which the back end doesn't
+// lay out again. INTEL_IVB_ARGUMENT_BUFFER_OFFSETS=0 turns it off.
+static unsigned ivbArgumentBufferOffsets(LLVMModuleRef module) {
+    const char *dataLayout = LLVMGetDataLayoutStr(module);
+    LLVMTargetDataRef layout = dataLayout ? LLVMCreateTargetData(dataLayout) : nullptr;
+    if (!layout) return 0;
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMTypeRef i8 = LLVMInt8TypeInContext(context), i64 = LLVMInt64TypeInContext(context);
+    LLVMBuilderRef builder = LLVMCreateBuilderInContext(context);
+    unsigned rewritten = 0;
+    for (const char *list : {"air.vertex", "air.fragment"}) {
+        std::vector<LLVMValueRef> entries(LLVMGetNamedMetadataNumOperands(module, list));
+        if (entries.empty()) continue;
+        LLVMGetNamedMetadataOperands(module, list, entries.data());
+        for (LLVMValueRef entry : entries) {
+            std::vector<LLVMValueRef> parts = metadataOperands(entry);
+            if (parts.size() < 3 || !parts[0] || LLVMIsDeclaration(parts[0])) continue;
+            LLVMValueRef function = parts[0];
+            for (LLVMValueRef arg : metadataOperands(parts[2])) {
+                std::vector<LLVMValueRef> f = metadataOperands(arg);
+                long index = f.empty() ? -1 : metadataInt(f[0]);
+                if (f.size() < 2 || !isString(f[1], "air.indirect_buffer") || index < 0 || (unsigned)index >= LLVMCountParams(function)) continue;
+                LLVMValueRef param = LLVMGetParam(function, (unsigned)index);
+                LLVMTypeRef pointer = LLVMTypeOf(param);
+                if (LLVMGetTypeKind(pointer) != kAbPointerKind || LLVMGetTypeKind(LLVMGetElementType(pointer)) != kAbStructKind) continue;
+                LLVMTypeRef structType = LLVMGetElementType(pointer);
+                unsigned space = LLVMGetPointerAddressSpace(pointer);
+                std::vector<LLVMValueRef> geps;  // GEP(param, 0, constant element, ...)
+                for (LLVMUseRef u = LLVMGetFirstUse(param); u; u = LLVMGetNextUse(u)) {
+                    LLVMValueRef gep = LLVMGetUser(u);
+                    if (!LLVMIsAGetElementPtrInst(gep) || LLVMGetOperand(gep, 0) != param || LLVMGetNumOperands(gep) < 3) continue;
+                    LLVMValueRef first = LLVMGetOperand(gep, 1), element = LLVMGetOperand(gep, 2);
+                    if (!LLVMIsAConstantInt(first) || LLVMConstIntGetZExtValue(first) || !LLVMIsAConstantInt(element)) continue;
+                    if (LLVMConstIntGetZExtValue(element) >= LLVMCountStructElementTypes(structType)) continue;
+                    geps.push_back(gep);
+                }
+                for (LLVMValueRef gep : geps) {
+                    unsigned e = (unsigned)LLVMConstIntGetZExtValue(LLVMGetOperand(gep, 2));
+                    LLVMTypeRef member = LLVMStructGetTypeAtIndex(structType, e);
+                    LLVMPositionBuilderBefore(builder, gep);
+                    LLVMValueRef offset = LLVMConstInt(i64, LLVMOffsetOfElement(layout, structType, e), 0);
+                    LLVMValueRef bytes = LLVMBuildInBoundsGEP(builder, LLVMBuildBitCast(builder, param, LLVMPointerType(i8, space), ""), &offset, 1, "");
+                    LLVMValueRef at = LLVMBuildBitCast(builder, bytes, LLVMPointerType(member, space), "");
+                    int n = LLVMGetNumOperands(gep);
+                    if (n > 3) {  // further indices into the member: GEP(member, 0, ...)
+                        std::vector<LLVMValueRef> rest = {LLVMConstInt(LLVMTypeOf(LLVMGetOperand(gep, 1)), 0, 0)};
+                        for (int i = 3; i < n; i++) rest.push_back(LLVMGetOperand(gep, i));
+                        at = LLVMBuildInBoundsGEP(builder, at, rest.data(), (unsigned)rest.size(), "");
+                    }
+                    if (LLVMTypeOf(at) != LLVMTypeOf(gep)) at = LLVMBuildBitCast(builder, at, LLVMTypeOf(gep), "");
+                    LLVMReplaceAllUsesWith(gep, at);
+                    LLVMInstructionEraseFromParent(gep);
+                    rewritten++;
+                }
+            }
+        }
+    }
+    LLVMDisposeBuilder(builder);
+    LLVMDisposeTargetData(layout);
+    return rewritten;
+}
 
 // ---- texture/sampler loads through escaped pointers -----------------------------------------------------------------
 // MSL texture/sampler array arguments are byval arrays of handles in AIR. IGILTextureTypeEncode follows each such
@@ -6207,6 +6280,10 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (ivyBridgePlugin && !disabled("INTEL_IVB_ARGUMENT_BUFFER_FIX")) {
             unsigned rewritten = ivbArgumentBuffers(module);
             if (rewritten && logging()) fprintf(stderr, "[inteltex] %u function(s): argument-buffer pointers made hidden buffers\n", rewritten);
+        }
+        if (ivyBridgePlugin && !disabled("INTEL_IVB_ARGUMENT_BUFFER_OFFSETS")) {
+            unsigned offsets = ivbArgumentBufferOffsets(module);
+            if (offsets && logging()) fprintf(stderr, "[inteltex] %u argument-buffer member access(es) in vertex/fragment functions done at byte offsets\n", offsets);
         }
         unsigned n = dropInlineAsm(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u inline asm call(s) dropped\n", n);
