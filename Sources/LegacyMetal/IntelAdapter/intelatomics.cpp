@@ -1815,6 +1815,14 @@ static unsigned dropArrayStructInfo(LLVMModuleRef module) {
 // pointer member in order of argument buffer index and id (vertex functions keep 0-16 for vertex buffers), and its
 // loads read that parameter. MetalOldCompat item 47 encodes the argument buffer and binds each buffer it points to at
 // that index before the draw or dispatch. Constants stay in the argument buffer, which this back end reads right.
+// Textures and samplers (members of kind air.texture / air.sampler, a metal::texture2d or metal::sampler struct around
+// the handle; a copy into a local, `texture2d<float> t = ab.t;`, loads that struct as an i64 and casts it back with
+// inttoptr, which is followed too) are a load from memory the back end can't do at all: WebKit's WebGPU puts every bind group's textures and
+// samplers in an argument buffer, and a fragment function sampling one crashed the compiler service
+// (IGILair_ldst_handling looked up a load intrinsic for an image type and got a null name). Each becomes a hidden texture
+// or sampler parameter the same way, named likewise, at a texture index counted down from 30 / a sampler index counted
+// down from 15 over the ones the function doesn't use (MetalOldCompat item 79 binds them; arrays of them are left
+// alone). INTEL_IVB_ARGUMENT_BUFFER_TEXTURES=0 turns that part off.
 // Ivy Bridge only. INTEL_IVB_ARGUMENT_BUFFER_FIX=0 turns it off.
 extern "C" {
 int LLVMIsFunctionVarArg(LLVMTypeRef);
@@ -1844,19 +1852,27 @@ void LLVMDisposePassManager(LLVMPassManagerRef);
 LLVMValueRef LLVMGetCalledValue(LLVMValueRef);
 LLVMValueRef LLVMIsACallInst(LLVMValueRef);
 LLVMValueRef LLVMIsAFunction(LLVMValueRef);
+typedef struct LLVMOpaqueTargetData *LLVMTargetDataRef;
+LLVMTargetDataRef LLVMCreateTargetData(const char *);
+void LLVMDisposeTargetData(LLVMTargetDataRef);
+unsigned long long LLVMOffsetOfElement(LLVMTargetDataRef, LLVMTypeRef, unsigned);
+unsigned LLVMGetIntTypeWidth(LLVMTypeRef);
+const char *LLVMGetDataLayoutStr(LLVMModuleRef);
 }
 // (LLVMGetAttributeCountAtIndex dereferences an empty attribute set in this LLVM, so the attributes go over whole)
 extern "C" void functionCopyAttributesFrom(void *function, const void *source) asm("__ZN4llvm8Function18copyAttributesFromEPKNS_11GlobalValueE");
 extern "C" void basicBlockInsertInto(void *block, void *function, void *before) asm("__ZN4llvm10BasicBlock10insertIntoEPNS_8FunctionEPS0_");
 extern "C" void *valueAsMetadataGet(void *value) asm("__ZN4llvm15ValueAsMetadata3getEPNS_5ValueE");
 
-enum { kAbStructKind = 10, kAbArrayKind = 11, kAbPointerKind = 12 };  // LLVMTypeKind
+enum { kAbIntegerKind = 8, kAbStructKind = 10, kAbArrayKind = 11, kAbPointerKind = 12 };  // LLVMTypeKind
 
-struct ArgumentBufferSlot {  // one pointer of an argument buffer, reached by GEP(argument buffer, 0, path...)
-    unsigned bufferIndex, id, hidden;
+enum { kSlotBuffer, kSlotTexture, kSlotSampler, kSlotKinds };
+struct ArgumentBufferSlot {  // one pointer or handle of an argument buffer, reached by GEP(argument buffer, 0, path...)
+    unsigned kind, bufferIndex, id, hidden;
     std::vector<unsigned> path;
     LLVMValueRef kindNode;  // the member's !{n, !"air.buffer", !"air.location_index", id, count, ...}
     LLVMValueRef param = nullptr;
+    LLVMTypeRef type = nullptr;  // the pointer or handle type at the path: the hidden parameter's type
 };
 
 static long metadataInt(LLVMValueRef value) {
@@ -1870,7 +1886,7 @@ static long fieldAfter(const std::vector<LLVMValueRef> &fields, const char *key,
 
 // The members of a struct_type_info node: [!"air.struct_type_info", !nested,] offset, size, count, type name, name,
 // !"air.indirect_argument", !kind-or-i32 each. The i32 of a nested member (a metal::array) is its first id.
-struct StructInfoMember { long count; LLVMValueRef nested, kind; long firstId; };
+struct StructInfoMember { long count; LLVMValueRef nested, kind; long firstId, offset; };
 static bool structInfoMembers(LLVMValueRef info, std::vector<StructInfoMember> &out) {
     std::vector<LLVMValueRef> ops = metadataOperands(info);
     for (size_t i = 0; i < ops.size();) {
@@ -1882,7 +1898,7 @@ static bool structInfoMembers(LLVMValueRef info, std::vector<StructInfoMember> &
         }
         if (i + 7 > ops.size() || !isString(ops[i + 5], "air.indirect_argument")) return false;
         bool node = LLVMIsAMDNode(ops[i + 6]);
-        out.push_back({metadataInt(ops[i + 2]), nested, node ? ops[i + 6] : nullptr, node ? -1 : metadataInt(ops[i + 6])});
+        out.push_back({metadataInt(ops[i + 2]), nested, node ? ops[i + 6] : nullptr, node ? -1 : metadataInt(ops[i + 6]), metadataInt(ops[i])});
         i += 7;
     }
     return !out.empty();
@@ -1893,42 +1909,99 @@ static bool isBufferKind(LLVMValueRef kind, long &id) {
     id = fieldAfter(f, "air.location_index");
     return id >= 0;
 }
+// A texture or sampler member: kSlotTexture / kSlotSampler, its id, and the path to its handle in its element (a
+// metal::texture2d / metal::sampler struct around one pointer: {0}; the pointer itself: {}). -1 if it isn't one.
+static int handleSlotKind(LLVMValueRef kind, LLVMTypeRef element, long &id, std::vector<unsigned> &inner, LLVMTypeRef &pointer) {
+    std::vector<LLVMValueRef> f = metadataOperands(kind);
+    if (f.size() < 2) return -1;
+    int slot = isString(f[1], "air.texture") ? kSlotTexture : isString(f[1], "air.sampler") ? kSlotSampler : -1;
+    if (slot < 0 || fieldAfter(f, "air.location_index", 2) > 1 || disabled("INTEL_IVB_ARGUMENT_BUFFER_TEXTURES")) return -1;
+    id = fieldAfter(f, "air.location_index");
+    inner.clear();
+    if (LLVMGetTypeKind(element) == kAbStructKind && LLVMCountStructElementTypes(element) == 1) {
+        element = LLVMStructGetTypeAtIndex(element, 0);
+        inner.push_back(0);
+    }
+    pointer = element;
+    return id >= 0 && LLVMGetTypeKind(element) == kAbPointerKind ? slot : -1;
+}
 
-// The pointer slots of one argument buffer: pointer members (path {m}) and metal::array members of pointers
-// ({m, 0, j}: a struct holding [n x pointer], described by a nested __elems member with count n). False if the layout
-// is one this pass doesn't follow; constants, textures and samplers are left alone.
-static bool argumentBufferSlots(LLVMValueRef info, LLVMTypeRef structType, unsigned bufferIndex, std::vector<ArgumentBufferSlot> &out) {
+// A struct element that is only padding: [n x i8].
+static bool bytePadding(LLVMTypeRef type) {
+    return LLVMGetTypeKind(type) == kAbArrayKind && LLVMGetTypeKind(LLVMGetElementType(type)) == kAbIntegerKind &&
+           LLVMGetIntTypeWidth(LLVMGetElementType(type)) == 8;
+}
+
+// The pointer slots of one argument buffer: pointer members (path {e}) and metal::array members of pointers
+// ({e, 0, j}: a struct holding [n x pointer], described by a nested __elems member with count n), e being the member's
+// element of the struct type. Usually member m is element m. A struct with a reference member (WebKit's WebGPU writes
+// `device array<T, 1> &x [[id(0)]]; uint length [[id(1)]];` for every storage buffer) is a packed struct with explicit
+// padding elements instead, <{ %"struct.metal::array" addrspace(1)*, i32, [4 x i8] }>: its members are matched to
+// elements by byte offset, padding skipped (td: the module's data layout; INTEL_IVB_PADDED_ARGUMENT_BUFFER_FIX=0 turns
+// that off). False if the layout is one this pass doesn't follow; constants, textures and samplers are left alone.
+static bool argumentBufferSlots(LLVMValueRef info, LLVMTypeRef structType, unsigned bufferIndex, std::vector<ArgumentBufferSlot> &out,
+                                LLVMTargetDataRef td) {
     std::vector<StructInfoMember> members;
-    if (!structInfoMembers(info, members) || LLVMGetTypeKind(structType) != kAbStructKind ||
-        LLVMCountStructElementTypes(structType) != members.size())
-        return false;
+    if (!structInfoMembers(info, members) || LLVMGetTypeKind(structType) != kAbStructKind) return false;
+    unsigned elements = LLVMCountStructElementTypes(structType);
+    std::vector<unsigned> elementOf(members.size());
+    if (elements == members.size()) {
+        for (unsigned m = 0; m < members.size(); m++) elementOf[m] = m;
+    } else {
+        if (!td || elements < members.size() || disabled("INTEL_IVB_PADDED_ARGUMENT_BUFFER_FIX")) return false;
+        unsigned m = 0;
+        for (unsigned e = 0; e < elements; e++) {
+            unsigned long long offset = LLVMOffsetOfElement(td, structType, e);
+            if (m < members.size() && members[m].offset >= 0 && offset == (unsigned long long)members[m].offset) elementOf[m++] = e;
+            else if (!bytePadding(LLVMStructGetTypeAtIndex(structType, e))) return false;  // an element no member describes
+        }
+        if (m != members.size()) return false;
+    }
     for (unsigned m = 0; m < members.size(); m++) {
-        LLVMTypeRef element = LLVMStructGetTypeAtIndex(structType, m);
+        unsigned e = elementOf[m];
+        LLVMTypeRef element = LLVMStructGetTypeAtIndex(structType, e);
         long id = -1;
         if (members[m].kind && isBufferKind(members[m].kind, id)) {
             if (LLVMGetTypeKind(element) != kAbPointerKind) return false;
-            out.push_back({bufferIndex, (unsigned)id, 0, {m}, members[m].kind});
+            out.push_back({kSlotBuffer, bufferIndex, (unsigned)id, 0, {e}, members[m].kind});
+            out.back().type = element;
+            continue;
+        }
+        std::vector<unsigned> inner;
+        LLVMTypeRef pointer = nullptr;
+        int handle = members[m].kind ? handleSlotKind(members[m].kind, element, id, inner, pointer) : -1;
+        if (handle >= 0) {
+            std::vector<unsigned> path = {e};
+            path.insert(path.end(), inner.begin(), inner.end());
+            out.push_back({(unsigned)handle, bufferIndex, (unsigned)id, 0, path, members[m].kind});
+            out.back().type = pointer;
             continue;
         }
         if (!members[m].nested) continue;
-        std::vector<StructInfoMember> inner;
-        if (!structInfoMembers(members[m].nested, inner) || inner.size() != 1 || !inner[0].kind || !isBufferKind(inner[0].kind, id))
+        std::vector<StructInfoMember> nested;
+        if (!structInfoMembers(members[m].nested, nested) || nested.size() != 1 || !nested[0].kind || !isBufferKind(nested[0].kind, id))
             continue;  // a nested struct of something else
         if (LLVMGetTypeKind(element) != kAbStructKind || LLVMCountStructElementTypes(element) != 1) return false;
         LLVMTypeRef array = LLVMStructGetTypeAtIndex(element, 0);
         if (LLVMGetTypeKind(array) != kAbArrayKind || LLVMGetTypeKind(LLVMGetElementType(array)) != kAbPointerKind ||
-            inner[0].count != (long)LLVMGetArrayLength(array))
+            nested[0].count != (long)LLVMGetArrayLength(array))
             return false;
         // the __elems member's id counts from the array's own first id (!"air.indirect_argument", i32 3 for
         // array<constant B *, 3> b [[id(3)]]), which an argument buffer with two arrays needs
         long first = members[m].firstId > 0 ? members[m].firstId : 0;
-        for (unsigned j = 0; j < LLVMGetArrayLength(array); j++) out.push_back({bufferIndex, (unsigned)(first + id) + j, 0, {m, 0, j}, inner[0].kind});
+        for (unsigned j = 0; j < LLVMGetArrayLength(array); j++) {
+            out.push_back({kSlotBuffer, bufferIndex, (unsigned)(first + id) + j, 0, {e, 0, j}, nested[0].kind});
+            out.back().type = LLVMGetElementType(array);
+        }
     }
     return true;
 }
 
-// The slot a load reads its pointer through: GEP(param, 0, path...) with constant indices.
-static ArgumentBufferSlot *slotOf(LLVMValueRef gep, LLVMValueRef param, unsigned bufferIndex, std::vector<ArgumentBufferSlot> &slots) {
+// The slot a load reads its pointer through: GEP(param, 0, path...) with constant indices. *wrapper: the GEP is to the
+// metal::texture2d / metal::sampler struct around a handle (path... without its last 0), which WebKit's copies of such a
+// member load as an i64 through a bitcast (`texture2d<float> t = ab.t;`).
+static ArgumentBufferSlot *slotOf(LLVMValueRef gep, LLVMValueRef param, unsigned bufferIndex, std::vector<ArgumentBufferSlot> &slots,
+                                  bool *wrapper) {
     if (!gep || !LLVMIsAGetElementPtrInst(gep) || LLVMGetOperand(gep, 0) != param) return nullptr;
     int n = LLVMGetNumOperands(gep);
     if (n < 3) return nullptr;
@@ -1939,9 +2012,22 @@ static ArgumentBufferSlot *slotOf(LLVMValueRef gep, LLVMValueRef param, unsigned
         if (i > 1) path.push_back((unsigned)LLVMConstIntGetZExtValue(index));
         else if (LLVMConstIntGetZExtValue(index)) return nullptr;
     }
+    *wrapper = false;
     for (ArgumentBufferSlot &s : slots)
         if (s.bufferIndex == bufferIndex && s.path == path) return &s;
+    path.push_back(0);
+    for (ArgumentBufferSlot &s : slots)
+        if (s.bufferIndex == bufferIndex && s.kind != kSlotBuffer && s.path == path) return *wrapper = true, &s;
     return nullptr;
+}
+extern "C" int LLVMGetInstructionOpcode(LLVMValueRef);
+extern "C" LLVMValueRef LLVMBuildBitCast(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
+enum { kOpIntToPtr = 40 };  // LLVMOpcode
+// A load the rewrite can replace: of the pointer itself, or of a 64-bit integer through a bitcast.
+static bool slotLoad(LLVMValueRef load, LLVMValueRef from) {
+    if (!LLVMIsALoadInst(load) || LLVMGetOperand(load, 0) != from) return false;
+    LLVMTypeRef t = LLVMTypeOf(load);
+    return LLVMGetTypeKind(t) == kAbPointerKind || (LLVMGetTypeKind(t) == kAbIntegerKind && LLVMGetIntTypeWidth(t) == 64);
 }
 
 // ---- program-scope constants in vertex and fragment functions on Ivy Bridge -----------------------------------------
@@ -2109,6 +2195,9 @@ static bool inlineArgumentBufferCallees(LLVMModuleRef module) {
 static unsigned ivbArgumentBuffers(LLVMModuleRef module) {
     inlineArgumentBufferCallees(module);
     unsigned rewritten = 0;
+    const char *dataLayout = LLVMGetDataLayoutStr(module);
+    LLVMTargetDataRef layout = dataLayout ? LLVMCreateTargetData(dataLayout) : nullptr;  // for packed structs, see argumentBufferSlots
+    struct DisposeLayout { LLVMTargetDataRef t; ~DisposeLayout() { if (t) LLVMDisposeTargetData(t); } } disposeLayout{layout};
     LLVMContextRef context = LLVMGetModuleContext(module);
     LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
     for (const char *list : {"air.kernel", "air.fragment", "air.vertex"}) {
@@ -2121,18 +2210,20 @@ static unsigned ivbArgumentBuffers(LLVMModuleRef module) {
             LLVMValueRef function = parts[0];
             unsigned params = LLVMCountParams(function);
             std::vector<LLVMValueRef> args = metadataOperands(parts[2]);
-            // buffer indices the function already uses, and its argument buffers in index order
-            std::set<unsigned> used;
+            // buffer, texture and sampler indices the function already uses, and its argument buffers in index order
+            std::set<unsigned> used[kSlotKinds];
             std::map<unsigned, std::pair<unsigned, LLVMValueRef>> buffers;  // index -> (param, struct_type_info)
             bool ok = true;
             for (LLVMValueRef arg : args) {
                 std::vector<LLVMValueRef> f = metadataOperands(arg);
                 if (f.size() < 2) continue;
                 bool plain = isString(f[1], "air.buffer"), indirect = isString(f[1], "air.indirect_buffer");
-                if (!plain && !indirect) continue;
+                int handle = isString(f[1], "air.texture") ? kSlotTexture : isString(f[1], "air.sampler") ? kSlotSampler : -1;
+                if (!plain && !indirect && handle < 0) continue;
                 long index = fieldAfter(f, "air.location_index"), count = fieldAfter(f, "air.location_index", 2), param = metadataInt(f[0]);
                 if (index < 0 || param < 0 || (unsigned)param >= params) { ok = false; break; }
-                for (long k = 0; k < (count > 0 ? count : 1); k++) used.insert((unsigned)(index + k));
+                for (long k = 0; k < (count > 0 ? count : 1); k++) used[handle < 0 ? kSlotBuffer : handle].insert((unsigned)(index + k));
+                if (handle >= 0) continue;
                 if (!indirect) continue;
                 long info = -1;
                 for (size_t k = 0; k + 1 < f.size(); k++)
@@ -2145,35 +2236,42 @@ static unsigned ivbArgumentBuffers(LLVMModuleRef module) {
             for (auto &b : buffers) {
                 LLVMTypeRef type = LLVMTypeOf(LLVMGetParam(function, b.second.first));
                 if (LLVMGetTypeKind(type) != kAbPointerKind ||
-                    !argumentBufferSlots(b.second.second, LLVMGetElementType(type), b.first, slots)) { ok = false; break; }
+                    !argumentBufferSlots(b.second.second, LLVMGetElementType(type), b.first, slots, layout)) { ok = false; break; }
             }
             if (!ok || slots.empty()) continue;
             std::sort(slots.begin(), slots.end(), [](const ArgumentBufferSlot &a, const ArgumentBufferSlot &b) {
                 return a.bufferIndex != b.bufferIndex ? a.bufferIndex < b.bufferIndex : a.id < b.id;
             });
-            int next = 30;
-            unsigned lowest = !strcmp(list, "air.vertex") ? 17 : 0;
+            // counted down per kind, in order of argument buffer index and id (as MetalOldCompat does)
+            int next[kSlotKinds] = {30, 30, 15};
+            int lowest[kSlotKinds] = {!strcmp(list, "air.vertex") ? 17 : 0, 0, 0};
             for (ArgumentBufferSlot &s : slots) {
-                while (next >= (int)lowest && used.count((unsigned)next)) next--;
-                if (next < (int)lowest) { ok = false; break; }
-                s.hidden = (unsigned)next--;
+                int &n = next[s.kind];
+                while (n >= lowest[s.kind] && used[s.kind].count((unsigned)n)) n--;
+                if (n < lowest[s.kind]) { ok = false; break; }
+                s.hidden = (unsigned)n--;
             }
             if (!ok) {
-                if (logging()) fprintf(stderr, "[inteltex] %s: %zu argument-buffer pointers, not enough free buffer indices\n",
+                if (logging()) fprintf(stderr, "[inteltex] %s: %zu argument-buffer pointers/handles, not enough free indices\n",
                                        LLVMGetValueName(function), slots.size());
                 continue;
             }
-            // the pointer loads: load(GEP(argument buffer, 0, member[, element]))
-            std::vector<std::pair<LLVMValueRef, ArgumentBufferSlot *>> loads;
+            // the pointer loads: load(GEP(argument buffer, 0, member[, element])), or through a bitcast of it
+            struct SlotLoad { LLVMValueRef first, cast; ArgumentBufferSlot *second; };
+            std::vector<SlotLoad> loads;
             for (auto &b : buffers) {
                 LLVMValueRef param = LLVMGetParam(function, b.second.first);
                 for (LLVMUseRef u = LLVMGetFirstUse(param); u; u = LLVMGetNextUse(u)) {
                     LLVMValueRef gep = LLVMGetUser(u);
-                    ArgumentBufferSlot *slot = slotOf(gep, param, b.first, slots);
+                    bool wrapper = false;
+                    ArgumentBufferSlot *slot = slotOf(gep, param, b.first, slots, &wrapper);
                     if (!slot) continue;
                     for (LLVMUseRef v = LLVMGetFirstUse(gep); v; v = LLVMGetNextUse(v)) {
-                        LLVMValueRef load = LLVMGetUser(v);
-                        if (LLVMIsALoadInst(load) && LLVMGetOperand(load, 0) == gep) loads.push_back({load, slot});
+                        LLVMValueRef user = LLVMGetUser(v);
+                        if (!wrapper && slotLoad(user, gep)) loads.push_back({user, nullptr, slot});
+                        else if (LLVMIsABitCastInst(user) && LLVMGetOperand(user, 0) == gep)
+                            for (LLVMUseRef w = LLVMGetFirstUse(user); w; w = LLVMGetNextUse(w))
+                                if (slotLoad(LLVMGetUser(w), user)) loads.push_back({LLVMGetUser(w), user, slot});
                     }
                 }
             }
@@ -2187,7 +2285,7 @@ static unsigned ivbArgumentBuffers(LLVMModuleRef module) {
             LLVMGetParamTypes(type, types.data());
             for (ArgumentBufferSlot *s : hidden)
                 for (auto &l : loads)
-                    if (l.second == s) { types.push_back(LLVMTypeOf(l.first)); break; }
+                    if (l.second == s) { types.push_back(s->type ? s->type : LLVMTypeOf(l.first)); break; }
             std::string name = LLVMGetValueName(function);
             LLVMSetValueName(function, (name + ".ivbab").c_str());
             LLVMValueRef rewrittenFn = LLVMAddFunction(module, name.c_str(),
@@ -2220,12 +2318,34 @@ static unsigned ivbArgumentBuffers(LLVMModuleRef module) {
                 }
                 newArgs.push_back(LLVMMDNodeInContext(context, f.data(), (unsigned)f.size()));
             }
+            LLVMBuilderRef builder = LLVMCreateBuilderInContext(context);
             for (auto &l : loads) {
-                LLVMValueRef gep = LLVMGetOperand(l.first, 0);
-                LLVMReplaceAllUsesWith(l.first, l.second->param);
+                LLVMValueRef gep = l.cast ? LLVMGetOperand(l.cast, 0) : LLVMGetOperand(l.first, 0), param = l.second->param;
+                LLVMTypeRef loaded = LLVMTypeOf(l.first);
+                if (loaded == LLVMTypeOf(param)) {
+                    LLVMReplaceAllUsesWith(l.first, param);
+                } else if (LLVMGetTypeKind(loaded) == kAbIntegerKind) {  // an i64 copy: its inttoptr to the handle type is the parameter
+                    std::vector<LLVMValueRef> handles;
+                    for (LLVMUseRef w = LLVMGetFirstUse(l.first); w; w = LLVMGetNextUse(w))
+                        if (LLVMGetInstructionOpcode(LLVMGetUser(w)) == kOpIntToPtr && LLVMTypeOf(LLVMGetUser(w)) == LLVMTypeOf(param))
+                            handles.push_back(LLVMGetUser(w));
+                    for (LLVMValueRef h : handles) {
+                        LLVMReplaceAllUsesWith(h, param);
+                        LLVMInstructionEraseFromParent(h);
+                    }
+                    if (LLVMGetFirstUse(l.first)) {
+                        LLVMPositionBuilderBefore(builder, l.first);
+                        LLVMReplaceAllUsesWith(l.first, LLVMBuildPtrToInt(builder, param, loaded, ""));
+                    }
+                } else {
+                    LLVMPositionBuilderBefore(builder, l.first);
+                    LLVMReplaceAllUsesWith(l.first, LLVMBuildBitCast(builder, param, loaded, ""));
+                }
                 LLVMInstructionEraseFromParent(l.first);
+                if (l.cast && !LLVMGetFirstUse(l.cast)) LLVMInstructionEraseFromParent(l.cast);
                 if (!LLVMGetFirstUse(gep)) LLVMInstructionEraseFromParent(gep);
             }
+            LLVMDisposeBuilder(builder);
             void *node = metadataOf(entry), *argList = metadataOf(LLVMMDNodeInContext(context, newArgs.data(), (unsigned)newArgs.size()));
             if (node && argList) {
                 mdNodeReplaceOperand(node, 0, valueAsMetadataGet(rewrittenFn));
@@ -2234,8 +2354,8 @@ static unsigned ivbArgumentBuffers(LLVMModuleRef module) {
             if (!LLVMGetFirstUse(function)) LLVMDeleteFunction(function);
             rewritten++;
             if (logging()) {
-                fprintf(stderr, "[inteltex] %s: %zu argument-buffer pointer load(s) read hidden buffer(s)", name.c_str(), loads.size());
-                for (ArgumentBufferSlot *s : hidden) fprintf(stderr, " %u.%u->%u", s->bufferIndex, s->id, s->hidden);
+                fprintf(stderr, "[inteltex] %s: %zu argument-buffer pointer/handle load(s) read hidden argument(s)", name.c_str(), loads.size());
+                for (ArgumentBufferSlot *s : hidden) fprintf(stderr, " %u.%u->%c%u", s->bufferIndex, s->id, "bts"[s->kind], s->hidden);
                 fprintf(stderr, "\n");
             }
         }

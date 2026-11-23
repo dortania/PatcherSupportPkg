@@ -141,6 +141,8 @@
 //      through a buffer
 //  77. 2x multisampling on GPUs without it (Ivy Bridge, Haswell), which MetalOld's validation aborted on (Tahoe's Sequoia
 //      wallpaper): 2 samples become 4 in textures, heap sizes, render pipelines and attachment-less passes
+//  79. textures and samplers in item 47's argument buffers (Safari's WebGPU bind groups, whose fragment functions crashed
+//      the compiler service): bound at the adapter's hidden texture / sampler indices around each draw or dispatch
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -810,9 +812,18 @@ static void guardArgumentEncoders(void) {
 //    (unused ones too) and each argument buffer's struct;
 //  - before each draw or dispatch, the buffers the bound argument buffers point to are bound at their hidden indices
 //    with the driver's own setters, and whatever the app had bound there is put back afterwards.
-// Textures and samplers inside argument buffers, nested argument buffers and tessellation draws aren't covered.
+// Nested argument buffers, arrays of textures or samplers and tessellation draws aren't covered.
 // Ivy Bridge driver only (a device class without argument encoders of its own). MTLSHIM_IVB_ARGUMENT_BUFFERS=0 turns it
 // off. (s61)
+// 79. Textures and samplers in those argument buffers. WebKit's WebGPU puts each bind group in an argument buffer,
+// textures and samplers included, and fills it with an argument encoder; a fragment function that sampled one crashed
+// the compiler service, so Safari's WebGPU render pipelines failed (device lost). The adapter
+// (INTEL_IVB_ARGUMENT_BUFFER_TEXTURES) makes each texture or sampler member a hidden texture / sampler parameter, at a
+// texture index counted down from 30 / a sampler index counted down from 15 over the ones the function doesn't use, in
+// the same order as the buffers. Here the encoder writes a token for each (the object's id, as for buffers), the
+// pipeline gets those indices from its reflection, and each draw or dispatch binds them with the driver's setters and
+// puts back what the app had bound there (samplers with their LOD clamps). MTLSHIM_IVB_ARGUMENT_BUFFER_TEXTURES=0 turns
+// it off. (s86)
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"  // MetalOld has only the macOS 12 reflection API (MTLArgument)
 @interface _MTLIndirectArgumentBufferLayout : NSObject
@@ -822,9 +833,13 @@ static void guardArgumentEncoders(void) {
 - (instancetype)initWithLayout:(id)layout device:(id<MTLDevice>)device;
 @end
 
-typedef struct { uint32_t id, offset, pointer; } ABSlot;                   // a member: [[id]], byte offset, pointer?
-typedef struct { uint8_t stage, argument, hidden; uint32_t offset; } ABBinding;  // stage: 0 vertex, 1 fragment, 2 compute
-static BOOL ivbArgumentBuffersOn;
+enum { kABConstant, kABPointer, kABTexture, kABSampler };
+typedef struct { uint32_t id, offset, kind; } ABSlot;                            // a member: [[id]], byte offset, kAB*
+typedef struct { uint8_t stage, argument, hidden, kind; uint32_t offset; } ABBinding;  // stage: 0 vertex, 1 fragment, 2 compute
+static BOOL ivbArgumentBuffersOn, abTexturesOn;
+static uint32_t abSlotKind(MTLDataType t) {
+    return t == MTLDataTypePointer ? kABPointer : t == MTLDataTypeTexture ? kABTexture : t == MTLDataTypeSampler ? kABSampler : kABConstant;
+}
 
 static NSUInteger abAlignUp(NSUInteger v, NSUInteger a) { return a > 1 ? (v + a - 1) / a * a : v; }
 static void abSizeAlign(MTLDataType t, NSUInteger *size, NSUInteger *align) {
@@ -888,7 +903,7 @@ static void abFlatten(MTLStructType *type, NSUInteger idBase, NSMutableData *slo
             if (array.elementType != MTLDataTypeStruct)
                 for (NSUInteger j = 0; j < array.arrayLength; j++) {
                     ABSlot s = {(uint32_t)(id + j * MAX(array.argumentIndexStride, (NSUInteger)1)), (uint32_t)(offset + j * elementSize),
-                                array.elementType == MTLDataTypePointer};
+                                abSlotKind(array.elementType)};
                     [slots appendBytes:&s length:sizeof s];
                 }
             size = elementSize * array.arrayLength;
@@ -896,7 +911,7 @@ static void abFlatten(MTLStructType *type, NSUInteger idBase, NSMutableData *slo
         } else {
             abSizeAlign(m.dataType, &size, &align);
             offset = abAlignUp(offset, align);
-            ABSlot s = {(uint32_t)id, (uint32_t)offset, m.dataType == MTLDataTypePointer};
+            ABSlot s = {(uint32_t)id, (uint32_t)offset, abSlotKind(m.dataType)};
             [slots appendBytes:&s length:sizeof s];
         }
         offset += size;
@@ -953,14 +968,14 @@ static id abBufferForId(uint32_t i) {
 - (NSUInteger)encodedLength { return size; }
 - (NSUInteger)alignment { return align; }
 - (BOOL)bufferLayoutMatchesFrontEndLayout { return YES; }
-- (const ABSlot *)slotForId:(NSUInteger)i pointer:(BOOL)pointer {
+- (const ABSlot *)slotForId:(NSUInteger)i kind:(uint32_t)kind {
     const ABSlot *s = slots.bytes;
     for (NSUInteger k = 0; k < slots.length / sizeof(ABSlot); k++)
-        if (s[k].id == i && (BOOL)s[k].pointer == pointer) return &s[k];
+        if (s[k].id == i && s[k].kind == kind) return &s[k];
     return NULL;
 }
 - (NSUInteger)constantOffsetAtIndex:(NSUInteger)i {
-    const ABSlot *s = [self slotForId:i pointer:NO];
+    const ABSlot *s = [self slotForId:i kind:kABConstant];
     return s ? s->offset : NSNotFound;
 }
 @end
@@ -986,28 +1001,40 @@ static id abBufferForId(uint32_t i) {
     abBuffer = buffer;
     abOffset = start + element * abAlignUp(abLayout->size, abLayout->align);
 }
-- (void)setBuffer:(id<MTLBuffer>)buffer offset:(NSUInteger)offset atIndex:(NSUInteger)index {
-    const ABSlot *s = [abLayout slotForId:index pointer:YES];
+- (void)writeToken:(uint64_t)token kind:(uint32_t)kind atIndex:(NSUInteger)index {
+    const ABSlot *s = [abLayout slotForId:index kind:kind];
     uint8_t *p = abBuffer.contents;
     if (!s || !p || abOffset + s->offset + 8 > abBuffer.length) return;
-    uint64_t token = buffer ? (uint64_t)abBufferId(buffer) << 32 | (uint32_t)offset : 0;
     memcpy(p + abOffset + s->offset, &token, sizeof token);
+}
+- (void)setBuffer:(id<MTLBuffer>)buffer offset:(NSUInteger)offset atIndex:(NSUInteger)index {
+    [self writeToken:buffer ? (uint64_t)abBufferId(buffer) << 32 | (uint32_t)offset : 0 kind:kABPointer atIndex:index];
 }
 - (void)setBuffers:(const id<MTLBuffer> __unsafe_unretained[])buffers offsets:(const NSUInteger[])offsets withRange:(NSRange)range {
     for (NSUInteger i = 0; i < range.length; i++) [self setBuffer:buffers[i] offset:offsets[i] atIndex:range.location + i];
 }
 - (void *)constantDataAtIndex:(NSUInteger)index {
-    const ABSlot *s = [abLayout slotForId:index pointer:NO];
+    const ABSlot *s = [abLayout slotForId:index kind:kABConstant];
     uint8_t *p = abBuffer.contents;
     return s && p && abOffset + s->offset < abBuffer.length ? p + abOffset + s->offset : NULL;
 }
 - (void)unsupported:(const char *)what {
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] argument buffer on the Ivy Bridge GPU: %s not supported\n", what);
 }
-- (void)setTexture:(id<MTLTexture>)texture atIndex:(NSUInteger)index { [self unsupported:"textures"]; }
-- (void)setTextures:(const id<MTLTexture> __unsafe_unretained[])textures withRange:(NSRange)range { [self unsupported:"textures"]; }
-- (void)setSamplerState:(id<MTLSamplerState>)sampler atIndex:(NSUInteger)index { [self unsupported:"samplers"]; }
-- (void)setSamplerStates:(const id<MTLSamplerState> __unsafe_unretained[])samplers withRange:(NSRange)range { [self unsupported:"samplers"]; }
+- (void)setTexture:(id<MTLTexture>)texture atIndex:(NSUInteger)index {  // item 79: the texture's id, as for buffers
+    if (!abTexturesOn) return [self unsupported:"textures"];
+    [self writeToken:(uint64_t)abBufferId(texture) << 32 kind:kABTexture atIndex:index];
+}
+- (void)setTextures:(const id<MTLTexture> __unsafe_unretained[])textures withRange:(NSRange)range {
+    for (NSUInteger i = 0; i < range.length; i++) [self setTexture:textures[i] atIndex:range.location + i];
+}
+- (void)setSamplerState:(id<MTLSamplerState>)sampler atIndex:(NSUInteger)index {
+    if (!abTexturesOn) return [self unsupported:"samplers"];
+    [self writeToken:(uint64_t)abBufferId(sampler) << 32 kind:kABSampler atIndex:index];
+}
+- (void)setSamplerStates:(const id<MTLSamplerState> __unsafe_unretained[])samplers withRange:(NSRange)range {
+    for (NSUInteger i = 0; i < range.length; i++) [self setSamplerState:samplers[i] atIndex:range.location + i];
+}
 - (id<MTLArgumentEncoder>)newArgumentEncoderForBufferAtIndex:(NSUInteger)index { return nil; }
 @end
 
@@ -1022,35 +1049,40 @@ static id ivbNewArgumentEncoder(id self, SEL _cmd, id layout) {
     return [layout isKindOfClass:[MTLShimArgumentLayout class]] ? [[MTLShimArgumentEncoder alloc] initWithLayout:layout device:self] : nil;
 }
 
-// The adapter's hidden indices for one stage, from its reflection arguments.
+// The adapter's hidden indices for one stage, from its reflection arguments: buffers counted down from 30 (17 the
+// lowest in a vertex function), textures from 30 and samplers (item 79) from 15, over the indices the function uses.
 static void abStageBindings(NSArray<MTLArgument *> *arguments, uint8_t stage, NSMutableData *out) {
-    BOOL used[31] = {NO};
-    typedef struct { NSUInteger buffer, id, offset; } Pointer;
+    BOOL used[4][31] = {{NO}};  // by kAB* kind
+    typedef struct { NSUInteger kind, buffer, id, offset; } Pointer;
     NSMutableData *pointers = [NSMutableData data];
     for (MTLArgument *a in arguments) {
-        if (a.type != MTLArgumentTypeBuffer) continue;
+        int kind = a.type == MTLArgumentTypeBuffer ? kABPointer : a.type == MTLArgumentTypeTexture ? kABTexture
+                   : a.type == MTLArgumentTypeSampler ? kABSampler : kABConstant;
+        if (kind == kABConstant) continue;
         for (NSUInteger k = 0; k < MAX(a.arrayLength, (NSUInteger)1); k++)
-            if (a.index + k < 31) used[a.index + k] = YES;
-        MTLStructType *type = a.bufferStructType;
+            if (a.index + k < 31) used[kind][a.index + k] = YES;
+        MTLStructType *type = kind == kABPointer ? a.bufferStructType : nil;
         if (!type || a.index >= 31) continue;
-        // the members the adapter rewrites: pointers, and metal::array structs of pointers
-        NSMutableIndexSet *ids = [NSMutableIndexSet indexSet];
+        // the members the adapter rewrites: pointers, metal::array structs of pointers, and (item 79) textures and samplers
+        NSMutableIndexSet *ids = [NSMutableIndexSet indexSet], *handles = [NSMutableIndexSet indexSet];
         for (MTLStructMember *m in type.members) {
             if (m.dataType == MTLDataTypePointer) [ids addIndex:m.argumentIndex];
+            if (abTexturesOn && (m.dataType == MTLDataTypeTexture || m.dataType == MTLDataTypeSampler)) [handles addIndex:m.argumentIndex];
             if (m.dataType != MTLDataTypeStruct || m.structType.members.count != 1) continue;
             MTLStructMember *inner = m.structType.members.firstObject;
             if (inner.dataType != MTLDataTypeArray || inner.arrayType.elementType != MTLDataTypePointer) continue;
             for (NSUInteger j = 0; j < inner.arrayType.arrayLength; j++)
                 [ids addIndex:m.argumentIndex + inner.argumentIndex + j * MAX(inner.arrayType.argumentIndexStride, (NSUInteger)1)];
         }
-        if (!ids.count) continue;
+        if (!ids.count && !handles.count) continue;
         NSMutableData *flat = [NSMutableData data];
         NSUInteger size, align;
         abFlatten(type, 0, flat, &size, &align);
         const ABSlot *s = flat.bytes;
         for (NSUInteger k = 0; k < flat.length / sizeof(ABSlot); k++)
-            if (s[k].pointer && [ids containsIndex:s[k].id]) {
-                Pointer p = {a.index, s[k].id, s[k].offset};
+            if ((s[k].kind == kABPointer && [ids containsIndex:s[k].id]) ||
+                ((s[k].kind == kABTexture || s[k].kind == kABSampler) && [handles containsIndex:s[k].id])) {
+                Pointer p = {s[k].kind, a.index, s[k].id, s[k].offset};
                 [pointers appendBytes:&p length:sizeof p];
             }
     }
@@ -1062,12 +1094,13 @@ static void abStageBindings(NSArray<MTLArgument *> *arguments, uint8_t stage, NS
         if (a->buffer != b->buffer) return a->buffer < b->buffer ? -1 : 1;
         return a->id < b->id ? -1 : a->id > b->id;
     });
-    int next = 30, lowest = stage == 0 ? 17 : 0;
+    int next[4] = {0, 30, 30, 15}, lowest[4] = {0, stage == 0 ? 17 : 0, 0, 0};
     NSMutableData *bindings = [NSMutableData data];
     for (NSUInteger k = 0; k < n; k++) {
-        while (next >= lowest && used[next]) next--;
-        if (next < lowest) return;  // the adapter left this function alone
-        ABBinding b = {stage, (uint8_t)p[k].buffer, (uint8_t)next--, (uint32_t)p[k].offset};
+        NSUInteger kind = p[k].kind;
+        while (next[kind] >= lowest[kind] && used[kind][next[kind]]) next[kind]--;
+        if (next[kind] < lowest[kind]) return;  // the adapter left this function alone
+        ABBinding b = {stage, (uint8_t)p[k].buffer, (uint8_t)next[kind]--, (uint8_t)kind, (uint32_t)p[k].offset};
         [bindings appendBytes:&b length:sizeof b];
     }
     [out appendData:bindings];
@@ -1082,7 +1115,7 @@ static void abAttach(id pipeline, NSArray *vertex, NSArray *fragment, NSArray *c
     abStageBindings(compute, 2, bindings);
     if (!bindings.length) return;
     objc_setAssociatedObject(pipeline, kABBindingsKey, bindings, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] pipeline with %lu argument-buffer pointer(s) bound at hidden indices\n",
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] pipeline with %lu argument-buffer pointer(s)/handle(s) bound at hidden indices\n",
                                            (unsigned long)(bindings.length / sizeof(ABBinding)));
 }
 
@@ -1196,6 +1229,9 @@ static void abComputeDescOptAsync(id self, SEL _cmd, MTLComputePipelineDescripto
     __strong id buffers[3][31];
     NSUInteger offsets[3][31];
     __strong NSData *bytes[3][31];
+    __strong id textures[3][31], samplers[3][16];  // item 79
+    float lodMin[3][16], lodMax[3][16];
+    BOOL clamped[3][16];
     __strong NSData *bindings;
 }
 @end
@@ -1256,6 +1292,58 @@ AB_STAGE_HOOKS(Vertex, 0)
 AB_STAGE_HOOKS(Fragment, 1)
 AB_STAGE_HOOKS(Compute, 2)
 
+// item 79: what the app binds at texture and sampler indices, to put back after a draw that borrowed them
+typedef void (*ABSetTextureIMP)(id, SEL, id, NSUInteger);
+typedef void (*ABSetTexturesIMP)(id, SEL, const id __unsafe_unretained *, NSRange);
+typedef void (*ABSetSamplerLodIMP)(id, SEL, id, float, float, NSUInteger);
+typedef void (*ABSetSamplersLodIMP)(id, SEL, const id __unsafe_unretained *, const float *, const float *, NSRange);
+static ABSetTextureIMP abOrigSetTexture[3], abOrigSetSampler[3];
+static ABSetTexturesIMP abOrigSetTextures[3], abOrigSetSamplers[3];
+static ABSetSamplerLodIMP abOrigSetSamplerLod[3];
+static ABSetSamplersLodIMP abOrigSetSamplersLod[3];
+static SEL abSetTextureSel[3], abSetSamplerSel[3], abSetSamplerLodSel[3];
+static void abRecordTexture(id encoder, int stage, id texture, NSUInteger index) {
+    if (index < 31) abState(encoder)->textures[stage][index] = texture;
+}
+static void abRecordSampler(id encoder, int stage, id sampler, BOOL clamped, float min, float max, NSUInteger index) {
+    if (index >= 16) return;
+    MTLShimABState *s = abState(encoder);
+    s->samplers[stage][index] = sampler;
+    s->clamped[stage][index] = clamped;
+    s->lodMin[stage][index] = min;
+    s->lodMax[stage][index] = max;
+}
+#define AB_HANDLE_HOOKS(name, stage)                                                                                    \
+    static void abSetTexture##name(id self, SEL _cmd, id texture, NSUInteger index) {                                     \
+        abRecordTexture(self, stage, texture, index);                                                                    \
+        abOrigSetTexture[stage](self, _cmd, texture, index);                                                             \
+    }                                                                                                                    \
+    static void abSetTextures##name(id self, SEL _cmd, const id __unsafe_unretained *textures, NSRange range) {           \
+        for (NSUInteger i = 0; i < range.length; i++) abRecordTexture(self, stage, textures[i], range.location + i);      \
+        abOrigSetTextures[stage](self, _cmd, textures, range);                                                           \
+    }                                                                                                                    \
+    static void abSetSampler##name(id self, SEL _cmd, id sampler, NSUInteger index) {                                     \
+        abRecordSampler(self, stage, sampler, NO, 0, 0, index);                                                          \
+        abOrigSetSampler[stage](self, _cmd, sampler, index);                                                             \
+    }                                                                                                                    \
+    static void abSetSamplers##name(id self, SEL _cmd, const id __unsafe_unretained *samplers, NSRange range) {           \
+        for (NSUInteger i = 0; i < range.length; i++) abRecordSampler(self, stage, samplers[i], NO, 0, 0, range.location + i); \
+        abOrigSetSamplers[stage](self, _cmd, samplers, range);                                                           \
+    }                                                                                                                    \
+    static void abSetSamplerLod##name(id self, SEL _cmd, id sampler, float min, float max, NSUInteger index) {            \
+        abRecordSampler(self, stage, sampler, YES, min, max, index);                                                     \
+        abOrigSetSamplerLod[stage](self, _cmd, sampler, min, max, index);                                                \
+    }                                                                                                                    \
+    static void abSetSamplersLod##name(id self, SEL _cmd, const id __unsafe_unretained *samplers, const float *mins,      \
+                                       const float *maxs, NSRange range) {                                               \
+        for (NSUInteger i = 0; i < range.length; i++)                                                                    \
+            abRecordSampler(self, stage, samplers[i], mins != NULL, mins ? mins[i] : 0, maxs ? maxs[i] : 0, range.location + i); \
+        abOrigSetSamplersLod[stage](self, _cmd, samplers, mins, maxs, range);                                            \
+    }
+AB_HANDLE_HOOKS(Vertex, 0)
+AB_HANDLE_HOOKS(Fragment, 1)
+AB_HANDLE_HOOKS(Compute, 2)
+
 static void abSetRenderPipeline(id self, SEL _cmd, id pipeline) {
     abState(self)->bindings = objc_getAssociatedObject(pipeline, kABBindingsKey);
     abOrigSetRenderPipeline(self, _cmd, pipeline);
@@ -1271,7 +1359,18 @@ static void abBind(id encoder, BOOL restore) {
     if (!s || !s->bindings) return;
     const ABBinding *b = s->bindings.bytes;
     for (NSUInteger k = 0; k < s->bindings.length / sizeof(ABBinding); k++) {
-        int st = b[k].stage;
+        int st = b[k].stage, h = b[k].hidden;
+        if (restore && b[k].kind == kABTexture) {
+            if (s->textures[st][h]) abOrigSetTexture[st](encoder, abSetTextureSel[st], s->textures[st][h], h);
+            continue;
+        }
+        if (restore && b[k].kind == kABSampler) {
+            if (s->samplers[st][h] && s->clamped[st][h])
+                abOrigSetSamplerLod[st](encoder, abSetSamplerLodSel[st], s->samplers[st][h], s->lodMin[st][h], s->lodMax[st][h], h);
+            else if (s->samplers[st][h])
+                abOrigSetSampler[st](encoder, abSetSamplerSel[st], s->samplers[st][h], h);
+            continue;
+        }
         if (restore) {
             if (s->buffers[st][b[k].hidden])
                 abOrigSetBuffer[st](encoder, abSetBufferSel[st], s->buffers[st][b[k].hidden], s->offsets[st][b[k].hidden], b[k].hidden);
@@ -1294,7 +1393,10 @@ static void abBind(id encoder, BOOL restore) {
         uint64_t token;
         memcpy(&token, p + base + b[k].offset, sizeof token);
         id target = abBufferForId((uint32_t)(token >> 32));
-        if (target) abOrigSetBuffer[st](encoder, abSetBufferSel[st], target, (uint32_t)token, b[k].hidden);
+        if (!target) continue;
+        if (b[k].kind == kABTexture) abOrigSetTexture[st](encoder, abSetTextureSel[st], target, h);
+        else if (b[k].kind == kABSampler) abOrigSetSampler[st](encoder, abSetSamplerSel[st], target, h);
+        else abOrigSetBuffer[st](encoder, abSetBufferSel[st], target, (uint32_t)token, h);
     }
 }
 
@@ -1354,6 +1456,43 @@ static void installIvbArgumentBuffers(void) {
     }
     abOrigSetRenderPipeline = (ABSetPipelineIMP)swizzle(kRender, "setRenderPipelineState:", (IMP)abSetRenderPipeline);
     abOrigSetComputePipeline = (ABSetPipelineIMP)swizzle(kCompute, "setComputePipelineState:", (IMP)abSetComputePipeline);
+    // item 79: textures and samplers, when the driver has every setter this needs
+    const char *const setTexture[3] = {"setVertexTexture:atIndex:", "setFragmentTexture:atIndex:", "setTexture:atIndex:"};
+    const char *const setTextures[3] = {"setVertexTextures:withRange:", "setFragmentTextures:withRange:", "setTextures:withRange:"};
+    const char *const setSampler[3] = {"setVertexSamplerState:atIndex:", "setFragmentSamplerState:atIndex:", "setSamplerState:atIndex:"};
+    const char *const setSamplers[3] = {"setVertexSamplerStates:withRange:", "setFragmentSamplerStates:withRange:", "setSamplerStates:withRange:"};
+    const char *const setSamplerLod[3] = {"setVertexSamplerState:lodMinClamp:lodMaxClamp:atIndex:",
+                                          "setFragmentSamplerState:lodMinClamp:lodMaxClamp:atIndex:", "setSamplerState:lodMinClamp:lodMaxClamp:atIndex:"};
+    const char *const setSamplersLod[3] = {"setVertexSamplerStates:lodMinClamps:lodMaxClamps:withRange:",
+                                           "setFragmentSamplerStates:lodMinClamps:lodMaxClamps:withRange:",
+                                           "setSamplerStates:lodMinClamps:lodMaxClamps:withRange:"};
+    const char *handles = getenv("MTLSHIM_IVB_ARGUMENT_BUFFER_TEXTURES");
+    BOOL texturesOn = !(handles && !strcmp(handles, "0"));
+    for (int st = 0; st < 3 && texturesOn; st++)
+        if (!definesMethod(stageClass[st], setTexture[st]) || !definesMethod(stageClass[st], setTextures[st]) ||
+            !definesMethod(stageClass[st], setSampler[st]) || !definesMethod(stageClass[st], setSamplers[st]) ||
+            !definesMethod(stageClass[st], setSamplerLod[st]) || !definesMethod(stageClass[st], setSamplersLod[st]))
+            texturesOn = NO;
+    if (texturesOn) {
+        const IMP textureHooks[3] = {(IMP)abSetTextureVertex, (IMP)abSetTextureFragment, (IMP)abSetTextureCompute};
+        const IMP texturesHooks[3] = {(IMP)abSetTexturesVertex, (IMP)abSetTexturesFragment, (IMP)abSetTexturesCompute};
+        const IMP samplerHooks[3] = {(IMP)abSetSamplerVertex, (IMP)abSetSamplerFragment, (IMP)abSetSamplerCompute};
+        const IMP samplersHooks[3] = {(IMP)abSetSamplersVertex, (IMP)abSetSamplersFragment, (IMP)abSetSamplersCompute};
+        const IMP samplerLodHooks[3] = {(IMP)abSetSamplerLodVertex, (IMP)abSetSamplerLodFragment, (IMP)abSetSamplerLodCompute};
+        const IMP samplersLodHooks[3] = {(IMP)abSetSamplersLodVertex, (IMP)abSetSamplersLodFragment, (IMP)abSetSamplersLodCompute};
+        for (int st = 0; st < 3; st++) {
+            abSetTextureSel[st] = sel_registerName(setTexture[st]);
+            abSetSamplerSel[st] = sel_registerName(setSampler[st]);
+            abSetSamplerLodSel[st] = sel_registerName(setSamplerLod[st]);
+            abOrigSetTexture[st] = (ABSetTextureIMP)swizzle(stageClass[st], setTexture[st], textureHooks[st]);
+            abOrigSetTextures[st] = (ABSetTexturesIMP)swizzle(stageClass[st], setTextures[st], texturesHooks[st]);
+            abOrigSetSampler[st] = (ABSetTextureIMP)swizzle(stageClass[st], setSampler[st], samplerHooks[st]);
+            abOrigSetSamplers[st] = (ABSetTexturesIMP)swizzle(stageClass[st], setSamplers[st], samplersHooks[st]);
+            abOrigSetSamplerLod[st] = (ABSetSamplerLodIMP)swizzle(stageClass[st], setSamplerLod[st], samplerLodHooks[st]);
+            abOrigSetSamplersLod[st] = (ABSetSamplersLodIMP)swizzle(stageClass[st], setSamplersLod[st], samplersLodHooks[st]);
+        }
+        abTexturesOn = YES;
+    }
     const struct { const char *cls, *sel; IMP imp; IMP *orig; } draws[] = {
         {kRender, "drawPrimitives:vertexStart:vertexCount:", (IMP)abDrawP, (IMP *)&abOrigDrawP},
         {kRender, "drawPrimitives:vertexStart:vertexCount:instanceCount:", (IMP)abDrawPI, (IMP *)&abOrigDrawPI},
