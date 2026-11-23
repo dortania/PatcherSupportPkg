@@ -9,7 +9,7 @@
 // entry points: one r32ui plane on a framebuffer with no other attachment, loaded as zero, two draws that each add 7
 // (with a barrier between them, as the extension asks without raster order groups), stored and read back: 14 everywhere.
 // FAIL with item 11's old list (MTLSHIM_NO_ATTACHMENTS=0 restores it). SKIP without WebKit's ANGLE or the extension.
-// Runs on the GPU ANGLE picks (the result line names the renderer).
+// Runs on the GPU ANGLE picks (the result line names the renderer); an Intel argument on a dual-GPU Mac picks the iGPU.
 #import "repro.h"
 #include <dlfcn.h>
 #include <string.h>
@@ -46,6 +46,9 @@ static U step(const char *what) {  // S85_VERBOSE=1: the GL error after each cal
 int main(int argc, char **argv) {
     @autoreleasepool {
         const char *bug = "s85-angle-pixel-local-storage";
+        // WebKit's ANGLE takes the GPU item 11 gives it (the family-2 one on a dual-GPU Mac); asked for the Intel GPU, the
+        // test makes ANGLE's callers see only the iGPU (MTLSHIM_TEST_IGPU_ONLY), so the family-1 Intel path runs there too
+        if (argc > 1 && strcasestr(argv[1], "intel") && MTLCopyAllDevices().count > 1) setenv("MTLSHIM_TEST_IGPU_ONLY", "1", 0);
         MTLCreateSystemDefaultDevice();  // as WebCore does in Safari's GPU process before ANGLE starts
         angle = dlopen("/System/Library/Frameworks/WebKit.framework/Versions/A/Frameworks/WebCore.framework/Versions/A/Frameworks/"
                        "libANGLE-shared.dylib", RTLD_NOW);
