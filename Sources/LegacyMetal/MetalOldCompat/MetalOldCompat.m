@@ -5585,9 +5585,15 @@ static void interposeCompilerImage(const struct mach_header *mh, intptr_t slide)
 }
 
 // The process that runs the GPU compiler, where items 25, 75 and the read sampler rewrite go: MTLCompilerService, or a
-// test that runs it in-process (Tests/tools/localcc.dylib, which verify.sh uses, exports localcc_hosts_compiler)
+// test that runs it in-process (Tests/tools/localcc.dylib, which verify.sh uses). Called from the constructor of every
+// process that loads Metal, WindowServer at boot included: no dlsym there, only the list of loaded images.
 static bool hostsCompiler(void) {
-    return !strcmp(getprogname(), "MTLCompilerService") || dlsym(RTLD_DEFAULT, "localcc_hosts_compiler");
+    if (!strcmp(getprogname(), "MTLCompilerService")) return true;
+    for (uint32_t i = 0, n = _dyld_image_count(); i < n; i++) {
+        const char *name = _dyld_get_image_name(i), *slash = name ? strrchr(name, '/') : NULL;
+        if (slash && !strcmp(slash + 1, "localcc.dylib")) return true;
+    }
+    return false;
 }
 
 static void installAIR27Retargeting(void) {
@@ -5719,8 +5725,13 @@ static void addCompiledOutput(id self, SEL _cmd, id output, id cachedOutput, id 
     origAddCompiledOutput(self, _cmd, output, cachedOutput, symbols, libraries, hashKey, type, functionCache);
 }
 
-// <user cache folder>/<bundle id>/com.apple.metal/<GPU>/functions.{data,list}; a marker file records that it was done
+// <user cache folder>/<bundle id>/com.apple.metal/<GPU>/functions.{data,list}; a marker file records that it was done.
+// Not from the constructor: it runs in WindowServer and loginwindow at boot, where confstr's lookup of the user's cache
+// folder (dirhelper, opendirectoryd) and file work may wait on services that aren't up yet (the HD 4000's Tahoe stopped
+// booting where WindowServer starts). It runs on the process's first compile request instead, before that request reads
+// the cache, and only in apps run by a user (bundle id, uid 501 and up): the Chrome case, not system daemons.
 static void clearFunctionCachesOnce(void) {
+    if (getuid() < 501) return;
     NSString *bundle = NSBundle.mainBundle.bundleIdentifier;
     char dir[PATH_MAX];
     if (!bundle || !confstr(_CS_DARWIN_USER_CACHE_DIR, dir, sizeof dir)) return;
@@ -5737,6 +5748,15 @@ static void clearFunctionCachesOnce(void) {
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] function cache: %d file(s) cleared in %s\n", cleared, root.UTF8String);
 }
 
+typedef void (*CompileRequestIMP)(id, SEL, id, BOOL, unsigned long long, BOOL, id);
+static CompileRequestIMP origCompileRequest;
+static void compileRequest(id self, SEL _cmd, id request, BOOL frameworkLinking, unsigned long long linkDataSize, BOOL reflectionOnly,
+                           id handler) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ clearFunctionCachesOnce(); });
+    origCompileRequest(self, _cmd, request, frameworkLinking, linkDataSize, reflectionOnly, handler);
+}
+
 static void installFunctionCacheKeys(void) {
     const char *setting = getenv("MTLSHIM_CACHE_KEYS");
     if (setting && !strcmp(setting, "0")) return;
@@ -5747,7 +5767,9 @@ static void installFunctionCacheKeys(void) {
     if (!store || !add) return;
     origAddCompiledOutput = (AddCompiledOutputIMP)method_setImplementation(add, (IMP)addCompiledOutput);
     origCacheCompilerData = (CacheCompilerDataIMP)method_setImplementation(store, (IMP)cacheCompilerData);
-    clearFunctionCachesOnce();
+    Method request = class_getInstanceMethod(compiler,
+        sel_registerName("compileFunctionRequestInternal:frameworkLinking:linkDataSize:reflectionOnly:completionHandler:"));
+    if (request) origCompileRequest = (CompileRequestIMP)method_setImplementation(request, (IMP)compileRequest);
 }
 
 // 45. Texture reads through the read sampler. Xcode 26's front end builds every texture read of a Metal 4.0 library, and
