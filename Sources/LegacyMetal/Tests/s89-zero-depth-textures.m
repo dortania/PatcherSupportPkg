@@ -1,13 +1,13 @@
-// n51-kepler-zero-depth-textures (MetalOldCompat item 84): new depth and stencil textures must read zero. Kepler's driver
-// hands a new depth or stencil texture the memory a freed one of the same size left, as it was, and Safari's WebGPU
-// relies on new textures being zero (as Apple's GPUs make them) for a depth/stencil attachment that a pass loads and
-// stores: WebGPU CTS resource_init,texture_zero:uninitialized_texture_is_zero (2d, DepthTest and StencilTest after
-// "Creation") read the old values, which a page could use to read another resource's freed data. (Item 84 is on in
-// WebKit's GPU process, elsewhere with MTLSHIM_NV_ZERO_DEPTH=1, which the test sets for itself.) Checked, for
-// Depth32Float (5 levels, 3 slices), Depth16Unorm, Stencil8 and Depth32Float_Stencil8 (both aspects), 64x64 render
+// s89-zero-depth-textures (MetalOldCompat item 84): new depth and stencil textures must read zero. The Kepler, Haswell,
+// Ivy Bridge and GCN drivers hand a new depth or stencil texture the memory a freed one of the same size left, as it
+// was, and Safari's WebGPU relies on new textures being zero (as Apple's GPUs make them) for a depth/stencil attachment
+// that a pass loads and stores: WebGPU CTS resource_init,texture_zero:uninitialized_texture_is_zero (2d, DepthTest and
+// StencilTest after "Creation") read the old values, which a page could use to read another resource's freed data.
+// (Item 84 is on in WebKit's GPU process, elsewhere with MTLSHIM_ZERO_DEPTH=1, which the test sets for itself.) Checked,
+// for Depth32Float (5 levels, 3 slices), Depth16Unorm, Stencil8 and Depth32Float_Stencil8 (both aspects), 64x64 render
 // targets: textures of the same kind are cleared to depth 0.7 / stencil 0x5a and freed, then every level and slice of a
-// new one is copied to a buffer and must be all zero. Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name
-// substring (default: NVIDIA).
+// new one is copied to a buffer and must be all zero. Stock OCLP: FAIL (GTX 770, Iris Pro, R9 M370X). Fixed: PASS.
+// Argument: GPU name substring (default: the system default GPU).
 #import "repro.h"
 
 static int check(const char *bug, const char *name, id<MTLDevice> dev, id<MTLCommandQueue> queue, MTLPixelFormat format,
@@ -84,10 +84,11 @@ static int check(const char *bug, const char *name, id<MTLDevice> dev, id<MTLCom
 
 int main(int argc, char **argv) {
     @autoreleasepool {
-        const char *bug = "n51-kepler-zero-depth-textures";
-        setenv("MTLSHIM_NV_ZERO_DEPTH", "1", 0);  // item 84 is on by itself only in WebKit's GPU process (=0, the fix's switch, stays)
-        id<MTLDevice> dev = reproDevice(argc, argv, "NVIDIA");
+        const char *bug = "s89-zero-depth-textures";
+        setenv("MTLSHIM_ZERO_DEPTH", "1", 0);  // item 84 is on by itself only in WebKit's GPU process (=0, the fix's switch, stays)
+        id<MTLDevice> dev = argc > 1 ? reproDevice(argc, argv, "") : MTLCreateSystemDefaultDevice();
         if (!dev) return SKIP(bug, "no such GPU");
+        if (!reproOnMetalOld()) return SKIP(bug, "not OCLP's legacy Metal (the GPU's own driver, no MetalOldCompat)");
         const char *name = dev.name.UTF8String;
         id<MTLCommandQueue> queue = [dev newCommandQueue];
         int r;
