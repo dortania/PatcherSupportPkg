@@ -145,6 +145,8 @@
 //      the compiler service): bound at the adapter's hidden texture / sampler indices around each draw or dispatch
 //  83. blits from two threads at once on the Ivy Bridge driver, which crashed it (SIGFPE in its fixed-function kernel
 //      setup): its blit methods run one at a time
+//  85. vertex functions with 32 inputs on the Ivy Bridge driver, whose input walk never ended (an abort): it is
+//      stopped after the 32nd
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -5554,6 +5556,60 @@ static void ivbSerializedBlits(void) {
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Ivy Bridge: %d blit methods run one at a time\n", n);
 }
 
+// 85. Vertex functions with 32 inputs on the Ivy Bridge driver: -[MTLIGRenderPipelineState generate3DStateVF:] walks the
+// vertex function's inputs (its attributes and its [[vertex_id]] and [[instance_id]], in the function's order) while
+// their bit is set in a 32-bit mask, testing bit (i mod 32) after each; with exactly 32 inputs the mask is full, so after
+// the last one it tests bit 0 again, walks on past its 32 records, asks for vertex attribute 7680 (or 65536), and Metal
+// aborts the process. WebKit's WebGPU offers 30 attributes, so a page using all of them with vertex_index and
+// instance_index crashed Safari's GPU process (CTS vertex_state, max_buffers_and_attribs and overlapping_attributes); 31
+// attributes with [[vertex_id]] crashed any app. The mask is read again after every input, so for such a function bit 0
+// is cleared once the walk is past the first input (when it first asks the vertex descriptor for an attribute) and put
+// back when the driver is done: the walk then ends after the 32nd. 33 inputs (31 attributes and both IDs) are past the
+// driver's table and still draw wrong. Ivy Bridge only. MTLSHIM_IVB_VERTEX_INPUTS=0 turns it off. Test: s88.
+typedef BOOL (*GenerateVFIMP)(id, SEL, void *);
+typedef id (*AttributeAtIndexIMP)(id, SEL, NSUInteger);
+static GenerateVFIMP origIvbGenerateVF;
+static AttributeAtIndexIMP origIvbAttributeAtIndex;
+static ptrdiff_t ivbVSOffset;
+static pthread_mutex_t ivbVertexInputsLock = PTHREAD_MUTEX_INITIALIZER;
+static __thread uint8_t *ivbFullInputMask;  // this thread's driver is walking a full mask (in a compiled vertex function)
+enum { kIvbInputMask = 0x3d99 };
+
+static id ivbAttributeAtIndex(id self, SEL _cmd, NSUInteger index) {
+    if (ivbFullInputMask) {
+        const uint32_t past0 = 0xfffffffe;
+        memcpy(ivbFullInputMask, &past0, 4);
+        ivbFullInputMask = NULL;
+    }
+    return origIvbAttributeAtIndex(self, _cmd, index);
+}
+static BOOL ivbGenerateVF(id self, SEL _cmd, void *arg) {
+    uint8_t *object = (__bridge void *)self, *stage = *(uint8_t **)(object + ivbVSOffset), *program = stage ? *(uint8_t **)(stage + 8) : NULL;
+    uint32_t mask = 0;
+    if (program) memcpy(&mask, program + kIvbInputMask, 4);
+    if (mask != 0xffffffff) return origIvbGenerateVF(self, _cmd, arg);
+    // the mask belongs to the compiled vertex function, which other pipelines share: changed only for this call
+    pthread_mutex_lock(&ivbVertexInputsLock);
+    ivbFullInputMask = program + kIvbInputMask;
+    BOOL result = origIvbGenerateVF(self, _cmd, arg);
+    ivbFullInputMask = NULL;
+    memcpy(program + kIvbInputMask, &mask, 4);
+    pthread_mutex_unlock(&ivbVertexInputsLock);
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] vertex function with 32 inputs: the driver's walk stopped after the last\n");
+    return result;
+}
+static void ivbVertexInputs(void) {
+    const char *setting = getenv("MTLSHIM_IVB_VERTEX_INPUTS"), *image = class_getImageName(objc_getClass("MTLIGRenderPipelineState"));
+    if (origIvbGenerateVF || !image || !strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") || (setting && !strcmp(setting, "0"))) return;
+    Ivar vs = class_getInstanceVariable(objc_getClass("MTLIGRenderPipelineState"), "mVS");
+    if (!vs || !definesMethod("MTLIGRenderPipelineState", "generate3DStateVF:") ||
+        !definesMethod("MTLVertexAttributeDescriptorArrayInternal", "objectAtIndexedSubscript:"))
+        return;
+    ivbVSOffset = ivar_getOffset(vs);
+    origIvbAttributeAtIndex = (AttributeAtIndexIMP)swizzle("MTLVertexAttributeDescriptorArrayInternal", "objectAtIndexedSubscript:", (IMP)ivbAttributeAtIndex);
+    origIvbGenerateVF = (GenerateVFIMP)swizzle("MTLIGRenderPipelineState", "generate3DStateVF:", (IMP)ivbGenerateVF);
+}
+
 static void patchDriverClasses(void) {
     if (patched) restoreArgumentEncoders();  // item 14: after the wrapper's initializer
     if (patched) ivbDrawParameters();  // item 48, under item 47's draw hooks
@@ -5616,6 +5672,7 @@ static void patchDriverClasses(void) {
     if (!origIGFillBuffer && definesMethod("MTLIGAccelBlitCommandEncoder", "fillBuffer:range:value:"))
         origIGFillBuffer = (FillBufferIMP)swizzle("MTLIGAccelBlitCommandEncoder", "fillBuffer:range:value:", (IMP)igFillBuffer);
     ivbSerializedBlits();  // item 83: last, so that its lock wraps the other blit hooks
+    ivbVertexInputs();  // item 85
     os_unfair_lock_unlock(&lock);
 }
 
