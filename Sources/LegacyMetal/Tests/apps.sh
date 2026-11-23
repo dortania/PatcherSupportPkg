@@ -19,6 +19,14 @@ T=$(cd "$(dirname "$0")" && pwd); P=$(cd "$T/.." && pwd)
 # warnings about this Mac (a kext the next boot loses, a staged macOS update), without stopping the run
 [ -x "$T/tools/preflight.sh" ] && { "$T/tools/preflight.sh" || echo "(preflight warnings above; continuing)"; }
 secs=${1:-25}
+# The browsers' pages finish on requestAnimationFrame, which doesn't run while the display sleeps (every page then "no
+# result", a false FAIL): wake the display and keep it awake for as long as this script runs
+caffeinate -u -t 1 > /dev/null 2>&1; caffeinate -d -w $$ > /dev/null 2>&1 &
+# A locked screen hides the browsers' windows too, and the pages wait for requestAnimationFrame forever: stop instead of
+# reporting every page stuck. Only the user can unlock.
+if ioreg -n Root -d1 2>/dev/null | grep -q '"CGSSessionScreenIsLocked"=Yes'; then
+    echo "$(basename "$0"): the screen is locked; the pages can't finish behind the lock screen (unlock, then run again)" >&2; exit 2
+fi
 # PAGE=webgpu-page.html: the browsers open that page instead (WebGPU through Dawn or Firefox's wgpu instead of WebGL)
 PAGE=${PAGE:-apps-page.html}
 inject=()

@@ -161,7 +161,8 @@ async function sampling(device) {
     const adapter = await navigator.gpu.requestAdapter();
     if (!adapter) return fail('no WebGPU adapter');
     const info = adapter.info || {};
-    console.log(`webgpu-page: adapter ${info.vendor || '?'} ${info.architecture || ''} ${info.description || ''}`.trim());
+    window.webgpuAdapter = `${info.vendor || '?'} ${info.architecture || ''} ${info.description || ''}`.trim();  // for WKWebView runners
+    console.log(`webgpu-page: adapter ${window.webgpuAdapter}`);
     const device = await adapter.requestDevice();
     const lost = device.lost.then(l => fail('device lost: ' + l.message));
     device.addEventListener('uncapturederror', e => fail('uncaptured error: ' + e.error.message));

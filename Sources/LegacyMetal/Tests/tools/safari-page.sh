@@ -7,6 +7,14 @@
 set -u
 T=$(cd "$(dirname "$0")/.." && pwd)
 secs=${1:-30} port=$((8700 + RANDOM % 200))
+# The browsers' pages finish on requestAnimationFrame, which doesn't run while the display sleeps (every page then "no
+# result", a false FAIL): wake the display and keep it awake for as long as this script runs
+caffeinate -u -t 1 > /dev/null 2>&1; caffeinate -d -w $$ > /dev/null 2>&1 &
+# A locked screen hides the browsers' windows too, and the pages wait for requestAnimationFrame forever: stop instead of
+# reporting every page stuck. Only the user can unlock.
+if ioreg -n Root -d1 2>/dev/null | grep -q '"CGSSessionScreenIsLocked"=Yes'; then
+    echo "$(basename "$0"): the screen is locked; the pages can't finish behind the lock screen (unlock, then run again)" >&2; exit 2
+fi
 page_file=${PAGE:-apps-page.html}
 out=$(mktemp -d)
 trap 'pkill -f "pageserver.py $port" 2>/dev/null; rm -rf "$out"' EXIT
