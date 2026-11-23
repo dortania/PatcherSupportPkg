@@ -1880,6 +1880,19 @@ static MTLRenderPassDescriptor *passWithFourSamples(id<MTLCommandBuffer> buffer,
 }
 
 static MTLRenderPipelineDescriptor *adjustedPipeline(id<MTLDevice> device, MTLRenderPipelineDescriptor *descriptor) {
+    if (getenv("MTLSHIM_LOG_VERTEX_DESCRIPTORS") && descriptor.vertexDescriptor) {  // debugging: each layout and attribute in use, to the system log
+        MTLVertexDescriptor *vd = descriptor.vertexDescriptor;
+        NSMutableString *text = [NSMutableString stringWithFormat:@"[mtlshim] vertex descriptor of %@:", descriptor.vertexFunction.name];
+        for (NSUInteger i = 0; i < 31; i++) {
+            MTLVertexBufferLayoutDescriptor *l = vd.layouts[i];
+            if (l.stride) [text appendFormat:@" layout%lu{stride %lu step %lu rate %lu}", (unsigned long)i, (unsigned long)l.stride, (unsigned long)l.stepFunction, (unsigned long)l.stepRate];
+        }
+        for (NSUInteger i = 0; i < 31; i++) {
+            MTLVertexAttributeDescriptor *a = vd.attributes[i];
+            if (a.format != MTLVertexFormatInvalid) [text appendFormat:@" attr%lu{format %lu offset %lu buffer %lu}", (unsigned long)i, (unsigned long)a.format, (unsigned long)a.offset, (unsigned long)a.bufferIndex];
+        }
+        os_log(OS_LOG_DEFAULT, "%{public}s", text.UTF8String);
+    }
     return withCoverageWrite(device, withEmptyFragment(device, withDummyAttachment(device, withFourSamples(device, descriptor))));  // items 77, 73, 21 and 34
 }
 
@@ -2396,8 +2409,25 @@ static void repairDepthLevels(id<MTLCommandBuffer> commandBuffer, id<MTLTexture>
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] depth pass at a level above 0: empty pass at level 0 after it\n");
 }
 
+// 81. A stencil clear value above 255: the stencil formats keep 8 bits, and WebGPU (stencilClearValue) and Metal take the
+// low ones, but on Kepler a clearStencil of 258 left the pass's stencil and the copy after it unwritten, and 65539 failed the
+// command buffer (Safari's WebGPU passes the value through; WebGPU CTS clear_value:stencil_clear_value in WebKit, every
+// stencil format; Chrome masks it and passes). The pass's clearStencil is masked to 8 bits here. MTLSHIM_STENCIL_CLEAR_MASK=0
+// turns it off. Test: n49.
+static MTLRenderPassDescriptor *withMaskedStencilClear(MTLRenderPassDescriptor *descriptor) {
+    static int setting;  // 1 on, -1 off
+    if (!setting) {
+        const char *value = getenv("MTLSHIM_STENCIL_CLEAR_MASK");
+        setting = value && !strcmp(value, "0") ? -1 : 1;
+    }
+    if (setting < 0 || !descriptor || descriptor.stencilAttachment.clearStencil <= 0xff) return descriptor;
+    MTLRenderPassDescriptor *copy = [descriptor copy];
+    copy.stencilAttachment.clearStencil = descriptor.stencilAttachment.clearStencil & 0xff;
+    return copy;
+}
+
 static id igRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor) {
-    descriptor = withDummyTarget(self, passWithFourSamples(self, descriptor));  // items 77 and 73
+    descriptor = withMaskedStencilClear(withDummyTarget(self, passWithFourSamples(self, descriptor)));  // items 77, 73 and 81
     MTLRenderPassDescriptor *redirected = nil;
     NSMutableArray *copies = nil;  // {temporary, destination, level, slice, depth plane}
     for (NSUInteger i = 0; descriptor && i < 8; i++) {
@@ -2639,7 +2669,7 @@ static RenderEncoderIMP origNVRenderEncoder;
 static EndEncodingIMP origNVRenderEndEncoding;
 static BOOL nvResolveLevels;  // item 55 on
 static id nvRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor) {
-    descriptor = withDummyTarget(self, passWithFourSamples(self, descriptor));  // items 77 and 73
+    descriptor = withMaskedStencilClear(withDummyTarget(self, passWithFourSamples(self, descriptor)));  // items 77, 73 and 81
     MTLRenderPassDescriptor *redirected = nil;
     NSMutableArray *copies = nil;  // {temporary, destination, level, slice, depth plane}
     for (NSUInteger i = 0; descriptor && nvResolveLevels && i < 8; i++) {
