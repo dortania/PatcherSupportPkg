@@ -139,6 +139,8 @@
 //      order than the hardware's: reported in the hardware's order
 //  72. copies between a format and its sRGB variant on Ivy Bridge and Haswell, which converted the texels (BC: garbled): made
 //      through a buffer
+//  77. 2x multisampling on GPUs without it (Ivy Bridge, Haswell), which MetalOld's validation aborted on (Tahoe's Sequoia
+//      wallpaper): 2 samples become 4 in textures, heap sizes, render pipelines and attachment-less passes
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -357,8 +359,34 @@ static id initFunction(CONSUMED id self, SEL _cmd, id device, dispatch_data_t da
 typedef BOOL (*ValidateTextureIMP)(id, SEL, id);
 static ValidateTextureIMP origValidateTexture;
 
+// 77. 2x multisampling on GPUs without it. Ivy Bridge and Haswell have 4x and 8x only (supportsTextureSampleCount:2 is NO
+// on the HD 4000 and the Iris Pro), and MetalOld's texture validation aborts on a 2x texture ("MTLTextureDescriptor
+// sampleCount (2) is not supported by device."). Tahoe's Sequoia wallpaper (WallpaperSequoiaExtension) renders its
+// scene into a 2x Depth16Unorm target without asking, so the extension crashed and the wallpaper fell back to Tahoe's
+// default. Where the device itself says it has no 2x but has 4x, a sample count of 2 becomes 4 everywhere it can come in,
+// together, so a pass and its pipelines keep agreeing: texture descriptors (in validation, which every texture path
+// runs), heap sizing (heapTextureSizeAndAlignWithDescriptor:), render pipelines (adjustedPipeline) and the default raster
+// sample count of passes without attachments (before item 73's stand-in target). supportsTextureSampleCount:2 still says
+// NO, so apps that ask keep choosing 4x themselves. Shaders that read [[sample_id]], get_num_samples() or sample
+// positions see 4 samples. MTLSHIM_MSAA2=0 turns it off. Test: s83 (and tools/wallpaper-check.sh builtin:sequoia).
+static char kTwoSamplesKey;
+static BOOL promotesTwoSamples(id<MTLDevice> device) {
+    static int enabled = -1;
+    if (enabled < 0) { const char *setting = getenv("MTLSHIM_MSAA2"); enabled = !(setting && !strcmp(setting, "0")); }
+    if (!enabled || !device) return NO;
+    NSNumber *known = objc_getAssociatedObject(device, &kTwoSamplesKey);
+    if (known) return known.boolValue;
+    BOOL promote = ![device supportsTextureSampleCount:2] && [device supportsTextureSampleCount:4];
+    objc_setAssociatedObject(device, &kTwoSamplesKey, @(promote), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return promote;
+}
+
 static BOOL validateTexture(id self, SEL _cmd, id device) {
     MTLTextureDescriptor *desc = self;
+    if (desc.sampleCount == 2 && promotesTwoSamples(device)) {  // item 77
+        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] 2x multisampled texture made 4x (the device has no 2x)\n");
+        desc.sampleCount = 4;
+    }
     if (desc.usage & MTLTextureUsageShaderAtomic) {
         if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] dropped MTLTextureUsageShaderAtomic (usage 0x%lx)\n", (unsigned long)desc.usage);
         desc.usage = (desc.usage & ~MTLTextureUsageShaderAtomic) | MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
@@ -1690,8 +1718,26 @@ static MTLRenderPassDescriptor *withDummyTarget(id<MTLCommandBuffer> buffer, MTL
     return copy;
 }
 
+// Item 77 for render pipelines: rasterSampleCount 2 becomes 4 on a device without 2x.
+static MTLRenderPipelineDescriptor *withFourSamples(id<MTLDevice> device, MTLRenderPipelineDescriptor *descriptor) {
+    if (!descriptor || descriptor.rasterSampleCount != 2 || !promotesTwoSamples(device)) return descriptor;
+    MTLRenderPipelineDescriptor *copy = [descriptor copy];
+    copy.rasterSampleCount = 4;
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] 2x render pipeline made 4x (the device has no 2x)\n");
+    return copy;
+}
+
+// Item 77 for passes without attachments: defaultRasterSampleCount 2 becomes 4 on a device without 2x.
+static MTLRenderPassDescriptor *passWithFourSamples(id<MTLCommandBuffer> buffer, MTLRenderPassDescriptor *descriptor) {
+    if (!descriptor || descriptor.defaultRasterSampleCount != 2 || !promotesTwoSamples(buffer.device)) return descriptor;
+    MTLRenderPassDescriptor *copy = [descriptor copy];
+    copy.defaultRasterSampleCount = 4;
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] 2x render pass made 4x (the device has no 2x)\n");
+    return copy;
+}
+
 static MTLRenderPipelineDescriptor *adjustedPipeline(id<MTLDevice> device, MTLRenderPipelineDescriptor *descriptor) {
-    return withCoverageWrite(device, withEmptyFragment(device, withDummyAttachment(device, descriptor)));  // items 73, 21 and 34
+    return withCoverageWrite(device, withEmptyFragment(device, withDummyAttachment(device, withFourSamples(device, descriptor))));  // items 77, 73, 21 and 34
 }
 
 static id newRenderPipeline(id self, SEL _cmd, MTLRenderPipelineDescriptor *descriptor, NSError **error) RETURNS_RETAINED;
@@ -2208,7 +2254,7 @@ static void repairDepthLevels(id<MTLCommandBuffer> commandBuffer, id<MTLTexture>
 }
 
 static id igRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor) {
-    descriptor = withDummyTarget(self, descriptor);  // item 73
+    descriptor = withDummyTarget(self, passWithFourSamples(self, descriptor));  // items 77 and 73
     MTLRenderPassDescriptor *redirected = nil;
     NSMutableArray *copies = nil;  // {temporary, destination, level, slice, depth plane}
     for (NSUInteger i = 0; descriptor && i < 8; i++) {
@@ -2450,7 +2496,7 @@ static RenderEncoderIMP origNVRenderEncoder;
 static EndEncodingIMP origNVRenderEndEncoding;
 static BOOL nvResolveLevels;  // item 55 on
 static id nvRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor) {
-    descriptor = withDummyTarget(self, descriptor);  // item 73
+    descriptor = withDummyTarget(self, passWithFourSamples(self, descriptor));  // items 77 and 73
     MTLRenderPassDescriptor *redirected = nil;
     NSMutableArray *copies = nil;  // {temporary, destination, level, slice, depth plane}
     for (NSUInteger i = 0; descriptor && nvResolveLevels && i < 8; i++) {
@@ -2831,12 +2877,23 @@ static id igNewViewRange(id self, SEL _cmd, MTLPixelFormat format, MTLTextureTyp
 static id igNewViewRange(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices) {
     return origIGNewViewRange(self, _cmd, sampleableStencilView(self, format), type, levels, slices);
 }
+// Item 77 for heaps: a 2x texture is sized as the 4x texture it becomes.
+typedef MTLSizeAndAlign (*HeapTextureSizeIMP)(id, SEL, MTLTextureDescriptor *);
+static HeapTextureSizeIMP origIGHeapTextureSize;
+static MTLSizeAndAlign igHeapTextureSize(id self, SEL _cmd, MTLTextureDescriptor *descriptor) {
+    if (descriptor.sampleCount != 2 || !promotesTwoSamples(self)) return origIGHeapTextureSize(self, _cmd, descriptor);
+    MTLTextureDescriptor *copy = [descriptor copy];
+    copy.sampleCount = 4;
+    return origIGHeapTextureSize(self, _cmd, copy);
+}
 static void intelDepthWithoutHiZ(void) {
     Class device = objc_getClass("MTLIGAccelDevice");
     Ivar hiz = device ? class_getInstanceVariable(device, "bHizDisable") : NULL;
     if (origIGNewTexture || !definesMethod("MTLIGAccelDevice", "newTextureWithDescriptor:")) return;
     if (hiz && !strcmp(ivar_getTypeEncoding(hiz), "B")) igHizDisableOffset = ivar_getOffset(hiz);
     origIGNewTexture = (NewTextureIMP)swizzle("MTLIGAccelDevice", "newTextureWithDescriptor:", (IMP)igNewTexture);
+    if (definesMethod("MTLIGAccelDevice", "heapTextureSizeAndAlignWithDescriptor:"))  // item 77
+        origIGHeapTextureSize = (HeapTextureSizeIMP)swizzle("MTLIGAccelDevice", "heapTextureSizeAndAlignWithDescriptor:", (IMP)igHeapTextureSize);
     if (igHizDisableOffset && definesMethod("MTLIGAccelHeap", "newTextureWithDescriptor:"))
         origIGHeapNewTexture = (NewTextureIMP)swizzle("MTLIGAccelHeap", "newTextureWithDescriptor:", (IMP)igHeapNewTexture);
     if (definesMethod("MTLIGAccelTexture", "newTextureViewWithPixelFormat:"))
