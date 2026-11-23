@@ -1803,6 +1803,49 @@ static unsigned dropArrayStructInfo(LLVMModuleRef module) {
     return dropped;
 }
 
+// ---- argument-buffer references in the 12.x plugin's emulation --------------------------------------------------------
+// The 12.x plugin emulates argument buffers (AirEmulateArgumentBuffers): each buffer an argument buffer points to becomes
+// a hidden kernel argument, numbered in order (air.location_index), that its driver binds at the dispatch. It builds the
+// hidden argument's metadata from the member's and writes that number at a fixed operand, the one after
+// "air.location_index" in {argno, "air.buffer", "air.location_index", N, ...}. The macOS 14 front end gives a reference
+// member (`device array<float4, 1> &out [[id(k)]]`, `device T &x`; a pointer member has no size) an "air.buffer_size"
+// first, so the number went into the size and the location kept the member's id: unless the two were the same, the
+// kernel used a hidden buffer the driver hadn't bound, and its reads and writes went nowhere. WebKit's WebGPU declares
+// every buffer of a bind group that way, next to textures and samplers: Safari's compute passes on Haswell wrote nothing.
+// The number is moved to the location and the size dropped, which is the form a pointer member gets.
+// INTEL_EMULATED_REFERENCE_FIX=0 turns it off. (i83, s86)
+static unsigned fixEmulatedReferenceSlots(LLVMModuleRef module) {
+    if (disabled("INTEL_EMULATED_REFERENCE_FIX")) return 0;
+    unsigned fixed = 0;
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    for (const char *list : {"air.kernel", "air.fragment", "air.vertex"}) {
+        std::vector<LLVMValueRef> entries(LLVMGetNamedMetadataNumOperands(module, list));
+        if (entries.empty()) continue;
+        LLVMGetNamedMetadataOperands(module, list, entries.data());
+        for (LLVMValueRef entry : entries) {
+            std::vector<LLVMValueRef> parts = metadataOperands(entry);
+            for (unsigned i = 1; i < parts.size(); i++) {
+                std::vector<LLVMValueRef> args = metadataOperands(parts[i]);
+                for (unsigned a = 0; a < args.size(); a++) {
+                    std::vector<LLVMValueRef> arg = metadataOperands(args[a]);
+                    if (arg.size() < 6 || !isString(arg[1], "air.buffer") || !isString(arg[2], "air.buffer_size") ||
+                        !arg[3] || !LLVMIsAConstantInt(arg[3]) || !isString(arg[4], "air.location_index") || !arg[5] ||
+                        !LLVMIsAConstantInt(arg[5]) || !isString(arg.back(), "air.emulation_argument"))
+                        continue;
+                    std::vector<LLVMValueRef> kept = {arg[0], arg[1], arg[4], arg[3]};
+                    kept.insert(kept.end(), arg.begin() + 6, arg.end());
+                    void *listNode = metadataOf(parts[i]);
+                    void *replacement = metadataOf(LLVMMDNodeInContext(context, kept.data(), (unsigned)kept.size()));
+                    if (!listNode || !replacement) continue;
+                    mdNodeReplaceOperand(listNode, a, replacement);
+                    fixed++;
+                }
+            }
+        }
+    }
+    return fixed;
+}
+
 // ---- argument buffers on Ivy Bridge ---------------------------------------------------------------------------------
 // OCLP's 11.7.10 Ivy Bridge plugin doesn't emulate argument buffers (the 12.x plugin makes each buffer an argument
 // buffer points to a hidden constant buffer, EMULATION_ARGUMENT TRUE, that its driver binds at the draw), and its driver
@@ -6173,6 +6216,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (n && logging()) fprintf(stderr, "[inteltex] %u loop(s) that never exit made returns\n", n);
         n = dropArrayStructInfo(module);
         if (n && logging()) fprintf(stderr, "[inteltex] struct info dropped from %u array-of-struct argument(s)\n", n);
+        n = ivyBridgePlugin ? 0 : fixEmulatedReferenceSlots(module);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u argument-buffer reference(s) given the hidden buffer the driver binds\n", n);
         n = fixEscapedHandleLoads(module);
         if (n && logging()) fprintf(stderr, "[inteltex] %u texture/sampler load(s) through escaped pointers re-indexed into the argument\n", n);
         n = fixVertexSignedSubwords(module);
