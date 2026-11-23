@@ -66,6 +66,10 @@ if [ "${STACK:-installed}" = build ]; then
     BUILD=1 "$T/fuzz/gpu.sh" "$k" > /dev/null 2>&1
     rm -rf "${k%/k.metal}"
     [ -f "$L/IntelTextureAtomics.dylib" ] || { echo "STACK=build: fuzz/gpu.sh didn't make $L" >&2; exit 2; }
+    # WebKit's GPU process keeps compiled functions in its own Metal cache, keyed on the code and the compiler plugin but
+    # not on the adapters (item 76 clears it when the installed ones change, not these): without this a run after a
+    # rebuild tests the functions the previous build compiled
+    rm -rf "$(getconf DARWIN_USER_CACHE_DIR)com.apple.WebKit.GPU+webkithost/com.apple.WebKit.GPU/com.apple.metal"
     env=(__XPC_DYLD_INSERT_LIBRARIES="$B/MetalOldCompat.dylib:$T/tools/bronzeload.dylib"
          __XPC_AMD_BRONZE_COMPAT_PATH="$L/AMDBronzeCompat.dylib"
          __XPC___XPC_DYLD_LIBRARY_PATH="$L:$L/GeForceAIRPlugin.bundle/Contents/MacOS")
