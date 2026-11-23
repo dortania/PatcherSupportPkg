@@ -11,7 +11,8 @@
 // metal::texture2d struct, then inttoptr), next to a `constant` struct reference and an unused sampler, and asks the
 // texture's size: before the adapter followed such copies the pipeline failed ("Compilation failed"), so every CTS
 // case that reads texels back on the GPU (BC and depth formats) compared against zeros. Stock OCLP: FAIL (pipeline
-// creation fails or the compiler crashes). Fixed: PASS. Argument: GPU name substring (default: Intel).
+// creation fails or the compiler crashes). Fixed: PASS. On GPUs with argument buffers of their own (Haswell, GCN,
+// Kepler) it checks their native path. Argument: GPU name substring (default: Intel).
 #import "repro.h"
 
 static NSString *const source =
@@ -115,7 +116,7 @@ int main(int argc, char **argv) {
         enum { W = 12, H = 4 };
         MTLTextureDescriptor *rd = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:W height:H mipmapped:NO];
         rd.usage = MTLTextureUsageRenderTarget;
-        rd.storageMode = MTLStorageModeShared;
+        rd.storageMode = MTLStorageModeManaged;  // a discrete GPU renders into its own memory: managed + synchronize
         id<MTLTexture> target = [dev newTextureWithDescriptor:rd];
         MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
         pass.colorAttachments[0].texture = target;
@@ -136,6 +137,9 @@ int main(int argc, char **argv) {
             [re drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
         }
         [re endEncoding];
+        id<MTLBlitCommandEncoder> sync = [cb blitCommandEncoder];
+        [sync synchronizeResource:target];
+        [sync endEncoding];
         if (!reproRun(cb)) return FAIL(bug, "%s: draws: command buffer failed", name);
         uint8_t pixels[W * H * 4];
         [target getBytes:pixels bytesPerRow:W * 4 fromRegion:MTLRegionMake2D(0, 0, W, H) mipmapLevel:0];
