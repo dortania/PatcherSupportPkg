@@ -1786,7 +1786,8 @@ static MTLRenderPipelineDescriptor *withCoverageWrite(id<MTLDevice> device, MTLR
 // R8Unorm with writeMask none, and such passes a private R8Unorm texture of the render target's size, layer count and
 // sample count (kept per device), loaded and stored as don't-care. The fragment function, its buffer and texture writes
 // and visibility results stay as they are (item 66 makes Kepler count samples for the masked attachment). Family-2 GPUs
-// are left alone. MTLSHIM_NO_ATTACHMENTS=0 turns it off. Test: s79.
+// are left alone. Vertex-only pipelines (rasterization off) without attachments get the same attachment: Safari's WebGPU makes
+// one for its indirect-draw clamp. MTLSHIM_NO_ATTACHMENTS=0 turns it off. Test: s79.
 static BOOL familyTwo(const void *device);
 static BOOL attachmentsEmulated(id<MTLDevice> device) {
     static int setting;  // 1 on, -1 off
@@ -1798,7 +1799,10 @@ static BOOL attachmentsEmulated(id<MTLDevice> device) {
 }
 
 static MTLRenderPipelineDescriptor *withDummyAttachment(id<MTLDevice> device, MTLRenderPipelineDescriptor *descriptor) {
-    if (!descriptor || !descriptor.rasterizationEnabled || descriptor.depthAttachmentPixelFormat != MTLPixelFormatInvalid ||
+    // rasterization off too: Safari's WebGPU clamps indirect draws with a vertex-only pipeline (no fragment function, no
+    // attachments, the pass's sample count) and MetalOld's validation aborted the GPU process on it all the same; with
+    // rasterization off the masked attachment is never written, and the pipeline draws in passes of any format (s79)
+    if (!descriptor || descriptor.depthAttachmentPixelFormat != MTLPixelFormatInvalid ||
         descriptor.stencilAttachmentPixelFormat != MTLPixelFormatInvalid)
         return descriptor;
     for (NSUInteger i = 0; i < 8; i++)
@@ -3250,6 +3254,19 @@ static void nvStencilUploadOrder(void) {
 // unaligned_mip_level_0, all BC formats). Such a copy's height is rounded up to the block: the level's memory holds whole
 // blocks, and the driver takes the size. MTLSHIM_NV_BLOCK_EDGE=0 turns it off. Test: n17 on the GTX 770.
 static BOOL nvVolumeOn, nvBlockEdgeOn;
+
+// 80. Kepler copies between a buffer and a depth-only texture wrong when asked for MTLBlitOptionDepthFromDepthStencil:
+// from a Depth16Unorm texture it writes 32-bit floats (00 00 80 3f for 1.0, two texels' worth), and into one it reads
+// them (16-bit depth values arrived as 0); without the option both copies are right. The option only means something for
+// a combined depth/stencil texture, and Safari's WebGPU passes it for every depth copy (WebGPU CTS storeOp
+// depth_stencil_attachment_only with depth16unorm, through tools/webkit-cts.sh; Chrome doesn't pass it). For Depth16Unorm
+// and Depth32Float it's dropped. MTLSHIM_NV_DEPTH_COPY=0 turns it off. Test: n48.
+static BOOL nvDepthCopyOn;
+static MTLBlitOption nvDepthOnlyOption(id<MTLTexture> t, MTLBlitOption options) {
+    if (!nvDepthCopyOn || !(options & MTLBlitOptionDepthFromDepthStencil)) return options;
+    MTLPixelFormat f = t.pixelFormat;
+    return f == MTLPixelFormatDepth16Unorm || f == MTLPixelFormatDepth32Float ? options & ~MTLBlitOptionDepthFromDepthStencil : options;
+}
 static BufferToTextureIMP origNVVolumeB2T;
 static BufferToTextureOptionsIMP origNVVolumeB2TOptions;
 static TextureToBufferIMP origNVVolumeT2B;
@@ -3276,6 +3293,7 @@ static void nvVolumeB2T(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInte
 }
 static void nvVolumeB2TOptions(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInteger row, NSUInteger image, MTLSize size, id t,
                                NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLBlitOption options) {
+    options = nvDepthOnlyOption(t, options);  // item 80
     size = nvBlockEdge(t, level, origin, size);
     if (!nvVolumeSplit(t, size, row, image))
         return NVO(origNVVolumeB2TOptions)(self, _cmd, buffer, offset, row, image, size, t, slice, level, origin, options);
@@ -3292,22 +3310,24 @@ static void nvVolumeT2B(id self, SEL _cmd, id t, NSUInteger slice, NSUInteger le
 }
 static void nvVolumeT2BOptions(id self, SEL _cmd, id t, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLSize size, id buffer,
                                NSUInteger offset, NSUInteger row, NSUInteger image, MTLBlitOption options) {
+    options = nvDepthOnlyOption(t, options);  // item 80
     if (!nvVolumeSplit(t, size, row, image))
         return NVO(origNVVolumeT2BOptions)(self, _cmd, t, slice, level, origin, size, buffer, offset, row, image, options);
     for (NSUInteger z = 0; z < size.depth; z++)
         NVO(origNVVolumeT2BOptions)(self, _cmd, t, slice, level, MTLOriginMake(origin.x, origin.y, origin.z + z),
                                MTLSizeMake(size.width, size.height, 1), buffer, offset + z * image, row, image, options);
 }
-static void nvVolumeCopies(void) {  // items 65 and 67; after item 53, whose buffer-to-texture hook it calls
+static void nvVolumeCopies(void) {  // items 65, 67 and 80; after item 53, whose buffer-to-texture hook it calls
     static const char *const kEncoder = "NVMTLBlitCommandEncoder_KEPLER_A", *const kBufferToTexture =
         "copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:",
                              *const kTextureToBuffer =
         "copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:";
     char withOptions[256];
-    const char *volume = getenv("MTLSHIM_NV_VOLUME_COPY"), *edge = getenv("MTLSHIM_NV_BLOCK_EDGE");
+    const char *volume = getenv("MTLSHIM_NV_VOLUME_COPY"), *edge = getenv("MTLSHIM_NV_BLOCK_EDGE"), *depth = getenv("MTLSHIM_NV_DEPTH_COPY");
     nvVolumeOn = !(volume && !strcmp(volume, "0"));
     nvBlockEdgeOn = !(edge && !strcmp(edge, "0"));
-    if (origNVVolumeB2T || (!nvVolumeOn && !nvBlockEdgeOn) || !definesMethod(kEncoder, kBufferToTexture)) return;
+    nvDepthCopyOn = !(depth && !strcmp(depth, "0"));
+    if (origNVVolumeB2T || (!nvVolumeOn && !nvBlockEdgeOn && !nvDepthCopyOn) || !definesMethod(kEncoder, kBufferToTexture)) return;
     origNVVolumeB2T = (BufferToTextureIMP)keplerSwizzle(kEncoder, kBufferToTexture, (IMP)nvVolumeB2T);
     snprintf(withOptions, sizeof withOptions, "%soptions:", kBufferToTexture);
     if (definesMethod(kEncoder, withOptions))
