@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# safari-page.sh [seconds]: runs apps-page.html in Safari against the installed stack, as apps.sh does for the other
+# safari-page.sh [seconds]: runs apps-page.html (PAGE=webgpu-page.html: that page) in Safari against the installed stack, as apps.sh does for the other
 # browsers. Safari ignores DYLD_INSERT_LIBRARIES (a platform binary), so only a root-patched build is tested, and it
 # prints no page console, so tools/pageserver.py serves the page and takes its result back. Safari opens it as a new
 # tab of the user's own Safari (close it afterwards). FAIL: no "apps.sh: done" within [seconds] (default 30), a crash
@@ -7,12 +7,13 @@
 set -u
 T=$(cd "$(dirname "$0")/.." && pwd)
 secs=${1:-30} port=$((8700 + RANDOM % 200))
+page_file=${PAGE:-apps-page.html}
 out=$(mktemp -d)
 trap 'pkill -f "pageserver.py $port" 2>/dev/null; rm -rf "$out"' EXIT
 python3 -I "$T/tools/pageserver.py" "$port" "$out/result" > /dev/null 2>&1 &
 sleep 1
 "$T/tools/crashwatch.sh" start "$out/reports"
-open -g -a Safari "http://127.0.0.1:$port/apps-page.html?report=1"
+open -g -a Safari "http://127.0.0.1:$port/$page_file?report=1"
 for ((i = 0; i < secs; i++)); do [ -s "$out/result" ] && break; sleep 1; done
 sleep 2
 page=$(tail -1 "$out/result" 2>/dev/null)

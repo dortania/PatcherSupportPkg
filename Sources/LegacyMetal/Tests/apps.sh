@@ -19,6 +19,8 @@ T=$(cd "$(dirname "$0")" && pwd); P=$(cd "$T/.." && pwd)
 # warnings about this Mac (a kext the next boot loses, a staged macOS update), without stopping the run
 [ -x "$T/tools/preflight.sh" ] && { "$T/tools/preflight.sh" || echo "(preflight warnings above; continuing)"; }
 secs=${1:-25}
+# PAGE=webgpu-page.html: the browsers open that page instead (WebGPU through Dawn or Firefox's wgpu instead of WebGL)
+PAGE=${PAGE:-apps-page.html}
 inject=()
 if [ -z "${INSTALLED:-}" ]; then
     [ -f "$P/build/MetalOldCompat.dylib" ] || { echo "run ../build.sh first (or INSTALLED=1)" >&2; exit 2; }
@@ -63,7 +65,7 @@ for dir in "${dirs[@]}"; do
         # LogJsConsoleMessages: Chromium 128-150 stopped printing the page's console messages to stderr without it.
         args=(--user-data-dir="$prof" --no-first-run --no-default-browser-check --use-mock-keychain --in-process-gpu
               --enable-logging=stderr --v=0 --enable-features=LogJsConsoleMessages)
-        [ -n "$browser" ] && args+=("file://$T/apps-page.html")
+        [ -n "$browser" ] && args+=("file://$T/$PAGE")
         extra=()
         case "$id" in
             org.godotengine.godot)  # the editor on an empty project; ._sc_ next to the binary: settings in editor_data/ there
@@ -83,7 +85,7 @@ for dir in "${dirs[@]}"; do
                     [ "$(stat -f %d "$app/Contents/MacOS/$exe")" = "$(stat -f %d /)" ] || { extra=(MOZ_DISABLE_GPU_SANDBOX=1); name="$name (GPU sandbox off: not on the boot volume)"; }
                 browser=1; mkdir -p "$prof"
                 printf 'user_pref("devtools.console.stdout.content", true);\nuser_pref("browser.shell.checkDefaultBrowser", false);\nuser_pref("app.update.enabled", false);\n' > "$prof/user.js"
-                args=(-profile "$prof" -no-remote "file://$T/apps-page.html") ;;
+                args=(-profile "$prof" -no-remote "file://$T/$PAGE") ;;
         esac
         env ${inject[@]+"${inject[@]}"} ${extra[@]+"${extra[@]}"} "$app/Contents/MacOS/$exe" ${args[@]+"${args[@]}"} > "$out/log" 2>&1 & pid=$!
         sleep "$secs"
@@ -109,6 +111,9 @@ for dir in "${dirs[@]}"; do
             echo "SKIP $name: needs a Metal family-2 GPU (Blender 3.6 LTS still has OpenGL)"; skip=$((skip + 1))
         elif [ -n "$native" ] && [ -z "$alive" ] && [ "$page" != "apps.sh: done" ]; then  # a browser may relaunch itself once its page is done
             echo "FAIL $name: quit before ${secs}s: $(grep -v '^\s*$' "$out/log" | tail -2 | tr '\n' ' ' | cut -c1-200)"; fail=$((fail + 1))
+        elif [ -n "$browser" ] && [ "$page" = "apps.sh: error: no WebGPU (navigator.gpu missing)" ]; then
+            # the browser doesn't offer WebGPU at all (Firefox on Intel Macs): nothing of the GPU stack was asked
+            echo "SKIP $name: this browser has no WebGPU"; skip=$((skip + 1))
         elif [ -n "$browser" ] && [ "$page" != "apps.sh: done" ]; then
             echo "FAIL $name: page: ${page:-no result in ${secs}s (stuck?)}"; fail=$((fail + 1))
         else
