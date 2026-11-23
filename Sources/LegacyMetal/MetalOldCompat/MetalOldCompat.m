@@ -4902,10 +4902,13 @@ static void visEndEncoding(id self, SEL _cmd) {
 // sizes were 0). Metal documents newBufferWithLength:options: as clearing the buffer, and Dawn relies on it instead of
 // clearing WebGPU buffers itself: the WebGPU CTS read old values from unused query slots (queries, occlusionQuery
 // initial and timestampQuery unused_slots_are_zero), and a buffer could show data another part of the app had freed.
+// Managed buffers the same way: their GPU copy came back as a freed managed buffer's had left it (every byte, at 256 B,
+// 4 KB and 1 MB), while the CPU copy read 0, so whatever the GPU read first was another buffer's old data. Both copies of
+// a new managed buffer are cleared.
 // Every private buffer it makes is filled with zeros by a blit on a queue of the shim's, waited for before it is
 // returned (some 0.2-0.3 ms per buffer); so is a new counter sample buffer's result buffer (below). Heap buffers keep
 // their undefined contents, as Metal specifies.
-// MTLSHIM_NV_ZERO_BUFFERS=0 turns it off. Test: n09 on the GTX 770.
+// MTLSHIM_NV_ZERO_BUFFERS=0 turns it off. Test: n09 on the GTX 770 (private and managed).
 typedef id (*NVNewBufferIMP)(id, SEL, NSUInteger, MTLResourceOptions) RETURNS_RETAINED;
 static NVNewBufferIMP origNVNewBuffer;
 static id<MTLCommandQueue> zeroQueue(id device) {  // the shim's own queue on the device, for the fills
@@ -4932,9 +4935,11 @@ static void zeroFill(id<MTLCommandQueue> queue, id<MTLBuffer> buffer, NSUInteger
 static id nvNewBuffer(id self, SEL _cmd, NSUInteger length, MTLResourceOptions options) RETURNS_RETAINED;
 static id nvNewBuffer(id self, SEL _cmd, NSUInteger length, MTLResourceOptions options) {
     id<MTLBuffer> buffer = origNVNewBuffer(self, _cmd, length, options);
-    if (!buffer || !length || (options & MTLResourceStorageModeMask) != MTLResourceStorageModePrivate) return buffer;
+    MTLResourceOptions mode = options & MTLResourceStorageModeMask;
+    if (!buffer || !length || (mode != MTLResourceStorageModePrivate && mode != MTLResourceStorageModeManaged)) return buffer;
     id<MTLCommandQueue> queue = zeroQueue(self);
     if (!queue) return buffer;
+    if (mode == MTLResourceStorageModeManaged) memset(buffer.contents, 0, length);  // the CPU copy too, so both agree
     zeroFill(queue, buffer, length);
     return buffer;
 }
