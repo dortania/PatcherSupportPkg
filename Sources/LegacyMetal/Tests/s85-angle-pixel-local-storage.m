@@ -9,7 +9,7 @@
 // entry points: one r32ui plane on a framebuffer with no other attachment, loaded as zero, two draws that each add 7
 // (with a barrier between them, as the extension asks without raster order groups), stored and read back: 14 everywhere.
 // FAIL with item 11's old list (MTLSHIM_NO_ATTACHMENTS=0 restores it). SKIP without WebKit's ANGLE or the extension.
-// Runs on the GPU ANGLE picks (the result line names the renderer); an Intel argument on a dual-GPU Mac picks the iGPU.
+// Runs on the GPU named by the argument (SKIP if WebKit's ANGLE can't be put on it); the result line names the renderer.
 #import "repro.h"
 #include <dlfcn.h>
 #include <string.h>
@@ -46,9 +46,14 @@ static U step(const char *what) {  // S85_VERBOSE=1: the GL error after each cal
 int main(int argc, char **argv) {
     @autoreleasepool {
         const char *bug = "s85-angle-pixel-local-storage";
-        // WebKit's ANGLE takes the GPU item 11 gives it (the family-2 one on a dual-GPU Mac); asked for the Intel GPU, the
-        // test makes ANGLE's callers see only the iGPU (MTLSHIM_TEST_IGPU_ONLY), so the family-1 Intel path runs there too
-        if (argc > 1 && strcasestr(argv[1], "intel") && MTLCopyAllDevices().count > 1) setenv("MTLSHIM_TEST_IGPU_ONLY", "1", 0);
+        // The GPU asked for (argument: a name substring), handed to ANGLE by registry ID (EGL_ANGLE_platform_angle_device_id).
+        // ANGLE picks among the devices its callers are shown, and item 11 shows them only the family-2 GPU on a dual-GPU Mac,
+        // so for an Intel GPU there the iGPU-only view (MTLSHIM_TEST_IGPU_ONLY) goes on first. If ANGLE still ends up on
+        // another GPU, the test SKIPs rather than report that GPU's result as the one asked for.
+        id<MTLDevice> want = argc > 1 ? reproDevice(argc, argv, "") : nil;
+        if (argc > 1 && !want) return SKIP(bug, "no GPU named %s", argv[1]);
+        if (want && want.lowPower && MTLCopyAllDevices().count > 1) setenv("MTLSHIM_TEST_IGPU_ONLY", "1", 0);
+        uint64_t registry = want ? want.registryID : 0;
         MTLCreateSystemDefaultDevice();  // as WebCore does in Safari's GPU process before ANGLE starts
         angle = dlopen("/System/Library/Frameworks/WebKit.framework/Versions/A/Frameworks/WebCore.framework/Versions/A/Frameworks/"
                        "libANGLE-shared.dylib", RTLD_NOW);
@@ -59,7 +64,8 @@ int main(int argc, char **argv) {
         L(GL_DrawArrays) L(GL_GetString) L(GL_GenFramebuffers) L(GL_BindFramebuffer) L(GL_GenTextures) L(GL_BindTexture) L(GL_TexStorage2D)
         L(GL_FramebufferTexture2D) L(GL_Disable) L(GL_FramebufferTexturePixelLocalStorageANGLE) L(GL_BeginPixelLocalStorageANGLE)
         L(GL_EndPixelLocalStorageANGLE) L(GL_PixelLocalStorageBarrierANGLE)
-        const I displayAttributes[] = {0x3203, 0x3489, 0x3038};  // EGL_PLATFORM_ANGLE_TYPE_ANGLE: METAL
+        const I displayAttributes[] = {0x3203, 0x3489,  // EGL_PLATFORM_ANGLE_TYPE_ANGLE: METAL; DEVICE_ID_HIGH / LOW (none: ANGLE's choice)
+                                       registry ? 0x34D6 : 0x3038, (I)(registry >> 32), 0x34D7, (I)(uint32_t)registry, 0x3038};
         P display = EGL_GetPlatformDisplayEXT(0x3202, 0, displayAttributes);
         I major, minor, configs;
         if (!display || !EGL_Initialize(display, &major, &minor)) return FAIL(bug, "ANGLE's Metal display didn't initialize");
@@ -77,6 +83,8 @@ int main(int argc, char **argv) {
             GL_DebugMessageCallbackKHR(debugMessage, NULL);
         }
         const char *renderer = GL_GetString(0x1F01), *extensions = GL_GetString(0x1F03);
+        if (want && renderer && !strstr(renderer, want.name.UTF8String))
+            return SKIP(bug, "WebKit's ANGLE runs on another GPU than %s here (%s)", want.name.UTF8String, renderer);
         if (!extensions || !strstr(extensions, "GL_ANGLE_shader_pixel_local_storage "))
             return SKIP(bug, "%s: WebKit's ANGLE doesn't offer GL_ANGLE_shader_pixel_local_storage here", renderer);
 
