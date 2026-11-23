@@ -2311,6 +2311,18 @@ static unsigned ivbArgumentBuffers(LLVMModuleRef module) {
                     LLVMValueRef gep = LLVMGetUser(u);
                     bool wrapper = false;
                     ArgumentBufferSlot *slot = slotOf(gep, param, b.first, slots, &wrapper);
+                    if (!slot && LLVMIsABitCastInst(gep) && LLVMGetOperand(gep, 0) == param) {
+                        // the first member, at offset 0, read through a cast of the argument buffer itself (WebKit's
+                        // `i8 constant *` for a bind group with dynamic offsets): element 0, or the handle in its wrapper
+                        for (ArgumentBufferSlot &s : slots)
+                            if (s.bufferIndex == b.first && (s.path == std::vector<unsigned>{0} ||
+                                                             (s.kind != kSlotBuffer && s.path == std::vector<unsigned>{0, 0})))
+                                slot = &s;
+                        if (slot)
+                            for (LLVMUseRef w = LLVMGetFirstUse(gep); w; w = LLVMGetNextUse(w))
+                                if (slotLoad(LLVMGetUser(w), gep)) loads.push_back({LLVMGetUser(w), gep, slot});
+                        continue;
+                    }
                     if (!slot) continue;
                     for (LLVMUseRef v = LLVMGetFirstUse(gep); v; v = LLVMGetNextUse(v)) {
                         LLVMValueRef user = LLVMGetUser(v);
@@ -2389,7 +2401,7 @@ static unsigned ivbArgumentBuffers(LLVMModuleRef module) {
                 }
                 LLVMInstructionEraseFromParent(l.first);
                 if (l.cast && !LLVMGetFirstUse(l.cast)) LLVMInstructionEraseFromParent(l.cast);
-                if (!LLVMGetFirstUse(gep)) LLVMInstructionEraseFromParent(gep);
+                if (LLVMIsAGetElementPtrInst(gep) && !LLVMGetFirstUse(gep)) LLVMInstructionEraseFromParent(gep);  // not the argument buffer itself
             }
             LLVMDisposeBuilder(builder);
             void *node = metadataOf(entry), *argList = metadataOf(LLVMMDNodeInContext(context, newArgs.data(), (unsigned)newArgs.size()));
