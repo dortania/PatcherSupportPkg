@@ -7,6 +7,7 @@
 // message contains WEBKITHOST_DONE, or after [seconds] (default 7200).
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
+#import <objc/message.h>
 
 @interface Host : NSObject <NSApplicationDelegate, WKScriptMessageHandler>
 @property(strong) NSWindow *window;
@@ -22,6 +23,19 @@
     }
     double limit = args.count > 2 ? [args[2] doubleValue] : 7200;
     WKWebViewConfiguration *config = [WKWebViewConfiguration new];
+    // WebKit before Safari 26 (Sequoia's 18.x) leaves WebGPU off for apps: switch on every feature flag named WebGPU*, as
+    // Safari's Feature Flags menu does (WKPreferences' private feature API)
+    if ([WKPreferences respondsToSelector:NSSelectorFromString(@"_features")]) {
+        NSArray *features = ((NSArray *(*)(id, SEL))objc_msgSend)([WKPreferences class], NSSelectorFromString(@"_features"));
+        SEL set = NSSelectorFromString(@"_setEnabled:forFeature:");
+        for (id feature in features) {
+            NSString *key = [feature valueForKey:@"key"];
+            if ([key hasPrefix:@"WebGPU"] && [config.preferences respondsToSelector:set]) {
+                ((void (*)(id, SEL, BOOL, id))objc_msgSend)(config.preferences, set, YES, feature);
+                fprintf(stderr, "webkithost: feature %s on\n", key.UTF8String);
+            }
+        }
+    }
     NSString *forward = @"(function(){var p=function(k,a){try{window.webkit.messageHandlers.log.postMessage(k+': '+"
                          "Array.prototype.map.call(a,String).join(' '));}catch(e){}};"
                          "['log','warn','error','info','debug'].forEach(function(k){var o=console[k];console[k]=function(){"
