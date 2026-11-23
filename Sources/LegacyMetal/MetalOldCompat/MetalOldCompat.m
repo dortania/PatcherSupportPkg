@@ -155,6 +155,7 @@
 #import <objc/runtime.h>
 #include <ctype.h>
 #include <dlfcn.h>
+#include <sys/stat.h>
 #include <mach/mach.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
@@ -5945,6 +5946,11 @@ static void installOldAIRPassThrough(void) {
 // reflection block as its input list: the compiler's parser wrote past a fixed array and MTLCompilerService crashed
 // (Chrome for Testing 124's WebGL on the R9). Only blocks whose type had a key are cached now, and each app's function
 // caches, which may hold such entries, are cleared once. MTLSHIM_CACHE_KEYS=0 turns this off.
+// They are cleared again whenever this build changes: Metal keys a cached function on its code and the compiler plugin,
+// not on the adapters the plugins load (IntelTextureAtomics, AMDTextureAtomics, GeForceAIRCompat, the patched
+// libAMDIL902), so after an update apps kept the functions the old adapters had compiled (WebKit's GPU process kept
+// fragment functions that read argument-buffer constants from the wrong offsets after the fix for that was installed).
+// The marker holds this dylib's and each adapter's size and modification time, and a different one clears the caches.
 typedef void (*CacheCompilerDataIMP)(id, SEL, void *, void *, void *, void *, const void *);
 typedef void (*AddCompiledOutputIMP)(id, SEL, id, id, id, id, const void *, int, const void *);
 static CacheCompilerDataIMP origCacheCompilerData;
@@ -5981,6 +5987,28 @@ static void addCompiledOutput(id self, SEL _cmd, id output, id cachedOutput, id 
 // folder (dirhelper, opendirectoryd) and file work may wait on services that aren't up yet (the HD 4000's Tahoe stopped
 // booting where WindowServer starts). It runs on the process's first compile request instead, before that request reads
 // the cache, and only in apps run by a user (bundle id, uid 501 and up): the Chrome case, not system daemons.
+// What the functions an app has cached were compiled with: this dylib and the adapters, by size and modification time.
+static NSData *functionCacheBuild(void) {
+    static const char *const kAdapters[] = {
+        "/System/Library/Extensions/AppleIntelHD4000GraphicsMTLDriver.bundle/Contents/MacOS/IntelTextureAtomics.dylib",
+        "/System/Library/Extensions/AppleIntelHD5000GraphicsMTLDriver.bundle/Contents/MacOS/IntelTextureAtomics.dylib",
+        "/System/Library/Extensions/AMDShared.bundle/Contents/MacOS/AMDTextureAtomics.dylib",
+        "/System/Library/Extensions/AMDShared.bundle/Contents/PlugIns/libAMDIL902.dylib",
+        "/System/Library/Extensions/GeForceAIRPlugin.bundle/Contents/MacOS/GeForceAIRCompat.dylib",
+    };
+    NSMutableString *build = [NSMutableString string];
+    Dl_info self;
+    const char *paths[1 + sizeof kAdapters / sizeof *kAdapters];
+    paths[0] = dladdr((const void *)functionCacheBuild, &self) && self.dli_fname ? self.dli_fname : NULL;
+    for (size_t i = 0; i < sizeof kAdapters / sizeof *kAdapters; i++) paths[i + 1] = kAdapters[i];
+    for (size_t i = 0; i < sizeof paths / sizeof *paths; i++) {
+        struct stat st;
+        if (paths[i] && !stat(paths[i], &st))
+            [build appendFormat:@"%s %lld %ld.%09ld\n", paths[i], (long long)st.st_size, (long)st.st_mtimespec.tv_sec, st.st_mtimespec.tv_nsec];
+    }
+    return [build dataUsingEncoding:NSUTF8StringEncoding];
+}
+
 static void clearFunctionCachesOnce(void) {
     if (getuid() < 501) return;
     NSString *bundle = NSBundle.mainBundle.bundleIdentifier;
@@ -5990,13 +6018,17 @@ static void clearFunctionCachesOnce(void) {
     NSString *marker = [root stringByAppendingPathComponent:@"mtlshim-function-cache-keys"];
     NSFileManager *files = NSFileManager.defaultManager;
     BOOL isDir = NO;
-    if (![files fileExistsAtPath:root isDirectory:&isDir] || !isDir || [files fileExistsAtPath:marker]) return;
+    NSData *build = functionCacheBuild();
+    if (![files fileExistsAtPath:root isDirectory:&isDir] || !isDir || [[NSData dataWithContentsOfFile:marker] isEqualToData:build]) return;
     int cleared = 0;
     for (NSString *gpu in [files contentsOfDirectoryAtPath:root error:nil])
         for (NSString *name in @[@"functions.data", @"functions.list"])
             cleared += [files removeItemAtPath:[[root stringByAppendingPathComponent:gpu] stringByAppendingPathComponent:name] error:nil];
-    [files createFileAtPath:marker contents:nil attributes:nil];
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] function cache: %d file(s) cleared in %s\n", cleared, root.UTF8String);
+    NSData *was = [NSData dataWithContentsOfFile:marker];
+    BOOL written = [build writeToFile:marker options:0 error:nil];  // not atomically: WebKit's GPU process may not make the temporary file
+    if (getenv("MTLSHIM_VERBOSE"))
+        shimLog("[mtlshim] function cache: %d file(s) cleared in %s (build key %lu bytes, marker had %ld, written %d)\n", cleared, root.UTF8String,
+                (unsigned long)build.length, was ? (long)was.length : -1L, written);
 }
 
 typedef void (*CompileRequestIMP)(id, SEL, id, BOOL, unsigned long long, BOOL, id);
