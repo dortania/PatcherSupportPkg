@@ -206,6 +206,9 @@ int main(int argc, char **argv) {
         co = [cb computeCommandEncoder];
         [co setComputePipelineState:rp];
         [co setBuffer:readbackBindings offset:0 atIndex:0];
+        [co useResource:params usage:MTLResourceUsageRead];
+        [co useResource:image usage:MTLResourceUsageRead];
+        [co useResource:texelsOut usage:MTLResourceUsageWrite];
         [co dispatchThreads:MTLSizeMake(2, 2, 1) threadsPerThreadgroup:MTLSizeMake(2, 2, 1)];
         [co endEncoding];
         if (!reproRun(cb)) return FAIL(bug, "%s: readback kernel: command buffer failed", name);
