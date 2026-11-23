@@ -5049,6 +5049,73 @@ static void keplerModifiedRetain(void) {
         origNVReplace6 = (NVReplace6IMP)swizzle("NVMTLTexture", "replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:", (IMP)nvReplace6);
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Kepler managed buffers and textures: kept from didModifyRange: / replaceRegion: until the next commit\n");
 }
+// 84. New depth and stencil textures on the Kepler driver hold what the memory held before: a 64x64 Depth32Float,
+// Depth16Unorm or Stencil8 texture made after one of the same size was cleared (depth 0.7, stencil 0x5a) and freed read
+// that texture's values back, every time. Apple's GPUs hand out zeroed memory, and Safari's WebGPU relies on it: it
+// clears a never-written color attachment that a pass loads, but a depth or stencil one only when the pass doesn't
+// store it, so a new depth/stencil texture that a pass loads and stores keeps the old contents (WebGPU CTS
+// resource_init,texture_zero:uninitialized_texture_is_zero, dimension 2d, every DepthTest and StencilTest case with
+// uninitializeMethod "Creation", 8 failing) and a page could read another resource's freed data. In WebKit's GPU
+// process (Safari's and any WKWebView's), each new depth or stencil texture that can be a render target (not from a
+// heap, whose resources Metal leaves undefined) is now cleared to depth 0 and stencil 0, every level and slice, by
+// passes on the shim's queue that are waited for before it is returned, as item 60 does for buffers. That costs some
+// 1.5-3 ms per texture, which other apps don't need: Chrome's Dawn, Firefox's wgpu and ANGLE clear what they haven't
+// written themselves. MTLSHIM_NV_ZERO_DEPTH=1 turns it on in any process, =0 off. Test: n51 on the GTX 770.
+typedef id (*NVNewTextureIMP)(id, SEL, MTLTextureDescriptor *) RETURNS_RETAINED;
+static NVNewTextureIMP origNVNewDepthTexture;
+static id nvNewDepthTexture(id self, SEL _cmd, MTLTextureDescriptor *d) RETURNS_RETAINED;
+static id nvNewDepthTexture(id self, SEL _cmd, MTLTextureDescriptor *d) {
+    id<MTLTexture> texture = origNVNewDepthTexture(self, _cmd, d);
+    static int on = -1;  // decided at the first texture: the test turns it on in main(), after the shim is loaded
+    if (on < 0) {
+        const char *setting = getenv("MTLSHIM_NV_ZERO_DEPTH");
+        on = (setting && !strcmp(setting, "1")) || !strcmp(getprogname(), "com.apple.WebKit.GPU");
+    }
+    if (!on) return texture;
+    MTLPixelFormat f = d.pixelFormat;
+    BOOL depth = f == MTLPixelFormatDepth16Unorm || f == MTLPixelFormatDepth32Float || f == MTLPixelFormatDepth24Unorm_Stencil8 ||
+                 f == MTLPixelFormatDepth32Float_Stencil8;
+    BOOL stencil = f == MTLPixelFormatStencil8 || f == MTLPixelFormatDepth24Unorm_Stencil8 || f == MTLPixelFormatDepth32Float_Stencil8;
+    if (!texture || (!depth && !stencil) || !(d.usage & MTLTextureUsageRenderTarget) || d.storageMode == MTLStorageModeMemoryless)
+        return texture;
+    id<MTLCommandQueue> queue = zeroQueue(self);
+    if (!queue) return texture;
+    NSUInteger faces = texture.textureType == MTLTextureTypeCube || texture.textureType == MTLTextureTypeCubeArray ? 6 : 1;
+    NSUInteger slices = MAX(texture.arrayLength, (NSUInteger)1) * faces;
+    id<MTLCommandBuffer> commandBuffer = [queue commandBuffer];
+    for (NSUInteger level = 0; level < texture.mipmapLevelCount; level++)
+        for (NSUInteger slice = 0; slice < slices; slice++) {
+            MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+            if (depth) {
+                pass.depthAttachment.texture = texture;
+                pass.depthAttachment.level = level;
+                pass.depthAttachment.slice = slice;
+                pass.depthAttachment.loadAction = MTLLoadActionClear;
+                pass.depthAttachment.clearDepth = 0;
+                pass.depthAttachment.storeAction = MTLStoreActionStore;
+            }
+            if (stencil) {
+                pass.stencilAttachment.texture = texture;
+                pass.stencilAttachment.level = level;
+                pass.stencilAttachment.slice = slice;
+                pass.stencilAttachment.loadAction = MTLLoadActionClear;
+                pass.stencilAttachment.clearStencil = 0;
+                pass.stencilAttachment.storeAction = MTLStoreActionStore;
+            }
+            [[commandBuffer renderCommandEncoderWithDescriptor:pass] endEncoding];
+        }
+    [commandBuffer commit];
+    [commandBuffer waitUntilCompleted];
+    return texture;
+}
+static void keplerZeroDepthTextures(void) {
+    static BOOL done;
+    const char *setting = getenv("MTLSHIM_NV_ZERO_DEPTH");
+    if (done || (setting && !strcmp(setting, "0")) || !definesMethod("NVMTLDevice", "newTextureWithDescriptor:")) return;
+    done = YES;
+    origNVNewDepthTexture = (NVNewTextureIMP)swizzle("NVMTLDevice", "newTextureWithDescriptor:", (IMP)nvNewDepthTexture);  // after item 58's
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Kepler depth and stencil textures: zeroed at creation (WebKit GPU process, or MTLSHIM_NV_ZERO_DEPTH=1)\n");
+}
 // 61. The Kepler driver's -resolveCounters:inRange:destinationBuffer:destinationOffset: reads the samples from the sample
 // buffer's own result buffer (counterResultBuffer, 16 bytes a sample) but leaves it out of the command buffer's resources,
 // so nothing makes it resident: when its pages aren't mapped the GPU faults (kernel log: "Access Violation Error (MMU
@@ -5532,6 +5599,7 @@ static void patchDriverClasses(void) {
     keplerVisibilitySums();  // item 59
     keplerZeroBuffers();  // item 60
     keplerModifiedRetain();  // item 82
+    keplerZeroDepthTextures();  // item 84, after item 58: wraps its newTextureWithDescriptor:
     keplerResolveResidency();  // item 61
     keplerReversedDepth();  // item 70, before item 69's viewport hooks: it checks the driver's own setters
     keplerGuardBand();  // item 69
