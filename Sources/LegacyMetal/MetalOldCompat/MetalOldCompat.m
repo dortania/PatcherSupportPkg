@@ -4288,7 +4288,12 @@ static id igSwizzleView(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType
     format = sampleableStencilView(self, format);  // item 36
     id view = origIGSwizzleView(self, _cmd, format, type, levels, slices, swizzle);
     if (view) return view;
-    if (!swizzleChangesNothing(format, swizzle)) return nil;
+    if (!swizzleChangesNothing(format, swizzle)) {
+        if (getenv("MTLSHIM_VERBOSE"))
+            shimLog("[mtlshim] swizzled texture view (format %lu, swizzle %d%d%d%d): nil, as the driver said\n", (unsigned long)format, swizzle.red,
+                    swizzle.green, swizzle.blue, swizzle.alpha);
+        return nil;
+    }
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] swizzled texture view: made without the swizzle\n");
     return ((NewViewRangeIMP)objc_msgSend)(
         self, @selector(newTextureViewWithPixelFormat:textureType:levels:slices:), format, type, levels, slices);
@@ -6003,11 +6008,23 @@ static void installMPSMatmulFallback(void);  // item 43
 static void installMPSGraphSoftMax(void);  // item 57
 static void installMetalFXTemporalLimit(void);  // item 44
 
+// Item 11 on Tahoe: OCLP's wrapper answers WebKit's processes yes to Mac2 by itself, so WebKit's ANGLE never asks
+// compatSupportsFamily, and the features a family-1 GPU lacks stayed on: with hasTextureSwizzle, ANGLE made every
+// COMPRESSED_RGB_S3TC_DXT1 texture a BC1 view with the swizzle (R, G, B, 1), the driver returned nil, and WebGL sampled
+// (0, 0, 0, 0) from it (conformance/extensions/s3tc-and-rgtc, webgl-compressed-texture-s3tc-srgb). ANGLE asks for its
+// device before it sets up its features, so they're turned off there too.
+static void angleFeaturesForCaller(const void *returnAddress) {
+    if (!fromChromium(returnAddress) || !familyOneAsTwo()) return;
+    disableFeaturesFamilyOneLacks();
+    enableEventsForWebKit(returnAddress);
+}
+
 static id<MTLDevice> compatCreateSystemDefaultDevice(void) {
     dropValidationLayers();
     installMPSMatmulFallback();
     installMPSGraphSoftMax();
     installMetalFXTemporalLimit();
+    angleFeaturesForCaller(__builtin_return_address(0));  // item 11
     id<MTLDevice> device = MTLCreateSystemDefaultDevice();
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MTLCreateSystemDefaultDevice from %s -> %s\n", callerImage(__builtin_return_address(0)), device.name.UTF8String);
     pinDevice((__bridge const void *)device);
@@ -6027,6 +6044,7 @@ static CFArrayRef compatCopyAllDevices(void) {
     installMPSMatmulFallback();
     installMPSGraphSoftMax();
     installMetalFXTemporalLimit();
+    angleFeaturesForCaller(__builtin_return_address(0));  // item 11
     CFArrayRef all = (__bridge_retained CFArrayRef)MTLCopyAllDevices();
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MTLCopyAllDevices from %s\n", callerImage(__builtin_return_address(0)));
     for (CFIndex i = 0; all && i < CFArrayGetCount(all); i++) pinDevice(CFArrayGetValueAtIndex(all, i));
@@ -6038,6 +6056,7 @@ static CFArrayRef compatCopyAllDevicesWithObserver(id<NSObject> __strong *observ
     installMPSMatmulFallback();
     installMPSGraphSoftMax();
     installMetalFXTemporalLimit();
+    angleFeaturesForCaller(__builtin_return_address(0));  // item 11
     CFArrayRef all = (__bridge_retained CFArrayRef)MTLCopyAllDevicesWithObserver(observer, handler);
     for (CFIndex i = 0; all && i < CFArrayGetCount(all); i++) pinDevice(CFArrayGetValueAtIndex(all, i));
     return fromChromium(__builtin_return_address(0)) ? familyTwoOnly(all) : all;
