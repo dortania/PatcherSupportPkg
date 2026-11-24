@@ -1434,15 +1434,97 @@ static unsigned hideNarrowProducts(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
+// ---- entry points and hidden buffer arguments (texture atomics, depth channels) -------------------------------------
+extern "C" void functionCopyAttributesFrom(void *function, const void *source) asm("__ZN4llvm8Function18copyAttributesFromEPKNS_11GlobalValueE");
+extern "C" void basicBlockInsertInto(void *block, void *function, void *before) asm("__ZN4llvm10BasicBlock10insertIntoEPNS_8FunctionEPS0_");
+
+// Hidden buffer indices are taken from 30 down over the indices an entry point leaves free; vertex functions keep 0-16
+// for vertex buffers. MetalOldCompat items 58 and 62 count them the same way from the pipeline's reflection.
+enum { kBufferIndexCount = 31, kHighestHiddenBuffer = 30, kLowestVertexHiddenBuffer = 17 };
+static int lowestHiddenBuffer(const char *list) { return !strcmp(list, "air.vertex") ? kLowestVertexHiddenBuffer : 0; }
+
+struct EntryPoint { LLVMValueRef function; void *node; std::vector<LLVMValueRef> args; };
+// The defined functions an entry-point list (air.kernel, air.fragment, air.vertex) names, with their argument metadata.
+static std::vector<EntryPoint> entryPoints(LLVMModuleRef module, const char *list) {
+    std::vector<EntryPoint> out;
+    std::vector<LLVMValueRef> entries(LLVMGetNamedMetadataNumOperands(module, list));
+    if (entries.empty()) return out;
+    LLVMGetNamedMetadataOperands(module, list, entries.data());
+    for (LLVMValueRef entry : entries) {
+        std::vector<LLVMValueRef> parts = metadataOperands(entry);
+        void *node = metadataOf(entry);
+        if (parts.size() < 3 || !parts[0] || !node || LLVMIsDeclaration(parts[0])) continue;
+        out.push_back({parts[0], node, metadataOperands(parts[2])});
+    }
+    return out;
+}
+
+static long metadataFieldAfter(const std::vector<LLVMValueRef> &f, const char *key, unsigned skip = 1) {
+    for (size_t k = 0; k + skip < f.size(); k++)
+        if (isString(f[k], key) && LLVMIsAConstantInt(f[k + skip])) return (long)LLVMConstIntGetZExtValue(f[k + skip]);
+    return -1;
+}
+static bool isBufferArgument(const std::vector<LLVMValueRef> &f) {
+    return isString(f[1], "air.buffer") || isString(f[1], "air.indirect_buffer");
+}
+static void markBufferIndices(const std::vector<LLVMValueRef> &f, bool used[kBufferIndexCount]) {
+    long index = metadataFieldAfter(f, "air.location_index"), count = metadataFieldAfter(f, "air.location_index", 2);
+    for (long k = 0; index >= 0 && k < (count > 0 ? count : 1); k++)
+        if (index + k < kBufferIndexCount) used[index + k] = true;
+}
+// The highest free buffer index at or below `start`, or -1 if there is none down to `lowest`.
+static int freeBufferIndex(const bool used[kBufferIndexCount], int start, int lowest) {
+    while (start >= lowest && used[start]) start--;
+    return start >= lowest ? start : -1;
+}
+
+// The entry point again with `extraCount` parameters of type `extra` after its own; the body and the uses of its
+// parameters move over. The old function stays, empty, renamed with `suffix`: the plugin keeps pointers to it.
+static LLVMValueRef rebuildWithParameters(LLVMModuleRef module, LLVMValueRef function, LLVMTypeRef extra, size_t extraCount,
+                                          const char *suffix) {
+    LLVMTypeRef type = LLVMGetElementType(LLVMTypeOf(function));
+    unsigned params = LLVMCountParams(function);
+    std::vector<LLVMTypeRef> types(LLVMCountParamTypes(type));
+    LLVMGetParamTypes(type, types.data());
+    types.insert(types.end(), extraCount, extra);
+    std::string name = LLVMGetValueName(function);
+    LLVMSetValueName(function, (name + suffix).c_str());
+    LLVMValueRef rebuilt = LLVMAddFunction(module, name.c_str(),
+        LLVMFunctionType(LLVMGetReturnType(type), types.data(), (unsigned)types.size(), LLVMIsFunctionVarArg(type)));
+    LLVMSetLinkage(rebuilt, LLVMGetLinkage(function));
+    functionCopyAttributesFrom(rebuilt, function);
+    for (unsigned p = 0; p < params; p++) {
+        LLVMSetValueName(LLVMGetParam(rebuilt, p), LLVMGetValueName(LLVMGetParam(function, p)));
+        LLVMReplaceAllUsesWith(LLVMGetParam(function, p), LLVMGetParam(rebuilt, p));
+    }
+    while (LLVMBasicBlockRef block = LLVMGetFirstBasicBlock(function)) {
+        LLVMRemoveBasicBlockFromParent(block);
+        basicBlockInsertInto(block, rebuilt, nullptr);
+    }
+    return rebuilt;
+}
+// The argument metadata of a hidden uint buffer parameter; access is "air.read" or "air.read_write".
+static LLVMValueRef hiddenBufferArgument(Gen &g, unsigned param, int bufferIndex, const char *access, const char *argName) {
+    auto str = [&](const char *t) { return LLVMMDStringInContext(g.context, t, (unsigned)strlen(t)); };
+    LLVMValueRef f[] = {g.c32(param), str("air.buffer"), str("air.location_index"), g.c32(bufferIndex), g.c32(1), str(access),
+                        str("air.arg_type_size"), g.c32(4), str("air.arg_type_align_size"), g.c32(4),
+                        str("air.arg_type_name"), str("uint"), str("air.arg_name"), str(argName)};
+    return LLVMMDNodeInContext(g.context, f, sizeof f / sizeof *f);
+}
+// Points the entry point's metadata at `rebuilt` and the argument list `args`; false if the list can't be made.
+static bool updateEntryPoint(Gen &g, void *node, LLVMValueRef rebuilt, std::vector<LLVMValueRef> &args) {
+    void *argList = metadataOf(LLVMMDNodeInContext(g.context, args.data(), (unsigned)args.size()));
+    if (!argList) return false;
+    mdNodeReplaceOperand(node, 0, valueAsMetadata(rebuilt));
+    mdNodeReplaceOperand(node, 2, argList);
+    return true;
+}
+
 // ---- texture atomics on linear 2D textures (MetalOldCompat item 58) -------------------------------------------------
 // The plugin can't compile texture atomics (the compiler crashed). Item 58 puts such textures in a buffer after a
 // 256-byte header {magic, row pitch in words, width, height}; each atomic becomes a global one at word 64 + y * pitch +
 // x (scratch word 8 when outside or headerless), the buffer at a hidden index per read_write texture2d<uint/int>
-// argument, counted down from 30 over unused indices (vertex functions keep 0-16), as item 58 counts them.
-// NVAIR_TEXTURE_ATOMICS. (a01, n04)
-extern "C" void functionCopyAttributesFrom(void *function, const void *source) asm("__ZN4llvm8Function18copyAttributesFromEPKNS_11GlobalValueE");
-extern "C" void basicBlockInsertInto(void *block, void *function, void *before) asm("__ZN4llvm10BasicBlock10insertIntoEPNS_8FunctionEPS0_");
-
+// argument. NVAIR_TEXTURE_ATOMICS. (a01, n04)
 static const unsigned kTexAtomicMagic = 0x4154564E;  // "NVTA"
 enum { kTexAtomicHeaderWords = 64, kTexAtomicScratchWord = 8 };
 enum { kTAFetch, kTALoad, kTAStore, kTACompareExchange };
@@ -1454,11 +1536,6 @@ static const struct { const char *air, *u, *s; int kind; } kTexAtomicOps[] = {  
     {"load", "or.u", "or.u", kTALoad},  // or 0: read at L2, where the other atomics are
     {"store", "exch", "exch", kTAStore}, {"compare_exchange_weak", "cas", "cas", kTACompareExchange},
 };
-static long metadataFieldAfter(const std::vector<LLVMValueRef> &f, const char *key, unsigned skip = 1) {
-    for (size_t k = 0; k + skip < f.size(); k++)
-        if (isString(f[k], key) && LLVMIsAConstantInt(f[k + skip])) return (long)LLVMConstIntGetZExtValue(f[k + skip]);
-    return -1;
-}
 static bool atomicTextureArgument(const std::vector<LLVMValueRef> &f) {  // read_write texture2d<uint> / <int>, not an array
     if (f.size() < 5 || !isString(f[1], "air.texture") || metadataFieldAfter(f, "air.location_index", 2) != 1) return false;
     bool readWrite = false, type = false;
@@ -1475,7 +1552,7 @@ static bool atomicTextureArgument(const std::vector<LLVMValueRef> &f) {  // read
 }
 
 struct TexAtomicCall { LLVMValueRef call; int op; bool isSigned; };
-static unsigned lowerTextureAtomics(LLVMModuleRef module, Gen &g) {
+static std::vector<TexAtomicCall> textureAtomicCalls(LLVMModuleRef module) {
     std::vector<TexAtomicCall> calls;
     for (int op = 0; op < (int)(sizeof kTexAtomicOps / sizeof *kTexAtomicOps); op++)
         for (int s = 0; s < 4; s++) {  // s & 1: signed; s & 2: ushort coordinates
@@ -1489,150 +1566,133 @@ static unsigned lowerTextureAtomics(LLVMModuleRef module, Gen &g) {
                 if (LLVMIsACallInst(c) && LLVMGetCalledValue(c) == f) calls.push_back({c, op, (s & 1) != 0});
             }
         }
+    return calls;
+}
+// The entry point's atomic textures as (binding, parameter) in binding order, each with its hidden buffer index;
+// false if the free indices run out.
+static bool atomicTextureBuffers(const std::vector<LLVMValueRef> &args, int lowest, std::vector<std::pair<long, long>> &textures,
+                                 std::vector<int> &hidden) {
+    bool used[kBufferIndexCount] = {false};
+    for (LLVMValueRef arg : args) {
+        std::vector<LLVMValueRef> f = metadataOperands(arg);
+        if (f.size() < 2 || !LLVMIsAConstantInt(f[0])) continue;
+        if (isBufferArgument(f)) markBufferIndices(f, used);
+        else if (atomicTextureArgument(f)) textures.push_back({metadataFieldAfter(f, "air.location_index"), (long)LLVMConstIntGetZExtValue(f[0])});
+    }
+    std::sort(textures.begin(), textures.end());
+    hidden.assign(textures.size(), -1);
+    int next = kHighestHiddenBuffer;
+    for (size_t t = 0; t < textures.size(); t++) {
+        int index = freeBufferIndex(used, next, lowest);
+        if (index < 0) return false;
+        hidden[t] = index;
+        next = index - 1;
+    }
+    return true;
+}
+// For each atomic, the position of its texture in `textures` (-1: not a texture argument, left as is), and the
+// positions used, sorted.
+static std::vector<size_t> texturesUsed(LLVMValueRef function, const std::vector<TexAtomicCall *> &atomics,
+                                        const std::vector<std::pair<long, long>> &textures, std::vector<int> &callTexture) {
+    std::vector<size_t> needed;
+    callTexture.assign(atomics.size(), -1);
+    for (size_t i = 0; i < atomics.size(); i++) {
+        LLVMValueRef texture = LLVMGetOperand(atomics[i]->call, 0);
+        for (size_t t = 0; t < textures.size(); t++)
+            if (texture == LLVMGetParam(function, (unsigned)textures[t].second)) callTexture[i] = (int)t;
+        if (callTexture[i] < 0) {
+            if (logging()) fprintf(stderr, "[nvair] %s: a texture atomic not on a texture2d argument, left as is\n", LLVMGetValueName(function));
+            continue;
+        }
+        if (std::find(needed.begin(), needed.end(), (size_t)callTexture[i]) == needed.end()) needed.push_back(callTexture[i]);
+    }
+    std::sort(needed.begin(), needed.end());
+    return needed;
+}
+// One texture atomic as the plugin's global atomic on its texel in the linear buffer at `base`, or on the scratch word
+// when the texel is outside the texture or the buffer has no header.
+static void lowerTextureAtomic(Gen &g, LLVMBuilderRef b, const TexAtomicCall &atomic, LLVMValueRef base) {
+    LLVMValueRef call = atomic.call;
+    const auto &op = kTexAtomicOps[atomic.op];
+    LLVMTypeRef global = LLVMPointerType(g.i32, 1);
+    LLVMPositionBuilderBefore(b, call);
+    LLVMValueRef coord = LLVMGetOperand(call, op.kind == kTAStore ? 2 : 1);
+    LLVMValueRef x = LLVMBuildExtractElement(b, coord, g.c32(0), ""), y = LLVMBuildExtractElement(b, coord, g.c32(1), "");
+    if (LLVMTypeOf(x) != g.i32) { x = LLVMBuildZExt(b, x, g.i32, ""); y = LLVMBuildZExt(b, y, g.i32, ""); }
+    auto word = [&](unsigned k) { LLVMValueRef index = g.c32(k); return LLVMBuildLoad(b, LLVMBuildGEP(b, base, &index, 1, ""), ""); };
+    LLVMValueRef ok = LLVMBuildICmp(b, LLVMIntEQ, word(0), g.c32(kTexAtomicMagic), "");
+    ok = LLVMBuildAnd(b, ok, LLVMBuildICmp(b, LLVMIntULT, x, word(2), ""), "");
+    ok = LLVMBuildAnd(b, ok, LLVMBuildICmp(b, LLVMIntULT, y, word(3), ""), "");
+    LLVMValueRef index = LLVMBuildAdd(b, LLVMBuildAdd(b, LLVMBuildMul(b, y, word(1), ""), x, ""), g.c32(kTexAtomicHeaderWords), "");
+    index = LLVMBuildSelect(b, ok, index, g.c32(kTexAtomicScratchWord), "");
+    LLVMValueRef pointer = LLVMBuildGEP(b, base, &index, 1, "");
+    if (op.kind == kTACompareExchange) {
+        LLVMTypeRef three[3] = {global, g.i32, g.i32};
+        LLVMValueRef cas = g.intrinsic("llvm.nvvm.atomic.cas.i32.p1i32.p0i8", g.i32, three, 3);
+        LLVMValueRef expectedPointer = LLVMBuildBitCast(b, LLVMGetOperand(call, 2), LLVMPointerType(g.i32, 0), "");
+        LLVMValueRef expected = LLVMBuildLoad(b, expectedPointer, "");
+        LLVMValueRef a[3] = {pointer, expected, LLVMBuildExtractElement(b, LLVMGetOperand(call, 3), g.c32(0), "")};
+        LLVMValueRef old = LLVMBuildCall(b, cas, a, 3, "");
+        LLVMBuildStore(b, old, expectedPointer);
+        LLVMValueRef same = LLVMBuildICmp(b, LLVMIntEQ, old, expected, "");
+        LLVMTypeRef result = LLVMTypeOf(call);
+        LLVMReplaceAllUsesWith(call, result == g.i1 ? same : LLVMBuildZExt(b, same, result, ""));
+    } else {
+        char nvvm[64];
+        snprintf(nvvm, sizeof nvvm, "llvm.nvvm.atomic.%s.i32.p1i32", atomic.isSigned ? op.s : op.u);
+        LLVMTypeRef two[2] = {global, g.i32};
+        LLVMValueRef value = op.kind == kTALoad ? g.c32(0)
+                           : LLVMBuildExtractElement(b, LLVMGetOperand(call, op.kind == kTAStore ? 1 : 2), g.c32(0), "");
+        LLVMValueRef a[2] = {pointer, value};
+        LLVMValueRef old = LLVMBuildCall(b, g.intrinsic(nvvm, g.i32, two, 2), a, 2, "");
+        if (op.kind != kTAStore) LLVMReplaceAllUsesWith(call, LLVMBuildInsertElement(b, LLVMConstNull(LLVMVectorType(g.i32, 4)), old, g.c32(0), ""));
+    }
+    LLVMInstructionEraseFromParent(call);
+}
+static unsigned lowerTextureAtomics(LLVMModuleRef module, Gen &g) {
+    std::vector<TexAtomicCall> calls = textureAtomicCalls(module);
     if (calls.empty()) return 0;
-    LLVMTypeRef global = LLVMPointerType(g.i32, 1), v4 = LLVMVectorType(g.i32, 4);
+    LLVMTypeRef global = LLVMPointerType(g.i32, 1);
     LLVMBuilderRef b = LLVMCreateBuilderInContext(g.context);
     unsigned lowered = 0;
-    for (const char *list : {"air.kernel", "air.fragment", "air.vertex"}) {
-        std::vector<LLVMValueRef> entries(LLVMGetNamedMetadataNumOperands(module, list));
-        if (entries.empty()) continue;
-        LLVMGetNamedMetadataOperands(module, list, entries.data());
-        for (LLVMValueRef entry : entries) {
-            std::vector<LLVMValueRef> parts = metadataOperands(entry);
-            void *node = metadataOf(entry);
-            if (parts.size() < 3 || !parts[0] || !node || LLVMIsDeclaration(parts[0])) continue;
-            LLVMValueRef function = parts[0];
-            std::vector<TexAtomicCall *> mine;
+    for (const char *list : {"air.kernel", "air.fragment", "air.vertex"})
+        for (EntryPoint &entry : entryPoints(module, list)) {
+            LLVMValueRef function = entry.function;
+            std::vector<TexAtomicCall *> atomics;
             for (TexAtomicCall &c : calls)
-                if (LLVMGetBasicBlockParent(LLVMGetInstructionParent(c.call)) == function) mine.push_back(&c);
-            if (mine.empty()) continue;
-            // the hidden indices, as item 58 works them out
-            std::vector<LLVMValueRef> args = metadataOperands(parts[2]);
-            bool used[31] = {false};
+                if (LLVMGetBasicBlockParent(LLVMGetInstructionParent(c.call)) == function) atomics.push_back(&c);
+            if (atomics.empty()) continue;
             std::vector<std::pair<long, long>> textures;  // (binding, parameter)
-            for (LLVMValueRef arg : args) {
-                std::vector<LLVMValueRef> f = metadataOperands(arg);
-                if (f.size() < 2 || !LLVMIsAConstantInt(f[0])) continue;
-                if (isString(f[1], "air.buffer") || isString(f[1], "air.indirect_buffer")) {
-                    long index = metadataFieldAfter(f, "air.location_index"), count = metadataFieldAfter(f, "air.location_index", 2);
-                    for (long k = 0; index >= 0 && k < (count > 0 ? count : 1); k++)
-                        if (index + k < 31) used[index + k] = true;
-                } else if (atomicTextureArgument(f)) {
-                    textures.push_back({metadataFieldAfter(f, "air.location_index"), (long)LLVMConstIntGetZExtValue(f[0])});
-                }
-            }
-            std::sort(textures.begin(), textures.end());
-            std::vector<int> hidden(textures.size(), -1);
-            int next = 30, lowest = !strcmp(list, "air.vertex") ? 17 : 0;
-            bool room = true;
-            for (size_t t = 0; t < textures.size(); t++) {
-                while (next >= lowest && used[next]) next--;
-                if (next < lowest) { room = false; break; }
-                hidden[t] = next--;
-            }
-            if (!room) {
+            std::vector<int> hidden;
+            if (!atomicTextureBuffers(entry.args, lowestHiddenBuffer(list), textures, hidden)) {
                 if (logging()) fprintf(stderr, "[nvair] %s: texture atomics, but no free buffer indices for them\n", LLVMGetValueName(function));
                 continue;
             }
-            // the textures this function's atomics use, in texture order
-            std::vector<int> callTexture(mine.size(), -1);
-            std::vector<size_t> needed;
-            for (size_t i = 0; i < mine.size(); i++) {
-                LLVMValueRef texture = LLVMGetOperand(mine[i]->call, 0);
-                for (size_t t = 0; t < textures.size(); t++)
-                    if (texture == LLVMGetParam(function, (unsigned)textures[t].second)) callTexture[i] = (int)t;
-                if (callTexture[i] < 0) {
-                    if (logging()) fprintf(stderr, "[nvair] %s: a texture atomic not on a texture2d argument, left as is\n", LLVMGetValueName(function));
-                    continue;
-                }
-                if (std::find(needed.begin(), needed.end(), (size_t)callTexture[i]) == needed.end()) needed.push_back(callTexture[i]);
-            }
+            std::vector<int> callTexture;
+            std::vector<size_t> needed = texturesUsed(function, atomics, textures, callTexture);
             if (needed.empty()) continue;
-            std::sort(needed.begin(), needed.end());
-            // the new function: the old parameters, then one buffer per texture in `needed`; the body moves over
-            LLVMTypeRef type = LLVMGetElementType(LLVMTypeOf(function));
             unsigned params = LLVMCountParams(function);
-            std::vector<LLVMTypeRef> types(LLVMCountParamTypes(type));
-            LLVMGetParamTypes(type, types.data());
-            for (size_t k = 0; k < needed.size(); k++) types.push_back(global);
-            std::string name = LLVMGetValueName(function);
-            LLVMSetValueName(function, (name + ".nvta").c_str());
-            LLVMValueRef rebuilt = LLVMAddFunction(module, name.c_str(),
-                LLVMFunctionType(LLVMGetReturnType(type), types.data(), (unsigned)types.size(), LLVMIsFunctionVarArg(type)));
-            LLVMSetLinkage(rebuilt, LLVMGetLinkage(function));
-            functionCopyAttributesFrom(rebuilt, function);
-            for (unsigned p = 0; p < params; p++) {
-                LLVMSetValueName(LLVMGetParam(rebuilt, p), LLVMGetValueName(LLVMGetParam(function, p)));
-                LLVMReplaceAllUsesWith(LLVMGetParam(function, p), LLVMGetParam(rebuilt, p));
-            }
-            while (LLVMBasicBlockRef block = LLVMGetFirstBasicBlock(function)) {
-                LLVMRemoveBasicBlockFromParent(block);
-                basicBlockInsertInto(block, rebuilt, nullptr);
-            }
-            std::vector<LLVMValueRef> newArgs = args;
+            LLVMValueRef rebuilt = rebuildWithParameters(module, function, global, needed.size(), ".nvta");
+            std::vector<LLVMValueRef> args = entry.args;
             for (size_t k = 0; k < needed.size(); k++) {
                 char argName[32];
                 snprintf(argName, sizeof argName, "__nvta_%ld", textures[needed[k]].first);
                 LLVMSetValueName(LLVMGetParam(rebuilt, params + (unsigned)k), argName);
-                auto str = [&](const char *t) { return LLVMMDStringInContext(g.context, t, (unsigned)strlen(t)); };
-                LLVMValueRef f[] = {g.c32(params + k), str("air.buffer"), str("air.location_index"), g.c32(hidden[needed[k]]), g.c32(1),
-                                    str("air.read_write"), str("air.arg_type_size"), g.c32(4), str("air.arg_type_align_size"), g.c32(4),
-                                    str("air.arg_type_name"), str("uint"), str("air.arg_name"), str(argName)};
-                newArgs.push_back(LLVMMDNodeInContext(g.context, f, sizeof f / sizeof *f));
+                args.push_back(hiddenBufferArgument(g, params + (unsigned)k, hidden[needed[k]], "air.read_write", argName));
             }
-            void *argList = metadataOf(LLVMMDNodeInContext(g.context, newArgs.data(), (unsigned)newArgs.size()));
-            if (!argList) continue;  // (can't happen for a fresh node)
-            mdNodeReplaceOperand(node, 0, valueAsMetadata(rebuilt));
-            mdNodeReplaceOperand(node, 2, argList);
-            // the atomics
-            for (size_t i = 0; i < mine.size(); i++) {
+            if (!updateEntryPoint(g, entry.node, rebuilt, args)) continue;  // (can't happen for a fresh node)
+            for (size_t i = 0; i < atomics.size(); i++) {
                 if (callTexture[i] < 0) continue;
-                LLVMValueRef call = mine[i]->call;
-                const auto &op = kTexAtomicOps[mine[i]->op];
                 size_t position = std::find(needed.begin(), needed.end(), (size_t)callTexture[i]) - needed.begin();
-                LLVMValueRef base = LLVMGetParam(rebuilt, params + (unsigned)position);
-                LLVMPositionBuilderBefore(b, call);
-                LLVMValueRef coord = LLVMGetOperand(call, op.kind == kTAStore ? 2 : 1);
-                LLVMValueRef x = LLVMBuildExtractElement(b, coord, g.c32(0), ""), y = LLVMBuildExtractElement(b, coord, g.c32(1), "");
-                if (LLVMTypeOf(x) != g.i32) { x = LLVMBuildZExt(b, x, g.i32, ""); y = LLVMBuildZExt(b, y, g.i32, ""); }
-                auto word = [&](unsigned k) { LLVMValueRef index = g.c32(k); return LLVMBuildLoad(b, LLVMBuildGEP(b, base, &index, 1, ""), ""); };
-                LLVMValueRef ok = LLVMBuildICmp(b, LLVMIntEQ, word(0), g.c32(kTexAtomicMagic), "");
-                ok = LLVMBuildAnd(b, ok, LLVMBuildICmp(b, LLVMIntULT, x, word(2), ""), "");
-                ok = LLVMBuildAnd(b, ok, LLVMBuildICmp(b, LLVMIntULT, y, word(3), ""), "");
-                LLVMValueRef index = LLVMBuildAdd(b, LLVMBuildAdd(b, LLVMBuildMul(b, y, word(1), ""), x, ""), g.c32(kTexAtomicHeaderWords), "");
-                index = LLVMBuildSelect(b, ok, index, g.c32(kTexAtomicScratchWord), "");
-                LLVMValueRef pointer = LLVMBuildGEP(b, base, &index, 1, "");
-                char nvvm[64];
-                const char *which = mine[i]->isSigned ? op.s : op.u;
-                LLVMTypeRef two[2] = {global, g.i32}, three[3] = {global, g.i32, g.i32};
-                if (op.kind == kTACompareExchange) {
-                    LLVMValueRef cas = g.intrinsic("llvm.nvvm.atomic.cas.i32.p1i32.p0i8", g.i32, three, 3);
-                    LLVMValueRef expectedPointer = LLVMBuildBitCast(b, LLVMGetOperand(call, 2), LLVMPointerType(g.i32, 0), "");
-                    LLVMValueRef expected = LLVMBuildLoad(b, expectedPointer, "");
-                    LLVMValueRef a[3] = {pointer, expected, LLVMBuildExtractElement(b, LLVMGetOperand(call, 3), g.c32(0), "")};
-                    LLVMValueRef old = LLVMBuildCall(b, cas, a, 3, "");
-                    LLVMBuildStore(b, old, expectedPointer);
-                    LLVMValueRef same = LLVMBuildICmp(b, LLVMIntEQ, old, expected, "");
-                    LLVMTypeRef result = LLVMTypeOf(call);
-                    LLVMReplaceAllUsesWith(call, result == g.i1 ? same : LLVMBuildZExt(b, same, result, ""));
-                } else {
-                    snprintf(nvvm, sizeof nvvm, "llvm.nvvm.atomic.%s.i32.p1i32", which);
-                    LLVMValueRef value = op.kind == kTALoad ? g.c32(0)
-                                       : LLVMBuildExtractElement(b, LLVMGetOperand(call, op.kind == kTAStore ? 1 : 2), g.c32(0), "");
-                    LLVMValueRef a[2] = {pointer, value};
-                    LLVMValueRef old = LLVMBuildCall(b, g.intrinsic(nvvm, g.i32, two, 2), a, 2, "");
-                    if (op.kind != kTAStore) LLVMReplaceAllUsesWith(call, LLVMBuildInsertElement(b, LLVMConstNull(v4), old, g.c32(0), ""));
-                }
-                LLVMInstructionEraseFromParent(call);
+                lowerTextureAtomic(g, b, *atomics[i], LLVMGetParam(rebuilt, params + (unsigned)position));
                 lowered++;
             }
             if (logging()) {
-                fprintf(stderr, "[nvair] %s: %zu texture atomic(s) on linear texture buffers", name.c_str(), mine.size());
+                fprintf(stderr, "[nvair] %s: %zu texture atomic(s) on linear texture buffers", LLVMGetValueName(rebuilt), atomics.size());
                 for (size_t k = 0; k < needed.size(); k++) fprintf(stderr, " texture(%ld)->buffer(%d)", textures[needed[k]].first, hidden[needed[k]]);
                 fprintf(stderr, "\n");
             }
         }
-    }
     LLVMDisposeBuilder(b);
     return lowered;
 }
@@ -1655,108 +1715,78 @@ static bool argumentNamed(const std::vector<LLVMValueRef> &f, const char *name) 
         if (isString(f[k], "air.arg_name") && isString(f[k + 1], name)) return true;
     return false;
 }
+// The 4-channel samples and reads of the given texture arguments (binding, parameter), each with its binding.
+static std::vector<std::pair<LLVMValueRef, long>> textureSamplesAndReads(LLVMValueRef function, const std::vector<std::pair<long, long>> &textures) {
+    std::vector<std::pair<LLVMValueRef, long>> calls;
+    for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(function); bb; bb = LLVMGetNextBasicBlock(bb))
+        for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+            if (!LLVMIsACallInst(inst)) continue;
+            LLVMValueRef callee = calledFunction(inst);
+            const char *name = callee ? LLVMGetValueName(callee) : "";
+            if (!startsWith(name, "air.sample_texture_") && !startsWith(name, "air.read_texture_")) continue;
+            LLVMTypeRef rt = LLVMTypeOf(inst);
+            if (LLVMGetTypeKind(rt) != LLVMVectorTypeKind || LLVMGetVectorSize(rt) != 4) continue;
+            LLVMValueRef texture = LLVMGetOperand(inst, 0);
+            for (auto &t : textures)
+                if (t.first >= 0 && t.first < 128 && texture == LLVMGetParam(function, (unsigned)t.second)) calls.push_back({inst, t.first});
+        }
+    return calls;
+}
+// The call's (x, y, z, w) becomes (x, 0, 0, 1) where bit `binding` of the mask is set.
+static void applyDepthChannelMask(Gen &g, LLVMBuilderRef b, LLVMValueRef call, LLVMValueRef mask, long binding) {
+    LLVMPositionBuilderBefore(b, LLVMGetNextInstruction(call));
+    LLVMValueRef index = g.c32((unsigned)(binding / 32));
+    LLVMValueRef word = LLVMBuildLoad(b, LLVMBuildGEP(b, mask, &index, 1, ""), "");
+    LLVMValueRef bit = LLVMBuildAnd(b, LLVMBuildLShr(b, word, g.c32((unsigned)(binding % 32)), ""), g.c32(1), "");
+    LLVMValueRef isDepth = LLVMBuildICmp(b, LLVMIntNE, bit, g.c32(0), "");
+    LLVMTypeRef element = LLVMGetElementType(LLVMTypeOf(call));
+    bool integer = LLVMGetTypeKind(element) == LLVMIntegerTypeKind;
+    LLVMValueRef zero = LLVMConstNull(element), one = integer ? LLVMConstInt(element, 1, 0) : LLVMConstReal(element, 1.0);
+    LLVMValueRef v1 = LLVMBuildInsertElement(b, call, zero, g.c32(1), "");
+    LLVMValueRef v2 = LLVMBuildInsertElement(b, v1, zero, g.c32(2), "");
+    LLVMValueRef v3 = LLVMBuildInsertElement(b, v2, one, g.c32(3), "");
+    LLVMValueRef result = LLVMBuildSelect(b, isDepth, v3, call, "");
+    LLVMReplaceAllUsesWith(call, result);
+    LLVMSetOperand(v1, 0, call);
+    LLVMSetOperand(result, 2, call);
+}
 static unsigned fixDepthChannels(LLVMModuleRef module, Gen &g) {
     unsigned fixed = 0;
     LLVMBuilderRef b = nullptr;
-    for (const char *list : {"air.fragment", "air.vertex"}) {
-        std::vector<LLVMValueRef> entries(LLVMGetNamedMetadataNumOperands(module, list));
-        if (entries.empty()) continue;
-        LLVMGetNamedMetadataOperands(module, list, entries.data());
-        for (LLVMValueRef entry : entries) {
-            std::vector<LLVMValueRef> parts = metadataOperands(entry);
-            void *node = metadataOf(entry);
-            if (parts.size() < 3 || !parts[0] || !node || LLVMIsDeclaration(parts[0])) continue;
-            LLVMValueRef function = parts[0];
-            std::vector<LLVMValueRef> args = metadataOperands(parts[2]);
-            bool used[31] = {false}, angle = false;
+    for (const char *list : {"air.fragment", "air.vertex"})
+        for (EntryPoint &entry : entryPoints(module, list)) {
+            bool used[kBufferIndexCount] = {false}, angle = false;
             std::vector<std::pair<long, long>> textures;  // (binding, parameter)
-            for (LLVMValueRef arg : args) {
+            for (LLVMValueRef arg : entry.args) {
                 std::vector<LLVMValueRef> f = metadataOperands(arg);
                 if (f.size() < 2 || !LLVMIsAConstantInt(f[0])) continue;
-                if (isString(f[1], "air.buffer") || isString(f[1], "air.indirect_buffer")) {
-                    long index = metadataFieldAfter(f, "air.location_index"), count = metadataFieldAfter(f, "air.location_index", 2);
-                    for (long k = 0; index >= 0 && k < (count > 0 ? count : 1); k++)
-                        if (index + k < 31) used[index + k] = true;
+                if (isBufferArgument(f)) {
+                    markBufferIndices(f, used);
                     angle |= argumentNamed(f, "ANGLE_angleUniforms");
                 } else if (isString(f[1], "air.texture") && !depthTextureArgument(f)) {
                     textures.push_back({metadataFieldAfter(f, "air.location_index"), (long)LLVMConstIntGetZExtValue(f[0])});
                 }
             }
             if (!angle || textures.empty()) continue;
-            int hidden = 30, lowest = !strcmp(list, "air.vertex") ? 17 : 0;
-            while (hidden >= lowest && used[hidden]) hidden--;
-            if (hidden < lowest) continue;
-            // the samples and reads of a texture argument, with its binding
-            std::vector<std::pair<LLVMValueRef, long>> calls;
-            for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(function); bb; bb = LLVMGetNextBasicBlock(bb))
-                for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
-                    if (!LLVMIsACallInst(inst)) continue;
-                    LLVMValueRef callee = calledFunction(inst);
-                    const char *name = callee ? LLVMGetValueName(callee) : "";
-                    if (!startsWith(name, "air.sample_texture_") && !startsWith(name, "air.read_texture_")) continue;
-                    LLVMTypeRef rt = LLVMTypeOf(inst);
-                    if (LLVMGetTypeKind(rt) != LLVMVectorTypeKind || LLVMGetVectorSize(rt) != 4) continue;
-                    LLVMValueRef texture = LLVMGetOperand(inst, 0);
-                    for (auto &t : textures)
-                        if (t.first >= 0 && t.first < 128 && texture == LLVMGetParam(function, (unsigned)t.second)) calls.push_back({inst, t.first});
-                }
+            int hidden = freeBufferIndex(used, kHighestHiddenBuffer, lowestHiddenBuffer(list));
+            if (hidden < 0) continue;
+            std::vector<std::pair<LLVMValueRef, long>> calls = textureSamplesAndReads(entry.function, textures);
             if (calls.empty()) continue;
-            // the function again, with the mask parameter last; the body moves over
-            LLVMTypeRef type = LLVMGetElementType(LLVMTypeOf(function)), mask = LLVMPointerType(g.i32, 2);
-            unsigned params = LLVMCountParams(function);
-            std::vector<LLVMTypeRef> types(LLVMCountParamTypes(type));
-            LLVMGetParamTypes(type, types.data());
-            types.push_back(mask);
-            std::string name = LLVMGetValueName(function);
-            LLVMSetValueName(function, (name + ".nvds").c_str());
-            LLVMValueRef rebuilt = LLVMAddFunction(module, name.c_str(),
-                LLVMFunctionType(LLVMGetReturnType(type), types.data(), (unsigned)types.size(), LLVMIsFunctionVarArg(type)));
-            LLVMSetLinkage(rebuilt, LLVMGetLinkage(function));
-            functionCopyAttributesFrom(rebuilt, function);
-            for (unsigned p = 0; p < params; p++) {
-                LLVMSetValueName(LLVMGetParam(rebuilt, p), LLVMGetValueName(LLVMGetParam(function, p)));
-                LLVMReplaceAllUsesWith(LLVMGetParam(function, p), LLVMGetParam(rebuilt, p));
-            }
-            while (LLVMBasicBlockRef block = LLVMGetFirstBasicBlock(function)) {
-                LLVMRemoveBasicBlockFromParent(block);
-                basicBlockInsertInto(block, rebuilt, nullptr);
-            }
-            LLVMValueRef base = LLVMGetParam(rebuilt, params);
-            LLVMSetValueName(base, "__nvds");
-            auto str = [&](const char *t) { return LLVMMDStringInContext(g.context, t, (unsigned)strlen(t)); };
-            LLVMValueRef f[] = {g.c32(params), str("air.buffer"), str("air.location_index"), g.c32(hidden), g.c32(1), str("air.read"),
-                                str("air.arg_type_size"), g.c32(4), str("air.arg_type_align_size"), g.c32(4),
-                                str("air.arg_type_name"), str("uint"), str("air.arg_name"), str("__nvds")};
-            std::vector<LLVMValueRef> newArgs = args;
-            newArgs.push_back(LLVMMDNodeInContext(g.context, f, sizeof f / sizeof *f));
-            void *argList = metadataOf(LLVMMDNodeInContext(g.context, newArgs.data(), (unsigned)newArgs.size()));
-            if (!argList) continue;
-            mdNodeReplaceOperand(node, 0, valueAsMetadata(rebuilt));
-            mdNodeReplaceOperand(node, 2, argList);
+            unsigned params = LLVMCountParams(entry.function);
+            LLVMValueRef rebuilt = rebuildWithParameters(module, entry.function, LLVMPointerType(g.i32, 2), 1, ".nvds");
+            LLVMValueRef mask = LLVMGetParam(rebuilt, params);
+            LLVMSetValueName(mask, "__nvds");
+            std::vector<LLVMValueRef> args = entry.args;
+            args.push_back(hiddenBufferArgument(g, params, hidden, "air.read", "__nvds"));
+            if (!updateEntryPoint(g, entry.node, rebuilt, args)) continue;
             if (!b) b = LLVMCreateBuilderInContext(g.context);
             for (auto &c : calls) {
-                LLVMValueRef call = c.first;
-                LLVMPositionBuilderBefore(b, LLVMGetNextInstruction(call));
-                LLVMValueRef index = g.c32((unsigned)(c.second / 32));
-                LLVMValueRef word = LLVMBuildLoad(b, LLVMBuildGEP(b, base, &index, 1, ""), "");
-                LLVMValueRef bit = LLVMBuildAnd(b, LLVMBuildLShr(b, word, g.c32((unsigned)(c.second % 32)), ""), g.c32(1), "");
-                LLVMValueRef isDepth = LLVMBuildICmp(b, LLVMIntNE, bit, g.c32(0), "");
-                LLVMTypeRef element = LLVMGetElementType(LLVMTypeOf(call));
-                bool integer = LLVMGetTypeKind(element) == LLVMIntegerTypeKind;
-                LLVMValueRef zero = LLVMConstNull(element), one = integer ? LLVMConstInt(element, 1, 0) : LLVMConstReal(element, 1.0);
-                LLVMValueRef v1 = LLVMBuildInsertElement(b, call, zero, g.c32(1), "");
-                LLVMValueRef v2 = LLVMBuildInsertElement(b, v1, zero, g.c32(2), "");
-                LLVMValueRef v3 = LLVMBuildInsertElement(b, v2, one, g.c32(3), "");
-                LLVMValueRef result = LLVMBuildSelect(b, isDepth, v3, call, "");
-                LLVMReplaceAllUsesWith(call, result);
-                LLVMSetOperand(v1, 0, call);
-                LLVMSetOperand(result, 2, call);
+                applyDepthChannelMask(g, b, c.first, mask, c.second);
                 fixed++;
             }
             if (logging())
-                fprintf(stderr, "[nvair] %s: %zu texture sample(s) / read(s) given depth channels, mask at buffer %d\n", name.c_str(), calls.size(), hidden);
+                fprintf(stderr, "[nvair] %s: %zu texture sample(s) / read(s) given depth channels, mask at buffer %d\n", LLVMGetValueName(rebuilt), calls.size(), hidden);
         }
-    }
     if (b) LLVMDisposeBuilder(b);
     return fixed;
 }
