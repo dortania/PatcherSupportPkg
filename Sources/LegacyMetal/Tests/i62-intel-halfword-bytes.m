@@ -1,10 +1,6 @@
-// i62-intel-halfword-bytes (Intel adapter, IntelTextureAtomics.dylib): as_type<uchar4>(ushort2) and
-// as_type<char4>(short2) in vertex and fragment functions with the 3802 Intel compiler. That bitcast <2 x i16> -> <4 x i8>
-// aborted the compile ("IGILTargetLowering::ReplaceNodeResults(): need to lower this!" on a v4i8 node), so the render
-// pipeline failed with "Compiler encountered an internal error"; compute functions were right. Found by fuzzing fragment
-// functions. The vertex function unpacks halfwords of a constant buffer and passes the bytes on (flat); the fragment
-// function does the same with halfwords of a device buffer; each casts unsigned and signed, and the four results go to an
-// RGBA32Uint target. Stock OCLP: FAIL (no pipeline). Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i62-intel-halfword-bytes: as_type<uchar4>(ushort2) and as_type<char4>(short2) in vertex and fragment functions must
+// compile; the compiler aborted ("need to lower this!"). Fix: IntelTextureAtomics INTEL_HALFWORD_BYTES_FIX.
+// Checks: vertex and fragment casts, unsigned and signed, written to an RGBA32Uint target. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const kSource = @"#include <metal_stdlib>\nusing namespace metal;\n"

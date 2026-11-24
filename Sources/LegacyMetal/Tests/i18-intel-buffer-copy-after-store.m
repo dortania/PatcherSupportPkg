@@ -1,10 +1,6 @@
-// i18-intel-buffer-copy-after-store (Intel adapter, IntelTextureAtomics.dylib): a byte buffer viewed through an int
-// pointer at a constant offset (Tint's code for WGSL bufferView) is loaded, stored through the view, then copied out
-// whole (an aggregate copy, llvm.memcpy). The 3802 back end lowers the copy to loads and reuses the earlier load of the
-// viewed word instead of reading it again, so the copy has the value from before the store (WebGPU CTS bufferView
-// mixed_types_aliasing with constant offsets, 96 cases, workgroup and storage buffers). Runs the shape on threadgroup and
-// on device memory.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i18-intel-buffer-copy-after-store: a buffer copied out whole after a store through an int view (Tint's bufferView)
+// must have that store; the back end reused an earlier load. Fix: IntelTextureAtomics INTEL_TYPE_PUN_FIX.
+// Checks: load, store through the view and whole copy, on threadgroup and device memory. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

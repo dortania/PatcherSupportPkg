@@ -1,30 +1,6 @@
-// a15-amd-branch-conditions (AMD adapter, AMDTextureAtomics.dylib): branches the 12.5 AMD compiler gets wrong once
-// threads diverge. All found by differential fuzzing against a CPU reference:
-//   bittest:  r += (x & 1) != 0 ? 49 : ((b & 1) != 0 ? in[2] : d)  in an unrolled loop. libAMDIL902 treats booleans as
-//             0 / 1 when it simplifies but branches on the whole register: the load of in[2], guarded by "x even and
-//             b odd", becomes "x == 0 and b odd", so most threads add d instead
-//   loopexit: while (n < 8) { n++; v ^= ...; if (even(v ^ t) && (in[2] & 3) == 0) break; }  after a barrier. SC's code
-//             for the loop's two exits sends the threads that stay to the wrong branch whenever some threads leave, and
-//             they run once more
-//   bitphi:   r = (a & 1) != 0 ? 0 : b; if (r < d) a ^= in[..]; s = ((a & 1) != 0 ? d : 1) & 1 ? .. : ..  The front end
-//             tests a phi of the two a & 1 values after the if; once bittest's fix had made the first test an extract,
-//             that phi was the and's only user and libAMDIL902 dropped its & 1 (right with stock files: a regression
-//             of the fix, seed 2245), so the fix takes the phi's ands through extract_bits too
-//   bitshort: while (n < 8) { n++; v = ...; s = select(short2(1, 1), short2(..) & short2(-12131, -9348), ..); if
-//             ((uint(s.x) ^ uint(s.y) * 257) & 3) == 0) break; }  Bit 1 of s is known zero, so the front end tests
-//             (s.x ^ s.y) & 1 on 16 bits, and the exit tested the whole 16 bits (seed 1932): the fix takes 8- and
-//             16-bit single-bit ands through extract_bits too
-//   maskfirst: if ((min(150u, K) > b) != bool(min(1u, 104u) & (c / 1522195843u))) ..  The min/max fix folds min(1u, 104u)
-//             to 1 in place, leaving `1 & y` with the constant first, which the bit-test fix didn't look at: y = 2 took
-//             the wrong branch (seed 2286). The mask is now found in either operand
-//   switchbit: for (i < 3) { s = short2(short(i), short(a)) & short2(5474, 29237); switch ((uint(s.x) ^ uint(s.y) * 257)
-//             & 3) .. }  Unrolled, only bit 0 of the switch value varies for i = 0 and 1, and the lowering's bit test
-//             took the wrong case (seed 4273, stock files too): switches on low bits go through extract_bits
-//   bitbool:  for (i < 3) if (((c & 1) % (i | 1)) == uint(!((a ^ (t << i)) > b))) ..  The bit, divided, compared with a
-//             bool: libAMDIL902 drops the & 1 here too (seed 3010, stock files too), so a single bit compared with a
-//             zero-extended bool, directly or under an unsigned division, remainder or right shift, is an extract
-// 256 threads each, checked against the same code on the CPU. Stock OCLP: FAIL. Fixed: PASS.
-// Argument: GPU name substring (default: AMD).
+// a15-amd-branch-conditions: branches must go right once threads diverge; libAMDIL902 dropped the & 1 of bit tests and
+// SC misran two-exit loops. Fix: AMDTextureAtomics AMD_BIT_TEST_FIX, AMD_LOOP_EXIT_FIX.
+// Checks: bittest, loopexit, bitphi, bitshort, maskfirst, switchbit, bitbool, against the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

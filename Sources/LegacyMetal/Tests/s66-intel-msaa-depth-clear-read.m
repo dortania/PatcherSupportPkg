@@ -1,10 +1,6 @@
-// s66-intel-msaa-depth-clear-read (shim item 50): on the Ivy Bridge driver, depth a render pass clears into a 4x
-// multisampled texture reads back in a later render pass only in the texture's first width/2 x height/2 texels; the rest
-// reads 0 (a compute dispatch sees all of it). ANGLE resolves a multisampled depth renderbuffer for glBlitFramebuffer by
-// sampling it in a fragment shader, so cleared depth copied out of one came out as 0 (WebGL CTS
-// multisampled-depth-renderbuffer-initialization). Clears a 16x16 4x Depth32Float texture to 0.75 and reads sample 0 of
-// every texel in a fragment shader of the next pass. Stock OCLP on an HD 4000: FAIL. Fixed: PASS.
-// Argument: GPU name substring (default: Intel).
+// s66-intel-msaa-depth-clear-read: cleared 4x MSAA depth must read back in full in a later pass; Ivy Bridge saw only
+// the first quarter. Fix: MetalOldCompat item 50.
+// Checks: a 16x16 4x Depth32Float cleared to 0.75; sample 0 of every texel read in the next pass. Argument: GPU name.
 #import "repro.h"
 
 int main(int argc, char **argv) {

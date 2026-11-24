@@ -1,10 +1,6 @@
-// s80-msl32-fences (MetalOldCompat: MSL 3.2 requests): a kernel written the way SPIRV-Cross writes it for MSL 3.2, which
-// MoltenVK asks for on macOS 15 (4.0 on 26): memory barriers as atomic_thread_fence(flags, order, scope), at threadgroup,
-// device and simdgroup scope, followed by a control barrier. This stack's front end has no atomic_thread_fence (Godot
-// 4.7's compute shaders failed: "use of undeclared identifier 'memory_order_seq_cst'"); the shim compiles 3.2 requests
-// as 3.1 and writes the fences as the barriers SPIRV-Cross writes before 3.2. Checked: it compiles and every thread
-// reads what another thread of its threadgroup wrote before the fence.
-// Stock: compile error. Fixed: PASS. Argument: GPU name substring (default: the system default GPU).
+// s80-msl32-fences: SPIRV-Cross's MSL 3.2 atomic_thread_fence must compile and order memory; the 3.1 front end lacks it
+// (Godot). Fix: MetalOldCompat item 9.
+// Checks: it compiles, and threads read what others wrote before the fence. Argument: GPU name.
 #import "repro.h"
 
 static const char *source =

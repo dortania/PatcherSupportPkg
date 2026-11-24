@@ -1,10 +1,6 @@
-// i64-intel-byte-vector-compare (Intel adapter, IntelTextureAtomics.dylib): compares and selects of uchar4 / char4 in
-// fragment functions with the 3802 Intel compiler. The back end's type legalization of a compare between two byte
-// vectors depends on how each was made: any(uchar4(a, b, c, d) <= as_type<uchar4>(x)) crashed the compiler service
-// (SelectionDAG::getZeroExtendInReg), any(as_type<char4>(x) > as_type<char4>(y)) came out wrong, and a select of byte
-// vectors by such a compare crashed, also on the bytes of as_type<uchar4>(ushort2) (i62). Compute functions are right.
-// Found by fuzzing fragment functions. Each pixel of a 256x1 RGBA32Uint target gets the four cases for its own inputs.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i64-intel-byte-vector-compare: compares and selects of uchar4 / char4 in fragment functions must compile and be
+// right; the back end crashed or came out wrong. Fix: IntelTextureAtomics INTEL_NARROW_VECTOR_COMPARE_FIX.
+// Checks: four compare and select cases per pixel of a 256x1 RGBA32Uint target. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const kSource = @"#include <metal_stdlib>\nusing namespace metal;\n"

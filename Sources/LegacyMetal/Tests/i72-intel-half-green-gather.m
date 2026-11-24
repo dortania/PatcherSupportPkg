@@ -1,11 +1,6 @@
-// i72-intel-half-green-gather (Intel adapter, IntelTextureAtomics.dylib; regression test for i50): a green gather
-// through a texture2d<half> must compile and return the texels' green values. i50 compares a green gather with a red
-// one to catch Haswell's R32G32 erratum; it bitcast both to <4 x i32>, which is invalid for half4, so the compiler
-// service aborted ("Compiler encountered an internal error") on any half green gather: MetalFX's spatial scaler
-// (MFX_Scale) gathers half4, and MTLFXSpatialScaler came back nil on the Iris Pro although supportsDevice said yes.
-// Gathers green from a 4x4 RG32Float texture (the erratum's format) through texture2d<half> in a compute kernel, at the
-// centre of each 2x2 footprint, and checks the four values against the texels.
-// Stock OCLP: FAIL (no pipeline). Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i72-intel-half-green-gather: a green gather through texture2d<half> must compile and return green; i50's check
+// aborted the compiler (MetalFX's spatial scaler was nil). Fix: IntelTextureAtomics INTEL_GATHER_GREEN_FIX.
+// Checks: green gathers of a 4x4 RG32Float texture through texture2d<half>, in compute. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const kSource = @"#include <metal_stdlib>\nusing namespace metal;\n"

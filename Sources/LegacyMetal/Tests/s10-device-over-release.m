@@ -1,9 +1,6 @@
-// s10-device-over-release (MetalOldCompat item 10): a client releases an MTLDevice once more than it retained it
-// (Chromium's GPU process does, in ANGLE's default-device check). Apple's Metal tolerates that; MetalOld frees the
-// device while its device list still points to it, and the next MTLCopyAllDevices copies the freed object: the GPU
-// process crashes and Chrome falls back to software. The child runs with MallocScribble so the use-after-free is
-// deterministic.
-// Stock OCLP: FAIL (child crashes). Fixed: PASS. No arguments.
+// s10-device-over-release: an MTLDevice released once too often (Chromium's GPU process) must survive; MetalOld freed
+// it and the next MTLCopyAllDevices crashed. Fix: MetalOldCompat item 10.
+// Checks: the over-release, in a child with MallocScribble.
 #import "repro.h"
 
 static int child(void) {

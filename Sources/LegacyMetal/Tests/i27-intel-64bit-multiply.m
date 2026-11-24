@@ -1,9 +1,6 @@
-// i27-intel-64bit-multiply (Intel adapter, IntelTextureAtomics.dylib): 64-bit multiplies whose factors have a constant
-// low word. The back end splits a 64-bit multiply into 32-bit ones, and the high word of a 32-bit product is wrong when
-// a factor is a constant (as with mulhi(a, 3u), i21), so with a = (x << 32) | 139 both mulhi(a, b) and the high word of
-// a * b came out wrong (the MacBookPro11,5 session's 64-bit fuzzing). Runs ulong and long mulhi, madhi and multiplies,
-// with such factors and with arbitrary ones, on 256 seeded inputs and compares with the same arithmetic on the CPU.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i27-intel-64bit-multiply: 64-bit multiplies with a constant low word in a factor must be right; the 32-bit split got
+// the high word wrong. Fix: IntelTextureAtomics INTEL_MUL64_FIX (Kepler: NVAIR_INTRINSICS, NVAIR_I64_FIX).
+// Checks: ulong and long mulhi, madhi and multiply, such and arbitrary factors, vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

@@ -1,13 +1,6 @@
-// s74-chromium-angle-libraries (MetalOldCompat item 13 for old ANGLE libraries): the prebuilt ANGLE internal-shader library of
-// every Chromium-based app installed (Chrome, Edge, Brave, Electron apps such as VS Code, anything bundling libGLESv2.dylib),
-// loaded as ANGLE loads it, with each of the pipelines ANGLE builds from it: the clear, the blits for every color type and
-// source texture type, the depth blit and the mipmap kernels. Chromium ships that library built for macOS 10.14 (AIR 2.1);
-// on Tahoe's compiler for this stack every blit pipeline and mipmap kernel built from it aborted MTLCompilerService three
-// times ("Invalid record", "INSERTVAL: Invalid type") and failed, so a Chromium app's GPU process got stuck or drew without
-// its blits (OpenVPN Connect, VS Code, Chrome 158; reported on the PR by Gabriel-AGH with a patch). The shim compiles
-// WebKit's ANGLE source in its place. On Sequoia the prebuilt library builds either way. SKIP when no such app is installed;
-// it searches Tests/apps (tools/fetch-apps.sh fills it), /Applications and ~/Applications, or S74_APPS=<dir>[:<dir>...].
-// Stock OCLP on Tahoe: FAIL. Fixed: PASS. Argument: GPU name substring (default: the system default GPU).
+// s74-chromium-angle-libraries: Chromium apps' prebuilt ANGLE library must build its pipelines; on Tahoe it aborted
+// MTLCompilerService. Fix: MetalOldCompat item 13 MTLSHIM_OLD_ANGLE_LIBRARY. SKIP without such an app.
+// Checks: ANGLE's clear, blits and mipmap kernels per app (Tests/apps, /Applications, S74_APPS). Argument: GPU name.
 #import "repro.h"
 #import <CommonCrypto/CommonDigest.h>
 #include <dlfcn.h>

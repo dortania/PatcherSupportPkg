@@ -1,17 +1,6 @@
-// a13-amd-private-array-stores (AMD adapter, AMDTextureAtomics.dylib): private arrays written at variable indexes with
-// the 12.5 AMD compiler. SC keeps small private arrays in VGPRs and writes variable indexes with M0-relative moves
-// (v_movreld), and loses updates around them (found by differential fuzzing against a CPU reference):
-//   branch:  if (c) p[2] += 1; else p[i] += 1; p[j] = 1;   SC drops the first branch (p[2] keeps its old value)
-//   select:  if (c) { q = c2 ? &p[6] : &p[2]; *q += 1; } else p[2] += 1; p[j] = 1;   the same through a pointer select
-//   loop:    for (5 times) { p[i] += 1; s += p[i]; p[j] = 1; }   loses the first write from the second iteration on
-// The fix makes every access to such an array a constant-index one, loads too: with the stores done per element and the
-// loads left indexed, SC merges indexed loads across the stores between them once a loop is unrolled:
-//   unrolled: k = constant; for (5 times) { k += n * 7; p[k & 7] = a; s ^= p[i]; }   four of the five loads read one value
-//   metalarray: metal::array (what Chromium's ANGLE writes for GLSL arrays, a struct around the array), updated through
-//            a reference in a loop: for (3 times) { inout(p[i]); p[1] = g; }   the update applied twice, not 3 times
-// Each kernel runs on 256 threads with different indexes and is checked against the same code on the CPU.
-// Stock OCLP: FAIL. Fixed: PASS.
-// Argument: GPU name substring (default: AMD).
+// a13-amd-private-array-stores: private arrays written at variable indexes must keep every update; SC (v_movreld) lost
+// writes around them, also in ANGLE's metal::array. Fix: AMDTextureAtomics AMD_PRIVATE_STORE_FIX.
+// Checks: branch, select, loop, unrolled and metal::array kernels against the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

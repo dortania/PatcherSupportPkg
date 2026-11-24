@@ -1,10 +1,6 @@
-// i38-intel-saturating-add-zero (Intel adapter, INTEL_CONST_SAT_FIX): a saturating add of 0 and a byte. The back end
-// writes addsat(0u, x & 255) as UADD_sat r, 0, (x AND 255), and iCBE turns that into something that reads another
-// byte, so `v + addsat(0u, (uint)c)` with a uchar c got the wrong byte in 110 of 256 threads, also the signed form and
-// other uses of the same masked value. An add_sat with a zero operand (or a sub_sat of zero) is its other operand and
-// is folded away in the IR, with the saturating adds of two constants. Found by the MacBookPro11,5 session's
-// differential fuzzing (mslfuzz2 plain seed 812). Expected values from the CPU reference (cpuref.py) on the fuzzer's
-// input. Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i38-intel-saturating-add-zero: addsat(0u, byte) must be the byte; iCBE turned UADD_sat 0, (x AND 255) into a read of
+// another byte. Fix: IntelTextureAtomics INTEL_CONST_SAT_FIX.
+// Checks: v + addsat(0u, (uint)c) for a uchar c, signed too, and other uses of the masked value. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

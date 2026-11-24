@@ -1,9 +1,6 @@
-// i30-intel-narrow-udiv (Intel adapter, IntelTextureAtomics.dylib): division of uchar lanes built from selects of 32-bit
-// values. The back end writes it as UBDIV, and iCBE drops the AND 0xFF that truncates each lane (it takes the divide to
-// read only the low byte) while the divide uses the whole register, so lanes were divided with their upper bits in
-// place (the MacBookPro11,5 session's narrow-vector fuzzing, seed 31). The adapter writes UBDIV / USDIV as a 32-bit UDIV
-// of masked copies. On the differential fuzzer's 256-thread input, against the CPU reference.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i30-intel-narrow-udiv: uchar lanes built from selects of 32-bit values must divide as bytes; iCBE dropped the AND
+// 0xFF of UBDIV's operands. Fix: IntelTextureAtomics INTEL_NARROW_UDIV_FIX.
+// Checks: such a uchar division, 256 inputs vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

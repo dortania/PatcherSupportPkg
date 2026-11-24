@@ -1,10 +1,6 @@
-// i31-intel-narrow-div (Intel adapter, IntelTextureAtomics.dylib): 8- and 16-bit division and remainder done in narrow
-// lanes. The back end's narrow divides take operands extended the wrong way (narrow constants arrive sign-extended,
-// lanes zero-extended), so char4 shift amounts computed with char4(-90, -126, 70, 75) % d came out wrong (the
-// MacBookPro11,5 session's narrow-vector fuzzing, seed 44; the expression is the reduced one from that kernel). The
-// adapter does udiv / urem / sdiv / srem on i8 and i16 in 32-bit lanes. On the differential fuzzer's 256-thread input,
-// against the CPU reference.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i31-intel-narrow-div: 8- and 16-bit division and remainder must be right; the back end's narrow divides took operands
+// extended the wrong way. Fix: IntelTextureAtomics INTEL_NARROW_DIV_FIX.
+// Checks: char4(-90, -126, 70, 75) % d used as shift amounts, 256 inputs vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

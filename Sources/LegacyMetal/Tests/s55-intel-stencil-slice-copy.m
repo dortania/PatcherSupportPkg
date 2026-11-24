@@ -1,10 +1,6 @@
-// s55-intel-stencil-slice-copy (MetalOldCompat item 37): stencil copied between a buffer and slice 1 of a Stencil8 2D
-// array must keep every texel. On the 12.x Intel driver, with a buffer offset that isn't a multiple of 256, a copy out of
-// slice 1 reads 0, and a copy into it with a bytesPerRow that isn't one either writes nothing; slice 0, the stencil of
-// Depth32Float_Stencil8 and texture-to-texture copies are right. wgpu's copy_unaligned_rows round-trips a 3x2x2 Stencil8
-// array with bytesPerRow 4 and offset 16 and got slice 1 back as zeros. Copies 3x2 texels into slice 1 with bytesPerRow
-// 4 at offset 16 and with bytesPerRow 256 at offset 16, reading each back the same way and with an aligned layout.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s55-intel-stencil-slice-copy: stencil copied between a buffer and slice 1 of a Stencil8 array must keep every texel;
+// at unaligned offsets the 12.x Intel driver read 0 or wrote nothing. Fix: MetalOldCompat item 37.
+// Checks: 3x2 texels into slice 1 at offset 16, bytesPerRow 4 and 256, read back. Argument: GPU name.
 #import "repro.h"
 
 enum { W = 3, H = 2 };

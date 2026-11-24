@@ -1,12 +1,6 @@
-// s32-intel-depth-stencil-blit (MetalOldCompat item 27): blits into depth and stencil on the 12.x Intel driver. A render
-// pass after the blit doesn't see what it wrote: stencil copied in (from a buffer with StencilFromDepthStencil, or from
-// another texture) still tests as the old stencil, though a blit reads it back right, and depth copied into a small
-// texture that a render pass cleared (one that keeps HiZ; 4x4 here, 8x8 and larger were right) still tests as the cleared
-// depth. ANGLE copies stencil this way on
-// Intel GPUs, so WebGL's blitFramebuffer lost stencil. Each case: a 4x4 Depth32Float_Stencil8 render target cleared to depth
-// 1, stencil 0 in a render pass; depth 0.25 and stencil 0x5A copied in by a blit; then a render pass that loads it draws
-// at depth 0.5 with depth test Greater and stencil test Equal 0x5A, which only passes where both were copied.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s32-intel-depth-stencil-blit: depth and stencil blitted in must be seen by later passes; on the 12.x Intel driver
+// they tested as the old values (ANGLE's stencil copy). Fix: MetalOldCompat item 27. Checks: depth and stencil blitted
+// into a cleared 4x4 Depth32Float_Stencil8, then a draw testing both. Argument: GPU name.
 #import "repro.h"
 
 enum Case { kStencilFromBuffer, kDepthFromBuffer, kTextureToTexture };

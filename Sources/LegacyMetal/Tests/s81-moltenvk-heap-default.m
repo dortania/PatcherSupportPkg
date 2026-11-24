@@ -1,9 +1,6 @@
-// s81-moltenvk-heap-default (MetalOldCompat item 74): MoltenVK 1.4.0 and 1.4.1 take every Mac GPU for a family-2 one and
-// put Vulkan memory into placement heaps, which MetalOld refuses on the family-1 GPUs by aborting the app (Godot 4.7 on
-// the GTX 770: "Placement heap type is not supported"). The shim sets MVK_CONFIG_USE_MTLHEAP=0 unless the environment
-// has it. Checked: once Metal is loaded the setting is 0, and on a family-1 GPU a placement heap is indeed unavailable
-// (MetalOld would abort on one, so this only checks the family, not the heap).
-// Stock: FAIL (not set). Fixed: PASS. Argument: GPU name substring (default: the system default GPU).
+// s81-moltenvk-heap-default: MoltenVK 1.4.0/1.4.1 must not use placement heaps on family-1 GPUs; MetalOld aborted
+// (Godot on the GTX 770). Fix: MetalOldCompat item 74.
+// Checks: MVK_CONFIG_USE_MTLHEAP is 0 once Metal loads, and family 1 lacks placement heaps. Argument: GPU name.
 #import "repro.h"
 
 int main(int argc, char **argv) {

@@ -1,12 +1,6 @@
-// i24-intel-compute-compare-level (Intel adapter, IntelTextureAtomics.dylib, with MetalOldCompat item 40): sample_compare
-// with level(0) in a compute kernel whose coordinates come from a constant buffer. The IGIL writer builds the sample's
-// message in one register (coordinates in xyz, the LOD in w) and then names the coordinate register as the operand;
-// iCBE takes the LOD from its w, which held whatever the register last held, so the sample came from a random mip level
-// (blended, with a linear mip filter) and the results changed from run to run (WebGPU CTS textureSampleCompareLevel in
-// compute: 160 cases). A 16x16 Depth32Float texture with 3 levels of different random depths is compared (less, 0.5)
-// at 50 texel centres per run, 10 runs, nearest and linear filters; every result must be level 0's.
-// Stock OCLP: FAIL (item 40 missing: every comparison is "never"). The PR without this fix: FAIL. Fixed: PASS.
-// Argument: GPU name substring (default: Intel).
+// i24-intel-compute-compare-level: sample_compare with level(0) in a compute kernel must use level 0; the LOD came from
+// a stale register. Fix: IntelTextureAtomics INTEL_SAMPLE_LOD_OPERAND_FIX (needs MetalOldCompat item 40).
+// Checks: a 3-level depth texture compared at 50 texel centres, 10 runs, nearest and linear. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

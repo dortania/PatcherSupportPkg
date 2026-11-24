@@ -1,15 +1,6 @@
-// a16-amd-narrow-constants (AMD adapter, AMDTextureAtomics.dylib): 8- and 16-bit integer division and remainder. The
-// front end narrows 32-bit code to i8 / i16 when the values fit (`136u / (b | 1u)` with b a uchar becomes
-// `udiv i8 -120, b`), and libAMDIL902 doesn't clear or extend the upper bits of narrow values: it widens the narrow
-// constant by sign extension (0xFFFFFF88) before dividing the zero-extended operand (kernel k), and divides a uchar it
-// computed as ~x, kept in a register once the adapter has made a uchar array registers, with its upper bits set
-// (kernel garbage; kernel vectors: the same in a uchar4 lane). The quotient, remainder, shift or comparison comes out
-// wrong. Kernel loadedvec (the fuzzed form as reduced, seed 675): a char4 loaded from the buffer, compared and also used
-// as an integer; the fix's zero extension of the load became an extending <4 x i32> load that the combiner left the
-// integer use on ("Cannot select: i32 = bitcast"), so such loaded vectors are widened lane by lane (found by
-// differential fuzzing). uchar and ushort values read from private arrays (what lets the front end narrow), each operation against 136 / 200 / 0x8001 / 0xF000,
-// 256 threads, checked against the same code on the CPU. Stock OCLP: FAIL. Fixed: PASS.
-// Argument: GPU name substring (default: AMD).
+// a16-amd-narrow-constants: 8- and 16-bit division, remainder, shifts and compares must compute; libAMDIL902 left
+// narrow values' upper bits dirty. Fix: AMDTextureAtomics AMD_NARROW_CONSTANT_FIX.
+// Checks: uchar/ushort against 136, 200, 0x8001, 0xF000, vectors, a loaded char4, against the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

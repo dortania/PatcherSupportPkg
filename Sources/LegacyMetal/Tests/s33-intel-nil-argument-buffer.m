@@ -1,10 +1,6 @@
-// s33-intel-nil-argument-buffer (MetalOldCompat item 28): nil buffers in argument buffers on the 12.x Intel driver. Its
-// argument buffers are emulated (tier 1), and the emulated encoder's setBuffer:offset:atIndex: and
-// setBuffers:offsets:withRange: read the buffer's GPU address without checking for nil, so encoding nil into an unused
-// slot, which Metal allows, dereferences null. Cycles (Blender 3.6's GPU renderer) does that before every kernel, so a
-// GPU render crashed Blender. An encoder with four buffer slots gets nil in slot 0 with setBuffer, and nil in slot 2
-// with setBuffers; a kernel then reads the buffers in slots 1 and 3.
-// Stock OCLP: FAIL (crash). Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s33-intel-nil-argument-buffer: encoding nil buffers into argument buffers must work; the 12.x Intel driver
+// dereferenced null (Cycles crashed Blender). Fix: MetalOldCompat item 28.
+// Checks: nil set with setBuffer and setBuffers, then a kernel reading the other slots. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const kSource = @"#include <metal_stdlib>\nusing namespace metal;\n"

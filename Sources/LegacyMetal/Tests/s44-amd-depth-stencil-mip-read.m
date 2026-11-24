@@ -1,20 +1,6 @@
-// s44-amd-depth-stencil-mip-read (AMDBronzeCompat item 10): mipmapped depth-stencil textures on the 12.5 AMD driver.
-// The driver lays out the depth plane of Depth24Unorm_Stencil8 and Depth32Float_Stencil8 with addrlib's stencil padding,
-// which the texture unit doesn't follow, so shaders read the depth of levels 4 or fewer texels wide (among others) from the
-// wrong place: WebGL's depth24_stencil8 shadow lookups (dEQP textureshadow 2d and 2d_array, 32x64) and texture storage
-// checks. Without the padding, the depth unit (render passes) no longer finds stencil where blits and shaders have it on
-// those levels, which item 10 handles by rendering them through a temporary; so this test checks both.
-//   1. Depth: a different value per texel on every level (and slice) of 32x64 and 64x64 2D textures and a 32x64x2 2D
-//      array, uploaded the way ANGLE does (buffer-to-texture blits with DepthFromDepthStencil), read back with
-//      depth2d(_array)::read in a compute kernel.
-//   2. Stencil: a different value per texel on every level and slice of a 32x64 2D texture (7 levels) and a 32x16x2 2D
-//      array (3 levels), uploaded with StencilFromDepthStencil blits, read back three ways: a blit to a buffer, a shader
-//      through a stencil view, and the depth unit (a stencil-EQUAL draw per value, each writing the value to an R8Uint
-//      target). Then a render pass per level and slice replaces the stencil there with a value of its own, and blits and
-//      the shader must read exactly those values everywhere (a pass that wrote into another level or slice shows up).
-// Both formats. Stock OCLP: FAIL (small levels read other levels' depth). Item 10 without its render-pass routing: FAIL
-// (the depth unit misses stencil from slice 1 of level 1 on). Fixed: PASS.
-// Argument: GPU name substring (default: AMD).
+// s44-amd-depth-stencil-mip-read: shaders must read the depth of small levels of depth-stencil textures; the AMD
+// driver's padding put them elsewhere. Fix: AMDBronzeCompat item 10 AMD_BRONZE_COMPAT.
+// Checks: depth on every level read in a kernel; stencil via blits, views and the depth unit. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

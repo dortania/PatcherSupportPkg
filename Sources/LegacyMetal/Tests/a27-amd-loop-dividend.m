@@ -1,11 +1,6 @@
-// a27-amd-loop-dividend (AMD adapter): a loop variable that starts as 32 bits cut from a 64-bit value and is divided
-// as a signed int in the loop (`uint v = uint(min(x, y) >> 10); for (i < 3) { s += int(v) % 257; v ^= ...; }`) comes
-// out as the unsigned division in the first iteration (found by fuzzing with 64-bit integers, seed 1663). The same
-// bug as a22, but the division sees a phi in the AIR: libAMDIL902 unrolls the loop afterwards. The adapter builds
-// the cuts coming into such phis from the 32-bit halves too.
-// Checked: % 257 and / 1000 in a 3-trip loop, an index into a private array, and a nested 2 x 2 loop, against the CPU
-// on 256 threads.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// a27-amd-loop-dividend: a loop variable cut from a 64-bit value and divided as an int must divide signed; a22's bug
+// hit the first iteration. Fix: AMDTextureAtomics AMD_SHIFTED_DIVIDEND_FIX, GeForceAIRCompat NVAIR_INTRINSICS,
+// NVAIR_I64_FIX. Checks: % 257 and / 1000 in loops, a private-array index, a nested loop. Argument: GPU name.
 #import "repro.h"
 
 enum { kThreads = 256, kOut = 4 };

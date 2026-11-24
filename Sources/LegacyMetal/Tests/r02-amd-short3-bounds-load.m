@@ -1,13 +1,6 @@
-// r02-amd-short3-bounds-load (regression test for the AMD adapter's a16 fix; AMD GCN on the 12.5 stack): a signed
-// comparison with a short3 loaded from constant memory must read the vector's own three lanes. a16 does signed narrow
-// comparisons in 32 bits; zero-extending the loaded short3 whole let libAMDIL902 fold the extension into the load as a
-// <3 x i32> one, which fetched lane 2 at byte 8, past the short3, from the struct's padding. MPS's image kernels bound-
-// check their thread position like this against a short3 size in parameters whose padding MPS doesn't clear, so
-// MPSImageAdd and MPSImageMultiply wrote nothing whenever a leftover pointer's bits there read as a negative depth (about
-// half the calls). The kernel here returns early when any(size <= short3(thread position)), with size (64, 48, 1) and the
-// padding bytes 0x80, so lane 2 read from the padding would be -32640 and every thread would return.
-// Expected: PASS with no a16 fix and with a correct one; FAIL with the whole-vector extension (AMD_NARROW_LOAD3_FIX=0).
-// Argument: GPU name substring (default: AMD).
+// r02-amd-short3-bounds-load: guards a16's fix; must keep working: a signed compare with a short3 from constant memory
+// reads its 3 lanes, not the padding. Fix: AMDTextureAtomics AMD_NARROW_LOAD3_FIX.
+// Checks: threads return when any(size <= short3(position)), 0x80 padding after size. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const kSource = @"#include <metal_stdlib>\nusing namespace metal;\n"

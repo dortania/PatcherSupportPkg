@@ -1,11 +1,6 @@
-// s22-intel-depth-hiz-levels (shim item 22): HiZ on the 12.x Intel driver for depth textures with several mip levels or
-// slices. Depth written by a blit into a level or slice other than 0 is right in memory, but the hierarchical depth
-// buffer isn't updated, so a later render pass that loads that level/slice fails every depth test against it (WebGPU
-// CTS copy_depth_stencil, texture_zero with depth formats). Depth is drawn into level/slice 0 of one Depth32Float
-// array texture (3 levels, 4 slices), blit-copied into level 2 / slice 0 and level 0 / slice 1 of another, and the
-// same quad is drawn again against each with compare Equal into a color target: every pixel must come out green.
-// On the Ivy Bridge driver, which has no bHizDisable, item 27 writes such blits again with a render pass instead.
-// Stock OCLP: FAIL. Fixed: PASS (Haswell, HD 4000). Argument: GPU name substring (default: Intel).
+// s22-intel-depth-hiz-levels: depth blitted into a level or slice above 0 must be seen by later passes; the 12.x Intel
+// driver's HiZ missed it, so depth tests failed. Fix: MetalOldCompat item 22 (on Ivy Bridge item 27).
+// Checks: depth blitted to level 2 and slice 1 of a Depth32Float array, redrawn with Equal. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

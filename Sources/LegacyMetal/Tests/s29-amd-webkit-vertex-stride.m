@@ -1,9 +1,6 @@
-// s29-amd-webkit-vertex-stride (AMDBronzeCompat item 6): for a draw of one vertex, WebKit's WebGPU copies the pipeline with the
-// stride set to the end of the last attribute, 2 for snorm8x2. The 12.5 AMD driver refuses a stride that isn't a multiple of 4,
-// WebKit then draws with no pipeline set, and the driver crashes, taking Safari's GPU process with it (WebGPU CTS
-// api,validation,encoding,cmds,render,draw:vertex_buffer_OOB). The fix only applies in WebKit's processes, so this calls itself
-// one before Metal loads. It makes that pipeline and checks the draw reads the vertex.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// s29-amd-webkit-vertex-stride: WebKit's one-vertex pipeline copy with stride 2 must draw; the AMD driver refused it
+// and crashed Safari's GPU process. Fix: AMDBronzeCompat item 6 AMD_BRONZE_COMPAT.
+// Checks: posing as a WebKit process, makes that pipeline and checks the vertex is read. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

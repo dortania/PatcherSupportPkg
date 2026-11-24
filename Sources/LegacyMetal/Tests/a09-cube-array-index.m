@@ -1,9 +1,6 @@
-// a09-cube-array-index (AMD adapter): a cube array index out of range must read the same face of the nearest cube.
-// GCN clamps the slice, 8 * index + face, so -1 reads the first face of the first cube whatever the direction. WebKit passes
-// WGSL's array index on as it is. (WebGPU CTS builtin,textureSample and the others in Safari: every cube array case with a
-// negative index.)
-// Checked: color, unsigned and depth textures, sample, gather and compare, the whole texture and a view of its last two cubes.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// a09-cube-array-index: a cube array index out of range must read that face of the nearest cube; GCN read cube 0's
+// first face. Fix: AMDTextureAtomics AMD_CUBE_ARRAY_FIX, GeForceAIRCompat NVAIR_CUBE_ARRAY_FIX, NVAIR_GRADIENT_FIX.
+// Checks: color, uint, depth; sample, gather, compare; also through a view. Argument: GPU name.
 #import "repro.h"
 #include <math.h>
 

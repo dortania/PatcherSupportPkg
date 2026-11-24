@@ -1,10 +1,6 @@
-// s21-intel-depth-only-pipeline (shim item 21): depth-only render pipelines on the 12.x Intel driver. A pipeline
-// without a fragment function leaves its depth attachment unusable: drawing the same triangles again with compare
-// Equal passes nowhere. With an empty fragment function it works. Depth-only passes (shadow maps, depth pre-passes,
-// WebGPU pipelines without a fragment stage) are common; this is how the WebGPU CTS's depth copy tests fill depth.
-// Triangles with varying z are drawn into a Depth32Float target by a pipeline with no fragment function, then drawn
-// again with compare Equal and depth writes off into a color target: every pixel must come out green.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s21-intel-depth-only-pipeline: a pipeline without a fragment function must write usable depth; on the 12.x Intel
+// driver a redraw with compare Equal passed nowhere. Fix: MetalOldCompat item 21.
+// Checks: triangles drawn depth-only into Depth32Float, then with Equal: every pixel green. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

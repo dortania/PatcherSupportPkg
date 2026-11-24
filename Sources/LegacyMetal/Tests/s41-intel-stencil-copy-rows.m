@@ -1,10 +1,6 @@
-// s41-intel-stencil-copy-rows (MetalOldCompat item 37): stencil copied between a buffer and mip level 2 must keep every
-// texel. On the 12.x Intel driver, with a buffer offset or bytesPerRow that isn't a multiple of 256, a texel of each row
-// comes from its left neighbour (mip 2 of 20x16: the 5th texel reads or writes as the 4th), for Stencil8 and the stencil
-// of Depth32Float_Stencil8 (which backs WebGPU's stencil8). Dawn copies a tight buffer's last row on its own with
-// bytesPerRow = its width (WebGPU CTS image_copy rowsPerImage_and_bytesPerRow_depth_stencil). Copies 5x4 texels at mip 2
-// both ways with bytesPerRow 5, and the last row alone at a buffer offset of 16, for both formats.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s41-intel-stencil-copy-rows: stencil copied between a buffer and level 2 must keep every texel; with unaligned rows
+// the 12.x Intel driver shifted a texel per row. Fix: MetalOldCompat item 37.
+// Checks: Stencil8 and Depth32Float_Stencil8, 5x4 at level 2 both ways, bytesPerRow 5, offset 16. Argument: GPU name.
 #import "repro.h"
 
 static int check(id<MTLDevice> dev, id<MTLCommandQueue> q, MTLPixelFormat format, char *what, size_t whatSize) {

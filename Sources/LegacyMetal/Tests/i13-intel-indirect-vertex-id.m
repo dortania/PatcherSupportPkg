@@ -1,12 +1,6 @@
-// i13-intel-indirect-vertex-id (Intel adapter, IntelTextureAtomics.dylib): in indexed draws through an indirect buffer
-// (drawIndexedPrimitives:...indirectBuffer:), [[vertex_id]] on the 12.x Intel driver leaves out the base vertex, unless the
-// vertex function also reads [[base_vertex]]; direct draws are right. WebGPU's drawIndexedIndirect with a base vertex
-// drew from the wrong vertices wherever Dawn's shader uses the vertex index (CTS draw:arguments, robust_access_vertex).
-// A vertex function with rasterization off writes [[vertex_id]] and [[instance_id]] to a buffer, in indexed draws (base
-// vertex 5 and 2, first index 0 and 1, base instance 7) and a non-indexed draw, each direct and indirect (arguments in a
-// private buffer filled by a blit). On the Ivy Bridge driver the direct draws after an indirect one also kept its base
-// instance and (with the adapter's fix) base vertex (MetalOldCompat item 48). Stock OCLP: FAIL. Fixed: PASS (Haswell,
-// HD 4000). Argument: GPU name substring (default: Intel).
+// i13-intel-indirect-vertex-id: [[vertex_id]] in indexed indirect draws must include the base vertex; the driver left
+// it out. Fix: IntelTextureAtomics INTEL_BASE_VERTEX_FIX, MetalOldCompat MTLSHIM_IVB_DRAW_PARAMETERS.
+// Checks: vertex and instance ids of indexed and plain draws, direct and indirect. Argument: GPU name.
 #import "repro.h"
 
 int main(int argc, char **argv) {

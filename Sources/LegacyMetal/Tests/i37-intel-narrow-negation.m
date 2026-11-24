@@ -1,11 +1,6 @@
-// i37-intel-narrow-negation (Intel adapter, INTEL_NARROW_NEGATE_FIX): the negation of a char vector lane. The back end
-// writes it as BADD rD, rZ, -rX (rZ = MOV 0) followed by the sign extension BTOI rD, and iCBE folds the two into the
-// negation of the sign-extended lane, -(sext x) instead of sext(-x): for x = 0x80 a char3 lane of -(int)x read back as
-// +128 instead of -128. Scalar chars, shorts and zero extensions are right. The adapter writes such negations as
-// XOR 0xFF and a byte add of 1. Found by the MacBookPro11,5 session's narrow-vector fuzzing (mslfuzz2 VEC=1 ASTYPE=1,
-// seeds 70 and 110); this is 110's reduction. Expected values from the CPU reference (cpuref.py) on the fuzzer's
-// input; the other words (scalar char and short negations) are checked too. Stock OCLP: FAIL. Fixed: PASS. Argument:
-// GPU name substring (default: Intel).
+// i37-intel-narrow-negation: negating a char vector lane must give sext(-x); iCBE folded the byte add and sign
+// extension into -(sext x), so 0x80 gave +128. Fix: IntelTextureAtomics INTEL_NARROW_NEGATE_FIX.
+// Checks: a char3 lane negation, plus scalar char and short negations, vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

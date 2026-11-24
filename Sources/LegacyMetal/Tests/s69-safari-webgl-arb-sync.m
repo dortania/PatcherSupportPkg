@@ -1,17 +1,6 @@
-// s69-safari-webgl-arb-sync (MetalOldCompat item 11): Safari 18's WebKit makes every WebGL context (WebGL 1 and 2) require
-// GL_ARB_sync (GraphicsContextGLCocoa::platformInitializeExtensions: "Sync objects are used to throttle display on Metal
-// implementations"), and WebKit's ANGLE turns its MTLSharedEvent fences (feature hasEvents) off on NVIDIA GPUs
-// (crbug.com/1136673), which drops GL_ARB_sync. On Kepler (GTX 600/700) every WebGL context in Safari was created lost:
-// getContext returned a context whose isContextLost() was already true (CONTEXT_LOST_WEBGL), nothing logged. This loads
-// WebKit's libANGLE-shared into itself (the shim treats calls from it as WebKit's), creates WebGL-style contexts as WebKit
-// does (Metal display with WebKit's feature list, WebGL compatibility, robust init, no client arrays, no implicit binds),
-// checks that GL_ARB_sync is there for both, and then that ANGLE's fences on this GPU work: glFenceSync waited with
-// glClientWaitSync, flushed and polled the way WebGL pages poll SYNC_STATUS, and EGL fences; none may time out.
-// Tahoe's WebKit ANGLE doesn't offer GL_ARB_sync at all, with its fences on (GL_OES_EGL_sync, GL_NV_fence and
-// EGL_KHR_fence_sync there; R9 M370X), and Tahoe's Safari makes WebGL contexts without it; what hasEvents off takes away is
-// all four, so a context fails only when the other three are missing too.
-// Stock OCLP on Kepler: FAIL (no GL_ARB_sync). Fixed: PASS. Other GPUs have hasEvents on already: PASS either way.
-// SKIP without WebKit's ANGLE.
+// s69-safari-webgl-arb-sync: Safari's WebGL contexts need GL_ARB_sync; on Kepler WebKit's ANGLE dropped it, so every
+// context was created lost. Fix: MetalOldCompat item 11. SKIP without WebKit's ANGLE.
+// Checks: GL_ARB_sync in WebKit-style WebGL 1 and 2 contexts; GL and EGL fences that don't time out.
 #import "repro.h"
 #include <dlfcn.h>
 

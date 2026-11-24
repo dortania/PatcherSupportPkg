@@ -1,7 +1,6 @@
-// s26-amd-depth-stencil-copy-pitch (AMDBronzeCompat item 5): copying one aspect of a combined depth/stencil texture to a
-// buffer with destinationBytesPerRow 0, on the 12.5 AMD driver. wgpu passes 0 when WebGPU leaves bytesPerRow out, as it may
-// for a single row. The driver writes nothing (WebGPU conformance render_pass,clear_value:stencil_clear_value in Firefox).
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// s26-amd-depth-stencil-copy-pitch: copying one aspect of a depth/stencil texture to a buffer with bytesPerRow 0 must
+// write it (wgpu does, for one row); the AMD driver wrote nothing. Fix: AMDBronzeCompat item 5 AMD_BRONZE_COMPAT.
+// Checks: depth and stencil of Depth24Unorm_Stencil8 and Depth32Float_Stencil8. Argument: GPU name.
 #import "repro.h"
 
 // Clears to depth 1 and stencil 7, copies the aspect's first texel, and returns whether it arrived.

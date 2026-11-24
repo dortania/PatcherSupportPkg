@@ -1,16 +1,6 @@
-// s59-metal4-texture-reads (MetalOldCompat item 45): texture reads in a Metal 4.0 library (Xcode 26), where the front end
-// builds every read as air.read_<texture>(texture, air.get_read_sampler(), ...), as macOS 26's own SceneKit, VFX and
-// CoreComposite libraries do for depth, cube and 1D reads. On Tahoe's compiler (the 14.2 front end installed as
-// GPUCompiler 31001) a read with ushort coordinates crashed MTLCompilerService in AIR16BitTextureCoordinateEmulationPass,
-// and MetalOld sent the request again forever (SceneKit's temporal antialiasing: temporal_aa; on the Intel GPU every
-// read); on the AMD GPU the other reads failed with "SC compilation failure There is a call to an undefined label".
-// Fifteen kernels each read one texel of a known texture (1D, 2D at level 1, 2D array, 3D, cube, cube array, depth 2D,
-// depth 2D array, depth cube, texture buffer; ushort coordinates for 1D, 2D, 3D, cube and depth 2D); each pipeline
-// is built on a background queue and given 90 s.
-// Input: s59-metal4.metallib (build.sh builds it from data/s59-reads.metal with Xcode 26's metal compiler).
-// Stock OCLP on Tahoe: FAIL (a compile that never returns, or "undefined label"). Fixed: PASS. On macOS 15 and older, which
-// can't run apps built for macOS 26 (and whose own libraries don't use the read sampler): SKIP.
-// Argument: GPU name substring (default: AMD).
+// s59-metal4-texture-reads: texture reads in a Metal 4.0 library (Xcode 26) must build; Tahoe's compiler crashed
+// forever or failed. Fix: MetalOldCompat item 45 __XPC_MTLSHIM_READ_SAMPLER. SKIP before macOS 26.
+// Checks: 15 kernels read a texel of each texture type, from build.sh's s59-metal4.metallib. Argument: GPU name.
 #import "repro.h"
 
 enum { N = 8 };

@@ -1,12 +1,6 @@
-// i17-intel-private-pointer-select (Intel adapter, IntelTextureAtomics.dylib): a private array that is also reached
-// through a select of pointers into it (`thread uint *q = c ? &p[6] : &p[5]; *q += 5u;`) stays in private memory, and
-// there the 3802 back end forwards a load of an element past a store to that same element: after
-// `p[5] = p[5] + a; p[5] = p[5] * 3u;` the multiplication reads the first load's value (stock compiler too). The
-// adapter's variable-index rewrite (i07) turns every variable-index store into loads and stores of each element, so with
-// a pointer select in the function random integer kernels came out wrong 43% of the time (differential fuzzing on
-// both 2015 MacBook Pros). Runs both shapes, constant-index updates and variable-index stores followed by the pointer
-// select, on 64 threads, and checks every thread against the same code run on the CPU.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i17-intel-private-pointer-select: a private array also reached through a select of pointers must keep its stores; the
+// back end forwarded a load past one. Fix: IntelTextureAtomics INTEL_PRIVATE_SELECT_FIX.
+// Checks: constant-index updates, variable-index stores, then the pointer select, vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

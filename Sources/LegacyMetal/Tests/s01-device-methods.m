@@ -1,8 +1,6 @@
-// s01-device-methods (MetalOldCompat item 1): MTLDevice methods from the macOS 13.3+/14/15 SDKs that MetalOld (Metal
-// from macOS 13.2, which OCLP uses for every GPU on Macs with a Haswell/Ivy Bridge iGPU) doesn't implement. Apps built
-// with a current SDK call them unconditionally (Blender sets shouldMaximizeConcurrentCompilation at startup), and the
-// process dies with "unrecognized selector sent to instance".
-// Stock OCLP: FAIL (child killed by SIGABRT). Fixed: PASS. Argument: GPU name substring (default: all GPUs).
+// s01-device-methods: MTLDevice methods from the macOS 13.3-15 SDKs must exist; MetalOld lacked them and apps died with
+// "unrecognized selector" (Blender). Fix: MetalOldCompat item 1.
+// Checks: the methods called in a child process. Argument: GPU name.
 #import "repro.h"
 
 static int child(int argc, char **argv) {

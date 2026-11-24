@@ -1,10 +1,6 @@
-// i69-intel-half3-bits (Intel adapter, IntelTextureAtomics.dylib): bitwise operations on the bits of a half3 in fragment
-// functions with the 3802 Intel compiler. as_type<ushort3>(half3) & ushort3(0x7FFF) (and | of sign bits, >> 3) crashed
-// the compiler service: a 48-bit vector made with as_type, which the byte/halfword-vector rewrite (i66) extended as a whole.
-// RenderBox (SwiftUI's renderer) has exactly this in its resolve shaders (a sign-preserving color transfer), so those
-// pipeline variants failed with "Compiler encountered an internal error". Found by scanning the system's metallibs for
-// the IR the Intel fixes act on. Each pixel of a 256x1 target writes the abs, the sign-copied and the shifted bits of
-// its own half3 to a buffer. Stock OCLP: FAIL (no pipeline). Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i69-intel-half3-bits: bitwise operations on as_type<ushort3>(half3) in fragment functions must compile; the compiler
+// crashed (SwiftUI's RenderBox shaders failed). Fix: IntelTextureAtomics INTEL_NARROW_VECTOR_ARITH_FIX.
+// Checks: the abs, sign-copied and shifted bits of each pixel's half3. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const kSource = @"#include <metal_stdlib>\nusing namespace metal;\n"

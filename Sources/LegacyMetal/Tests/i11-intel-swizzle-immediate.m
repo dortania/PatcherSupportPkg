@@ -1,10 +1,6 @@
-// i11-intel-swizzle-immediate (Intel adapter, IntelTextureAtomics.dylib): in a long fragment function, a vector built
-// from immediates and per-pixel values (FragColor = vec4(1.0, a, b, 1.0)) gets the immediates right in only one pixel of
-// eight on the 3802 Intel compiler (IGIL MOV_SWZ); the others read 0. dEQP's uniform-block cases with instance arrays
-// end that way and failed in Chrome and Safari (uniformbuffers single_struct_array and single_nested_struct_array,
-// *_instance_array_fragment / _both). Runs ANGLE's translation of one of them (data/i11-ubo-fragment.metal) with its
-// buffer bytes (data/i11-ubo.bin, three blocks through an argument buffer): every pixel should be white.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i11-intel-swizzle-immediate: immediates in a vector with per-pixel values (vec4(1.0, a, b, 1.0)) in a long fragment
+// function must stay; they read 0 in 7 pixels of 8. Fix: IntelTextureAtomics INTEL_SWIZZLE_IMMEDIATE_FIX.
+// Checks: ANGLE's translation of a dEQP uniform-block case (data/i11-*) must draw all white. Argument: GPU name.
 #import "repro.h"
 
 int main(int argc, char **argv) {

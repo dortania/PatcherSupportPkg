@@ -1,10 +1,6 @@
-// s38-intel-coverage-without-writes (MetalOldCompat item 34): on the 12.x Intel driver, the coverage a fragment function
-// computes (a [[sample_mask]] output, or alpha with alpha-to-coverage) is dropped in a pipeline with no depth or stencil
-// attachment whose color attachments all have writeMask none: occlusion queries count every sample (WebGPU CTS
-// occlusionQuery sample_mask and alpha_to_coverage with writeMask 0). 4x pipelines like that, one writing sample_mask 0
-// and one with alpha-to-coverage and alpha 0, draw a full-target triangle in an occlusion query: no sample may count, and
-// the color target must keep its clear color. With mask 0xF and alpha 1 every sample counts. Stock OCLP: FAIL.
-// Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s38-intel-coverage-without-writes: shader coverage (sample_mask, alpha-to-coverage) must count with no attachment
+// written; the 12.x Intel driver dropped it. Fix: MetalOldCompat item 34.
+// Checks: occlusion counts with mask 0 / alpha 0 (none) and mask 0xF / alpha 1 (all). Argument: GPU name.
 #import "repro.h"
 
 int main(int argc, char **argv) {

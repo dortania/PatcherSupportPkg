@@ -1,13 +1,6 @@
-// a33-amd-divergent-inner-loop (AMD adapter): lanes that leave an inner loop early must keep their values while other
-// lanes of the wave go on looping, also inside an outer loop the compiler unrolls. `for (i < 4) { n = 0; while (n < 8) {
-// n++; v = (i & 1) ? extract_bits(a, (e * v) & 15, c & 15) : char(n) ^ a; if ((int(i) / d & 3) == 0) break; } }` gave a
-// wrong v in every lane of a wave that held one lane with d = 1, which loops on (found by fuzzing with loop counters in
-// expressions, seed 2398, stock files too): libAMDIL902 unrolls the outer loop fully, and the lanes that had left the
-// inner loop still took its later passes. With the outer loop left rolled the code is right, so the adapter keeps outer
-// loops around such inner loops rolled.
-// Checked: lane 5 of each 64-thread group loops on, the others leave at once; v and the summed trip counts of 256 threads
-// against the CPU.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// a33-amd-divergent-inner-loop: lanes that leave an inner loop early must keep their values while others loop on; with
+// the outer loop unrolled they took later passes' values. Fix: AMDTextureAtomics AMD_DIVERGENT_LOOP_FIX.
+// Checks: lane 5 of each 64-thread group loops on; v and trip counts against the CPU. Argument: GPU name.
 #import "repro.h"
 
 enum { kThreads = 256, kOut = 2 };

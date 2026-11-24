@@ -1,9 +1,6 @@
-// a20-amd-wide-compares (AMD adapter): 64-bit comparisons whose result is sign-extended or branched on must compile.
-// libAMDIL902's setcc on i64 operands has an i64 result, which no select or brcond pattern takes, so the compile stops
-// with "LLVM ERROR: Cannot select" (found by fuzzing with 64-bit integers; v -= uint(bool(w & m)) with w a ulong, or an
-// if on a ulong comparison). The adapter does every i64 comparison on the 32-bit halves.
-// Checked: the fuzzed form, branches on ulong and long ==, !=, <, >=, compare-selects, against the CPU on 256 threads.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// a20-amd-wide-compares: 64-bit compares that are sign-extended or branched on must compile; libAMDIL902 stopped with
+// "Cannot select". Fix: AMDTextureAtomics AMD_WIDE_COMPARE_FIX.
+// Checks: ulong and long ==, !=, <, >= in branches and selects, against the CPU. Argument: GPU name.
 #import "repro.h"
 
 enum { kThreads = 256 };

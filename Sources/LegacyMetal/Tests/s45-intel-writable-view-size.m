@@ -1,9 +1,6 @@
-// s45-intel-writable-view-size (MetalOldCompat item 39): get_width / get_height of a writable 2D-array texture view that
-// starts at mip level 1 must give that level's size in a fragment function. On the 12.x Intel driver such a binding
-// uses the view's render-target surface state, whose min LOD is 0 (its LOD field holds the level, which only writes
-// read), so the sampler's resinfo returned level 0's size (WebGPU CTS textureDimensions storage, write, 2d-array, base
-// level 1-2: 40 cases). Views of levels 1 and 2 of a 32x24 texture should report 16x12 and 8x6.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s45-intel-writable-view-size: get_width/height of a writable 2D-array view at level 1+ must give that level's size;
+// the 12.x Intel driver gave level 0's. Fix: MetalOldCompat item 39.
+// Checks: views of levels 1 and 2 of a 32x24 texture report 16x12 and 8x6. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

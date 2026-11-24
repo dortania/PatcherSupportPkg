@@ -1,9 +1,6 @@
-// s50-intel-compute-compare-sampler (MetalOldCompat item 40): sample_compare and gather_compare in a compute kernel
-// through a sampler argument with a compare function. The driver's compute path (CHAL_INTEL::ChalContext::
-// PatchSamplerObject) builds the hardware sampler state without the sampler's compare function, so every comparison
-// compared with "never" and returned 0 (WebGPU CTS textureGatherCompare in compute: 300 cases). An 8x8 Depth32Float
-// texture holds (x + 10y) / 100; a compute kernel compares texels against references with compare function less.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s50-intel-compute-compare-sampler: sample_compare and gather_compare in a kernel must use the sampler's compare
+// function; the 12.x Intel driver returned 0. Fix: MetalOldCompat item 40 MTLSHIM_COMPUTE_SAMPLER_COMPARE.
+// Checks: an 8x8 Depth32Float texture compared with "less" in a kernel. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

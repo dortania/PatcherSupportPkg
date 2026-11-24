@@ -1,11 +1,6 @@
-// i66-intel-byte-vector-arithmetic (Intel adapter, IntelTextureAtomics.dylib): arithmetic and bitwise operations on
-// uchar4 / char4 / ushort2 / short2 / uchar3 in fragment functions with the 3802 Intel compiler. The back end's type
-// legalization of these operations on vectors made with as_type crashed the compiler service (as_type<uchar4>(x) ^
-// as_type<uchar4>(y), as_type<char4>(x) | select(...)), and on vectors put together lane by lane they could leave nearby
-// code wrong (a signed min in a branch on char2(a, b) & (char2(3, 5) & char2(c, d))). Compute functions are right. Found
-// by fuzzing fragment functions. Each pixel of a 256x1 target writes eight results for its own inputs to a buffer: xor,
-// or with a select, add / mul / sub, the three shifts, halfword vectors, the branch, uchar3, and a loop carrying a uchar4.
-// Stock OCLP: FAIL (no pipeline). Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i66-intel-byte-vector-arithmetic: byte / halfword vector arithmetic and bitwise ops in fragment functions must
+// compile and be right; the back end crashed or miscompiled. Fix: IntelTextureAtomics INTEL_NARROW_VECTOR_ARITH_FIX.
+// Checks: xor, or, add / mul / sub, shifts, halfwords, a branch, uchar3, a uchar4 loop, per pixel. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const kSource = @"#include <metal_stdlib>\nusing namespace metal;\n"

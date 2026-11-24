@@ -1,12 +1,6 @@
-// s77-coreimage-kernel-kinds (sweep, with the payload's CoreImageOld.dylib): precompiled Core Image kernels of every kind
-// (colour, warp, blend, general, and [[stitchable]] colour), from libraries built for every macOS target an app may have
-// shipped (10.13 to 26.0: AIR 2.0 to 2.8), loaded with +kernelWithFunctionName:fromMetalLibraryData:error: as third-party
-// apps do and rendered on the GPU under test; each pixel is checked against the value computed here. Office's picture
-// corrections (s68) took one kind from two targets; this covers the rest of the public loading path. A library built
-// for a newer macOS than the one running is reported, not failed: no app can ship one to this Mac (it would require that
-// macOS), and this stack's compiler can't build AIR 2.8 on Sequoia. Inputs: s77-ci-<target>.metallib and
-// s77-ci-stitchable-<target>.metallib (build.sh, with Xcode's metal); none present: SKIP.
-// Argument: GPU name substring (default: Intel).
+// s77-coreimage-kernel-kinds: a sweep: precompiled Core Image kernels of every kind, built for macOS 10.13 to 26.0,
+// must render. Fix: the whole stack with the payload's CoreImageOld; only the fixed run must pass. SKIP without the
+// metallibs. Checks: colour, warp, blend, general and stitchable kernels; newer targets reported. Argument: GPU name.
 #import "repro.h"
 #import <CoreImage/CoreImage.h>
 #import <mach-o/dyld.h>

@@ -1,11 +1,6 @@
-// i20-intel-cube-gather-seam (Intel adapter, IntelTextureAtomics.dylib, with MetalOldCompat item 30): a cube gather at a
-// face edge, through a sampler whose filters are nearest, in a fragment function. Item 30 gives nearest samplers clamped
-// instead of seamless cube addressing (integer cubes with tiny faces need it), and a gather's 2x2 footprint spans the
-// edge, so all four texels came from one face (WebGPU CTS textureGather sampled_3d_coords, nearest: 330 cases). The
-// adapter gives cube gathers a linear constexpr sampler, which item 30 leaves seamless (a gather doesn't filter).
-// Gathers an 8x8 R32Float cube whose faces hold 10, 20, ... 60 at a direction a quarter texel into +X from its +Z edge:
-// two texels must come from +X (10) and two from +Z (50).
-// Stock OCLP with the PR's shim: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i20-intel-cube-gather-seam: a nearest cube gather at a face edge must span both faces; with MetalOldCompat item 30
+// all four texels came from one face. Fix: IntelTextureAtomics INTEL_CUBE_GATHER_SAMPLER_FIX.
+// Checks: a gather a quarter texel into +X from the +Z edge: two texels from each face. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

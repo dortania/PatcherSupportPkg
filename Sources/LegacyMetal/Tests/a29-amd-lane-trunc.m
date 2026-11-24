@@ -1,13 +1,6 @@
-// a29-amd-lane-trunc (AMD adapter): a byte or short cut from lane 1 or higher of a vector, with a uchar2 comparison in
-// the same block. libAMDIL902's DAG combiner, run again after type legalization changed the block (the uchar2 compare),
-// folds `trunc (extractelement v, k)` into an extract of v bitcast to narrower lanes, and builds that from the wrong bits
-// of lane k: a byte of lane 1 of a ushort2 is read from its bits 16-23, so it comes out 0 (found by differential fuzzing
-// with narrow vectors: `uchar(vf(max(ushort2(62847, 9125), u) << ushort2(12, 6)))` stored into a threadgroup array).
-// The adapter cuts such lanes through extract_bits.
-// Checked: lane 1 of a ushort2 from max with a constant and from max of two vectors, an as_type<uchar4> byte of a min
-// (all three read 0 without the fix), and lane 3 of a clamped ushort4 and the low short of lane 1 of a uint2 max, which
-// the fix also rewrites, against the CPU on 256 threads.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// a29-amd-lane-trunc: a byte or short cut from lane 1+ of a vector (next to a uchar2 compare) must be that lane's;
+// libAMDIL902 read the wrong bits and gave 0. Fix: AMDTextureAtomics AMD_BITCAST_LANE_FIX. Checks: lanes of ushort2,
+// ushort4 and uint2 min/max/clamp, an as_type<uchar4> byte, against the CPU. Argument: GPU name.
 #import "repro.h"
 
 enum { kThreads = 256 };

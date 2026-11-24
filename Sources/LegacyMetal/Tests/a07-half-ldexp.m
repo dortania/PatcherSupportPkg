@@ -1,8 +1,6 @@
-// a07-half-ldexp (AMD adapter): ldexp on half is broken in libAMDIL902 at every width. half, half2 and half4 compile but
-// return wrong values (0, inf). half3 crashes MTLCompilerService: the plugin renames air.ldexp.* to air.fast_ldexp.*, then
-// widens vec3 intrinsics to vec4 by name, and its intrinsic table has no air.fast_ldexp.v4f16, so the pipeline fails with
-// "Compiler encountered an internal error". (WebGPU CTS builtin,ldexp:f16.)
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// a07-half-ldexp: ldexp on half must compute; libAMDIL902 returned wrong values (0, inf) and half3 crashed
+// MTLCompilerService. Fix: AMDTextureAtomics AMD_LDEXP_FIX.
+// Checks: half, half2, half3 and half4 (WebGPU CTS builtin,ldexp:f16). Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

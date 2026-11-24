@@ -1,11 +1,6 @@
-// i50-intel-rg32-green-gather (Intel adapter, INTEL_GATHER_GREEN_FIX): gathers of the green component from R32G32
-// textures. Haswell's gather4 returns red for green on R32G32 formats, a hardware erratum (Mesa gives such gathers a
-// separate surface state); the shader can't tell the format, so the adapter checks a green gather against a red one and
-// samples the four texels where they agree (WebGPU CTS textureGather rg32float: 252 cases). Gathers green from an 8x8
-// rg32float texture, layer 1 of a 2-layer rg32float array and an rg32uint texture, with and without texel offsets, at
-// seven coordinates (some outside the texture) through clamp-to-edge, repeat and mirrored-repeat samplers, plus red from
-// the first, and checks the four texels of each against the texels it should have read.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i50-intel-rg32-green-gather: green gathers from R32G32 textures must return green; Haswell's gather4 returns red
+// there (a hardware erratum). Fix: IntelTextureAtomics INTEL_GATHER_GREEN_FIX.
+// Checks: green from rg32float, array and rg32uint textures, offsets, three address modes. Argument: GPU name.
 #import "repro.h"
 #include <math.h>
 

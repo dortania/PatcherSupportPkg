@@ -1,15 +1,6 @@
-// a21-amd-wide-bit-branches (AMD adapter): branches on one bit of a 64-bit value must compile.
-// libAMDIL902's DAG combiner turns a branch on `(x >> k) & 1` of a ulong (an if, or the bit-0 split of a switch on
-// `uint(x >> k) & 3`) into a compare of the 64-bit `and` with 0, whose result is i64 here, and no brcond pattern takes
-// it: "LLVM ERROR: Cannot select: brcond (i64 setcc ...)" (found by fuzzing with 64-bit integers; which branches reach
-// that combine depends on the code around them). The adapter tests such conditions through extract_bits, which the
-// combiner doesn't look into. A bool of high-half bits of a 64-bit product that is sign-extended or selected on meets
-// the same i64 setcc, there in a select, which no select pattern takes either (k3). So does such a bool worked out in an
-// earlier block: k4's f, from a 64-bit and tested != 0 (which the adapter's wide-compare fix splits into 32-bit halves),
-// is sign-extended after a loop, where the combiner folded the halves back into an i64 compare (seed 3227).
-// Checked: the fuzzed form (a ?: on bit 16 of a ulong remainder, then a ulong division using its result), a switch on
-// bits of a ulong min, `d - bool(uint(x * y >> 32) & 229)` and k4 (four kernels), against the CPU on 256 threads.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// a21-amd-wide-bit-branches: branches and selects on one bit of a 64-bit value must compile; libAMDIL902 stopped with
+// "Cannot select". Fix: AMDTextureAtomics AMD_WIDE_BRANCH_FIX, GeForceAIRCompat NVAIR_INTRINSICS, NVAIR_I64_FIX.
+// Checks: an if, a switch, a product-bit bool, a bool from an earlier block, against the CPU. Argument: GPU name.
 #import "repro.h"
 
 enum { kThreads = 256 };

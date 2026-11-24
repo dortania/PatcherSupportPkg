@@ -1,10 +1,6 @@
-// a12-amd-unpack-norm (AMD adapter, AMDTextureAtomics.dylib): unpack_snorm2x16_to_float, unpack_unorm2x16_to_float,
-// unpack_snorm4x8_to_float and unpack_unorm4x8_to_float with the 12.5 AMD compiler. libAMDIL902 gets the 2x16 forms up to
-// 6 (snorm) and 2 (unorm) ulp wrong in every shader stage; GLSL ES 3.0 allows 1, and WebGL 2 checks it (dEQP
-// shaderpackingfunction unpacksnorm2x16 / unpackunorm2x16). Every 16-bit value (for the 4x8 forms, every byte in every
-// position) goes through a compute kernel and a fragment function, against the exact quotient, clamped to -1 for snorm.
-// Stock OCLP: FAIL. Fixed: PASS (within 1 ulp everywhere).
-// Argument: GPU name substring (default: AMD).
+// a12-amd-unpack-norm: unpack_snorm/unorm 2x16 and 4x8 to float must be within 1 ulp (WebGL 2 checks); libAMDIL902 was
+// up to 6 (snorm) and 2 (unorm) ulp off. Fix: AMDTextureAtomics AMD_UNPACK_FIX.
+// Checks: every 16-bit value (4x8: every byte in every lane) in a kernel and a fragment function. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

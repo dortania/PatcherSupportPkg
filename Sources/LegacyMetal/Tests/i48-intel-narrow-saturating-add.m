@@ -1,10 +1,6 @@
-// i48-intel-narrow-saturating-add (Intel adapter, INTEL_NARROW_SHIFT_FIX): a 32-bit saturating add of two masked values.
-// addsat(x & 1, y & 255) is UADD_sat of two registers that iCBE types as narrow (the AND results), and it read them as
-// other SIMD lanes' bytes: in each group of 16 threads, lanes 1-7 added 0 or another lane's value (lane 4 added lane 1's).
-// Found by differential fuzzing (mslfuzz2 VEC=1 seed 1568, reduced; the stock compiler gives the same wrong results).
-// Such an AND that a 32-bit saturating add or subtract reads is done on 32 bits, as i40 and i46 do for merges and
-// min / max (the narrow saturating forms are other opcodes). 256 threads on five inputs, against the same code on the
-// CPU. Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i48-intel-narrow-saturating-add: a 32-bit addsat of two masked values must add this thread's values; iCBE read them
+// from other SIMD lanes. Fix: IntelTextureAtomics INTEL_NARROW_SHIFT_FIX, INTEL_LATE_SAT_FIX.
+// Checks: addsat(x & 1, y & 255), 256 threads on five inputs vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

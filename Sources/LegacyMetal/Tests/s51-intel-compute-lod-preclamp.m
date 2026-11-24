@@ -1,11 +1,6 @@
-// s51-intel-compute-lod-preclamp (MetalOldCompat item 40): an explicit level at or below 0 in a compute kernel, through a
-// sampler with a fractional lodMinClamp. The kernel's sampler-state template that CHAL_INTEL::ChalContext::
-// PatchSamplerObject fills has LOD PreClamp Enable clear, so the hardware chose between the min and mag filters on the
-// unclamped LOD: level 0 or below magnified and read the base level alone, where the clamp to 0.25 should have blended
-// a quarter of level 1 in (WebGPU CTS textureSampleLevel lodClamp in compute, linear filter: 90 cases; vertex and
-// fragment functions were right). A 4x4 R32Float texture whose levels 0-2 hold 0, 1 and 2 is sampled with a linear
-// sampler clamped to [0.25, 1.75] at levels -0.24, 0, 0.5 and 2.5.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s51-intel-compute-lod-preclamp: a level at or below 0 in a kernel must honour a fractional lodMinClamp; the 12.x
+// Intel driver picked the filter on the unclamped LOD. Fix: MetalOldCompat item 40 MTLSHIM_COMPUTE_LOD_PRECLAMP.
+// Checks: a 3-level 4x4 texture, clamps [0.25, 1.75], at levels -0.24, 0, 0.5 and 2.5. Argument: GPU name.
 #import "repro.h"
 #include <math.h>
 

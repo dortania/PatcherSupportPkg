@@ -1,11 +1,6 @@
-// s52-intel-integer-cube-compare-sampler (MetalOldCompat item 30): an integer cube texture with 1x1 faces sampled in a
-// fragment function through a nearest sampler that has a compare function set. ANGLE passes GL's default compare
-// function (LEQUAL) to every MTLSamplerDescriptor, comparison on or off, so WebGL's samplers all carry one. Item 30 gives
-// nearest samplers programmed cube addressing (seamless addressing reads integer cubes with tiny faces as 0); for a while
-// it left samplers with a compare function seamless (for WebGPU's compare gathers), and every WebGL integer cube read 0
-// again (Khronos WebGL 2.0.1 integer-cubemap-texture-sampling, integer-cubemap-specification-order-bug, and the r8ui /
-// rg8ui / rgb8ui / rgba8ui upload pages in Chrome). Reads each face of an R8Uint cube holding 11-16 through such a sampler.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s52-intel-integer-cube-compare-sampler: an integer cube with 1x1 faces must read through a nearest sampler with a
+// compare function (ANGLE's); the 12.x Intel driver read 0. Fix: MetalOldCompat item 30 MTLSHIM_NEAREST_CUBE_CLAMP.
+// Checks: each face of an R8Uint cube holding 11-16. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

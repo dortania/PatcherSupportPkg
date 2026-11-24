@@ -1,12 +1,6 @@
-// s88-intel-32-vertex-inputs (MetalOldCompat item 85, MTLSHIM_IVB_VERTEX_INPUTS): a vertex function with 32 inputs on the
-// Ivy Bridge driver. -[MTLIGRenderPipelineState generate3DStateVF:] walks the inputs while their bit is set in a 32-bit
-// mask, testing bit (i mod 32), so with all 32 set it never stopped, asked for vertex attribute 7680 and Metal aborted
-// (WebKit's WebGPU offers 30 attributes: with vertex_index and instance_index that is 32, CTS vertex_state
-// max_buffers_and_attribs). Checked, in a child process (so that the abort is a result): 30 float attributes with
-// [[vertex_id]] and [[instance_id]] after them and before them (WebKit's order), and 31 with [[vertex_id]], each drawn
-// as points over 2 vertices (and 3 instances);
-// every point's value (the sum of its attributes, plus 1000 x vertex_id and 10000 x instance_id) must be right.
-// Stock: FAIL (the child aborts). Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s88-intel-32-vertex-inputs: vertex functions with 32 inputs must build on Ivy Bridge; its input walk never ended and
+// Metal aborted (WebKit's WebGPU). Fix: MetalOldCompat item 85 MTLSHIM_IVB_VERTEX_INPUTS.
+// Checks: 30 attributes plus vertex and instance ids (both orders), and 31, in a child. Argument: GPU name.
 #import "repro.h"
 #include <spawn.h>
 #include <sys/wait.h>

@@ -1,11 +1,6 @@
-// i12-intel-branch-chain-compile (Intel adapter, IntelTextureAtomics.dylib): a vertex function made of chains of short
-// branches (`if (a && b && c ...)` over many values, each chain falling through to a shared else) takes exponential time in
-// the 12.x Intel back end (iCBE register allocation's structural analysis): 4 such checks compile in 2 s, 8 in more than ten
-// minutes. Chrome's GPU process is killed by its watchdog while it waits (WebGPU CTS
-// shader,execution,robust_access_vertex, which checks each of up to 12 vertex attributes that way). A vertex function
-// checks 12 float4 values read from 12 buffers (each component one of five allowed values, else all zero) and writes
-// whether they passed; the pipeline has to build within 60 s and draw the right answers for four vertices.
-// Stock OCLP: FAIL (time-out). Fixed: PASS. Argument: GPU name substring (default: Intel). I12_VALUES=<n> changes the count.
+// i12-intel-branch-chain-compile: a vertex function of many short branch chains must compile in time; the 12.x back end
+// took exponential time (Chrome's watchdog). Fix: IntelTextureAtomics INTEL_BRANCH_CHAIN_FIX.
+// Checks: 12 float4 inputs checked in branch chains (I12_VALUES=n); builds in 60 s, draws right. Argument: GPU name.
 #import "repro.h"
 
 int main(int argc, char **argv) {

@@ -1,15 +1,6 @@
-// s61-intel-argument-buffers (MetalOldCompat item 47 with the Intel adapter's INTEL_IVB_ARGUMENT_BUFFER_FIX): OCLP's
-// 11.7.10 Ivy Bridge plugin reads an argument buffer's pointer members as offsets into the argument buffer itself, and a
-// vertex or fragment function that dereferences one doesn't build ("Compilation failed"); the driver has no argument
-// encoders (item 46). WebKit's ANGLE puts every WebGL 2 uniform block in an argument buffer. This program encodes two
-// buffer pointers and a constant with the argument encoder of a fragment function, draws with it and reads a pixel back,
-// does the same in a kernel (with two arrays of pointers, the second at id 4), then runs a kernel that reads a buffer the app bound at
-// buffer index 30, which the first kernel's hidden bindings used, to check that the app's binding was put back. The values
-// avoid rounding ties in the 8-bit target (0.375 -> 96); a second pass writes 0.5, an exact tie that Metal rounds to even
-// (128). Kepler (GTX 600/700) writes 127 there, a known deviation in its fixed-function output (FIXES.md, known
-// limitations), so on Kepler that check expects 127 and reports it.
-// Stock OCLP on an HD 4000: FAIL (the encoder aborts, s60; with only item 46, no encoder). Fixed: PASS. Other GPUs have
-// argument buffers of their own and pass either way. Argument: GPU name substring (default: Intel).
+// s61-intel-argument-buffers: argument buffers must work on Ivy Bridge (WebGL 2); its plugin read pointers as offsets.
+// Fix: MetalOldCompat item 47 MTLSHIM_IVB_ARGUMENT_BUFFERS, IntelTextureAtomics INTEL_IVB_ARGUMENT_BUFFER_FIX.
+// Checks: pointers read in fragment and kernel functions, the app's binding put back. Argument: GPU name.
 #import "repro.h"
 
 int main(int argc, char **argv) {

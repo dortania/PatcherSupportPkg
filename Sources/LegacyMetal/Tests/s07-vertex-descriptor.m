@@ -1,9 +1,6 @@
-// s07-vertex-descriptor (MetalOldCompat item 7): a vertex descriptor with a MTLVertexStepFunctionConstant layout, as
-// Blender uses for default attributes. The current compiler and MetalOld serialize vertex descriptors with layout
-// records of different sizes, so MetalOld misreads the layouts: pipeline creation fails with "Buffer stride is not a
-// multiple of 4 bytes", or the attributes are fetched wrongly. Draws one triangle (positions per vertex in buffer 1,
-// colour + uv constant in buffer 2) and checks the pixel.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// s07-vertex-descriptor: a vertex descriptor with a constant-step layout must work; MetalOld misread the compiler's
+// layout records (a pipeline error or wrong attributes). Fix: MetalOldCompat item 7.
+// Checks: a triangle with per-vertex positions and constant colour and uv; the pixel. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

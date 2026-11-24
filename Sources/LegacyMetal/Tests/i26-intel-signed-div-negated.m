@@ -1,12 +1,6 @@
-// i26-intel-signed-div-negated (Intel adapter, IntelTextureAtomics.dylib): signed division and remainder of a negated
-// value. iCBE folds the negation (0 - v) into the integer divide as a source modifier, and the divide drops it: (-v) % d
-// came out as v % d, (-v) / d and v / (-d) as v / d (mslfuzz2 seed 223, where such a remainder picked a vector lane).
-// Unsigned division and remainders by a negated divisor (whose sign doesn't matter) were right. Runs the forms with
-// variable and constant divisors, scalars and int2, INT_MIN among the inputs, on 256 seeded inputs and compares with
-// the same arithmetic on the CPU. The second kernel has the negation hidden from the IR: the front end writes
-// (short)(-(int)v) % d as (v * -65536) >> 16, and the back end, knowing v is 0 or 1 after the loops, makes it a negation
-// that iCBE folds into the divide the same way (mslfuzz2 VEC=1 seed 917, reduced); that one is fixed in the IGIL text.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i26-intel-signed-div-negated: signed division and remainder of a negated value must keep the sign; iCBE folded the
+// negation into the divide and dropped it. Fix: IntelTextureAtomics INTEL_SIGNED_DIV_NEG_FIX.
+// Checks: (-v) % d, (-v) / d, v / (-d) incl. INT_MIN, scalar and int2; a negation hidden in IR. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

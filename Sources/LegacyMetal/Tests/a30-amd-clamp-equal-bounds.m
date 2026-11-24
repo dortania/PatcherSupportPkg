@@ -1,9 +1,6 @@
-// a30-amd-clamp-equal-bounds (AMD adapter): a clamp whose bounds are the same constant is that constant, also when its
-// value isn't constant. `z + uint(bool(x & clamp(y | 1u, 1u, 1u)))` came out as z minus the bool: libAMDIL902's DAG
-// folds the call to 1 through the known bits of y | 1, and the and with the now constant 1 is taken for a 0 / -1
-// boolean (a23's bug; found probing the forms around a28). The adapter folds clamp(x, c, c) to c.
-// Checked: uint with y | 1, w | 3 and y | 0x80000001, and ushort, against the CPU on 256 threads.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// a30-amd-clamp-equal-bounds: clamp(x, c, c) must be c; z + uint(bool(x & clamp(y | 1u, 1u, 1u))) subtracted (a23's
+// bug). Fix: AMDTextureAtomics AMD_CONSTANT_MINMAX_FIX.
+// Checks: uint with y | 1, w | 3 and y | 0x80000001, and ushort, against the CPU. Argument: GPU name.
 #import "repro.h"
 
 enum { kThreads = 256, kOut = 4 };

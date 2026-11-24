@@ -1,13 +1,6 @@
-// c03-amdil-gep-select (libAMDIL902 patch 4; AMD GCN on the 12.5 stack, every GCN generation): a field of a struct in
-// a small dynamically indexed private array (`S w[2]; ... w[s].count += 1; ... read w[s].count`) reads back a stale
-// value. libAMDIL902's IL GEP Select pass (ILGEPSelect::runOnFunction) rewrites each load through such a GEP into loads
-// of every element + selects on the index, but builds all of them at the GEP: when LLVM computed &w[s].count once
-// and reused it for every access, loads after the stores read the values from before them (here closure_len came out
-// 0, or whatever an earlier wavefront left in that scratch slot). The fix moves the pass's IRBuilder to each load.
-// (Found while trying to reproduce a03 with a small shader: the fragment-shader variant of this kernel.) The 3802 Intel
-// compiler can't select the byte loads of normal_len (align 16, from the struct's alignment) and aborts; the Intel
-// adapter does those accesses on their 32-bit word (INTEL_PRIVATE_ALIGN_FIX).
-// Stock OCLP: FAIL. Fixed (patched libAMDIL902): PASS. Argument: GPU name substring (default: AMD).
+// c03-amdil-gep-select: a field in a run-time-indexed private struct array must read back what was stored; libAMDIL902
+// read it before the stores. Fix: the libAMDIL902 patch 4; IntelTextureAtomics INTEL_PRIVATE_ALIGN_FIX.
+// Checks: w[s].count += 1, then read back; the Intel compiler aborted on its byte loads. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

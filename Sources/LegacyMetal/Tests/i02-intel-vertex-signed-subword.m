@@ -1,12 +1,6 @@
-// i02-intel-vertex-signed-subword (Intel adapter, IntelTextureAtomics.dylib): signed bytes and halfwords in vertex
-// functions with the 3802 Intel compiler. The sign-extended top lane of a word read from a constant buffer comes from the
-// first word of its 16 bytes when it isn't that word: char4(x).w, short2(x).y, unpack_snorm4x8_to_float(x).w and
-// unpack_snorm2x16_to_float(x).y (fragment and compute functions are right). ANGLE's vertex shaders unpack their Y flip,
-// at byte 12 of their uniform block, with unpack_snorm4x8_to_float(...).w, so on a Haswell / Ivy Bridge GPU every WebGL
-// draw collapsed and drew nothing. Each case is one conversion of a word at byte 0 or 12 of a constant buffer whose other
-// words differ, as in ANGLE's shaders: a vertex function passes the result as a varying, which a fragment function
-// writes to an R32Float target; a compute function does the same as the control.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i02-intel-vertex-signed-subword: sign-extended bytes / halfwords of constant-buffer words in vertex functions must
+// come from that word; they came from the first word of 16 bytes. Fix: IntelTextureAtomics INTEL_SIGNED_SUBWORD_FIX.
+// Checks: char4.w, short2.y and snorm unpacks of words at bytes 0 and 12, vertex vs compute. Argument: GPU name.
 #import "repro.h"
 
 // One library per case and word position, with the field read directly: function constants are resolved after the

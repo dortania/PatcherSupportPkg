@@ -1,7 +1,6 @@
-// s03-shader-atomic-usage (MetalOldCompat item 3): MTLTextureUsageShaderAtomic (macOS 14) in a texture descriptor.
-// MetalOld predates it and rejects the descriptor in its texture validation; apps that ask for texture atomics
-// (Blender EEVEE's shadow and volume textures) can't create their textures.
-// Stock OCLP: FAIL (child aborted / nil texture). Fixed: PASS. Argument: GPU name substring (default: AMD).
+// s03-shader-atomic-usage: a texture with MTLTextureUsageShaderAtomic must be made; MetalOld's validation rejected it
+// (Blender EEVEE). Fix: MetalOldCompat item 3.
+// Checks: the texture is created, in a child process. Argument: GPU name.
 #import "repro.h"
 
 static int child(int argc, char **argv) {

@@ -1,9 +1,6 @@
-// s37-intel-stencil-subresources (MetalOldCompat items 33 and 27): on the 12.x Intel driver, render passes on a stencil
-// texture with several mip levels or slices and blits into it don't agree: a pass at another level or slice doesn't load
-// what's there, and a pass that loads and stores level 0 / slice 0 makes every subresource read back by a shader as what
-// that pass saw. Blits a value per (level, slice) into a 3-level, 2-slice Stencil8 texture, runs an empty pass that loads
-// and stores level 0 / slice 0, then checks every subresource with a stencil test (EQUAL, a level-0 color target of its
-// size) and a shader read. Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s37-intel-stencil-subresources: passes and blits must agree on a stencil texture with several levels or slices; on
+// the 12.x Intel driver they didn't. Fix: MetalOldCompat items 33 and 27, AMDBronzeCompat item 11 AMD_BRONZE_COMPAT.
+// Checks: a 3-level, 2-slice Stencil8 filled by blits, a level-0 pass, stencil tests, shader reads. Argument: GPU name.
 #import "repro.h"
 
 int main(int argc, char **argv) {

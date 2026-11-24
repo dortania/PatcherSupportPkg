@@ -1,13 +1,6 @@
-// i42-intel-folded-bitcast (Intel adapter, INTEL_CONSTANT_CALL_FIX): a vector bitcast of an integer function of
-// constants. i36 folds `min(194u, 253u)` to 194; `as_type<short2>` of it is then a bitcast of a constant, which the
-// 3802 LLVM leaves as a constant expression instead of two lanes, and the adapter's own folding of the `& short2(15)`
-// and shift that follow read it lane by lane and crashed the compiler (mslfuzz2 VEC=1 seed 734, reduced). Such
-// bitcasts are folded to their lanes now, and vectors that aren't plain constant data (a zeroinitializer, a constant
-// vector with an undef lane) are no longer read lane by lane. And `clz` / `ctz` of constants, which AIR calls with a
-// second, i1 operand, weren't folded at all: iCBE folded them itself and unpacked `as_type<ushort2>(clz(1827419243u))`
-// as (1, 1) instead of (1, 0), the byte-reading bug of i36, so a vector lane picked with it was the wrong one in every
-// thread (mslfuzz2 VEC=1 seed 896). Expected values computed here, as on the CPU. Fixed: PASS. Argument: GPU name
-// substring (default: Intel).
+// i42-intel-folded-bitcast: a vector bitcast of a folded constant call must compile and be right; i36's folding crashed
+// on it, and clz / ctz of constants were unpacked wrong. Fix: IntelTextureAtomics INTEL_CONSTANT_CALL_FIX.
+// Checks: as_type<short2>(min(194u, 253u)) masked and shifted; a lane picked via clz(constant). Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

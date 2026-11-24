@@ -1,13 +1,6 @@
-// s47-amd-stencil-only-attachment (AMDBronzeCompat item 12): a depth-stencil texture attached as the stencil attachment
-// alone (no depth attachment) must test and write the stencil that blits put there. With only stencil attached, the
-// 12.5 AMD driver programs the depth unit's stencil-only state, which leaves part of the surface setup at what a depth
-// attachment would have set: on textures up to 32 texels wide the stencil test sees about half of the texels (a 32x16
-// Depth32Float_Stencil8 texture: 256 of 512), and it writes stencil there the same way. Attaching the texture as depth too
-// makes it right. ANGLE attaches a packed depth-stencil buffer that way when GL only binds it as GL_STENCIL_ATTACHMENT.
-// Blits a stencil value per row into 32x16 textures (Depth32Float_Stencil8, Depth24Unorm_Stencil8 where supported, and
-// level 1 of a 64x64 one), counts the pixels an EQUAL test passes for each value with only stencil attached, then writes
-// stencil 0x5A with a REPLACE draw (stencil only) and reads it back with a blit.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// s47-amd-stencil-only-attachment: a depth-stencil texture attached as stencil only must test and write its stencil;
+// the AMD driver saw about half the texels up to 32 wide. Fix: AMDBronzeCompat item 12 AMD_BRONZE_COMPAT.
+// Checks: 32x16 textures (and level 1 of 64x64): EQUAL counts per row, then a REPLACE draw. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

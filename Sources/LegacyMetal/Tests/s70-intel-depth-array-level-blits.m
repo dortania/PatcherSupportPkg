@@ -1,18 +1,6 @@
-// s70-intel-depth-array-level-blits (MetalOldCompat item 63): blits at levels 1+ of mipmapped depth arrays on Ivy Bridge.
-// Any blit that read or wrote level 1 or higher of a Depth16Unorm or Depth32Float 2D-array, cube or cube-array texture with
-// several levels, even of 4x4 texels, left bands of the whole texture wrong (rows of other slices zeroed or overwritten with
-// another level's), and the copy itself moved the wrong texels; blits at level 0 were fine. A Depth32Float cube array (2
-// layers, 3 levels, 64x64) and a Depth16Unorm 2D array (6 slices, 3 levels) get their own depth in every level and slice
-// (render-pass clears); then one blit encoder copies level 1 and level 2 slices into buffers, a 4x4 patch from a buffer into
-// level 1, and level 2 of one slice into a one-level 2D texture; in the same encoder after those, a buffer copy of the
-// first read-back, a copy of the patched region back out, and a read-back into a managed buffer with synchronizeResource
-// (the shim redoes such copies when the encoder ends, so what follows them must wait). The buffers must hold the slices'
-// depths, the 2D texture the copied ones, and every texel of every level and slice, read by a compute kernel, its own depth
-// (or the patch's). Last, a copy out of level 1 into an untracked buffer followed by updateFence:, and a second encoder that
-// waits for the fence and copies that buffer on: only the fence orders them. The HD 4000 driver runs a command buffer's
-// encoders in order anyway (with the fence left at its place, 200 rounds of a 1024x1024 copy never raced), so this part
-// checks the contract rather than catching a race there.
-// Stock OCLP on an HD 4000: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s70-intel-depth-array-level-blits: blits at levels 1+ of mipmapped depth arrays and cubes must touch only their
+// texels; Ivy Bridge garbled other slices. Fix: MetalOldCompat item 63 MTLSHIM_DEPTH_LEVEL_BLITS. Checks: a cube array
+// and a 2D array: copies out and in, every texel read back; fence-ordered copies. Argument: GPU name.
 #import "repro.h"
 #include <math.h>
 

@@ -1,9 +1,6 @@
-// s08-sdk-properties (MetalOldCompat item 8): properties and encoder calls from the macOS 13.3-15 SDKs that MetalOld
-// (13.2) lacks. Chromium's ANGLE calls -[MTLCompileOptions setMathMode:] for every shader (the GPU process aborts with
-// "unrecognized selector"); MoltenVK / wgpu use the attributeStride encoder calls; macOS 15 apps read
-// shaderValidation; render encoders get object/mesh stage bindings even on GPUs without mesh shaders (MetalOld's
-// _MTLCommandEncoder has them as throwing stubs). Each call runs in a child process.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// s08-sdk-properties: properties and encoder calls from the macOS 13.3-15 SDKs must work; MetalOld lacked them or had
+// throwing stubs (Chrome aborted on setMathMode:). Fix: MetalOldCompat item 8.
+// Checks: mathMode, attributeStride calls, shaderValidation, object/mesh bindings, each in a child. Argument: GPU name.
 #import "repro.h"
 #import <objc/message.h>
 

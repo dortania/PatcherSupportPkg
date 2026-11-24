@@ -1,11 +1,6 @@
-// a04-si-threadgroup-pointer (AMD adapter, GCN1/SI): threadgroup memory reached through a pointer kept in thread memory.
-// Blender's MSL keeps compute shared variables as `threadgroup float (&array)[N]` members of its shader class, and
-// EEVEE's depth-of-field resolve computes a per-tile max through one (parallelMax). libAMDIL902 builds such a pointer
-// as user data API slot 8 + the variable's LDS offset, while direct accesses use the bare offset; slot 8 isn't 0 on
-// this stack, so reads through the pointer are out of range and return 0 (EEVEE: everything slightly out of focus
-// rendered black; render tests camera_depth_of_field, camera_ortho_depth_of_field_near_clip). Each 256-thread group
-// does Blender's reduction through the reference and compares with the known max.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// a04-si-threadgroup-pointer: on GCN1/SI, threadgroup memory read through a pointer must give its values; libAMDIL902
+// added slot 8's base, so reads missed and returned 0 (EEVEE depth of field). Fix: AMDTextureAtomics AMD_LDS_BASE_FIX.
+// Checks: Blender's per-tile max reduction through a threadgroup reference, 256 threads. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

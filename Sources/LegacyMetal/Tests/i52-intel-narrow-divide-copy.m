@@ -1,10 +1,6 @@
-// i52-intel-narrow-divide-copy (Intel adapter, INTEL_NARROW_SHIFT_FIX): a byte-masked value that reaches a signed divide
-// through vector copies. short3(..., (short)(uint)pc[0], ...) / short3(..., 1, ...) put the AND 255 of pc[0] into a vector
-// lane (MOV_SWZ), and the back end's IDIV read the lane, moved back out, as a signed byte: bytes 128-255 came out
-// negative, and any(q < 0) picked the wrong lane of a store (mslfuzz2 VEC=1 seed 2387, reduced; the stock compiler is
-// wrong too). i46's 32-bit AND now also covers registers that reach a min / max or signed operation through MOV and
-// MOV_SWZ copies. 256 threads on five inputs, against the same code on the CPU. Stock OCLP: FAIL. Fixed: PASS.
-// Argument: GPU name substring (default: Intel).
+// i52-intel-narrow-divide-copy: a byte-masked lane reaching a signed divide via vector copies must stay unsigned; IDIV
+// read it signed. Fix: IntelTextureAtomics INTEL_NARROW_SHIFT_FIX (Kepler: NVAIR_INTRINSICS, NVAIR_I64_FIX).
+// Checks: a short3 divide with a (short)(uint)pc[0] lane, any(q < 0) picking a store, vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

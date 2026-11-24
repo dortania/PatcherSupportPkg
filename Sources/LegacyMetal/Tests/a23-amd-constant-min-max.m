@@ -1,15 +1,6 @@
-// a23-amd-constant-min-max (AMD adapter): a bool from `x & min(1u, 145u)` added to a value must be added.
-// air.min / air.max / air.clamp with constant arguments stay calls through libAMDIL902's IR optimizer and fold only in
-// its DAG, where the and with the now constant 1 is taken for a 0 / -1 boolean and `z + bool` becomes `z - bool`
-// (found by fuzzing: z + uint(bool(x & min(1u, 145u)))). The adapter folds such calls to constants first.
-// Also `y % (min(x, 1u) | 1u)`, a power-of-two divisor the DAG finds late, which crashed its bit-field-extract combine.
-// Checked: unsigned and signed min, max, clamp, a mask of 2, the min(x, 1u) divisor, and min(1u, x) under a select in a
-// loop exit (form 6: made x != 0, min(x, 1u) gave a 0 / 1 value that a15's bug misread: seed 518; the stock compiler
-// and the call are right there), and forms 7 and 8: `(1u >> ((x << 1) & 6u))` modulo `(min(uint(bool(z & 86u)), mulhi(z,
-// x)) | 1u) & 0x7fffffffu`, which the front end makes `(min & 0x7ffffffe) | 1` (crashed the same combine: seed 4629), and
-// the same with min(1u, ..), and form 9: the min's 0 / 1 argument a bool divided, `uint(int(bool(..)) / int(d))`, which
-// the front end makes a udiv (seed 3734), against the CPU on 256 threads.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// a23-amd-constant-min-max: z + uint(bool(x & min(1u, 145u))) must add; libAMDIL902 took the folded 1 for a -1 bool and
+// subtracted, and some forms crashed it. Fix: AMDTextureAtomics AMD_CONSTANT_MINMAX_FIX.
+// Checks: signed and unsigned min, max, clamp, min(x, 1u) divisors, forms 6-9, against the CPU. Argument: GPU name.
 #import "repro.h"
 
 enum { kThreads = 256, kOut = 10 };

@@ -1,10 +1,6 @@
-// i47-intel-narrow-private-array (Intel adapter, INTEL_NARROW_PRIVATE_ARRAY_FIX): a private uchar array read after the
-// rewrites. The array (uchar pc[8]) is stored with truncating stores and read with extending loads, and after i07's and
-// i35's rewrites the back end forwarded a stored 32-bit value to such a load without its mask, so pc[2] read in a
-// ushort2 compare kept the bits above its byte and the atomic sum came out wrong in 34 of 256 threads (mslfuzz2 VEC=1
-// seed 1497, reduced; the stock compiler is wrong there too, differently). Private arrays of 8- and 16-bit integers
-// reached only through element loads and stores are done on 32-bit words. Expected values from the CPU reference
-// (cpuref.py) on the fuzzer's input. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i47-intel-narrow-private-array: a private uchar array must keep its bytes; a 32-bit store reached a byte load
+// unmasked. Fix: IntelTextureAtomics INTEL_NARROW_PRIVATE_ARRAY_FIX (Kepler: NVAIR_NARROW_PRIVATE_ARRAY_FIX).
+// Checks: pc[2] of a uchar pc[8] read in a ushort2 compare feeding an atomic sum, vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

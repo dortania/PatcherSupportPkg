@@ -1,10 +1,6 @@
-// a24-amd-zext-shift-halves (AMD adapter): a zero-extended 32-bit value shifted into both halves of a ulong keeps the
-// bits that cross into the high half.
-// `(ulong(min(c, a)) << 32 | rhadd(b, a)) * k >> 19`, which the front end turns into
-// `(ulong(min) << 45 | ulong(rhadd) << 13) * ...`, came out with rhadd's top 19 bits missing from the high half (found by
-// fuzzing with 64-bit integers; the same with hadd). The adapter builds `ulong(y) << k` (0 < k < 32) from the halves.
-// Checked: the fuzzed form with rhadd and with hadd (two kernels), against the CPU on 256 threads.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// a24-amd-zext-shift-halves: a zero-extended 32-bit value shifted across both halves of a ulong must keep its high
+// bits; rhadd's top bits went missing. Fix: AMDTextureAtomics AMD_ZEXT_SHIFT_FIX, AMD_AVERAGE_FIX.
+// Checks: (ulong(min(c, a)) << 32 | rhadd(b, a)) * k >> 19, and with hadd, against the CPU. Argument: GPU name.
 #import "repro.h"
 
 enum { kThreads = 256 };

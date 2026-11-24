@@ -1,10 +1,6 @@
-// i67-intel-render-int64 (Intel adapter, IntelTextureAtomics.dylib): 64-bit division, remainder and shifts by a variable
-// amount in fragment functions with the 3802 Intel compiler. ulong / ulong, long / long, % and ulong >> (y & 63) crashed
-// the compiler service in a vertex or fragment function (compute functions are right; 64-bit add, mul and shifts by a
-// constant were fine). Found by fuzzing fragment functions with 64-bit values. Each pixel of a 256x1 target writes 32
-// words for its own inputs to a buffer: unsigned and signed quotients and remainders (divisors with high words of 0, a
-// few bits, all bits and the top bit, small negative ones, a constant), the three shifts by every amount 0-63, and ulong2
-// division and shifts. Stock OCLP: FAIL (no pipeline). Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i67-intel-render-int64: 64-bit division, remainder and variable shifts in render functions must compile; they crashed
+// the compiler. Fix: IntelTextureAtomics INTEL_RENDER_INT64_FIX (Kepler: NVAIR_INTRINSICS, NVAIR_I64_FIX).
+// Checks: signed and unsigned quotients and remainders, shifts by 0-63, ulong2, per pixel. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const kSource = @"#include <metal_stdlib>\nusing namespace metal;\n"

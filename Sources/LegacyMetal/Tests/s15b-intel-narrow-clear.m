@@ -1,9 +1,6 @@
-// s15b-intel-narrow-clear (MetalOldCompat item 15; also Apple's own Intel driver 18.8.16 on macOS 12.7.6): a render
-// pass clear of a color target at most 2 texels wide and more than 16 rows tall, with every channel 0 or 1 (the fast
-// clear path), on the 12.x Intel driver. Half of the rows below row 16 keep their old contents, in bands of 16 rows
-// (formats of 4+ bytes per texel). wgpu zero_init::copy_texture_to_buffer_unaligned_offset_row_padding_init (a 1x512
-// texture zero-initialized by a clear). Fills 1x64 and 2x64 RGBA8 targets with 0x5a, clears them to black, reads back.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s15b-intel-narrow-clear: clears of color targets at most 2 texels wide must clear every row; the 12.x Intel driver's
+// fast clear missed bands below row 16. Fix: MetalOldCompat item 15.
+// Checks: 1x64 and 2x64 RGBA8 targets filled with 0x5a, cleared to black, read back. Argument: GPU name.
 #import "repro.h"
 
 static NSUInteger wrongTexels(id<MTLDevice> d, id<MTLCommandQueue> q, NSUInteger w, NSUInteger *firstRow) {

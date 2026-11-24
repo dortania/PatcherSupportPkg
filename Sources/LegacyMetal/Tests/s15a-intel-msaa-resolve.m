@@ -1,9 +1,6 @@
-// s15a-intel-msaa-resolve (MetalOldCompat item 15; also Apple's own Intel driver 18.8.16 on macOS 12.7.6): an MSAA
-// resolve into mip level / array slice other than 0 of a 2D-array texture on the 12.x Intel (Haswell / Ivy Bridge)
-// driver. Through resolveLevel/resolveSlice the result is lost (the driver always resolves to level 0, slice 0);
-// through a one-level/one-slice texture view, IGRenderPass::generateResolveOptions crashes the process. (wgpu
-// render_target::resolve_to_2d_view, WebGL 2 blitFramebuffer into texture layers.) Each case runs in a child.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s15a-intel-msaa-resolve: MSAA resolves into level or slice 1+ of a 2D array must land; the 12.x Intel driver lost
+// them (or crashed, through a view). Fix: MetalOldCompat item 15.
+// Checks: resolveLevel/resolveSlice and a one-level view, each in a child. Argument: GPU name.
 #import "repro.h"
 
 static int child(int argc, char **argv, const char *mode) {

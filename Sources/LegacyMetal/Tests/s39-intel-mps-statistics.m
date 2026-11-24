@@ -1,10 +1,6 @@
-// s39-intel-mps-statistics (MetalOldCompat item 35): Metal Performance Shaders' image statistics end with a
-// compute_final_*_statistics kernel that assumes at least 32 threads per threadgroup; MPS dispatches it with the pipeline's
-// threadExecutionWidth, 16 on these Intel GPUs, and its first reduction step reads past the threadgroup memory as 0.
-// MPSImageStatisticsMinAndMax returned 0 minimums (and 0 maximums for negative data), MeanAndVariance wrong means and
-// variances; Core Image's CIAreaMinMax, which runs on it, too. Both kernels run on a 37x23 RGBA32Float texture with
-// positive and negative channels and are checked against the values computed here. Stock OCLP: FAIL. Fixed: PASS.
-// Argument: GPU name substring (default: Intel). SKIP where Metal Performance Shaders doesn't support the GPU.
+// s39-intel-mps-statistics: MPS image statistics must be right; MPS ran their final kernel with 16 threads on these
+// Intel GPUs, where it needs 32. Fix: MetalOldCompat item 35.
+// Checks: MinAndMax and MeanAndVariance on a 37x23 RGBA32Float texture. Argument: GPU name.
 #import "repro.h"
 #include <dlfcn.h>
 #include <math.h>

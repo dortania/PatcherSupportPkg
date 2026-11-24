@@ -1,8 +1,6 @@
-// s02-reflection (MetalOldCompat item 2): pipeline reflection on a GPU whose shaders the current (macOS 14+) compiler
-// builds. The compiler wraps reflection data in a newer container (CompilerOutputReflectionBlock) that MetalOld can't
-// read, so render/compute pipeline reflection (MTLPipelineOptionBindingInfo | BufferTypeInfo, used by Blender, Godot,
-// MoltenVK...) is missing or wrong, or the process crashes. Checks binding names, indices and a buffer's struct layout.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// s02-reflection: pipeline reflection must come through with the current compiler; MetalOld couldn't read its newer
+// container (missing, wrong, or a crash). Fix: MetalOldCompat item 2.
+// Checks: binding names, indices and a buffer's struct layout. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

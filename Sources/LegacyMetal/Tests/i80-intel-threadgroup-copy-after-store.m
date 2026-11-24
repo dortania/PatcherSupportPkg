@@ -1,11 +1,6 @@
-// i80-intel-threadgroup-copy-after-store (Intel adapter, INTEL_COPY_EXPAND_FIX): a struct in threadgroup memory is copied
-// in from a buffer, one field is updated through a pointer passed to a helper function (*pa += *pb twice, pa = &A.x,
-// pb = &B.x), and the struct is then copied out whole (llvm.memcpy from threadgroup to device memory). On the HD 4000 the
-// copy came out as the original input, as if the store through pa had never happened (A.x 10, want 210), while the
-// helper's return value was right: WebGPU CTS ptr_aliasing two_pointers and composite_copy, workgroup address space. The
-// copy expansion's threadgroup-side accesses are volatile now, as its device-side ones were (n12's struct copies).
-// Also runs the same shape on device memory and on private memory.
-// Stock OCLP on an HD 4000: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i80-intel-threadgroup-copy-after-store: a threadgroup struct copied out whole after a store through a pointer must
+// have the store; on the HD 4000 the copy had the old value. Fix: IntelTextureAtomics INTEL_COPY_EXPAND_FIX.
+// Checks: *pa += *pb twice in a helper, then a whole copy; threadgroup, device, private memory. Argument: GPU name.
 #import "repro.h"
 
 enum { BIG = 32, WORDS = 2 + 4 + 4 + BIG };  // ints in Data: x, y, arr[4], s, big[32]

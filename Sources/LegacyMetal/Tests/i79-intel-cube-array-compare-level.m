@@ -1,12 +1,6 @@
-// i79-intel-cube-array-compare-level (Intel adapter, INTEL_CUBE_ARRAY_LEVEL_FIX): depth comparisons at an explicit level
-// on a cube array. iCBE took the level from the array index (layer n compared at level n whatever level was asked for),
-// Ivy Bridge and Haswell, with the stock compiler too. An 8-layer, 3-level Depth32Float cube array has its own depth in
-// every level, layer and face; compute kernels and a fragment shader compare (less or equal) at every level of every layer,
-// with the layer index from a buffer and as a constant, with references just below, equal to, one ulp above and just above
-// the texel: 1, 1, 0, 0. The fix multiplies the reference by the layer index and iCBE divides it back, exactly for layers
-// 0, 1, 2 and 4 only, so the ties are checked there; layers 3, 5, 6 and 7 can be one ulp off (a known limitation) and are
-// checked just below and above. SKIPs on Kepler, which compares depth at level 0 only (a known limitation).
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i79-intel-cube-array-compare-level: depth comparisons at an explicit level on a cube array must use that level; iCBE
+// took the level from the array index. Fix: IntelTextureAtomics INTEL_CUBE_ARRAY_LEVEL_FIX.
+// Checks: every level and layer, compute and fragment; exact ties on layers 0-2, 4; SKIP on Kepler. Argument: GPU name.
 #import "repro.h"
 #include <math.h>
 

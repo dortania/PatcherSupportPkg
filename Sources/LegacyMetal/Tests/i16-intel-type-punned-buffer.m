@@ -1,12 +1,6 @@
-// i16-intel-type-punned-buffer (Intel adapter, IntelTextureAtomics.dylib): a buffer viewed as two element types through
-// casts of one byte pointer (as Tint does for WGSL's bufferArrayView) must keep its loads and stores in order. The 3802
-// back end reorders or forwards an access of one type past an access of the other to the same address: "load int,
-// store float2 there, load int" returned the first value (WebGPU CTS bufferArrayView mixed_types_aliasing, 285 cases,
-// storage and workgroup buffers). Runs that sequence on a device buffer and on threadgroup memory. Also checks what
-// the fix must leave alone: a buffer copied whole into a private variable (as Tint writes `var v = input;`), whose only
-// cast is the copy's own byte pointer; marking that copy volatile lost the mat2x2<f16> values (WebGPU CTS memory_layout
-// read_layout array_mat2x2h_stride, function and private address spaces).
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i16-intel-type-punned-buffer: accesses to one buffer through two element types (Tint's bufferArrayView) must stay in
+// order; the back end reordered them. Fix: IntelTextureAtomics INTEL_TYPE_PUN_FIX.
+// Checks: load int, store float2, load int on device and threadgroup memory; a private copy. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

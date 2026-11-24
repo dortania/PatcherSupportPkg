@@ -1,10 +1,6 @@
-// s36-intel-swizzle-view (MetalOldCompat item 32): the 12.x Intel driver returns nil from
-// newTextureViewWithPixelFormat:textureType:levels:slices:swizzle: (family 1 has no texture swizzle). Dawn (Chrome's
-// WebGPU), told the iGPU is family 2 (item 11), makes its depth/stencil views with the swizzle (R, 0, 0, 1), so every
-// stencil8 render pass and every depth texture bound to a shader lost the device. Makes views with swizzles that change
-// nothing a shader can see (R001 on Depth32Float_Stencil8 as X32_Stencil8 and on Depth32Float, R001 on R8Unorm, the
-// identity on RGBA8Unorm) and reads the Depth32Float view in a compute function. Stock OCLP: FAIL. Fixed: PASS.
-// Argument: GPU name substring (default: Intel).
+// s36-intel-swizzle-view: texture views with a swizzle must be made; the 12.x Intel driver returned nil (Dawn lost its
+// device). Fix: MetalOldCompat item 32.
+// Checks: R001 and identity swizzles on depth, stencil, R8 and RGBA8, and a compute read. Argument: GPU name.
 #import "repro.h"
 
 int main(int argc, char **argv) {

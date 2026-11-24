@@ -1,10 +1,6 @@
-// i36-intel-constant-call-fold (Intel adapter, INTEL_CONSTANT_CALL_FIX): integer functions of constants that the front
-// end leaves as calls (max(0, 0x04030201), clamp of constants, popcount(0x0F0F00FFu)), unpacked into uchar4 lanes and
-// multiplied. iCBE folds the call itself and then reads every lane of the folded value as byte 0 in the multiplies:
-// uint(v.z) * 7 gave 7, not 21. Such calls, and the instructions that then have only constant operands, are folded in
-// the adapter. Found by the MacBookPro11,5 session's narrow-vector fuzzing (mslfuzz2 VEC=1 ASTYPE=1, seed 213: an index
-// into a private array). Expected values from the CPU reference (cpuref.py) on the fuzzer's input.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i36-intel-constant-call-fold: integer functions of constants left as calls must be right when unpacked into bytes;
+// iCBE read every lane as byte 0. Fix: IntelTextureAtomics INTEL_CONSTANT_CALL_FIX.
+// Checks: max, clamp and popcount of constants unpacked into uchar4 lanes and multiplied. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

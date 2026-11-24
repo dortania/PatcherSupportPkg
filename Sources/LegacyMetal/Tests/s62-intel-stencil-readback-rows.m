@@ -1,9 +1,6 @@
-// s62-intel-stencil-readback-rows (shim item 37, Ivy Bridge part): the HD 4000 driver writes only the first row of a
-// stencil copy into a buffer whose bytesPerRow isn't the region's width, at every level and slice; copies into the
-// texture, and depth, are right. WebGPU's bytesPerRow is a multiple of 256, so every stencil read-back there lost all
-// but its first row. Fills Stencil8 (level 0, level 1, slice 1 of an array) and the stencil of Depth32Float_Stencil8
-// with tight rows, then reads each back with bytesPerRow 256 at a buffer offset of 256 and checks every texel.
-// Stock OCLP on an HD 4000: FAIL. Fixed: PASS. Other GPUs pass either way. Argument: GPU name substring (default: Intel).
+// s62-intel-stencil-readback-rows: stencil read back with bytesPerRow above the width must keep every row; the HD 4000
+// driver wrote only the first. Fix: MetalOldCompat item 37.
+// Checks: Stencil8 (levels 0 and 1, slice 1) and Depth32Float_Stencil8, bytesPerRow 256. Argument: GPU name.
 #import "repro.h"
 
 static id<MTLTexture> make(id<MTLDevice> dev, MTLPixelFormat format, NSUInteger slices) {

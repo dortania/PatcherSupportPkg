@@ -1,12 +1,6 @@
-// i49-intel-uniform-dependency (Intel adapter, INTEL_UNIFORM_DEPENDENCY_FIX): the Intel compiler's uniformity analysis
-// reading past its map. IGILUniformAnalysis::getDependency returns the map entry of a value, and for an instruction the
-// analysis hasn't reached yet reads past the end of the map's buckets; its match for sign extensions asks for an
-// operand two levels below the instruction whose operands it checked. In this generated kernel (mslfuzz2 LONG=1 seed
-// 741, data/i49-long-fuzz-741.metal) that is ashr (add %v3, %t), 31 before %t, a truncated 64-bit product, has an
-// entry, and the map's buckets end at a page: the compiler crashed, the stock one too. Smaller kernels with the same
-// read get garbage instead, so the kernel stays whole. Compiles and runs it as the fuzzer did, on three inputs, and
-// compares the hash of the output with the same code run on the CPU. Stock OCLP: FAIL (crashed). Fixed: PASS.
-// Argument: GPU name substring (default: Intel).
+// i49-intel-uniform-dependency: the uniformity analysis must not read past its map; getDependency did and crashed the
+// compiler. Fix: IntelTextureAtomics INTEL_UNIFORM_DEPENDENCY_FIX (Kepler: NVAIR_INTRINSICS, NVAIR_I64_FIX).
+// Checks: a generated kernel kept whole (data/i49-*.metal), three inputs, hash vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 int main(int argc, char **argv) { @autoreleasepool {

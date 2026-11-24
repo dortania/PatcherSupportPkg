@@ -1,10 +1,6 @@
-// s87-intel-concurrent-blits (MetalOldCompat item 83, MTLSHIM_IVB_BLIT_LOCK): blits from two threads at once on the Ivy
-// Bridge driver. Its buffer fills and copies run a fixed-function kernel set up from state the driver shares between
-// command buffers (CHAL_INTEL::ChalContext::SetupFixedFunctionKernelExecute), and two threads encoding them at the same
-// time, each with its own queue, read it half written: a division by zero, SIGFPE, within a second. Checked, in a child
-// process (so that a crash is a result): two threads fill, copy buffer to buffer, copy into a texture and copy back,
-// each on its own queue, for 3 seconds, and every copy holds what was written. Stock: FAIL (the child dies, SIGFPE).
-// Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s87-intel-concurrent-blits: blits from two threads at once must work on Ivy Bridge; the driver's shared state crashed
+// it (SIGFPE). Fix: MetalOldCompat item 83 MTLSHIM_IVB_BLIT_LOCK.
+// Checks: two threads fill and copy on their own queues for 3 s, in a child; every copy right. Argument: GPU name.
 #import "repro.h"
 #include <spawn.h>
 #include <stdatomic.h>

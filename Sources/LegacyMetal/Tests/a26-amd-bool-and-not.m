@@ -1,10 +1,6 @@
-// a26-amd-bool-and-not (AMD adapter): `bool(~b & uint(bool(a))) | (a & 0xffff)` must compile.
-// The IR, or (and (zext (a != 0)), ~b), (and a, 0xffff), sends libAMDIL902's bit-field-insert combine
-// (ILTargetLowering::AnalyzeBFICombine) to read the operands of an operand that has none: "Compiler encountered an
-// internal error" (found by fuzzing with narrow vectors: uint((ushort)uint(bool(~b & uint(bool(a)))) | (ushort)a)).
-// The adapter builds that and as `select (a != 0), (~b & 1), 0`.
-// Checked: the ushort and uchar forms, against the CPU on 256 threads.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// a26-amd-bool-and-not: bool(~b & uint(bool(a))) | (a & 0xffff) must compile; libAMDIL902's bit-field-insert combine
+// hit an internal error. Fix: AMDTextureAtomics AMD_BOOL_AND_NOT_FIX.
+// Checks: the ushort and uchar forms, against the CPU. Argument: GPU name.
 #import "repro.h"
 
 enum { kThreads = 256 };

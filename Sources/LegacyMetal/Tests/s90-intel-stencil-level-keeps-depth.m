@@ -1,11 +1,6 @@
-// s90-intel-stencil-level-keeps-depth (MetalOldCompat item 86, MTLSHIM_STENCIL_KEEPS_DEPTH): stencil copied into mip level
-// 1 of a mipmapped Depth32Float_Stencil8 texture on the Ivy Bridge driver. The stencil lands, but at 63x63 the copy also
-// zeroed the depth of levels 2-4; WebKit's lazy zero-fill does such copies, so a depth a render pass had put in a deeper
-// level read back as 0 (WebGPU CTS texture_zero, depth32float-stencil8 with 5 levels). Checked: levels 0 and 2-4 of a
-// 63x63 5-level texture hold depth 0.8 (render passes); stencil goes into level 1 by a blit from a buffer (bytesPerRow
-// 256, the driver's own copy; and 31, item 37's way through a temporary) and by a copy from a 31x31 texture (depth 0.5,
-// stencil 7); afterwards levels 0 and 2-4 must still hold 0.8, and level 1 what was copied in.
-// Stock: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s90-intel-stencil-level-keeps-depth: stencil copied into level 1 must keep the deeper levels' depth; Ivy Bridge
+// zeroed levels 2-4. Fix: MetalOldCompat item 86 MTLSHIM_STENCIL_KEEPS_DEPTH.
+// Checks: a 63x63 5-level Depth32Float_Stencil8: stencil into level 1 by blits and a copy. Argument: GPU name.
 #import "repro.h"
 
 enum { TextureSize = 63, Levels = 5 };

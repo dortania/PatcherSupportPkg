@@ -1,11 +1,6 @@
-// s56-default-viewport-slots (AMDBronzeCompat item 13, MetalOldCompat item 42): before the app sets a viewport, every one
-// of the 16 viewport slots must cover the render target, as on Apple GPUs. The 12.5 AMD and 12.x Intel drivers set up
-// only slot 0, so primitives sent to slot 1-15 with [[viewport_array_index]] drew nothing, and so did vertex amplification
-// views mapped to viewportArrayIndexOffset 1+: wgpu maps view i to slot i and sets no viewport unless the app does, and its
-// multiview::draw_multiview left layer 1 of a 2-layer target at the clear color. Draws a triangle into each slot of a
-// 64x64 target without setting a viewport, then (GPUs with vertex amplification) wgpu's multiview pass: 2 views into a
-// 2-layer target, view 1 mapped to slot 1, the fragment function coloring by [[amplification_id]].
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// s56-default-viewport-slots: before any viewport is set, all 16 slots must cover the target; the AMD and 12.x Intel
+// drivers set only slot 0 (wgpu multiview). Fix: AMDBronzeCompat item 13 AMD_BRONZE_COMPAT, MetalOldCompat item 42.
+// Checks: a triangle per slot of a 64x64 target, then wgpu's 2-view amplification pass. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const kSource = @"#include <metal_stdlib>\nusing namespace metal;\n"

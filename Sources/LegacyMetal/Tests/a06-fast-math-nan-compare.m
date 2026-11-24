@@ -1,11 +1,6 @@
-// a06-fast-math-nan-compare (AMD adapter): an ordered compare must be false for NaN, also with fast math. Metal
-// compiles with fast math by default and marks every function "no-nans-fp-math"="true"; libAMDIL902's instruction
-// selection (LLVM 5) then treats compares as NaN-free and may branch on the inverse (`x <= t` for `if (x > t)`), so
-// a NaN takes the wrong branch. Apple's current compilers keep the IEEE result, and shaders rely on it: Blender EEVEE
-// normalizes the world sun's accumulated direction with safe_normalize(sum / weight), which is 0/0 when the world has
-// no sun; the NaN skipped safe_normalize's fallback, the sun direction became NaN and all volume lighting was dropped
-// (render tests osl_camera_offset_in_volume, implicit_volume, light_ray_visibility, ...). The kernel is that code.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// a06-fast-math-nan-compare: an ordered compare must be false for NaN, also with fast math; libAMDIL902 branched on the
+// inverse (EEVEE dropped all volume lighting). Fix: AMDTextureAtomics AMD_NAN_FIX.
+// Checks: EEVEE's safe_normalize(sum / weight) of 0/0 takes its fallback. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

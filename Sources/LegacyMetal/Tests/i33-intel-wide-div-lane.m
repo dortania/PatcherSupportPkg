@@ -1,12 +1,6 @@
-// i33-intel-wide-div-lane (Intel adapter, IntelTextureAtomics.dylib): a vector lane picked by a 64-bit quotient. The
-// back end expands 64-bit division into loops, and an extractelement indexed by such a quotient (w[q & 3]) read its
-// index from a register the loop hadn't written: with a constant dividend (0x200000002 / d) the lane picked was the
-// dividend's low word, & 3, whatever q was. q itself, a variable dividend and a select on q & 3 were right (the
-// MacBookPro11,5 session's 64-bit fuzzing, LONG=1 seed 6). The adapter picks such lanes with selects. Signed and
-// unsigned quotients and remainders with constant dividends, on the differential fuzzer's 256-thread input, against the
-// CPU reference. Word 6: a lane picked by a 64-bit shift of a constant (w[(uint)(4151055293ul >> s) & 3]), on which the
-// stock back end crashes in its DAG legalizer (LONG=1 seed 378); the same selects avoid it.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i33-intel-wide-div-lane: a lane picked by a 64-bit quotient must be the quotient's; the back end read an unwritten
+// register. Fix: IntelTextureAtomics INTEL_WIDE_DIV_INDEX_FIX (Kepler: NVAIR_INTRINSICS, NVAIR_I64_FIX).
+// Checks: lanes picked by quotients of constant dividends and by a 64-bit shift (crashed). Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

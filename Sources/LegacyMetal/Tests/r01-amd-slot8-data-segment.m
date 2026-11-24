@@ -1,13 +1,6 @@
-// r01-amd-slot8-data-segment (regression test for the AMD adapter's a04 fix; AMD GCN on the 12.5 stack): user data API
-// slot 8 is the address of a shader's constant data segment (program-scope `constant` variables; Tint/Dawn declare
-// `volatile constexpr constant uint tint_volatile_zero`, which Chrome's Skia Graphite text and image shaders read).
-// libAMDIL902 also adds it, wrongly, to the address of threadgroup variables (a04). A fix that zeroed every slot-8 read
-// breaks Chrome's tab strip, icons and text; one that zeroed it in all compute shaders with threadgroup memory still
-// breaks such shaders when they also read a program-scope constant.
-//   1. fragment shader reading a volatile program-scope constant (Chrome's case)
-//   2. compute kernel doing Blender's threadgroup reduction through a reference member AND reading such a constant
-// Expected: PASS with no a04 fix and with a correct one; FAIL with either of those two approaches (1, 2).
-// Argument: GPU name substring (default: AMD).
+// r01-amd-slot8-data-segment: guards a04's fix; must keep working, with or without it: program-scope constants (slot 8)
+// in fragment shaders and threadgroup kernels. Fix: AMDTextureAtomics AMD_LDS_BASE_FIX.
+// Checks: a fragment shader reading a volatile constant; a threadgroup reduction reading one. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const common = @"#include <metal_stdlib>\nusing namespace metal;\n"

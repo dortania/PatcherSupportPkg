@@ -1,12 +1,6 @@
-// i78-intel-gradient-compare-level (Intel adapter, INTEL_COMPARE_GRADIENT_FIX): depth comparisons with gradients on
-// mipmapped depth textures. The Intel compilers failed on sample_compare with gradient2d / gradientcube (n05); the adapter
-// makes such a comparison in the level form, at the level the gradients select (nearest mip filter). Each level of a 2D
-// (64x64, 4 levels), a 2D-array (layer 1) and a cube (32x32, 3 levels) Depth32Float texture is cleared to its own depth
-// (0.2, 0.4, 0.6, 0.8); for each level k, gradients of 2^k texels (cube: of the face coordinates) must select level k: a
-// comparison (less) with a reference just below that level's depth passes and one just above fails. Level 0 for every
-// gradient, as on Kepler, passes only k = 0. SKIPs on AMD (no gradient comparisons) and Kepler (level 0 only): both are
-// known limitations.
-// Stock OCLP: FAIL (the compiler fails). Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i78-intel-gradient-compare-level: gradient sample_compare on mipmapped depth textures must use the level picked; the
+// compilers failed. Fix: IntelTextureAtomics INTEL_COMPARE_GRADIENT_FIX (Kepler: NVAIR_COMPARE_GRADIENT_FIX).
+// Checks: gradients of 2^k texels must pick level k, 2D, array and cube; SKIP on AMD, Kepler. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

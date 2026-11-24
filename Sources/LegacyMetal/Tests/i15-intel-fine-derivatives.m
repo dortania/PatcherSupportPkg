@@ -1,10 +1,6 @@
-// i15-intel-fine-derivatives (Intel adapter, IntelTextureAtomics.dylib): dfdx / dfdy must give each row (column) of a
-// 2x2 pixel quad its own difference, as Apple GPUs do. The IGIL back end writes them as GRADIENT_X / GRADIENT_Y, which
-// the Intel compiler evaluates coarse (one difference per quad), so WGSL's dpdxFine, dpdyFine and fwidthFine (compiled
-// to dfdx / dfdy by Tint) were wrong wherever the rows differ (WebGPU CTS: 8 of 8 cases each). Draws v = x * y over 4x4
-// pixels and writes dfdx(v) and dfdy(v): at pixel centers (x, y) those are y and x, which differ between the two rows
-// and columns of every quad.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i15-intel-fine-derivatives: dfdx / dfdy must give each row (column) of a 2x2 quad its own difference; the compiler
+// made them coarse, one per quad. Fix: IntelTextureAtomics INTEL_FINE_DERIVATIVES_FIX.
+// Checks: dfdx and dfdy of v = x * y over 4x4 pixels must be y and x at each pixel center. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

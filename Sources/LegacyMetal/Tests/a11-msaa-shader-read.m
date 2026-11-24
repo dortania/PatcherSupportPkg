@@ -1,9 +1,6 @@
-// a11-msaa-shader-read (AMD adapter): shaders must read the samples of a 4x MSAA texture. On the 12.5-24 Bronze driver
-// the FMASK descriptor table (API slot 13) is unset for render stages, so a fragment shader's texture2d_ms read loads its
-// FMASK descriptor from GPU address 0 and the GPU resets (Safari's WebGL resolves antialiased canvases this way); a
-// compute read gets a stale table and wrong samples. Fixed by the adapter's identity FMASK map (AMD_FMASK_FIX).
-// The compute read runs first; the fragment read only runs once it is right, so an unfixed stack fails without a reset.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// a11-msaa-shader-read: shaders must read the samples of a 4x MSAA texture; on the 12.5-24 driver a fragment read reset
+// the GPU (FMASK table unset), a compute read got wrong samples. Fix: AMDTextureAtomics AMD_FMASK_FIX.
+// Checks: a compute read, then a fragment read only if that was right (no reset). Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

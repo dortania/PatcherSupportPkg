@@ -1,8 +1,6 @@
-// s12-srgb-mipmaps (AMDBronzeCompat item 2): -[MTLBlitCommandEncoder generateMipmapsForTexture:] on an RGBA8Unorm_sRGB
-// texture with the 12.5 AMD driver. The driver averages the sRGB-encoded bytes instead of the linear values, so every
-// level below 0 is too dark (WebGL 2 conformance: conformance2/textures/misc/tex-srgb-mipmap). Level 0 is a
-// black/white checkerboard: the correct level 1 is linear 0.5 = sRGB byte 188; averaging the bytes gives 128.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// s12-srgb-mipmaps: generated mipmaps of an RGBA8Unorm_sRGB texture must average linear values; the AMD driver averaged
+// the encoded bytes (too dark). Fix: AMDBronzeCompat item 2 AMD_BRONZE_COMPAT.
+// Checks: level 1 of a black/white checkerboard is sRGB 188, not 128. Argument: GPU name.
 #import "repro.h"
 
 int main(int argc, char **argv) {

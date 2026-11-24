@@ -1,13 +1,6 @@
-// s42-shim-owned-returns (MetalOldCompat): the shim's replacements for new- and init-family methods must hand back an
-// owned object, as the methods they replace do. Annotated wrongly, ARC autoreleases what they return, and every texture,
-// view or MTLCompileOptions made through them then lives until an autorelease pool drains, never in a process that drains
-// none: dawn.node's WebGPU CTS image_copy had 15000 textures alive after 25 s and ran out of memory. Makes each kind of
-// object through the paths the shim hooks (a plain texture, a depth texture with mip levels (item 22), a multisampled
-// Stencil8 texture (item 36), texture views with and without a range, a view with a swizzle (item 32), MTLCompileOptions,
-// an R32Uint texture for atomics (item 58), render and compute pipelines with and without reflection (items 21, 47, 58),
-// a depth/stencil state (item 51))
-// and checks through a weak reference that it is freed as soon as it is released, with no pool drained in between.
-// Passes on any stack that doesn't defer these releases (the no-op shim too). Argument: GPU name substring (default: Intel).
+// s42-shim-owned-returns: the shim's new/init replacements must return owned objects; autoreleased ones lived until a
+// pool drained (dawn.node ran out of memory). Fix: MetalOldCompat. Passes with the no-op shim too.
+// Checks: textures, views, compile options, pipelines, depth/stencil states freed on release. Argument: GPU name.
 #import "repro.h"
 
 int main(int argc, char **argv) {

@@ -1,12 +1,6 @@
-// a22-amd-shifted-dividend (AMD adapter): signed division of 32 bits cut from the middle of a 64-bit value.
-// `(int)uint(x >> k) / c` with x a ulong (or long) and 0 < k < 32 comes out as the unsigned division, for constant
-// divisors of either sign, and `%` likewise (found by fuzzing with 64-bit integers: (int)uint(min(a, b) >> 31) / 65535).
-// The adapter builds such dividends from the 32-bit halves, which divide right.
-// Checked: k = 31, 16 and 1, / 65535, / -3, % 7, a long shifted right, a select between two cuts, a long remainder
-// a quotient of non-negative longs, and a cut that passes an unsigned division first (`(int)(uint(max(x, y) >> 14) / d)
-// / 225`, seed 4769), and a cut of a 64-bit product, `(int)uint(((ulong(a) << 32) * y) >> 24) / 51`, which built from
-// the product's halves came out wrong (seed 763), against the CPU on 256 threads.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// a22-amd-shifted-dividend: signed / and % of 32 bits cut from a 64-bit value must be signed; they came out unsigned.
+// Fix: AMDTextureAtomics AMD_SHIFTED_DIVIDEND_FIX, GeForceAIRCompat NVAIR_INTRINSICS, NVAIR_I64_FIX.
+// Checks: shifts of 31, 16, 1, divisors of both signs, selects, a product's cut, vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 enum { kThreads = 256, kOut = 11 };

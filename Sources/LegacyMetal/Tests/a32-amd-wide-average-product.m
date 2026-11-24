@@ -1,10 +1,6 @@
-// a32-amd-wide-average-product (AMD adapter): the high half of a 64-bit product whose operand has an unsigned average in
-// its low half must keep the average's carries. `mulhi((ulong(a + b) << 32) | rhadd(a, b), (ulong(popcount(86u)) << 32)
-// | k)` came out 2 too low for most inputs (found by fuzzing with 64-bit integers, seed 1488, stock files too; a literal
-// 4 for popcount(86u) hides it, so the factor has to fold late). The adapter builds widened hadd / rhadd from plain
-// bitwise arithmetic.
-// Checked: rhadd and hadd, the high halves of 256 products against exact 128-bit CPU multiplication.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// a32-amd-wide-average-product: mulhi of a 64-bit value with rhadd/hadd in its low half must keep the carries; it came
+// out 2 too low. Fix: AMDTextureAtomics AMD_AVERAGE_FIX, AMD_WIDE_MULHI_FIX, GeForceAIRCompat NVAIR_INTRINSICS,
+// NVAIR_I64_FIX. Checks: rhadd and hadd, 256 products against exact 128-bit CPU products. Argument: GPU name.
 #import "repro.h"
 
 enum { kThreads = 256, kOut = 4 };

@@ -1,13 +1,6 @@
-// i23-intel-buffer-pointer-select (Intel adapter, IntelTextureAtomics.dylib): `c ? in[i] : in[j]` inside one arm of a
-// switch. The front end loads through select(c, &in[i], &in[j]); the 3802 back end can't tell both pointers name the
-// same buffer and loads through a loop over the SIMD group's distinct surfaces, which takes flag register f0.1 without
-// saving it. Here the switch's case 1 falls through into the default and the back end keeps the else-branch's test
-// (selector != 0) in f0.1: in every SIMD8 group with a case-1 lane, the case-0 lanes ran the default's code too
-// (differential fuzzing, mslfuzz2 seeds 5, 144 and 291). The adapter selects the index instead of the pointer. Runs the
-// kernel on 256 seeded inputs and compares with the same arithmetic on the CPU.
-// Stock OCLP: PASS (the bug is the back end's, but in this kernel the flags only collide once the adapter's private-array
-// rewrite has kept the arrays in registers). The PR's adapter without this fix: FAIL. Fixed: PASS. Argument: GPU name
-// substring (default: Intel).
+// i23-intel-buffer-pointer-select: `c ? in[i] : in[j]` in a switch arm must not make other lanes run the default; the
+// back end clobbered flag f0.1 (only after i07's rewrite). Fix: IntelTextureAtomics INTEL_BUFFER_SELECT_FIX.
+// Checks: the kernel on 256 seeded inputs vs the same arithmetic on the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

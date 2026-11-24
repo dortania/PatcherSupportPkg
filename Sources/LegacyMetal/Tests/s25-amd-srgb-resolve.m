@@ -1,10 +1,6 @@
-// s25-amd-srgb-resolve (AMDBronzeCompat item 4): an MSAA resolve of an sRGB attachment with the 12.5 AMD driver. The
-// driver averages the encoded bytes instead of the linear values, so antialiased edges are too dark (WebGPU conformance:
-// render_pass,resolve:render_pass_resolve). Half of 4 samples white over black: the correct result is linear 0.5 = sRGB
-// byte 188; averaging the bytes gives 128. A linear format stays 128, and alpha is 128 either way. The blended case draws
-// every sample with white at alpha 0.5 over black, blended in linear space: 188 whether resolved right or not, so it checks
-// that blending in the multisample pass is unchanged by the fix.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// s25-amd-srgb-resolve: an MSAA resolve of an sRGB attachment must average linear values; the AMD driver averaged the
+// encoded bytes. Fix: AMDBronzeCompat item 4 AMD_BRONZE_COMPAT, MetalOldCompat item 55 MTLSHIM_NV_RESOLVE_LEVEL.
+// Checks: 2 of 4 samples white resolve to 188; linear stays 128; blending is unchanged. Argument: GPU name.
 #import "repro.h"
 
 // Returns the resolved red byte, or -1 if a pass failed; alpha goes to *alpha.

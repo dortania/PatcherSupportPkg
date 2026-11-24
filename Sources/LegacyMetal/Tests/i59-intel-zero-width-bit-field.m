@@ -1,9 +1,6 @@
-// i59-intel-zero-width-bit-field (Intel adapter, INTEL_CONSTANT_CALL_FIX): extract_bits / insert_bits of 0 bits. MSL
-// gives 0 and the base, but the back end lowers them with a shift by the width, which LLVM treats as poison and folds
-// away: w[(uint)((long)(1u | extract_bits(v0, 0u, 0u)) >> s) & 3u] = 1u stored to w[1] in every thread, whatever s was
-// (mslfuzz2 LONG=1 seed 2575, reduced; the stock compiler too). Calls with a constant bit count of 0 are folded in the
-// IR. 256 threads on five inputs, against the same code on the CPU. Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name
-// substring (default: Intel).
+// i59-intel-zero-width-bit-field: extract_bits / insert_bits of 0 bits must give 0 and the base; the back end shifted
+// by the width, which LLVM folded away as poison. Fix: IntelTextureAtomics INTEL_CONSTANT_CALL_FIX.
+// Checks: a lane index built from extract_bits(v0, 0u, 0u), five inputs vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

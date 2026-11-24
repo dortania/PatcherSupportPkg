@@ -1,10 +1,6 @@
-// i73-intel-ivb-inline-constants (Intel adapter, INTEL_IVB_INLINE_CONSTANT_FIX): OCLP's 11.7.10 Ivy Bridge plugin puts a
-// vertex or fragment function's program-scope constant data in an inline constant buffer that the driver doesn't bind:
-// the loads read the app's buffer at index 0 of that stage, or 0. Tint declares `volatile constexpr constant` values
-// (tint_volatile_zero). Draws twice with a buffer of other values bound at fragment index 0: a fragment function reading
-// a volatile program-scope constant, and one reading a small constant table at a run-time index.
-// Stock OCLP on an HD 4000: FAIL (the first reads the bound buffer). Fixed: PASS. Other GPUs pass either way.
-// Argument: GPU name substring (default: Intel).
+// i73-intel-ivb-inline-constants: program-scope constants in render functions must read their own data; OCLP's Ivy
+// Bridge plugin left them unbound (read the app's buffer 0). Fix: IntelTextureAtomics INTEL_IVB_INLINE_CONSTANT_FIX.
+// Checks: a volatile constant, a constant table at a run-time index; other GPUs always pass. Argument: GPU name.
 #import "repro.h"
 
 static uint32_t draw(id<MTLDevice> dev, id<MTLLibrary> lib, NSString *fn, id<MTLBuffer> junk, id<MTLBuffer> sel, NSError **err) {

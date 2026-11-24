@@ -1,9 +1,6 @@
-// s20-intel-fill-buffer (shim item 20): buffer fills on the 12.x Intel driver. -[MTLIGAccelBlitCommandEncoder
-// fillBuffer:range:value:] fills the wrong bytes when the length is exactly 8 and the offset is 4 mod 8: it fills the
-// 8-aligned bytes below (offset 4 -> bytes 0..7). wgpu (Firefox's WebGPU) zero-fills buffer tails this way, so a 4-byte
-// copy into a 12-byte buffer was wiped (WebGPU CTS clearBuffer, copyBufferToBuffer). Fills every 4-aligned
-// offset/length pair up to 32 bytes inside a 64-byte buffer and checks the bytes around them too.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s20-intel-fill-buffer: an 8-byte buffer fill at an offset of 4 mod 8 must fill those bytes; the 12.x Intel driver
+// filled the 8 bytes below (wgpu's zero-fills). Fix: MetalOldCompat item 20.
+// Checks: every 4-aligned offset and length up to 32 in a 64-byte buffer, and the bytes around. Argument: GPU name.
 #import "repro.h"
 
 int main(int argc, char **argv) {

@@ -1,15 +1,6 @@
-// s89-zero-depth-textures (MetalOldCompat item 84): new depth, stencil and 3D textures must read zero. The Kepler,
-// Haswell, Ivy Bridge and GCN drivers hand a new depth or stencil texture (and a 3D one) the memory a freed one of the
-// same size left, as it was, and Safari's WebGPU relies on new textures being zero (as Apple's GPUs make them) for a
-// depth/stencil attachment that a pass loads and stores (WebGPU CTS
-// resource_init,texture_zero:uninitialized_texture_is_zero, 2d, DepthTest and StencilTest after "Creation") and for the
-// planes of a 3D texture a pass didn't write (rendering,3d_texture_slices): it read the old values, which a page could
-// use to read another resource's freed data. (Item 84 is on in WebKit's GPU process, elsewhere with
-// MTLSHIM_ZERO_DEPTH=1, which the test sets for itself.) Checked, for Depth32Float (5 levels, 3 slices), Depth16Unorm,
-// Stencil8 and Depth32Float_Stencil8 (both aspects), 64x64 render targets, and a 16x16x8 RGBA8 3D render target with 2
-// levels: textures of the same kind are filled (depth 0.7, stencil 0x5a, color 0.4/0.6/0.2/1) and freed, then every
-// level and slice or plane of a new one is copied to a buffer and must be all zero. Stock OCLP: FAIL (GTX 770, Iris
-// Pro, R9 M370X, HD 4000). Fixed: PASS. Argument: GPU name substring (default: the system default GPU).
+// s89-zero-depth-textures: new depth, stencil and 3D textures must read zero (Safari's WebGPU relies on it); the
+// drivers handed out freed memory. Fix: MetalOldCompat item 84 MTLSHIM_ZERO_DEPTH (the test turns it on).
+// Checks: depth, stencil and 3D textures filled, freed and made again: all zero. Argument: GPU name.
 #import "repro.h"
 
 static int check(const char *bug, const char *name, id<MTLDevice> dev, id<MTLCommandQueue> queue, MTLPixelFormat format,

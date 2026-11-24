@@ -1,9 +1,6 @@
-// i53-intel-switch-phi-entries (Intel adapter, i12's branch-chain flattening): a switch whose cases 0 and 1 go to the
-// same block, in a function with enough branches for i12 to flatten. Folding the block that ends in the switch into its
-// predecessor gave the phis of that block one entry instead of one per case, and the IR verifier aborted the compiler
-// (mslfuzz2 VEC=1 seed 2642, reduced: data/i53-vec-fuzz-2642.metal; the stock compiler is right, so the test passes
-// without i12 too). Compiles and runs it as the fuzzer did, on three inputs, and compares the hash of the output with
-// the same code run on the CPU. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i53-intel-switch-phi-entries: i12's flattening must keep one phi entry per case when a switch's cases share a block;
+// it kept one and the IR verifier aborted the compiler. Fix: IntelTextureAtomics INTEL_BRANCH_CHAIN_FIX.
+// Checks: a generated kernel (data/i53-*.metal), hash vs the CPU; passes without i12 too. Argument: GPU name.
 #import "repro.h"
 
 int main(int argc, char **argv) { @autoreleasepool {

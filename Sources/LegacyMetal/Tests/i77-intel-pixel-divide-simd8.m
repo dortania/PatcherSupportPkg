@@ -1,11 +1,6 @@
-// i77-intel-pixel-divide-simd8 (Intel adapter, INTEL_PIXEL_DIVIDE_SIMD8_FIX): an integer divide in a branch of a SIMD16
-// pixel kernel. In a loop that stores into a uint4 w at one run-time lane and adds w[popcount(x) & 3] ^ (w.y << 1) ^ w.w
-// to v0, the compiler moves that last add into a switch case that divides v0 by 65535, and in the SIMD16 kernel the moved
-// read saw w as it was before the store in about 17 of 256 pixels. Gen7 divides integers eight channels at a time, so
-// SIMD16 splits the divide in two; the SIMD8 kernel is right. The HD 4000 and the Iris Pro alike; the R9 M370X is right.
-// Reduced from mslfuzz2 FRAG seed 613, run as the fuzzer runs fragment functions (one pixel of a 256x1 target per input
-// slot, the results written to a buffer) on three inputs, the output hash compared with the same code run on the CPU.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i77-intel-pixel-divide-simd8: an integer divide in a branch of a SIMD16 pixel kernel must see earlier stores; split
+// in two, a moved read saw the value before the store. Fix: IntelTextureAtomics INTEL_PIXEL_DIVIDE_SIMD8_FIX.
+// Checks: a reduced fragment kernel, one pixel per input of a 256x1 target, hash vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

@@ -1,11 +1,6 @@
-// i60-intel-negated-dividend-copy (Intel adapter, INTEL_SIGNED_DIV_NEG_FIX): a negated value that reaches a signed divide
-// through copies. In this generated kernel (mslfuzz2 LONG=1 seed 2592, reduced: data/i60-long-fuzz-2592.metal), case 0 of
-// a switch sets v2 = -(int)x and falls through into a loop that the back end made a subroutine; the loop's (int)v2 % 65535
-// read a copy of a copy of the negation, and iCBE got the remainder wrong as in i26: 0 instead of -1, so the bit count of
-// an insert_bits was 0 and the result 0 (the stock compiler is wrong too). i26's rewrite of the negation now follows MOV
-// copies, merges included, from the IDIV operands. Runs the kernel as the fuzzer did, on three inputs, and compares the
-// hash of the output with the same code run on the CPU. Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring
-// (default: Intel).
+// i60-intel-negated-dividend-copy: a negated value reaching a signed divide through copies must keep its sign; iCBE
+// dropped the folded negation, as in i26. Fix: IntelTextureAtomics INTEL_SIGNED_DIV_NEG_FIX.
+// Checks: a switch falling into a loop, in a generated kernel (data/i60-*.metal), vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 int main(int argc, char **argv) { @autoreleasepool {

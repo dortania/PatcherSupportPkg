@@ -1,10 +1,6 @@
-// s53-coreimageold-portrait-kernels (MetalOldCompat item 41): CIDepthBlurEffect, the filter behind Photos' portrait
-// editing, applied twice and rendered on the GPU. CoreImageOld.dylib (the 14.0 beta 3 Core Image the 3802 payloads
-// install) loads its portrait kernels from a static NSData that it never retains: once an autorelease pool drains, the
-// next portrait kernel gets a dangling pointer and the process crashes in -[CIKernelLibrary initWithData:error:] (OCLP
-// issue #1008, "Photos app failing to edit portrait photos", on Intel and AMD alike). Skips without CoreImageOld.
-// Stock OCLP: crash (FAIL). Fixed: PASS (the filter renders; MetalOld can't list the functions of Sequoia's portrait
-// metallibs, so the blur itself is not applied). Argument: GPU name substring (default: Intel).
+// s53-coreimageold-portrait-kernels: CIDepthBlurEffect (Photos' portrait editing) must render twice; CoreImageOld freed
+// its kernel data and crashed. Fix: MetalOldCompat item 41 MTLSHIM_SDOF_LIBRARY. SKIP without CoreImageOld.
+// Checks: the filter renders on the GPU (the blur itself isn't applied). Argument: GPU name.
 #import "repro.h"
 #import <CoreImage/CoreImage.h>
 #include <unistd.h>

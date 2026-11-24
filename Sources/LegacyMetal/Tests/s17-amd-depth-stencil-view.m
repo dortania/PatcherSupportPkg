@@ -1,9 +1,6 @@
-// s17-amd-depth-stencil-view (AMDBronzeCompat item 1): a depth/stencil attachment given as a 2D texture view of mip 1+
-// of a 2D-array texture, with the 12.5 AMD driver. A stencil clear through the view is lost, and goes to level 0 / slice
-// 0 instead, over what's there (wgpu zero_init depth/stencil tests, Dawn DepthStencilCopyTests, WebGPU CTS). Attaching the
-// parent texture with level/slice works. For Stencil8, Depth32Float_Stencil8 and Depth32Float: fills level 0 / slice 0,
-// clears level 1 / slice 1 through a view, then copies both to buffers: the view's clear must land, and only there.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// s17-amd-depth-stencil-view: a stencil clear through a view of mip 1+ must land there; the AMD driver wrote level 0 /
+// slice 0. Fix: AMDBronzeCompat item 1 AMD_BRONZE_COMPAT, MetalOldCompat item 33 MTLSHIM_STENCIL_SUBRESOURCE.
+// Checks: Stencil8 and Depth32Float(_Stencil8) at level 1 / slice 1 of a 2D array, via a view. Argument: GPU name.
 #import "repro.h"
 
 // Copies one level/slice's stencil (or depth) to a buffer; true if every texel holds `want`.

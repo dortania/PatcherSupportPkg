@@ -1,10 +1,6 @@
-// i68-intel-bit-test-compare (Intel adapter, IntelTextureAtomics.dylib): branches on a compare of a 0/1 value with 1 in
-// fragment functions with the 3802 Intel compiler. In `if (((x & 1u) & y) != 1u) v = min(...)` the back end took the
-// `& 1` out of the and as redundant for the compare and then tested the whole register (IGIL: AND r, x, y; IF_CND.z r),
-// so pixels where x & y had bits above bit 0 set went the wrong way. Compares with 0 and selects are right; compute
-// functions are right. Found by fuzzing fragment functions (VEC=1 seed 1248, through mulhi and insert_bits). Each pixel
-// of a 256x1 RGBA32Uint target does three such branches (the and of two values, of a mulhi, and of an insert_bits) with
-// a call in each so that they stay branches. Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i68-intel-bit-test-compare: a branch on ((x & 1u) & y) != 1u must test bit 0 only; the back end dropped the & 1 and
+// tested the whole register. Fix: IntelTextureAtomics INTEL_BIT_TEST_COMPARE_FIX.
+// Checks: three such branches (on two values, a mulhi, an insert_bits) per pixel. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const kSource = @"#include <metal_stdlib>\nusing namespace metal;\n"

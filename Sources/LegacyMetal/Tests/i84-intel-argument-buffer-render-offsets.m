@@ -1,14 +1,6 @@
-// i84-intel-argument-buffer-render-offsets (Intel adapter, IntelTextureAtomics.dylib, INTEL_IVB_ARGUMENT_BUFFER_OFFSETS):
-// constants after buffer, texture and sampler members of an argument buffer, read in vertex and fragment functions on
-// the Ivy Bridge driver. There the 11.7.10 back end laid the struct out with 4-byte pointers, where the C layout (which
-// compute kernels read, and MetalOldCompat's encoder writes) has 8: each constant came from 4 bytes early per pointer
-// before it, the high half of a pointer's token. WebKit's WebGPU keeps each storage buffer's length right after it,
-// and its fragment functions clamp their writes with it, so once a buffer's token held a 4 or more every write went to
-// element 0 (CTS rendering,draw:vertex_attributes,basic, from a page's fourth pipeline on). Checked: a vertex function
-// reads two constants after a buffer reference and a pointer, and a fragment function reads constants after a
-// reference, a texture and a sampler (WebKit's bind group shape), each passing what it read on to a buffer the test
-// reads back. Stock OCLP: FAIL (no argument buffers). Without the fix: FAIL. Fixed: PASS.
-// Argument: GPU name substring (default: Intel).
+// i84-intel-argument-buffer-render-offsets: constants after pointer-sized members of argument buffers must read right
+// in Ivy Bridge render functions; those took 4 bytes. Fix: IntelTextureAtomics INTEL_IVB_ARGUMENT_BUFFER_OFFSETS.
+// Checks: vertex and fragment functions read constants after such members (WebKit's bind group). Argument: GPU name.
 #import "repro.h"
 
 static NSString *const source =

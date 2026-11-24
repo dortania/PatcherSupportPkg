@@ -1,10 +1,6 @@
-// s49-intel-writable-array-view-layers (MetalOldCompat item 39): get_array_size() on a writable 2D-array view whose first
-// layer isn't 0, in a fragment function. The view's render-target surface state keeps the whole texture's Depth (the
-// sampler's has the view's), and the driver binds the render-target state for writable views in fragment functions, so
-// the query returned the texture's layer count (WebGPU CTS textureNumLayers storage, write, partial views: 40 cases).
-// A fragment function writes layers 0-5 of a view of layers 11-16 of a 17-layer texture and returns get_array_size():
-// 6, with the writes at layers 11-16.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s49-intel-writable-array-view-layers: get_array_size() of a writable 2D-array view must be the view's; the 12.x Intel
+// driver gave the texture's. Fix: MetalOldCompat item 39 MTLSHIM_TARGET_DEPTH.
+// Checks: a fragment function writes layers 0-5 of a view of layers 11-16 and returns 6. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

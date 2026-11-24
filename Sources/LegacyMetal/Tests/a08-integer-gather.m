@@ -1,11 +1,6 @@
-// a08-integer-gather (AMD adapter): gather on integer textures must return the four texels around the coordinate.
-// libAMDIL902 compiles it to fetch4 with unnormalized coordinates but passes the shader's normalized ones, so it always
-// returns the texels at the texture's corner. GCN also forces nearest filtering on integer formats, which leaves gather
-// half a texel off once the coordinates are normalized. (WebGPU CTS builtin,textureGather: every integer format.)
-// The 3802 Intel compiler gets the plain cases right but ignores the offset (as for samples, i04); the Intel adapter
-// moves it into the coordinates.
-// Checked: 2D and 2D array, 8 and 32 bit, clamp, repeat and mirrored repeat, with and without an offset.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// a08-integer-gather: integer gather must return the 4 texels around the point; AMD returned the corner ones, Intel
+// ignored the offset. Fix: AMDTextureAtomics AMD_GATHER_FIX, IntelTextureAtomics INTEL_INTEGER_OFFSET_FIX,
+// INTEL_KERNEL_GATHER_OFFSET_FIX. Checks: 2D, 2D array, 8/32 bit, 3 address modes, offsets. Argument: GPU name.
 #import "repro.h"
 #include <math.h>
 

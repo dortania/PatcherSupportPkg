@@ -1,12 +1,6 @@
-// a34-amd-wide-mulhi (AMD adapter): the high 64 bits of a 64 x 64 bit unsigned product, mulhi(ulong, ulong).
-// `uint(mulhi(ulong(x >> 16) << 32 | y, ulong(0x80000000u) << 32 | z) >> 32)` came out as if the first factor's high
-// half were 0, with stock files too, when the other factor's high half is a large power of two and the first one's
-// comes from a right shift (found by fuzzing with loop counters in expressions, seed 5225). libAMDIL902's 64-bit
-// multiply is at fault (the same product built from 64-bit multiplies in the IR is as wrong), so the adapter builds
-// every scalar unsigned 64-bit mul_hi from 32-bit mul and mul_hi of the halves.
-// Checked: 2^31 and 2^30 against x >> 16, 2^31 against x >> 1, the factors swapped, and two general products (their
-// high and low 32 bits), against the CPU on 256 threads.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// a34-amd-wide-mulhi: mulhi(ulong, ulong) must give the high 64 bits; with a large power of two in one high half, the
+// other's high half was taken as 0. Fix: AMDTextureAtomics AMD_WIDE_MULHI_FIX, GeForceAIRCompat NVAIR_INTRINSICS,
+// NVAIR_I64_FIX. Checks: 2^31 and 2^30 against shifted factors, swapped, two general products. Argument: GPU name.
 #import "repro.h"
 
 enum { kThreads = 256, kOut = 6 };

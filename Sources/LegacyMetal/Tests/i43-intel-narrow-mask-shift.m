@@ -1,10 +1,6 @@
-// i43-intel-narrow-mask-shift (Intel adapter, INTEL_NARROW_MASK_FIX): i32's rewrite of a narrow mask. i32 turns an AND
-// 0xFF / 0xFFFF over a narrower AND into a 32-bit form; it used to be SHL 24 / SHR 24, and where the source was itself a
-// narrow AND (AND 0xFF over x & 3, from `vf(uchar3(...) % uchar3(3)) & 3` in a loop's exit test), iCBE kept that source
-// in a byte register, the SHL lost it, and the exit test compared against 0: the loop count came out wrong in 171 of
-// 256 threads (mslfuzz2 VEC=1 seed 1111, reduced). Now it is (x | bit 31) & (mask | bit 31), then bit 31 XORed away.
-// Expected values from the CPU reference (cpuref.py) on the fuzzer's input. Stock OCLP: FAIL. Fixed: PASS. Argument: GPU
-// name substring (default: Intel).
+// i43-intel-narrow-mask-shift: i32's rewrite of a narrow mask over another narrow AND must keep the value; shifting by
+// 24 lost a byte-register source. Fix: IntelTextureAtomics INTEL_NARROW_MASK_FIX.
+// Checks: a loop exit test on vf(uchar3(...) % uchar3(3)) & 3, 256 inputs vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

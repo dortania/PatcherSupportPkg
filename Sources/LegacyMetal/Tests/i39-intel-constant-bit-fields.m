@@ -1,11 +1,6 @@
-// i39-intel-constant-bit-fields (Intel adapter, INTEL_CONSTANT_CALL_FIX, i36's folding): reverse_bits, rotate,
-// extract_bits and insert_bits with constant operands. The front end leaves such calls for the back end, which folds
-// them itself and can build something wrong from the result: in mslfuzz2 plain seed 849 (the MacBookPro11,5 session's
-// fuzzer), `(uchar)reverse_bits(60u)`, which is 0, fed a signed divide whose result picked the bits of a later
-// extract_bits, and 54 of 256 threads came out wrong; the same code with the literal 0x3C000000u, or reverse_bits of a
-// variable, was right. These calls are folded in the IR with i36's. Words 1-3 and 6 check the folded values against the
-// CPU reference (cpuref.py) on the fuzzer's input. Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default:
-// Intel).
+// i39-intel-constant-bit-fields: reverse_bits, rotate, extract_bits and insert_bits of constants must be right; the
+// back end folded them itself and built wrong code from the result. Fix: IntelTextureAtomics INTEL_CONSTANT_CALL_FIX.
+// Checks: the folded values and the code they feed, 256 inputs vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

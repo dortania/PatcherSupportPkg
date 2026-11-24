@@ -1,10 +1,6 @@
-// s64-firefox-angle-display (shim item 11): Firefox does WebGL on macOS through its own build of ANGLE
-// (Firefox.app/Contents/MacOS/libEGL.dylib, libGLESv2.dylib), which refuses pre-2016 Macs by model and family-1 GPUs as
-// Chromium's and WebKit's ANGLE do; the shim only recognised those two, so Firefox had no WebGL at all on these Macs
-// ("tryANGLE (FEATURE_FAILURE_NO_DISPLAY)"). ANGLE's own libGLESv2.dylib now counts as an ANGLE caller. This drives
-// Firefox's ANGLE through EGL like an antialiased WebGL 2 context: a 4x multisampled clear and a uniform-block draw,
-// each resolved with glBlitFramebuffer and read back. Stock OCLP: FAIL (eglInitialize fails). Fixed: PASS.
-// SKIP without Firefox (/Applications/Firefox.app, or S64_FIREFOX_APP). Runs on the GPU ANGLE picks (no argument).
+// s64-firefox-angle-display: Firefox's own ANGLE must get a display on these Macs; it refused them (no WebGL).
+// Fix: MetalOldCompat item 11. Needs Firefox (/Applications/Firefox.app or S64_FIREFOX_APP), else SKIP.
+// Checks: a 4x MSAA clear and uniform-block draw, resolved and read back.
 #import "repro.h"
 #include <dlfcn.h>
 

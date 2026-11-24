@@ -1,12 +1,6 @@
-// s43-intel-stencil-view-mips (MetalOldCompat item 38): a shader must read the stencil of Depth32Float_Stencil8 at mip
-// level 2 through an X32_Stencil8 view. On the 12.x Intel driver the view's surface state takes the depth plane's
-// horizontal mip alignment (4) while the stencil plane is laid out with 8, so levels 2+ read 0 for many widths (level 2
-// of 20x16 here; Dawn backs WebGPU's stencil8 with this format). Writes 5x4 distinct stencil bytes into level 2 with a
-// blit and reads them back in a compute kernel through a view of the whole texture and through a view of level 2 alone.
-// The AMD driver gets the same reads wrong another way: a stencil view of level 1+ or slice 1+ gets an image descriptor
-// whose base address already points past level 0 / slice 0 while BASE_LEVEL / BASE_ARRAY add them again (level 2 reads
-// level 0's stencil); AMDBronzeCompat item 1 sets it back.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s43-intel-stencil-view-mips: a shader must read Depth32Float_Stencil8's stencil at level 2 through a view; the 12.x
+// Intel and AMD drivers misaddressed it. Fix: MetalOldCompat item 38, AMDBronzeCompat item 1 AMD_BRONZE_COMPAT.
+// Checks: stencil blitted to level 2 of 20x16, read through a whole and a level-2 view. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

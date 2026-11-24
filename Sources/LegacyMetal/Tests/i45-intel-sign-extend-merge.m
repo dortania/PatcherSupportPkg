@@ -1,10 +1,6 @@
-// i45-intel-sign-extend-merge (Intel adapter, INTEL_SIGN_EXTEND_FIX): a sign-extended short merged with a 32-bit value.
-// iCBE keeps the result of STOI (a short sign-extended to 32 bits) in a 16-bit register and extends it where it is read;
-// here uint(short) is XORed into a vector lane, a store at a variable index merges that lane (MOV_CND) with a 32-bit
-// value, and a read at another variable index got the lane zero-extended: 0x0000fe13 for 0xfffffe13, in 26 of 256
-// threads. Found by differential fuzzing (mslfuzz2 VEC=1 seed 1865, reduced; it also fixed seeds 1040 and 1435). STOI and
-// BTOI are written as shift pairs in the IGIL text. 256 threads on five inputs, against the same code on the CPU. Stock
-// OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i45-intel-sign-extend-merge: a sign-extended short merged with a 32-bit value must stay sign-extended; iCBE kept the
+// STOI in 16 bits and the merged read zero-extended it. Fix: IntelTextureAtomics INTEL_SIGN_EXTEND_FIX.
+// Checks: uint(short) XORed into a lane, merged by a variable-index store, read elsewhere. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

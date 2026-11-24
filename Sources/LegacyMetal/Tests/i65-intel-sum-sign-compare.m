@@ -1,10 +1,6 @@
-// i65-intel-sum-sign-compare (Intel adapter, IntelTextureAtomics.dylib): signed compares of a sum with zero in fragment
-// functions with the 3802 Intel compiler. iCBE folds the constant of an add into the compare as if the add couldn't
-// overflow, (x + C) < 0 into x < -C and (x + C) > 0 into x > -C, but MSL's unsigned add wraps, so where x + C wrapped past
-// the sign bit the compare went the wrong way. In `if (c) v += (int)(x + 902107310u) < 0 ? y % 1000 : 777u` the pixels
-// whose x was in [2^31 - C, 2^31) got 777. Found by fuzzing fragment functions (compute functions are right). Each pixel
-// of a 256x1 RGBA32Uint target does three such compares (< 0 and > 0 with that constant, < 0 with its negation) inside
-// branches on its own inputs. Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i65-intel-sum-sign-compare: a signed compare of a sum with zero must allow for wrap-around; iCBE folded (x + C) < 0
+// into x < -C. Fix: IntelTextureAtomics INTEL_SUM_SIGN_TEST_FIX.
+// Checks: (x + C) < 0, (x + C) > 0 and (x - C) < 0 in branches, per pixel of a 256x1 target. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const kSource = @"#include <metal_stdlib>\nusing namespace metal;\n"

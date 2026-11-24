@@ -1,11 +1,6 @@
-// i54-intel-narrow-widened-shift (Intel adapter, INTEL_NARROW_SHIFT_FIX): a right shift of a zero-extended 16-bit value.
-// In this generated kernel (mslfuzz2 VEC=1 seed 3325, reduced: data/i54-vec-fuzz-3325.metal), (ushort3(pc[0], 7, b) <<
-// ushort3(7, 5, 14)) >> ushort3(11, 13, 15) reached the back end as USTOI of each lane and a right shift (the 16-bit
-// left shift folded into a mask), and iCBE shifted USTOI of the constant 7 by 8 to 7, not 0: lane y came out 7 (the
-// stock compiler is wrong too; on its own the expression is right). Such shifts of USTOI / UBTOI results are done on
-// 32 bits, as i40 does for constants and masked values. Runs the kernel as the fuzzer did, on three inputs, and compares
-// the hash of the output with the same code run on the CPU. Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring
-// (default: Intel).
+// i54-intel-narrow-widened-shift: right shifts of zero-extended 16-bit values must be right; iCBE shifted USTOI of 7 by
+// 8 to 7, not 0. Fix: IntelTextureAtomics INTEL_NARROW_SHIFT_FIX (Kepler: NVAIR_INTRINSICS, NVAIR_I64_FIX).
+// Checks: (ushort3(...) << ...) >> ... in a generated kernel (data/i54-*.metal), hash vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 int main(int argc, char **argv) { @autoreleasepool {

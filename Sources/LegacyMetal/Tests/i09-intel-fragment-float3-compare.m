@@ -1,10 +1,6 @@
-// i09-intel-fragment-float3-compare (Intel adapter, IntelTextureAtomics.dylib): in a fragment function, the z of a float3
-// input given straight to sample_compare as the reference value is compared with the input's x instead (3802 Intel
-// compiler; float2 and float4 inputs, and any arithmetic on the value, are right). ANGLE passes sampler2DShadow
-// coordinates as a vec3 varying that way: dEQP texture.sampler2dshadow_fragment and the like fail in Chrome and Safari.
-// A fragment function compares a float3 varying (2 + t, 3 + t, t), t going 0 to 1 across the target, against Depth16Unorm
-// and Depth32Float textures of 1.0 with compare function less: every comparison passes when z is the reference, none when
-// x is. Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i09-intel-fragment-float3-compare: a float3 input's z given straight to sample_compare must be the reference; the
+// compiler used x (ANGLE's sampler2DShadow). Fix: IntelTextureAtomics INTEL_FRAGMENT_FLOAT3_FIX.
+// Checks: a float3 varying (2 + t, 3 + t, t) compared (less) with depth textures of 1.0. Argument: GPU name.
 #import "repro.h"
 
 int main(int argc, char **argv) {

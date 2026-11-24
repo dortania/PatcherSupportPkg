@@ -1,13 +1,6 @@
-// s19-amd-trilinear-blend (AMDBronzeCompat item 3): linear blending between mip levels on the 12.5 AMD driver. Its samplers set
-// SQ_IMG_SAMP_WORD1.PERF_MIP = 6, so with mipFilter Linear the GPU reads one level near whole levels and blends only
-// in between: a sample at level 0.25 returns 0.19 of the way to the next level, at 0.75 0.81. Apple's GPUs blend
-// linearly (0.25, 0.75), and Blender EEVEE's horizon scan depends on it when it samples its depth pyramid just above a
-// whole level (render tests triangle_light_sampling, light_link_mesh_tree, ...: light from bright emitters missing).
-// Haswell's samplers do the same in compute kernels, though the sampler state asks for full-quality trilinear filtering:
-// they blend only between 0.375 and 0.625 (0.25 and 0.75 return 0 and 1); the Intel adapter remaps compute kernels'
-// explicit levels (INTEL_COMPUTE_TRILINEAR_FIX=0 turns that off).
-// A 2-level R32Float texture (level 0 = 0, level 1 = 1) is sampled at levels 0.25, 0.5 and 0.75.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// s19-amd-trilinear-blend: linear mip filtering must blend linearly; the AMD driver, and Haswell in kernels, blended
+// only mid-interval (EEVEE lost light). Fix: AMDBronzeCompat item 3 AMD_BRONZE_COMPAT, IntelTextureAtomics
+// INTEL_COMPUTE_TRILINEAR_FIX. Checks: levels 0 and 1 holding 0 and 1, sampled at 0.25, 0.5, 0.75. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

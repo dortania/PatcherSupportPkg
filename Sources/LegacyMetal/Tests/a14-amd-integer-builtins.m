@@ -1,13 +1,6 @@
-// a14-amd-integer-builtins (AMD adapter, AMDTextureAtomics.dylib): Metal integer builtins that SC (the 12.5 AMD shader
-// compiler's back end) folds wrong once it knows an operand. Both found by differential fuzzing against a CPU reference:
-//   subsat(x, 0) / addsat(x, 0), unsigned, with the 0 known (a constant, or mulhi(b, 1u)): SC makes `usub_sat x, 0` a float
-//   clamp to [0, 1] (v_max_f32 x, x clamp): 0 for x >= 0x80000000, 0x3f800000 for other large x
-//   rotate(x, n) with both known and n a multiple of 8: rotate(37u, 24u) gives 0x2500, rotate(37u, 8u) 0x25000000
-// Scalar and vector forms, 256 threads, checked against the same code on the CPU; the general forms (operands at run
-// time) are in there too and are right either way. Word 7 also has `x % (ulong(rotate(~0u, 1u << 31)) << 32 | 1)`: the
-// fix made every rotate shifts, this one folded to a constant, and libAMDIL902's optimizer turned the remainder into an
-// i64 compare that stopped the compile (seed 5463, stock files compile it); rotates that can't meet the bug stay calls.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// a14-amd-integer-builtins: addsat/subsat(x, 0) and rotates by multiples of 8 must compute; SC folded them wrong once
+// it knew an operand. Fix: AMDTextureAtomics AMD_SATURATE_FIX, AMD_ROTATE_FIX, GeForceAIRCompat NVAIR_INTRINSICS,
+// NVAIR_I64_FIX. Checks: scalar and vector forms, against the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

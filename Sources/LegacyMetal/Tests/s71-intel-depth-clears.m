@@ -1,15 +1,6 @@
-// s71-intel-depth-clears (MetalOldCompat item 64): depth clears on Ivy Bridge. A render-pass clear of a level or slice
-// other than 0 of a mipmapped, cube or cube-array depth texture didn't land once that subresource had been written (it kept
-// its old depth), and clears that landed on Depth32Float kept about 16 bits of mantissa. A Depth32Float cube is used as a
-// point-light shadow map over two frames, each one command buffer with depth-only face passes and then a compute pass
-// sampling the cube: the first clears all six faces to 0.25, the second updates faces 1-5 only (as a renderer that updates
-// some faces per frame does), clearing them to 1.0 and drawing an occluder at 0.5 over their top-left quarter (compare less).
-// Faces 1-5 must read 0.5 under the occluder and 1.0 elsewhere, face 0 still 0.25 (without the fix they kept 0.25, unless
-// face 0 was cleared in the same command buffer).
-// One more pass clears face 2 with an RGBA8 color target loaded from (0.2, 0.4, 0.6, 0.8), which must be unchanged. Then level 1
-// of a mipmapped Depth32Float 2D texture and face 3 of a Depth16Unorm cube are cleared again after a first clear, and a 2D,
-// a 4x multisampled and a Depth32Float_Stencil8 texture are cleared to 0.05 / 0.3 / 0.7, which must read back exactly.
-// Stock OCLP on an HD 4000: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s71-intel-depth-clears: depth clears at level or slice 1+ must land, exactly; Ivy Bridge kept the old depth, and
+// Depth32Float kept ~16 mantissa bits. Fix: MetalOldCompat item 64 MTLSHIM_DEPTH_CLEAR_DRAW. Checks: a cube shadow map
+// over two frames, repeated clears, exact 2D, 4x and depth-stencil clears. Argument: GPU name.
 #import "repro.h"
 #include <math.h>
 

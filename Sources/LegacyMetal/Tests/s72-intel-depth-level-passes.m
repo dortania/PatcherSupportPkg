@@ -1,14 +1,6 @@
-// s72-intel-depth-level-passes (MetalOldCompat item 68): render passes at levels 1+ of mipmapped depth arrays and cubes on
-// Ivy Bridge. After a pass with a depth attachment at level 1 or higher of such a texture (even an empty one that loads and
-// stores), fragment functions sampling level 0 read parts of some slices wrong, while compute read() sees the right texels.
-// Four textures, each filled and then sampled at every level and slice by a fragment function (one 64x64 R32Float target
-// per subresource, nearest mip filter, explicit level): a 57x13 Depth32Float 2D array with 7 slices and 6 levels, a 32x32
-// Depth16Unorm cube and a 2-cube Depth32Float cube array with 6 levels each, filled by one render pass per level and slice
-// (a draw writing 0.1 + 0.1 level + 0.01 slice); and the same 2D array filled the way WebKit's ANGLE does, one blit encoder
-// per level and slice, level by level, all in one command buffer (dEQP texstorage3d.format.depth_component32f_2d_array).
-// Then one more 2D array whose level 0 is filled by blits gets a single empty pass at level 1. Without the fix: level 0
-// slice 3 of the arrays and face 1 of the cubes read wrong in places.
-// Stock OCLP on an HD 4000: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s72-intel-depth-level-passes: a pass at level 1+ of a mipmapped depth array or cube must leave level 0 alone; on Ivy
+// Bridge fragment reads of level 0 went wrong. Fix: MetalOldCompat item 68 MTLSHIM_DEPTH_LEVEL_REPAIR. Checks: every
+// level and slice of 2D-array, cube and cube-array textures, filled by passes or blits. Argument: GPU name.
 #import "repro.h"
 #include <math.h>
 

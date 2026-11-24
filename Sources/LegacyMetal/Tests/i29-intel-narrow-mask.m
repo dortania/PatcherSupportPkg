@@ -1,10 +1,6 @@
-// i29-intel-narrow-mask (Intel adapter, IntelTextureAtomics.dylib): a uchar lane widened into a ushort2. The IGIL text
-// truncates it with AND 255 and re-truncates the 16-bit result with AND 0xFFFF; iCBE took the second AND for a
-// zero-extension of the first AND's source and dropped the 255, so ushort2(...) & ushort2((uchar)x, ...) kept bits 8-15
-// of x (the disassembly folds 255, 0xFFFF and 0x9a4b into one AND with 0x9a4b; the MacBookPro11,5 session's
-// narrow-vector fuzzing, seed 53). The adapter makes such a redundant second AND a MOV. On the differential fuzzer's
-// 256-thread input, against the CPU reference.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i29-intel-narrow-mask: a uchar lane widened into a ushort2 must keep only its byte; iCBE took the AND 0xFFFF for a
+// zero-extension and dropped the AND 255. Fix: IntelTextureAtomics INTEL_NARROW_MASK_FIX.
+// Checks: ushort2(...) & ushort2((uchar)x, ...), 256 inputs vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

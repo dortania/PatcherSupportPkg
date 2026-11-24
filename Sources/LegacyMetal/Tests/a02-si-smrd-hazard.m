@@ -1,11 +1,6 @@
-// a02-si-smrd-hazard (AMD adapter, GCN1/SI only): the 12.5 shader compiler (SC) builds a buffer descriptor with scalar
-// ALU instructions and reads through it with s_buffer_load right away; SI needs 4 wait states between them (LLVM:
-// GCNHazardRecognizer::checkSMRDHazards). Without them the load sees the stale descriptor, is out of range and returns
-// 0. Metal argument buffers produce exactly this for every pointer they hold, and ANGLE puts every WebGL uniform block
-// in one: deqp uniformbuffers/random basic_types.19, basic_arrays.2, nested_structs.10 fail on every run in Chrome
-// and Safari. This program replays ANGLE's translated shaders of basic_types.19 (data/ubo19-*.metal): each stage
-// writes 1 if every uniform it read matched, so a correct render is white.
-// Stock OCLP (SI GPU): FAIL (blue = 0: the fragment shader read zeros). Fixed: PASS. Argument: GPU (default: AMD).
+// a02-si-smrd-hazard: on GCN1/SI, a scalar buffer load must see the descriptor just written; SC left out the 4 wait
+// states, so loads returned 0 (WebGL 2 uniform blocks). Fix: sihazard AMD_SI_HAZARD_FIX.
+// Checks: ANGLE's shaders of dEQP basic_types.19 (data/ubo19-*.metal) render white. Argument: GPU name.
 #import "repro.h"
 
 static NSString *dataDir(char **argv) {

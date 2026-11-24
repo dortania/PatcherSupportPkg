@@ -1,10 +1,6 @@
-// s73-intel-srgb-pair-copies (MetalOldCompat item 72): copies between a format and its sRGB variant on Ivy Bridge.
-// copyFromTexture:...toTexture: between RGBA8Unorm and RGBA8Unorm_sRGB (BGRA8, BC1, BC3 likewise) must copy the bytes as
-// they are; the HD 4000's driver converted RGBA8/BGRA8 texels (1 became 13) and garbled BC blocks. Each pair, both ways,
-// at level 0 and level 1 of a 32x32 two-level texture and into slice 1 of a 2D array: bytes uploaded from a buffer,
-// copied to the other format, read back into a buffer; every byte must match. A same-format copy is checked too, and the
-// RGBA8 pair through views of the other format (as Dawn copies): a sRGB view of the source, a unorm view of the destination.
-// Stock OCLP on an HD 4000: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s73-intel-srgb-pair-copies: copies between a format and its sRGB variant must copy the bytes; Ivy Bridge converted
+// RGBA8/BGRA8 and garbled BC blocks. Fix: MetalOldCompat item 72 MTLSHIM_SRGB_COPY.
+// Checks: RGBA8, BGRA8, BC1, BC3 pairs both ways at levels 0, 1 and slice 1, and through views. Argument: GPU name.
 #import "repro.h"
 
 int main(int argc, char **argv) { @autoreleasepool {

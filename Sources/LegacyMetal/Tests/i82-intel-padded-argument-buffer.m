@@ -1,14 +1,6 @@
-// i82-intel-padded-argument-buffer (Intel adapter, IntelTextureAtomics.dylib, INTEL_IVB_PADDED_ARGUMENT_BUFFER_FIX):
-// an argument buffer whose storage buffers are references followed by their lengths, as WebKit's WebGPU writes every
-// bind group: struct { device array<uint, 1> &out [[id(0)]]; device array<float, 1> &fout [[id(1)]];
-// device atomic_uint &total [[id(2)]]; uint outLength [[id(3)]]; ... }. A struct with reference members comes out of the
-// front end as a packed struct with explicit padding, <{ ptr, ptr, ptr, i32, i32, i32, [4 x i8] }>, which the Ivy
-// Bridge argument-buffer rewrite didn't follow (it matched members to elements one to one), so it left the kernel alone
-// and the back end read each pointer as an offset into the argument buffer: every store went there instead, and the
-// buffers stayed zero (Safari's WebGPU on the HD 4000: a compute pass wrote nothing). Checked: a kernel with a
-// threadgroup barrier writes every element of two buffers and adds to an atomic through such an argument buffer.
-// Stock OCLP: FAIL (no argument-buffer emulation at all). Without the fix: FAIL. Fixed: PASS.
-// Argument: GPU name substring (default: Intel).
+// i82-intel-padded-argument-buffer: WebKit's argument buffers (references, then lengths) must work on Ivy Bridge;
+// stores went into the argument buffer itself. Fix: IntelTextureAtomics INTEL_IVB_PADDED_ARGUMENT_BUFFER_FIX.
+// Checks: a kernel writes two buffers and adds to an atomic through such an argument buffer. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const source =

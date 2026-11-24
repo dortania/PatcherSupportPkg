@@ -1,11 +1,6 @@
-// i35-intel-narrow-vector-constant-lanes (Intel adapter, INTEL_NARROW_MINMAX_FIX): min and max on uchar4 vectors that
-// hold a variable lane next to constant lanes of 128 and up. i22 does narrow min / max on 32-bit lanes, but the vector
-// it extended was an insertelement of the variable lane into a constant, and the back end sign-extends the constant
-// lanes of such a zext: uchar4(x, 156, 0, 0) became (x, 0xffffff9c, 0, 0), so min(157, 156) gave 157. The constant
-// lanes are now extended in the IR, the variable lanes one by one (also for i31's narrow division). Found by the
-// MacBookPro11,5 session's narrow-vector fuzzing (mslfuzz2 VEC=1 ASTYPE=1, seeds 154, 183, 193). Expected values from
-// the CPU reference (cpuref.py) on the fuzzer's input; ushort2 min and a uchar2 divide of the same shape are checked
-// too. Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i35-intel-narrow-vector-constant-lanes: uchar4 min / max with constant lanes of 128 and up must be right; widening
+// sign-extended those lanes. Fix: IntelTextureAtomics INTEL_NARROW_CONSTANT_LANES_FIX.
+// Checks: uchar4 min / max with a variable lane, ushort2 min and a uchar2 divide, vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

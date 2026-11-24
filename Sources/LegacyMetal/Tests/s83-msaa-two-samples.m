@@ -1,13 +1,6 @@
-// s83-msaa-two-samples (MetalOldCompat item 77): 2x multisampling on a GPU without it (Ivy Bridge and Haswell have 4x and
-// 8x only: supportsTextureSampleCount:2 is NO). Tahoe's Sequoia wallpaper (WallpaperSequoiaExtension) makes a 2x
-// Depth16Unorm render target without asking, and MetalOld's validation aborted the extension ("MTLTextureDescriptor
-// sampleCount (2) is not supported by device."), so the wallpaper fell back to Tahoe's default. Everything here asks for
-// 2 samples: the wallpaper's depth target (Depth16Unorm, 2DMultisample, private, render target) and an RGBA8 color target
-// are made; a 2x pipeline draws the left half of the target with a depth test, resolved into a single-sample texture
-// (left half drawn, right half the clear color); a heap sized with heapTextureSizeAndAlignWithDescriptor: for the 2x
-// texture holds it; and a 2x pass without attachments runs a 2x pipeline once per pixel (a device atomic counts).
-// SKIP where the GPU has 2x (nothing to do there). Stock: crash (abort). Fixed: PASS.
-// Argument: GPU name substring (default: Intel).
+// s83-msaa-two-samples: 2x MSAA must work on GPUs without it (Ivy Bridge, Haswell); MetalOld's validation aborted
+// Tahoe's wallpaper. Fix: MetalOldCompat item 77 MTLSHIM_MSAA2. SKIP where the GPU has 2x.
+// Checks: 2x depth and color targets, a resolved draw, a heap, a pass without attachments. Argument: GPU name.
 #import "repro.h"
 
 static const char *source =

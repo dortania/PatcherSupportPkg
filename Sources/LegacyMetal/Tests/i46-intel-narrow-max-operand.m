@@ -1,9 +1,6 @@
-// i46-intel-narrow-max-operand (Intel adapter, INTEL_NARROW_SHIFT_FIX): a byte-masked value in a 16-bit max. With i22
-// widening max(short3, short3) to 32-bit lanes, the lane (short)(d & 255) reached the back end as IMAX r, 0, (d AND 255),
-// and iCBE took the AND's narrow result as a signed byte: max(0, 200) came out 0, in 219 of 256 threads (mslfuzz2
-// VEC=1 seed 1889, reduced; the stock compiler is right). An AND with a mask below 65536 that a min / max or a signed
-// operation reads is done on 32 bits, as i40 does for merges. 256 threads on five inputs, against the same code on the
-// CPU. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i46-intel-narrow-max-operand: a byte-masked lane in a 16-bit max must read unsigned; iCBE read it signed (max(0, 200)
+// gave 0). Fix: IntelTextureAtomics INTEL_NARROW_SHIFT_FIX (Kepler: NVAIR_INTRINSICS, NVAIR_I64_FIX).
+// Checks: max(short3, short3) with a (short)(d & 255) lane, five inputs vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

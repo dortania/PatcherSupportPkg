@@ -1,16 +1,6 @@
-// s31-angle-family-one (MetalOldCompat item 11): WebKit's ANGLE on a Mac whose only GPU is a family-1 one (Haswell /
-// Ivy Bridge iGPU). ANGLE refuses such a GPU (IsMetalRendererAvailable and DisplayMtl's requireGpuFamily2), so Safari's
-// WebGL contexts are lost and Chrome runs without GPU acceleration. With the fix ANGLE gets the GPU as family 2 and its
-// fallbacks for the three family-2 features the 12.x Intel driver lacks. This program loads WebKit's libANGLE-shared
-// into itself (the shim treats calls from it as WebKit's), creates an OpenGL ES 3 context on a pbuffer and checks:
-//   - a LUMINANCE_ALPHA texture samples as (L, L, L, A): with ANGLE's texture swizzle feature on, the driver returns nil
-//     for the swizzled view ANGLE samples through
-//   - stencil blitted out of a 4x multisampled framebuffer arrives: with ANGLE's stencil auto-resolve on, the driver
-//     writes nothing (and without item 27, ANGLE's stencil copy is lost)
-//   - textureGrad and texture with a bias on a sampler2DShadow compile and compare right: the Intel compiler can't build
-//     depth comparisons with gradients (ANGLE's allowSamplerCompareGradient goes off) or a bias (the Intel adapter)
-// Stock OCLP: FAIL (eglInitialize fails). Fixed: PASS. SKIP where a family-2 GPU exists (ANGLE runs there) or WebKit's
-// ANGLE isn't found.
+// s31-angle-family-one: WebKit's ANGLE must run on a Mac whose only GPU is family 1; it refused such GPUs (no WebGL).
+// Fix: MetalOldCompat item 11. SKIP where a family-2 GPU exists or WebKit's ANGLE isn't found.
+// Checks: an ES 3 context; LUMINANCE_ALPHA sampling, a 4x MSAA stencil blit, sampler2DShadow with grad and bias.
 #import "repro.h"
 #include <dlfcn.h>
 

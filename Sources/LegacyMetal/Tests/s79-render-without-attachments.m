@@ -1,11 +1,6 @@
-// s79-render-without-attachments (MetalOldCompat item 73): a render pipeline with no color, depth or stencil attachment,
-// drawn in a pass that has only a render target size, as MoltenVK makes for Vulkan subpasses without attachments (Godot
-// 4.7's editor at start). On the family-1 GPUs MetalOld's validation aborted the process when the pipeline was made
-// ("No valid pixelFormats set"). Checked: the fragment function runs once per pixel (it counts itself with a device
-// atomic), single-sampled and with 4 samples, and an occlusion query in counting mode sees every sample. Also a vertex-only
-// pipeline (rasterization off, no attachments), which Safari's WebGPU makes to clamp indirect draws and draws inside the
-// app's pass: MetalOld aborted the GPU process on it the same way (WebGPU CTS rendering,draw in WebKit).
-// Stock: crash (abort). Fixed: PASS. Argument: GPU name substring (default: the system default GPU).
+// s79-render-without-attachments: pipelines and passes without attachments must work (MoltenVK, Safari's WebGPU);
+// MetalOld's validation aborted. Fix: MetalOldCompat item 73.
+// Checks: a fragment per pixel at 1 and 4 samples, an occlusion count, a vertex-only pipeline. Argument: GPU name.
 #import "repro.h"
 
 static const char *source =

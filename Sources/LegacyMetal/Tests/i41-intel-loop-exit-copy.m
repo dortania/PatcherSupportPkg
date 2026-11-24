@@ -1,11 +1,6 @@
-// i41-intel-loop-exit-copy (Intel adapter, INTEL_LOOP_EXIT_COPY_FIX): a loop-carried value read after the loop. The
-// back end ends a loop body with the copies into the next iteration's registers and then the exit test, and iCBE reads
-// the register that took the previous value at the top of the body as if it held the new one: in
-// `p[...] = pc[addsat(0x7fffffff, v4 ^ t) & 7]; v4 = 0;` in a loop, with the store sunk out of it (after i07's private
-// array rewrite), threads that left in the first iteration read pc at the index for v4 = 0, so out[0] and out[5] came
-// out wrong in 8 of 256 threads. The adapter moves those copies after the exit test. Found by differential fuzzing
-// (mslfuzz2 plain seed 565, reduced). Expected values from the CPU reference (cpuref.py) on the fuzzer's input.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i41-intel-loop-exit-copy: a loop-carried value read after the loop must be its last value; iCBE read the register
+// holding the previous iteration's value. Fix: IntelTextureAtomics INTEL_LOOP_EXIT_COPY_FIX.
+// Checks: a private-array read indexed by a value the loop resets, threads exiting early. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

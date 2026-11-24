@@ -1,9 +1,6 @@
-// a28-amd-loop-min-max (AMD adapter): integer min, max or clamp of a loop counter and constants, and'ed with x, tested
-// as a bool and added (`for (i < 3) a += uint(bool(x & min(i, 145u)))`) comes out as a minus the bools. a23's bug:
-// once libAMDIL902 unrolls the loop the calls have constant arguments, which fold only in its DAG. The adapter makes
-// such calls a compare and a select, which fold right after unrolling.
-// Checked: unsigned min, max and clamp, signed min and clamp, against the CPU on 256 threads.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// a28-amd-loop-min-max: for (i < 3) a += uint(bool(x & min(i, 145u))) must add; once unrolled, a23's bug subtracted.
+// Fix: AMDTextureAtomics AMD_CONSTANT_MINMAX_FIX.
+// Checks: unsigned min, max and clamp, signed min and clamp, against the CPU. Argument: GPU name.
 #import "repro.h"
 
 enum { kThreads = 256, kOut = 5 };

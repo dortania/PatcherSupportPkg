@@ -1,10 +1,6 @@
-// s60-intel-argument-encoder-abort (MetalOldCompat item 46): OCLP's 11.7.10 Ivy Bridge driver has no argument-buffer
-// layouts or encoders, so asking for an argument encoder ends in MetalOld's -[MTLIOAccelDevice
-// newIndirectArgumentEncoderWithLayout:], which calls abort(). Safari's ANGLE asks for one at the first WebGL 2 draw with
-// a uniform block, so its GPU process died and took every WebGL context of the page with it. This program asks for
-// encoders both ways (from a function's argument buffer and from argument descriptors) in a child process.
-// Stock OCLP on an HD 4000: FAIL (the child aborts). Fixed: PASS (an encoder, or nil where the driver has none). On GPUs
-// whose driver has encoders it passes either way. Argument: GPU name substring (default: Intel).
+// s60-intel-argument-encoder-abort: asking for an argument encoder on Ivy Bridge must not abort; MetalOld called
+// abort() (Safari's GPU process died). Fix: MetalOldCompat item 46 MTLSHIM_ARGUMENT_ENCODER_GUARD, item 47
+// MTLSHIM_IVB_ARGUMENT_BUFFERS. Checks: encoders from a function and from descriptors, in a child. Argument: GPU name.
 #import "repro.h"
 
 static int child(int argc, char **argv) {

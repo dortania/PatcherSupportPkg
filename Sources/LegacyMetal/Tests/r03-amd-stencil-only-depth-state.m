@@ -1,13 +1,6 @@
-// r03-amd-stencil-only-depth-state (regression test for AMDBronzeCompat item 12; AMD GCN on the 12.5 stack): a render
-// pass whose only depth/stencil attachment is a Depth32Float_Stencil8 texture attached as stencil must not test or write
-// that texture's depth, whatever the depth/stencil state says. Item 12 attaches the same texture as depth too (the
-// driver misaddresses the stencil otherwise, s47), and the depth unit then applied the app's depth state to it: a Less
-// test against the old depth dropped every stencil write, and depth writes changed the depth. An M3 writes the stencil
-// in both cases and leaves the depth alone, as does the driver without item 12. Draws the left half at depth 0.5 with
-// stencil replace 3 into a texture whose depth is 0.25, once with depth compare Less and once with Always, both with
-// depth writes on; reads the stencil back in a compute kernel and the depth with a blit.
-// Expected: PASS with item 12's depth/stencil state copies; FAIL without them (AMD_BRONZE_STENCIL_DEPTH_STATE=0).
-// SKIP on other drivers (item 12 is AMDBronzeCompat's). Argument: GPU name substring (default: AMD).
+// r03-amd-stencil-only-depth-state: guards AMDBronzeCompat item 12; must keep working: a stencil-only
+// Depth32Float_Stencil8 attachment ignores the depth state. Fix: AMDBronzeCompat AMD_BRONZE_STENCIL_DEPTH_STATE.
+// Checks: stencil and depth after draws with depth compare Less and Always; SKIP on other drivers. Argument: GPU name.
 #import "repro.h"
 #import <objc/runtime.h>
 

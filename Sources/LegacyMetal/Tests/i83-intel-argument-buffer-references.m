@@ -1,15 +1,6 @@
-// i83-intel-argument-buffer-references (Intel adapter INTEL_EMULATED_REFERENCE_FIX): buffers an argument buffer holds as
-// references (`device array<float4, 1> &out [[id(1)]]`, `const constant float4 &tint [[id(2)]]`) on the Intel GPUs whose
-// 12.x compiler plugin emulates argument buffers (Haswell and later). The plugin makes each buffer of an argument buffer
-// a hidden argument, numbered in order, that the driver binds; for a reference it wrote the number into the
-// "air.buffer_size" the macOS 14 front end puts first, so the hidden argument kept the member's id, and a reference whose
-// id wasn't its number among the buffers read and wrote a buffer the driver hadn't bound: zeros, and writes lost. WebKit's
-// WebGPU declares every buffer of a bind group that way, next to its textures and samplers: Safari's compute passes on
-// Haswell wrote nothing. Checked, each buffer with its own value: pointers and references mixed in one argument buffer;
-// two argument buffers; an argument buffer between two plain buffers; a texture, a reference, a constant and a sampler
-// (a WebKit bind group); a fragment function that reads a constant reference after a texture and a sampler.
-// Without the fix: FAIL (the references read zeros and write nothing). Fixed: PASS. Argument: GPU name substring (default:
-// Intel).
+// i83-intel-argument-buffer-references: buffers an argument buffer holds as references must be bound on Haswell; they
+// read zeros and lost writes (Safari WebGPU). Fix: IntelTextureAtomics INTEL_EMULATED_REFERENCE_FIX.
+// Checks: refs with pointers, two argument buffers, plain buffers around one, WebKit bind groups. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const source = @

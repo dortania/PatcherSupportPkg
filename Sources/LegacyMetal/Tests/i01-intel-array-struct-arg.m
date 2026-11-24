@@ -1,11 +1,6 @@
-// i01-intel-array-struct-arg (Intel adapter; libMTLIntelCompilerPlugin, Haswell / Ivy Bridge): buffer arguments that
-// point to an array of plain structs, as naga (wgpu, Firefox WebGPU) writes WGSL `array<T, N>` storage bindings. The
-// current front end gives such an argument the struct's air.struct_type_info; the plugin's argument-buffer emulation
-// (MetadataParser::parseArgument) assumes the pointee then IS a struct and asserts (isa<StructType>(elementType)),
-// taking MTLCompilerService down: Firefox low-power WebGPU lost its device on the first pipeline. Two shapes, each in
-// a child process: naga's wrapper (`struct type_N { T inner[N]; }`, `device type_N&`) and a reference to an array
-// (`device T (&)[N]`), with a nested plain struct as in wgpu's timestamp normalization (array<{Uint64 {low, high}, ...}>).
-// Stock OCLP: FAIL (pipeline creation fails / compiler aborts). Fixed: PASS. Argument: GPU (default: Intel).
+// i01-intel-array-struct-arg: buffer arguments pointing to an array of plain structs (naga's WGSL array<T, N>) must
+// compile; the compiler plugin asserted. Fix: IntelTextureAtomics.
+// Checks: naga's wrapper struct and an array reference (nested struct), each in a child process. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const common = @"#include <metal_stdlib>\nusing namespace metal;\n"

@@ -1,12 +1,6 @@
-// a31-amd-counter-bit-test (AMD adapter): an inner loop's exit on bits of a value and'ed with the outer loop's counter
-// must be taken. `for (i < 3) { n = 0; while (n < 8) { n++; v ^= ...; if ((i & v & 3) == 0) break; } }` ran the inner loop
-// 8 times for i = 1 instead of stopping at the first even v (found by fuzzing with loop counters in expressions, on Tahoe
-// and Sequoia alike, stock files too): once libAMDIL902 unrolls the outer loop, the test is `(v & 1) == 0`, a15's bug,
-// which the adapter's bit-test fix only sees with a constant mask. The adapter sends such ands through extract_bits.
-// Checked: the and form, shifts of the counter by v & 1 and v & 31, and `(i <= z ? 0x80000000u : i % m) & 3` (seed 750:
-// the front end makes that select branches, so the counter reaches the and through a phi), the inner trip counts of
-// 256 threads against the CPU.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// a31-amd-counter-bit-test: an inner loop's exit on bits and'ed with the outer loop's counter must be taken; once
+// unrolled (a15's bug) it ran 8 times. Fix: AMDTextureAtomics AMD_BIT_TEST_FIX, AMD_DIVERGENT_LOOP_FIX.
+// Checks: the and, counter shifts, a select reaching the and through a phi; trip counts vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 enum { kThreads = 256, kOut = 11 };

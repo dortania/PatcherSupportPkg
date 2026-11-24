@@ -1,9 +1,6 @@
-// s57-intel-mps-matmul (MetalOldCompat item 43): MPSNDArrayMatrixMultiplication and MPSGraph's matrix multiplication must
-// compute the product. On the Haswell / Ivy Bridge GPUs, MPS typed them as GPUs with their own NDArray matmul kernels,
-// had none for them, and encoded nothing: every result stayed 0 (MPSGraph models, PyTorch's MPS backend). The classic
-// MPSMatrixMultiplication was right. Multiplies float32 matrices of a few shapes (16x16x16, 37x513x101, a 4-batch
-// with B transposed) with MPSGraph and one with MPSNDArrayMatrixMultiplication, against the CPU.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s57-intel-mps-matmul: MPSNDArray and MPSGraph matrix multiplication must compute; on Haswell / Ivy Bridge MPS encoded
+// nothing (all 0). Fix: MetalOldCompat item 43 MTLSHIM_MPS_MATMUL.
+// Checks: float32 products of several shapes (batched, B transposed), against the CPU. Argument: GPU name.
 #import "repro.h"
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 #import <MetalPerformanceShadersGraph/MetalPerformanceShadersGraph.h>

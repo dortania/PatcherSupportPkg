@@ -1,12 +1,6 @@
-// a17-amd-integer-cube-gather (AMD adapter): gather on integer cube textures must return the bilinear footprint's four
-// texels, from the neighbouring face where the footprint crosses an edge. GCN forces nearest filtering on integer
-// formats, so the hardware returns the footprint that starts at the texel holding the point (a08's half-texel shift, in
-// 2D), and integer fetch4 doesn't cross face edges, so no shifted direction fixes it on cubes. The adapter turns such a
-// gather into 4 nearest samples at the footprint's texel centres. (WebGPU CTS builtin,textureGather sampled_3d_coords
-// and sampled_array_3d_coords: every integer format, 252 cases.)
-// Checked: cube and cube array, uint and int, 8, 16 and 32 bit, every component, faces of 8 and 64 texels, random
-// directions and points within half a texel of an edge (corners and points within 1/64 texel of a texel boundary skipped).
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// a17-amd-integer-cube-gather: gather on integer cubes must return the bilinear footprint, across face edges too; GCN
+// returned a footprint half a texel off and didn't cross edges. Fix: AMDTextureAtomics AMD_CUBE_GATHER_FIX.
+// Checks: cube and cube array, uint/int, 8/16/32 bit, every component, points near edges. Argument: GPU name.
 #import "repro.h"
 #include <math.h>
 

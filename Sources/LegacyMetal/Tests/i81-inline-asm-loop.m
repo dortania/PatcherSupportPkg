@@ -1,11 +1,6 @@
-// i81-inline-asm-loop (Intel adapter, IntelTextureAtomics.dylib; Kepler adapter, GeForceAIRCompat.dylib): loop bodies with
-// __asm__(""), which ANGLE writes into every loop it translates so the front end can't take the loop for one that ends
-// (Chromium 142's, in Electron 39: Skia's blur shader is such a loop). It reaches the 3802 back ends as
-// `call void asm sideeffect "", ""()`, a call without a called function, whose name they read: IGILInstructionCleanup on
-// Intel and GeForceAIRPlugin on Kepler dereference null (Value::getName), MTLCompilerService crashes, MetalOld sends the
-// request again, and the window that drew a shadow stays blank (OpenVPN Connect 3.9.1). The adapters drop the call. A
-// vertex, a fragment and a kernel function each have such a loop; the kernel's sum is checked.
-// Stock OCLP: FAIL (no pipeline). Fixed: PASS. Argument: GPU name substring (default: Intel; NVIDIA for Kepler).
+// i81-inline-asm-loop: loops with __asm__("") (ANGLE puts one in every loop) must compile; the back ends crashed on the
+// call. Fix: IntelTextureAtomics INTEL_INLINE_ASM_FIX (Kepler: NVAIR_INLINE_ASM_FIX).
+// Checks: a vertex, a fragment and a kernel function with such a loop; the kernel's sum. Argument: GPU name.
 #import "repro.h"
 
 int main(int argc, char **argv) {

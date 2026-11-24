@@ -1,12 +1,6 @@
-// a18-amd-bitcast-lanes (AMD adapter): bytes taken out of a ushort2 reinterpreted as uchar4 must be just those bytes.
-// libAMDIL902 leaves the other byte of lane 1 in the register of the narrow lanes 2 and 3, so storing one into a uchar
-// array the compiler keeps in registers (four elements packed into one) also changes its neighbours. The same bitcast
-// comes from the front end itself when only the low bytes of a ushort2's lanes are used (uchar(x.x ^ x.y * 257)), also
-// with a constant mask applied in byte lanes before the store into a threadgroup array (found by differential fuzzing
-// with narrow vectors: 29 of 400 random kernels). The adapter builds such bitcasts lane by lane.
-// Checked: as_type<uchar4>(ushort2) bytes 2 and 3, as_type<char4>(short2), the low-byte form, private arrays at constant
-// and run-time indices, a threadgroup array.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// a18-amd-bitcast-lanes: bytes of a ushort2 taken as uchar4 must be just those bytes; libAMDIL902 left lane 1's other
+// byte in lanes 2-3, changing packed neighbours. Fix: AMDTextureAtomics AMD_BITCAST_LANE_FIX.
+// Checks: uchar4 of ushort2, char4 of short2, the low-byte form, private and threadgroup arrays. Argument: GPU name.
 #import "repro.h"
 
 enum { kThreads = 256 };

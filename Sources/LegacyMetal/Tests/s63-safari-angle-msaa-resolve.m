@@ -1,17 +1,6 @@
-// s63-safari-angle-msaa-resolve (shim item 13): Safari's WebGL runs on WebKit's own ANGLE (libANGLE-shared.dylib),
-// which loads its internal shaders (blits, clears, multisample resolves, buffer/texture copies) from a prebuilt
-// metallib. Safari 18.6 on Sequoia ships one built for AIR 2.7 (air64-apple-macosx15.8.0), which this stack's compiler
-// can't specialize ("air version set to 2.7.0, but expecting 2.6"), so every antialiased WebGL context failed its
-// multisample resolve with GL_INVALID_OPERATION and showed nothing. This drives WebKit's ANGLE through its EGL_/GL_
-// entry points like WebKit's antialiased drawing buffer: a 4x multisampled color and depth framebuffer, a clear and
-// a draw reading a uniform block, each resolved with glBlitFramebuffer and read back.
-// With S63_METALLIB=<file> (a saved copy of that library, e.g. Safari 18.6's on a Mac with a newer Safari), it instead
-// loads the file through tools/angle-caller/libANGLE-shared.dylib, which item 13 takes for WebKit's ANGLE, and checks that
-// the library it gets back is usable: it has the file's functions and ANGLE's clear pipeline specializes and builds
-// (the AIR 2.7 library itself fails to specialize). Argument in that mode: GPU name substring (default: the default GPU).
-// Stock OCLP on Sequoia with Safari 18.6: FAIL. Fixed: PASS. Tahoe's compiler reads AIR 2.7, and newer Safaris' libraries
-// take the original path, so there it passes either way. SKIP without WebKit's ANGLE. Runs on the GPU ANGLE picks (item 11
-// gives it the family-2 GPU on dual-GPU Macs; the result line names the renderer).
+// s63-safari-angle-msaa-resolve: Safari's antialiased WebGL must resolve; on Sequoia Safari 18.6's AIR 2.7 ANGLE
+// library didn't specialize (blank canvases). Fix: MetalOldCompat item 13. SKIP without WebKit's ANGLE.
+// Checks: a 4x clear and draw, resolved; or S63_METALLIB=<file>, a saved library. Argument (that mode): GPU name.
 #import "repro.h"
 #include <dlfcn.h>
 

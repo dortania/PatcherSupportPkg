@@ -1,12 +1,6 @@
-// i76-intel-ivb-mask-or (Intel adapter, INTEL_MASK_OR_FIX): a byte mask that reaches a 16-bit one through an OR that
-// iCBE folds itself. In any(a > b), with b's halfwords put together from bytes, c2 | (uchar)min3(x, 0u, 145u) << 8 (the
-// packing i75's first version wrote for as_type<ushort2>(char4(...)), where the fuzzer found it, and that shaders can
-// write themselves), the second lane reached the back end as AND 65535 of (c2 AND 255) | UMIN(UMIN(x, 0), 145) << 8.
-// iCBE drops the UMINs, the shift and the OR, then takes the AND 65535 after the AND 255 for one zero-extension and drops
-// the 255 (i29's fold), so the compare read 16 bits of c2's source and came out wrong in about a quarter of the threads
-// (reduced from mslfuzz2 VEC seed 468 on an HD 4000; the Iris Pro too). Runs the kernel as the fuzzer did, on three
-// inputs, and compares the hash of the output with the same code run on the CPU.
-// Stock OCLP on an HD 4000 and an Iris Pro: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i76-intel-ivb-mask-or: a byte mask reaching a 16-bit one through an OR iCBE folds itself must keep only the byte;
+// iCBE dropped the 255, as in i29. Fix: IntelTextureAtomics INTEL_MASK_OR_FIX.
+// Checks: any(a > b), b's halves built from bytes with min3 and a shift, hash vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

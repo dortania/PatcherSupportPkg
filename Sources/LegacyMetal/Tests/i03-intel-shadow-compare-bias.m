@@ -1,10 +1,6 @@
-// i03-intel-shadow-compare-bias (Intel adapter, IntelTextureAtomics.dylib): depth comparisons with an LOD bias and the
-// 3802 Intel compiler. sample_compare(s, coord, ref, bias(b)), which ANGLE emits for GLSL's texture(sampler2DShadow,
-// coord, bias), aborts MTLCompilerService ("Cannot select"), and in Chrome that takes the GPU process with it. The
-// compiler can't compute an LOD either, so the adapter drops the bias. A fragment function compares a one-level depth
-// texture holding 0.25 with 0.125 (LessEqual: 0.125 <= 0.25 passes) with a bias read from a buffer, for 2D, 2D array
-// and cube textures.
-// Stock OCLP: FAIL (no pipeline). Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i03-intel-shadow-compare-bias: sample_compare with bias() must compile (ANGLE emits it); the compiler aborted
+// ("Cannot select"). Fix: IntelTextureAtomics INTEL_COMPARE_BIAS_FIX (Kepler: NVAIR_COMPARE_LEVEL_FIX).
+// Checks: biased LessEqual compares of 0.125 with depth 0.25, on 2D, 2D-array and cube textures. Argument: GPU name.
 #import "repro.h"
 
 static const struct { const char *name, *type, *expression; MTLTextureType textureType; } kCases[] = {

@@ -1,12 +1,6 @@
-// i74-intel-ivb-ldst-walk (Intel adapter, Ivy Bridge): for every load and store in a vertex or fragment function, the
-// Ivy Bridge compiler's IGILair_ldst_handling pass asks which argument its address comes from;
-// IGILHelperFunctions::isValueUsed answers by walking each pointer argument's users, in order, until it reaches the
-// load, so each load walks every argument before its own. The adapter replaces that walk with a faster one that must
-// give the same answers: a load attributed to the wrong argument reads the wrong buffer. Builds a fragment function that
-// reads FIELDS (default 800) floats from each of three buffers (two of zeros first, the values last, so every load of
-// the last walks the first two), checks the sum it renders, and fails if the build took over LIMIT seconds (default
-// 60). Passes with the stock walk too, only slower on large shaders (Core Animation's uber shader: 26 s stock, 14 s
-// fixed; FIXES.md). Argument: GPU name substring (default: Intel).
+// i74-intel-ivb-ldst-walk: the adapter's faster isValueUsed walk on Ivy Bridge must find each load's buffer; the stock
+// walk is right but slow on big shaders. Fix: IntelTextureAtomics INTEL_VALUE_USED_FIX.
+// Checks: FIELDS (800) floats from each of three buffers summed; build within LIMIT (60) s. Argument: GPU name.
 #import "repro.h"
 #include <mach/mach_time.h>
 

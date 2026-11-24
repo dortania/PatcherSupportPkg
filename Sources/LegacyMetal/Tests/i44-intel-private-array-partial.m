@@ -1,11 +1,6 @@
-// i44-intel-private-array-partial (Intel adapter, INTEL_PRIVATE_ARRAY_FIX): i07 rewriting only part of an array. i07
-// decided GEP by GEP whether it could rewrite a variable-index access; the front end had stored `p[i] = in[3]` as a
-// <2 x i16> through a bitcast of the element's address (in[3] was also used as a ushort2), so that store stayed as the
-// front end wrote it while the array's other variable-index store was rewritten, and the back end then addressed the
-// array both ways: its contents after the first store were wrong in all 256 threads (mslfuzz2 VEC=1 seed 1469,
-// reduced; the stock compiler gets it right). Loads and stores through a same-size bitcast are now done in the
-// element's own type, and an array is rewritten whole or not at all. Expected values from the CPU reference
-// (cpuref.py) on the fuzzer's input. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i44-intel-private-array-partial: i07 must rewrite a private array whole or not at all; a store through a bitcast
+// stayed as it was and the back end addressed the array both ways. Fix: IntelTextureAtomics INTEL_PRIVATE_ARRAY_FIX.
+// Checks: p[i] = in[3] stored as <2 x i16> next to another variable-index store, vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

@@ -1,11 +1,6 @@
-// i61-intel-negated-dividend-fold (Intel adapter, INTEL_SIGNED_DIV_NEG_FIX): a negated value that reaches a signed divide
-// through a subtraction iCBE folds away. v0 = -(int)(x & 0x7fffffff); v0 -= min(mulhi(..., 0u), 0u) leaves v0 as it was,
-// and reaches the back end as IADD r80, r78, -r79 with r79 = UMIN of two zeros; iCBE folds that into a copy of the
-// negation and the negation into the IDIV as a source modifier, which it drops as in i26: (int)v0 / d came out as
-// (x & 0x7fffffff) / d, so the divisor built from it lost its sign and x % it was wrong in about half the threads (reduced
-// from mslfuzz2 plain seed 7727; the stock compiler is wrong too). Every negation in a shader with an IDIV is now done as
-// XOR and add. Runs the kernel as the fuzzer did, on three inputs, and compares the hash of the output with the same code
-// run on the CPU. Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i61-intel-negated-dividend-fold: a negated value reaching a signed divide through a subtraction iCBE folds away must
+// keep its sign; it was dropped, as in i26. Fix: IntelTextureAtomics INTEL_SIGNED_DIV_NEG_FIX.
+// Checks: v0 = -(int)(x & 0x7fffffff) minus a zero min(), then divided, vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

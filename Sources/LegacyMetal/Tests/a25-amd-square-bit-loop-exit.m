@@ -1,10 +1,6 @@
-// a25-amd-square-bit-loop-exit (AMD adapter): a loop exit on the low bits of a square must be taken right.
-// The front end turns `((x * x) << s) & 3 == 0` (the low two bits of a square are x & 1 and 0) into
-// `((x & 1) & (3 >> s)) == 0`; libAMDIL902 takes x & 1 for a 0 / 1 boolean, drops the `& 1` and tests the whole register,
-// so for x = 2 mod 4 and s = 0 the loop runs on (found by fuzzing with narrow vectors: a while loop with a threadgroup
-// atomic). The adapter's bit-test fix sends that x & 1 through extract_bits too.
-// Checked: the loop count of 256 threads against the CPU.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// a25-amd-square-bit-loop-exit: a loop exit on the low bits of a square must be taken; libAMDIL902 tested all of x & 1,
+// so for x = 2 mod 4 the loop ran on. Fix: AMDTextureAtomics AMD_BIT_TEST_FIX.
+// Checks: the loop count of 256 threads, against the CPU. Argument: GPU name.
 #import "repro.h"
 
 enum { kThreads = 256 };

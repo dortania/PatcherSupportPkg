@@ -1,10 +1,6 @@
-// i19-intel-kernel-gather-offset (Intel adapter, IntelTextureAtomics.dylib): textureGather with a texel offset in a compute
-// kernel. The 3802 back end adds the offset to the normalized coordinate as is (FADD coord, 1.0 for an offset of 1), so
-// each texel of offset moves the gather a whole texture width: on an 8x8 texture an offset of (1, 0) gathers column 8,
-// clamped to 7 (WebGPU CTS textureGather sampled_2d_coords with offsets in compute, 639 cases; vertex and fragment
-// functions are right). Gathers an 8x8 R32Float texture whose texels hold x + 10 * y at three coordinates with eight
-// offsets, clamp to edge, and checks the four texels returned.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i19-intel-kernel-gather-offset: a gather with a texel offset in a compute kernel must move by texels; it moved a
+// texture width per texel. Fix: IntelTextureAtomics INTEL_KERNEL_GATHER_OFFSET_FIX.
+// Checks: gathers of an 8x8 texture at three coordinates with eight offsets, clamp to edge. Argument: GPU name.
 #import "repro.h"
 #include <math.h>
 

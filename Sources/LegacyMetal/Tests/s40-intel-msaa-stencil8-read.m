@@ -1,10 +1,6 @@
-// s40-intel-msaa-stencil8-read (MetalOldCompat item 36): shaders must read a 4x multisampled Stencil8 texture's stencil.
-// On the 12.x Intel driver render passes write it right, but the sampler addresses only part of the surface: past the
-// largest power of two below the width, most rows read the left half again. ANGLE reads a GL_STENCIL_INDEX8
-// multisampled renderbuffer that way to resolve or blit it (dEQP fbomultisample stencil_index8). Fills a 256x128 texture
-// with 1 + column / 16 in 16-column bands (stencil replace, pipeline declaring Stencil8) and reads every texel of
-// sample 2 through a Stencil8 view in a compute kernel.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s40-intel-msaa-stencil8-read: shaders must read a 4x Stencil8 texture's stencil; the 12.x Intel driver read the left
+// half again on most rows. Fix: MetalOldCompat item 36.
+// Checks: a 256x128 texture banded by stencil; every texel of sample 2 read in a kernel. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

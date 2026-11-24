@@ -1,11 +1,6 @@
-// i32-intel-narrow-mask-copies (Intel adapter, IntelTextureAtomics.dylib): the iCBE fold of i29 reached through copies.
-// A uchar read from a private array is truncated (AND r45, r388, 255), copied into the register a switch's shared case
-// takes (MOV r420, r45; CALL 9), and truncated to 16 bits there (AND r389, r46, 65535); iCBE dropped the 255 and the
-// value kept bits 8-15 (mslfuzz2 seed 330, one case falling through into the next; seed 88 of the narrow-vector mode
-// too). That register is also set from a full 32-bit value on another path, so the 16-bit AND has to stay: it becomes
-// SHL 16 / SHR 16. The kernel is the reduced seed 330, on the differential fuzzer's 256-thread input, against the CPU
-// reference.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i32-intel-narrow-mask-copies: i29's byte mask must also hold through register copies (into a switch's shared case);
+// iCBE dropped the 255. Fix: IntelTextureAtomics INTEL_NARROW_MASK_FIX.
+// Checks: a private-array uchar copied into a fall-through case, masked to 16 bits, vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

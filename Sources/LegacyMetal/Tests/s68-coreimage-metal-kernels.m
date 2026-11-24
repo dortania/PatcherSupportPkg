@@ -1,26 +1,6 @@
-// s68-coreimage-metal-kernels (MetalOldCompat item 52, with the payload's CoreImageOld.dylib): Core Image kernels an
-// app loads from a metallib, and the reflection of [[stitchable]] functions under them. OCLP's CoreImageOld.dylib (the
-// 14.0 beta 3 Core Image of the 3802 payloads) has CIKernelReflection::reflect stubbed out, so +[CIKernel
-// kernelWithFunctionName:fromMetalLibraryData:error:] returned nil, without an error, for every precompiled kernel:
-// Microsoft Office's picture corrections, colour and artistic effects (Gabriel-AGH, PR #22). The stub kept stitchable
-// kernels away from MetalOld's MTLStitchingReflectionReader, which aborted on the reflection replies of Sequoia's compiler
-// service. Two checks, each in a child process (both abort or fail on an unfixed stack):
-//  1. a [[stitchable]] function's return type (float4), which MetalOld reflects through the compiler service: the
-//     stitchable kernel of s68-ci-stitchable.metallib, or without it one compiled from source. Stock OCLP: abort in
-//     MTLStitchingReflectionReader::deserializeArguments. (A run that aborted can leave an empty reply in Metal's shader
-//     cache, which later runs get back as no reflection, and the check then skips: clear the cache.)
-//  2. Core Image: the same brightness kernel (+0.25 on (102,128,153)) as a precompiled color kernel built for macOS
-//     14.0 and for 15.0 (AIR 2.7, as Office 16.115 ships; item 25 compiles it), and as a stitchable kernel, each loaded
-//     with kernelWithFunctionName:fromMetalLibraryData:error: and rendered on the GPU. Stock OCLP: nil kernels. Then
-//     two kernels in one Core Image kernel language string (+[CIKernel kernelsWithString:]; stock: nil, OCLP stubbed
-//     it) and a stitchable kernel in Metal source (+[CIKernel kernelsWithMetalString:error:]; stock: abort, because
-//     CoreImageOld looked for its Metal header in OCLP's CoreImage wrapper). The payload's CoreImageOld fixes both.
-//     Inputs: s68-ci-macos14.metallib, s68-ci-macos15.metallib, s68-ci-stitchable.metallib (build.sh makes them with
-//     Xcode's metal compiler); without them, or while the loaded CoreImageOld still has OCLP's stub (the payload isn't
-//     installed), only check 1 decides, and the line says so.
-// Check 1 asks MTLCompilerService, so the shim under test must be loaded there too (verify.sh passes it with
-// __XPC_DYLD_INSERT_LIBRARIES). Skips without MetalOld. Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring
-// (default: Intel).
+// s68-coreimage-metal-kernels: Core Image kernels from metallibs (Office's effects) must render; CoreImageOld returned
+// nil and stitchable reflection aborted. Fix: MetalOldCompat item 52, the payload's CoreImageOld.
+// Checks: stitchable reflection, then 4 kinds of CI kernel; clear Metal's cache after an abort. Argument: GPU name.
 #import "repro.h"
 #import <CoreImage/CoreImage.h>
 #import <mach-o/dyld.h>

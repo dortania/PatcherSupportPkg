@@ -1,16 +1,6 @@
-// s82-function-cache-reuse (MetalOldCompat item 76): MetalOld's function cache with the AMD GPUs' compiler, which returns a
-// reflection block with every render stage. MetalOld cached it under a key it never computed (it computes one only for
-// reflection it asked for): mostly the key just freed, which is the fragment stage's linking key, so the vertex stage's
-// reflection replaced the fragment-input list, and the next pipeline that took that fragment stage from the cache sent
-// the reflection as its input list and MTLCompilerService crashed (Chrome for Testing 124's WebGL on the R9). Which key
-// the block gets depends on what malloc hands back, so the check is on the cause: after pipelines that didn't ask for
-// reflection, the function cache must hold no reflection block. Also: the same pipeline is made twice in this process,
-// then again in a child process (its fragment stage from the cache on disk), and each draws with varyings that must
-// come out exact. Function caches are per app, so this program carries a bundle id (the Info.plist line below,
-// embedded by build.sh) and clears its cache folder first.
+// s82-function-cache-reuse: MetalOld's function cache must hold no unrequested reflection; AMD's crashed
+// MTLCompilerService. Fix: MetalOldCompat item 76. Checks: none cached; cached varyings exact. Argument: GPU name.
 // Info.plist: org.oclp.legacymetal.s82
-// Stock: FAIL on the AMD GPUs (a reflection block in the cache, at times a compiler crash). Fixed: PASS.
-// Argument: GPU name substring (default: AMD, else the system default GPU).
 #import "repro.h"
 
 static NSString *const kSource = @

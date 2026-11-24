@@ -1,13 +1,6 @@
-// i40-intel-narrow-shift-merge (Intel adapter, INTEL_NARROW_SHIFT_FIX): a right shift of a narrow value merged with a
-// 32-bit value of the same variable. iCBE gives SHR / SAR of a constant below 65536, or of x & 255 / x & 65535, a result
-// register only as wide as that value, and can then merge it with the variable's other copies: v0 = (uint)(x / y),
-// replaced in a loop by (uchar)1 >> s, came out as the quotient's low byte in every thread, also where the loop never
-// replaced it, so the wrong private array slot was cleared. The same with (uchar)v4 (a byte) and with (ushort)v4 or
-// 300 (16 bits), and with a 32-bit shift masked to 16 bits, (ushort)(v4 >> s), whose AND 65535 is narrow the same way.
-// The adapter does such shifts on the value with bit 31 set and XORs the shifted bit 31 away, and widens such a mask
-// where its result is copied into a merged register. Found by differential fuzzing (mslfuzz2 LONG=1 seeds 6 and 314,
-// reduced; VEC=1 seed 526). 256 threads on five inputs, against the same code on the CPU. Stock OCLP: FAIL. Fixed: PASS.
-// Argument: GPU name substring (default: Intel).
+// i40-intel-narrow-shift-merge: a narrow right shift merged with a 32-bit value must keep 32 bits; iCBE gave it a
+// narrow register. Fix: IntelTextureAtomics INTEL_NARROW_SHIFT_FIX (Kepler: NVAIR_INTRINSICS, NVAIR_I64_FIX).
+// Checks: shifts of a byte, 16-bit values and a 16-bit-masked shift, merged in a loop, vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

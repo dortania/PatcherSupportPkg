@@ -1,11 +1,6 @@
-// i06-intel-vertex-float3-input (Intel adapter, IntelTextureAtomics.dylib): a component of a float3 vertex input copied
-// straight to an output with the 3802 Intel compiler. The back end declares the input but drops its move into a register,
-// so the output comes from one nothing set: 0 or garbage. Float2 and float4 inputs and any arithmetic on the input are
-// right. ANGLE's vertex shaders do that copy for `out0 = in0.x` on a vec3 attribute (dEQP swizzles_vec3 *_vertex,
-// conversions_vector_to_scalar vec3_to_float_vertex: wrong values in Chrome and Safari).
-// Vertex functions write in.a.x, .y or .z of a float3 input (Float3 at attribute 1 after a float4, Float3 at attribute 0,
-// Half3 read as float3) to a varying, and the fragment function writes it to an R32Float target.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i06-intel-vertex-float3-input: a float3 vertex input copied straight to an output must keep its value; the back end
+// dropped the input's move (0 or garbage). Fix: IntelTextureAtomics INTEL_VERTEX_FLOAT3_FIX.
+// Checks: .x, .y, .z of Float3 inputs at attributes 0 and 1 and of a Half3, through a varying. Argument: GPU name.
 #import "repro.h"
 
 static float draw(id<MTLDevice> dev, id<MTLCommandQueue> q, int first, char component, MTLVertexFormat format, NSError **error) {

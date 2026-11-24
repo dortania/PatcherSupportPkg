@@ -1,18 +1,6 @@
-// s86-intel-argument-buffer-textures (MetalOldCompat item 79 + Intel adapter INTEL_IVB_ARGUMENT_BUFFER_TEXTURES): textures and
-// samplers inside argument buffers on the Ivy Bridge driver, which has no argument-buffer runtime (items 46, 47).
-// WebKit's WebGPU puts every bind group in an argument buffer, textures and samplers too: a fragment function that
-// samples `struct { texture2d<float, sample> global0 [[id(0)]]; sampler global1 [[id(1)]]; }` crashed the compiler
-// service (IGILair_ldst_handling, a null intrinsic name: the back end can't load a texture from memory), so Safari's
-// WebGPU render pipelines failed ("uncaptured error", device lost). Checked: (1) that fragment function samples a 2x2
-// texture through such an argument buffer; (2) a texture the app bound itself at the index the shim borrows for it is
-// back for the next draw that reads it (one encoder, three draws side by side); (3) a compute kernel reads and samples a
-// texture and writes through a buffer reference of the same argument buffer; (4) the WebGPU CTS's texel readback kernel
-// as WebKit writes it, which copies the texture into a local (`texture2d<float> t = ab.t;`, an i64 load of the
-// metal::texture2d struct, then inttoptr), next to a `constant` struct reference and an unused sampler, and asks the
-// texture's size: before the adapter followed such copies the pipeline failed ("Compilation failed"), so every CTS
-// case that reads texels back on the GPU (BC and depth formats) compared against zeros. Stock OCLP: FAIL (pipeline
-// creation fails or the compiler crashes). Fixed: PASS. On GPUs with argument buffers of their own (Haswell, GCN,
-// Kepler) it checks their native path. Argument: GPU name substring (default: Intel).
+// s86-intel-argument-buffer-textures: textures and samplers in argument buffers must work on Ivy Bridge (Safari's
+// WebGPU); its compiler crashed. Fix: MetalOldCompat item 79 MTLSHIM_IVB_ARGUMENT_BUFFER_TEXTURES, IntelTextureAtomics
+// INTEL_IVB_ARGUMENT_BUFFER_TEXTURES. Checks: sampling, app bindings kept, a kernel, CTS readback. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const source =

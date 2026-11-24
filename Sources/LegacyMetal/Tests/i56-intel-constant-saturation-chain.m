@@ -1,9 +1,6 @@
-// i56-intel-constant-saturation-chain (Intel adapter, INTEL_CONSTANT_CALL_FIX): a saturating add of constants that
-// only become constant after another call is folded. extract_bits(65599u, 0u, addsat(~1u, hadd(65536u, 36u)) & 15u) is
-// 63, but the back end folded the addsat as a plain add once hadd's value was known, so the bit count came out 0 and
-// nothing was subtracted (mslfuzz2 VEC=1 seed 4630, reduced; the stock compiler too). hadd / rhadd and add_sat / sub_sat
-// of scalar constants are folded in the IR along with i36's calls, until nothing changes. 256 threads on five inputs,
-// against the same code on the CPU. Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i56-intel-constant-saturation-chain: an addsat that becomes constant only after another call folds must saturate; the
+// back end added plainly. Fix: IntelTextureAtomics INTEL_CONSTANT_CALL_FIX, INTEL_LATE_SAT_FIX.
+// Checks: extract_bits(65599u, 0u, addsat(~1u, hadd(65536u, 36u)) & 15u) must be 63. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

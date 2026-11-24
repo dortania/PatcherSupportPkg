@@ -1,9 +1,6 @@
-// i08-intel-kernel-integer-gradient (Intel adapter, IntelTextureAtomics.dylib): gradient samples from integer textures in
-// compute functions crash the 3802 Intel compiler (a null dereference in IGILTargetLowering::LowerReadImage_Int), with or
-// without a texel offset; vertex and fragment functions are right, and so are float textures. A compute function samples
-// mipmapped integer textures (level n holding 1000 * n + 10 * y + x) with gradients that pick levels 0, 1 and 2, from 2D
-// int, 2D uint, 2D array and 3D int textures, one with an offset. Stock OCLP: FAIL (no pipeline, or the in-process
-// compiler crashes). Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i08-intel-kernel-integer-gradient: gradient samples from integer textures in compute functions must compile; the
+// compiler dereferenced null. Fix: IntelTextureAtomics INTEL_KERNEL_GRADIENT_FIX (Kepler: NVAIR_GRADIENT_FIX).
+// Checks: gradients picking levels 0-2 of 2D, 2D-array and 3D integer textures, one with an offset. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const kSource = @"#include <metal_stdlib>\nusing namespace metal;\n"

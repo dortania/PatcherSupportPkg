@@ -1,10 +1,6 @@
-// i22-intel-narrow-min-max (Intel adapter, IntelTextureAtomics.dylib): min, max and clamp on 8- and 16-bit integers
-// against constants with the top bit set. The 3802 back end compares the variable zero-extended (AND 0xFF) with the
-// constant sign-extended (130 becomes -126), so min(uchar2 a, uchar2(130, 183)) returned a and max returned the constant
-// (found by the MacBookPro11,5 session's narrow-vector fuzzing; clamp((uchar)y, 100, 200) returned y too). The adapter
-// does them on 32-bit lanes. Runs uchar, uchar2 and char min / max / clamp, plus the 16-bit forms (right on the stock
-// back end, rewritten all the same), with constant and variable operands on 256 seeded inputs and compares with the CPU.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i22-intel-narrow-min-max: 8- and 16-bit min, max and clamp with top-bit-set constants must be right; the back end
+// compared zero- with sign-extended values. Fix: IntelTextureAtomics INTEL_NARROW_MINMAX_FIX.
+// Checks: uchar, uchar2, char and 16-bit min / max / clamp with constant and variable operands. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

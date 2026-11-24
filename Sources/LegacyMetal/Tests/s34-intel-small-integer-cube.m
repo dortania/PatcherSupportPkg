@@ -1,10 +1,6 @@
-// s34-intel-small-integer-cube (MetalOldCompat item 30): integer cube textures with 1x1 or 2x2 faces, sampled in a
-// fragment function on the 12.x Intel driver, read 0 (1x1: every direction; 2x2: near the face centre). The driver's sampler
-// state asks for seamless cube addressing, which the sampler can't do for integer formats on faces this small; float
-// formats and compute kernels are right. The WebGL suite uploads such faces from canvases and ImageData
-// (integer-cubemap-texture-sampling and the tex-2d-*ui-*_integer-* pages). A fragment function samples R8Uint cube
-// textures of 1x1, 2x2 and 4x4 (each face filled with its own value) with a nearest sampler, in eight directions per face.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s34-intel-small-integer-cube: integer cubes with 1x1 or 2x2 faces must sample in fragment functions; the 12.x Intel
+// driver read 0. Fix: MetalOldCompat item 30.
+// Checks: R8Uint cubes of 1x1, 2x2 and 4x4, eight directions per face, nearest sampler. Argument: GPU name.
 #import "repro.h"
 
 int main(int argc, char **argv) {

@@ -1,15 +1,6 @@
-// s85-angle-pixel-local-storage (shim items 11 and 73): Chrome 158 offers WebGL's WEBGL_shader_pixel_local_storage, which
-// ANGLE builds on its GL_ANGLE_shader_pixel_local_storage. On these GPUs ANGLE's Metal backend keeps the planes in read_write
-// textures, so a draw that only uses pixel local storage has no attachment at all. Item 11 presents family-1 GPUs to ANGLE
-// as family 2, and used to switch ANGLE's allowRenderpassWithoutAttachment off for them (family 1 couldn't make such
-// pipelines); with it off ANGLE refuses the pipeline ("Render pipeline requires at least one render target for this
-// device"), loses the context, and Chrome running its GPU code in process went down (WebGL conformance
-// webgl-shader-pixel-local-storage). Item 73 gives such pipelines and passes a dummy target on family-1 GPUs, so item 11
-// now leaves that feature to ANGLE. This drives WebKit's ANGLE (the same ANGLE code; Safari's caller) through its EGL_/GL_
-// entry points: one r32ui plane on a framebuffer with no other attachment, loaded as zero, two draws that each add 7
-// (with a barrier between them, as the extension asks without raster order groups), stored and read back: 14 everywhere.
-// FAIL with item 11's old list (MTLSHIM_NO_ATTACHMENTS=0 restores it). SKIP without WebKit's ANGLE or the extension.
-// Runs on the GPU named by the argument (SKIP if WebKit's ANGLE can't be put on it); the result line names the renderer.
+// s85-angle-pixel-local-storage: ANGLE's pixel local storage without attachments must draw (Chrome's WebGL); ANGLE
+// refused the pipeline. Fix: MetalOldCompat items 11, 73 MTLSHIM_NO_ATTACHMENTS. SKIP without WebKit's ANGLE.
+// Checks: one r32ui plane, two draws adding 7, read back 14 everywhere. Argument: GPU name.
 #import "repro.h"
 #include <dlfcn.h>
 #include <string.h>

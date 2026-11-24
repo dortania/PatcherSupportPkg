@@ -1,10 +1,6 @@
-// s14-safari-argument-encoders (MetalOldCompat item 14): OCLP's Metal.framework wrapper (13.2.1-24) replaces
-// -[MTLFunction newArgumentEncoderWithBufferIndex:...] and -[MTLDevice newArgumentEncoderWithBufferBinding:] with
-// stubs returning nil in every process whose path contains "Safari". WebKit's ANGLE puts every WebGL 2 uniform block in
-// an argument buffer, so each such draw fails (GL_OUT_OF_MEMORY, blank canvases). This program copies itself into a
-// directory named "Safari" and asks for an argument encoder there (and, as the control, from its own path).
-// Stock OCLP: FAIL (nil encoder in the Safari path). Fixed: PASS. Argument: GPU name substring (default: Intel: on the
-// AMD GPU the argument-buffer compile itself also needs the libAMDIL902 fix, c01).
+// s14-safari-argument-encoders: argument encoders must work in processes named Safari; OCLP's wrapper stubbed them to
+// nil (WebGL 2 uniform blocks failed). Fix: MetalOldCompat item 14. Checks: an encoder from a copy of itself in a
+// "Safari" folder and from its own path. Argument: GPU name (AMD: needs c01).
 #import "repro.h"
 
 static int child(int argc, char **argv) {

@@ -1,11 +1,6 @@
-// a10-threadgroup-bool (AMD adapter): a threadgroup bool must read back what was stored. LLVM shrinks the variable to an i1
-// global and libAMDIL902 miscompiles zext of its load, `iand load, r` with r holding an unrelated 0, so it always reads as false.
-// (WebGPU CTS builtin,workgroupUniformLoad:types, type="bool", in Safari; the shader here is the one WebKit generates.)
-// When the front end leaves the variable a byte, libAMDIL902's own optimizer shrinks it after the adapter has run, and the
-// same zext comes back (`shrunk`: found by differential fuzzing; there it reads as false in the first threadgroup, which
-// sets it): the adapter loads such variables as volatile, which keeps the optimizer from shrinking them.
-// The 3802 Intel compiler can't select the i1 loads and stores at all and aborts; the Intel adapter widens the global to i8.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// a10-threadgroup-bool: a threadgroup bool must read back what was stored; libAMDIL902 read false, Intel's compiler
+// aborted. Fix: AMDTextureAtomics AMD_LDS_BOOL_FIX, IntelTextureAtomics INTEL_THREADGROUP_BOOL_FIX, GeForceAIRCompat
+// NVAIR_THREADGROUP_BOOL_FIX. Checks: WebKit's workgroupUniformLoad shader, a byte-sized bool. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

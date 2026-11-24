@@ -1,11 +1,6 @@
-// c05-amdil-bfe-constant (libAMDIL902 patch 6; AMD GCN on the 12.5 stack): a bit-field extract combine that reads the
-// operands of a folded constant. While combining the selection DAG, ILTargetLowering::AnalyzeBFECombine matches shift
-// and mask patterns, and in one of them reads operand 0 of a node it expects to be an operation; when that node has been
-// folded into a constant, which has no operands, it reads through a null operand list and the compiler service crashes
-// ("Compiler encountered an internal error"). Here a byte shifted by a variable amount is taken modulo a value that
-// becomes 1 only once the loop before it is unrolled and folded, and indexes a private byte array. Found by fuzzing.
-// Patches 1-5 alone: FAIL (no pipeline; in-process, the compiler takes the test down). Fixed: PASS.
-// Argument: GPU name substring (default: AMD).
+// c05-amdil-bfe-constant: a bit-field extract combine over a node folded to a constant must compile on GCN; libAMDIL902
+// read the constant's missing operands and crashed. Fix: the libAMDIL902 patch 6.
+// Checks: a shifted byte modulo a value that is 1 only after unrolling, indexing a private array. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const kSource = @"#include <metal_stdlib>\nusing namespace metal;\n"

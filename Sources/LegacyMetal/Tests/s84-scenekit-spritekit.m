@@ -1,11 +1,6 @@
-// s84-scenekit-spritekit (sweep): SceneKit and SpriteKit render offscreen on the GPU under test with SCNRenderer and
-// SKRenderer, in this process. Both generate their Metal shaders at runtime from the scene (lights, materials, shadows,
-// textures, blend modes), a third shader generator on these stacks after ANGLE (browsers, Electron) and SPIRV-Cross
-// (MoltenVK), which games, Chess.app and Quick Look's 3D previews use. Checked, for every MSAA sample count the GPU has of
-// 1, 2 and 4: a red lit sphere with a shadow on a white floor under a directional light, a textured box, and a SpriteKit
-// scene of blended sprites and a shape node render, and sampled pixels have the colors the scene implies (lit red on the
-// sphere, white floor brighter than its shadow, the box's texture colors, the sprites over the background).
-// Argument: GPU name substring (default: the system default GPU).
+// s84-scenekit-spritekit: a sweep: SceneKit and SpriteKit must render right offscreen (games, Chess, Quick Look).
+// Fix: the whole stack; only the fixed run must pass.
+// Checks: a lit sphere and its shadow, a textured box, blended sprites, at 1, 2 and 4 samples. Argument: GPU name.
 #import "repro.h"
 #import <SceneKit/SceneKit.h>
 #import <SpriteKit/SpriteKit.h>

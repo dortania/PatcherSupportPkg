@@ -1,12 +1,6 @@
-// s75-air-version-matrix (the stack's handling of prebuilt metallibs): one set of shaders (data/s75-air.metal), compiled by
-// build.sh for every macOS target from 10.14 (AIR 2.1) up, as apps ship prebuilt metallibs (Chromium's ANGLE library is
-// built for 10.14; games and engines for whatever their SDK was). Each library's pipelines are built and run: fragment
-// functions that sample, read, read a multisample texture, sample an array texture, and one with a function constant
-// (sample, read, gather), and a mipmap-style kernel and a sampling kernel; their output is checked against the texture.
-// On Tahoe, OCLP's libLLVM wrapper relabels old modules and the downgrade to the 3802 back ends wrote invalid bitcode for
-// texture calls (Chromium's library: every blit failed), which this catches without Chromium. The targets newer than the
-// stack's 14.2 compiler (AIR 2.7, macOS 15 and later) are reported, not failed: apps built for them need a newer compiler.
-// SKIP without Xcode's metal compiler (no libraries built). Argument: GPU name substring (default: the system default GPU).
+// s75-air-version-matrix: a sweep: shaders built for every macOS target from 10.14 (AIR 2.1) up must run; on Tahoe old
+// texture calls broke (item 75). Fix: the whole stack; only the fixed run must pass. SKIP without Xcode's metal.
+// Checks: fragment and kernel pipelines per library; AIR 2.7+ is reported, not failed. Argument: GPU name.
 #import "repro.h"
 
 static const char *targets[] = {"10.14", "10.15", "11.0", "12.0", "13.0", "14.0", "15.0", "26.0"};

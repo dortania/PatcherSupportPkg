@@ -1,11 +1,6 @@
-// i70-intel-narrow-vector-divide (Intel adapter, IntelTextureAtomics.dylib): division, remainder, min and max of byte
-// and halfword vectors made with as_type in fragment functions with the 3802 Intel compiler. The 8/16-bit division and
-// min / max fixes (i31, i22) widen the operands to 32-bit lanes, and a whole-vector extension of an as_type vector went
-// wrong there: as_type<uchar4>(x) % uchar4(41, 23, 33, 100) and / crashed the compiler service, as_type<char4>(x) %
-// char4(41, -23, 33, 100) came out as the unsigned remainder, and a signed max(char4, as_type<char4>(y)) was wrong.
-// Vectors put together lane by lane, and compute functions, were right. Found by fragment fuzzing with as_type (seeds 55,
-// 165, 205: crashes; 245: the max). Each pixel of a 256x1 target writes eight results for its
-// own inputs to a buffer. Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i70-intel-narrow-vector-divide: division, remainder, min and max of as_type byte / halfword vectors must compile and
+// be right; widening them crashed or went unsigned. Fix: IntelTextureAtomics INTEL_NARROW_VECTOR_OPERAND_FIX.
+// Checks: uchar4 and char4 % and /, and a signed char4 max, eight results per pixel. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const kSource = @"#include <metal_stdlib>\nusing namespace metal;\n"

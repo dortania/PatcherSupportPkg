@@ -1,9 +1,6 @@
-// s23-intel-3d-mip-plane (shim item 23): rendering into one depth plane of a 3D texture's mip level 1 or higher on the
-// 12.x Intel driver. A pass on plane 0 also writes plane 1, and one on plane 1 writes neither (clears and draws, also
-// through views; WebGPU CTS 3d_texture_slices with mip levels). Level 0 and blits are right. A zeroed 3D texture
-// (R8Unorm and BGRA8Unorm, 8x8x4 with 2 levels) is cleared one plane at a time at level 1, and each time only that
-// plane may change.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s23-intel-3d-mip-plane: a pass on one depth plane of a 3D texture's level 1+ must change only that plane; the 12.x
+// Intel driver wrote the wrong planes. Fix: MetalOldCompat item 23.
+// Checks: 8x8x4 R8Unorm and BGRA8Unorm textures cleared one plane at a time at level 1. Argument: GPU name.
 #import "repro.h"
 
 int main(int argc, char **argv) {

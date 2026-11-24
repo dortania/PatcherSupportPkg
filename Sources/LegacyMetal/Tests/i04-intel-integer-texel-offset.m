@@ -1,12 +1,6 @@
-// i04-intel-integer-texel-offset (Intel adapter, IntelTextureAtomics.dylib): texel offsets on integer textures with the
-// 3802 Intel compiler. sample(s, coord, offset) on an integer texture ignores the offset and returns the texel at the
-// coordinate; float textures are right. GLSL textureOffset / textureLodOffset / textureProjOffset on isampler and
-// usampler compile to that (dEQP shadertexturefunction *offset: 6 pages fail), and so do textureGradOffset and
-// textureProjGradOffset (gradient samples). A compute function samples 8x8 textures holding 10 * y + x at texel (2, 2)
-// with offsets, from 2D int, 2D uint (explicit level), 2D array and 3D int textures, and from a 2D float texture as the
-// control; a fragment function does the same with gradients from 2D int and 2D array textures (integer gradient samples
-// crash the back end in compute functions, offset or not), and samples level 1 of a mipmapped 2D int texture (1000 + 10 * y
-// + x there) with offsets, picked by gradients and by the derivatives of a minified coordinate. Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i04-intel-integer-texel-offset: sampling an integer texture with a texel offset must apply the offset; the compiler
+// ignored it (GLSL textureOffset on isampler). Fix: IntelTextureAtomics INTEL_INTEGER_OFFSET_FIX.
+// Checks: offsets on 2D, 2D-array and 3D int textures (float control), with levels and gradients. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const kSource = @"#include <metal_stdlib>\nusing namespace metal;\n"

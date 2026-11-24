@@ -1,11 +1,6 @@
-// i71-intel-outer-axis-reduction (Intel adapter, IntelTextureAtomics.dylib): MPSGraph's reductions along an outer axis
-// must compile and be right. MPS's reduce_multiple_passes_axes_* kernels, specialized for them, keep loops that never
-// exit (where a stride of 0 would spin); nested in these kernels, the IGIL back end never finishes compiling them
-// (USC::CompileComputeShaderOpenCL_Gen7 spins at 100%), so reductionMaximum or softMax over axis 0 of a 2D tensor waited
-// forever, the stock compiler too. Runs both on the Intel GPU on another thread and waits up to 120 seconds, then checks
-// them against the CPU (the compiler service of a timed-out run stops when this process exits).
-// Stock OCLP on Tahoe: FAIL (timeout). Fixed: PASS. On Sequoia, whose MPSGraph builds these kernels differently: PASS
-// either way. Argument: GPU name substring (default: Intel).
+// i71-intel-outer-axis-reduction: MPSGraph outer-axis reductions must compile; on Tahoe the back end spun forever on
+// their endless loops. Fix: IntelTextureAtomics INTEL_INFINITE_LOOP_FIX, MetalOldCompat MTLSHIM_MPSGRAPH_SOFTMAX.
+// Checks: reductionMaximum and softMax over axis 0 of a 2D tensor, within 120 s, vs the CPU. Argument: GPU name.
 #import "repro.h"
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 #import <MetalPerformanceShadersGraph/MetalPerformanceShadersGraph.h>

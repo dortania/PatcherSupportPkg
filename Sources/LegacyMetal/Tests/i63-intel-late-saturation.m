@@ -1,11 +1,6 @@
-// i63-intel-late-saturation (Intel adapter, IntelTextureAtomics.dylib): saturating adds and subtracts whose operands
-// become constant only when the Intel compiler unrolls a loop. The back end folds addsat / subsat of two constants as a
-// plain add / subtract (i38 folds the ones with constant operands in the source), and in loops with a constant trip
-// count addsat(i, ...) has constant operands in every unrolled copy of the body. Signed addsat and subsat came out
-// unsaturated, and an unsigned addsat picking a private array element (p[addsat(i, -i) & 7]) made a value read in the
-// same iteration take its next value. Found by fuzzing fragment functions (compute functions are the same). Each thread
-// runs three such loops: the unsigned one next to that read, a signed addsat and a signed subsat that saturate from the
-// third iteration on. Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i63-intel-late-saturation: saturating adds / subtracts whose operands become constant when a loop unrolls must
+// saturate; the back end folded them as plain ones. Fix: IntelTextureAtomics INTEL_LATE_SAT_FIX.
+// Checks: an unsigned addsat picking a private array element; signed addsat and subsat. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const kSource = @"#include <metal_stdlib>\nusing namespace metal;\n"

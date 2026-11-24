@@ -1,11 +1,6 @@
-// i07-intel-private-array-index (Intel adapter, IntelTextureAtomics.dylib): a private array inside a struct, indexed with a
-// variable, in a vertex or fragment function with the 3802 Intel compiler. The array becomes an indexable register array,
-// which the back end addresses two ways (raw scratch byte addresses for constant-offset stores, x0[i] for variable
-// indices), so elements written one way and read the other come back 0 or stale. ANGLE declares every GLSL array that way
-// (WebGL unary-minus-operator-in-dynamic-loop, dEQP shaderstruct array_member_dynamic_index). Vertex and fragment
-// functions fill int arrays (struct-wrapped with 3 and 8 elements, and a plain one as the control) at constant indices
-// and sum them in a loop bounded by a uniform.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i07-intel-private-array-index: a variable-indexed private array in a struct must read back what was written in vertex
+// and fragment functions; the back end addressed it two ways. Fix: IntelTextureAtomics INTEL_PRIVATE_ARRAY_FIX.
+// Checks: int arrays in structs (and a plain one) filled at constant indices, summed in a loop. Argument: GPU name.
 #import "repro.h"
 
 int main(int argc, char **argv) {

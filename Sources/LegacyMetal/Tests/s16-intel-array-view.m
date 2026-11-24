@@ -1,9 +1,6 @@
-// s16-intel-array-view (MetalOldCompat item 16; also Apple's own Intel driver 18.8.16 on macOS 12.7.6): a 2D-array
-// texture view whose first slice isn't 0, on the 12.x Intel driver. Its surface state limits the view to the parent's
-// slices below (first slice + view length) counted from the view, so only the first (length - first) layers are
-// reachable; the rest read layer 0 / the last valid layer. (WebGL 2 texture arrays and wgpu views of layers 2+.)
-// A 6-layer texture holds 10 * layer in every texel; a 3-layer view of layers 2..4 is read at layers 0..2.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s16-intel-array-view: a 2D-array view not starting at slice 0 must reach all its layers; the 12.x Intel driver cut it
+// short (later layers read layer 0 or the last one). Fix: MetalOldCompat item 16.
+// Checks: a 3-layer view of layers 2-4 of a 6-layer texture. Argument: GPU name.
 #import "repro.h"
 
 int main(int argc, char **argv) {

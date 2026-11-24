@@ -1,9 +1,6 @@
-// s78-mps-kernels (sweep): Metal Performance Shaders kernels that Vision, Core ML, Photos and apps reach, run on the GPU
-// under test and checked against values computed here: image kernels (3x3 convolution with bias, box, area max/min,
-// dilate/erode, binary threshold, transpose, median, integral, Gaussian blur), a CNN neuron (leaky ReLU), matrix kernels
-// (matrix x vector, row softmax) and an MPSGraph (matmul, ReLU, row sum). Neighbourhood kernels are compared away from
-// the edges (edge modes differ by kernel); the Gaussian only loosely (MPS picks its own kernel size for a sigma).
-// Argument: GPU name substring (default: Intel).
+// s78-mps-kernels: a sweep: MPS kernels that Vision, Core ML and Photos reach must compute. Fix: the whole stack; only
+// the fixed run must pass.
+// Checks: image kernels, a CNN neuron, matrix kernels and an MPSGraph, against the CPU. Argument: GPU name.
 #import "repro.h"
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 #import <MetalPerformanceShadersGraph/MetalPerformanceShadersGraph.h>

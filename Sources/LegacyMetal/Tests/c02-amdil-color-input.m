@@ -1,10 +1,6 @@
-// c02-amdil-color-input (libAMDIL902 parser fix, patches 2 and 3; AMD GCN on the 12.5 stack): fragment functions with
-// a [[color(n)]] *input* (framebuffer fetch; Blender's MSL declares one for tile inputs even on GPUs where it's unused).
-// The macOS 14+ compiler writes such inputs as `"air.render_target", <attachment>` without a blending index:
-// libAMDIL902's initShaderArgType aborts with "Unsupported 'air.render_target' metadata configuration", and with
-// raster_order_group the next key string is read as the blending index (crash). Blender 4.x can't build any material.
-// Builds the same pipeline with an unused colour input, with raster_order_group, and (control) without.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// c02-amdil-color-input: fragment functions with a [[color(n)]] input (Blender) must build on GCN; libAMDIL902 aborted
+// on the macOS 14+ metadata, or crashed with raster_order_group. Fix: the libAMDIL902 patches 2 and 3.
+// Checks: a pipeline with an unused color input, with raster_order_group, and without. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const common = @"#include <metal_stdlib>\nusing namespace metal;\n"

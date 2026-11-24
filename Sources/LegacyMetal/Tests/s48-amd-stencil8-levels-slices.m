@@ -1,12 +1,6 @@
-// s48-amd-stencil8-levels-slices (AMDBronzeCompat item 11): a Stencil8 texture with several levels and slices must hold
-// what each kind of access puts there. The 12.5 AMD driver lays such a texture out 1D tiled but describes it as 2D
-// tiled, so blits, the depth unit and shaders disagree past level 0 / slice 0; AMDBronzeCompat makes it as
-// Depth32Float_Stencil8 and keeps the Stencil8 API working around that.
-// A 32x16 Stencil8 2D array with 3 levels and 2 slices gets a value per texel, level and slice by blits without options.
-// Then: blits back to a buffer without options; a compute kernel reads every subresource from the texture itself and
-// level 1 / slice 1 through a Stencil8 view; a REPLACE draw writes 0x5A through a Stencil8 view of level 1 / slice 1 as
-// the stencil attachment; copies to and from a single-level Stencil8 texture (both ways, region and level copies).
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// s48-amd-stencil8-levels-slices: a Stencil8 texture with levels and slices must hold what each access puts there; on
+// the AMD driver blits, depth unit and shaders disagreed. Fix: AMDBronzeCompat item 11 AMD_BRONZE_COMPAT.
+// Checks: a 3-level, 2-slice array: blits, kernel reads, a REPLACE draw through a view, copies. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

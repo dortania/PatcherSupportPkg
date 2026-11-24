@@ -1,13 +1,6 @@
-// i75-intel-ivb-byte-halfwords (Intel adapter, INTEL_BYTE_HALFWORDS_FIX): bytes viewed as halfwords on Ivy Bridge.
-// as_type<short2>(uchar4 & uchar4) reaches the back end as a vector AND, BPACK of the four bytes into a word and SUNPACK
-// of its halves, and Ivy Bridge's iCBE read the low byte of .y as 0 when the AND makes byte 1 a known 0: in
-// (uint(s.x) ^ uint(s.y) * 257) & 255, byte 2 (a quotient of at most 4, ANDed with a private array byte) was lost in
-// about a third of the threads (reduced from mslfuzz2 VEC seed 23 on an HD 4000; the stock compiler too, Haswell's is
-// right). The IR and the IGIL text are right. The adapter puts such halfwords together from the bytes with shifts. Runs
-// the kernel as the fuzzer did, on three inputs, and compares the hash of the output with the same code run on the CPU.
-// Then the same for VEC seed 2598 (data/i75-vec-fuzz-2598.metal): as_type<short2> of a uchar4 shifted by a uchar4, which
-// the back end gets right and the hand-packed halves didn't (2 threads wrong), so the rewrite only takes bitcasts with a
-// known-zero byte lane. Stock OCLP on an HD 4000: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i75-intel-ivb-byte-halfwords: as_type<short2>(uchar4 & uchar4) must keep its bytes; Ivy Bridge's iCBE read a byte as
+// 0 where the AND zeroed another. Fix: IntelTextureAtomics INTEL_BYTE_HALFWORDS_FIX.
+// Checks: two generated kernels (a shifted uchar4 must stay as is), hash vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

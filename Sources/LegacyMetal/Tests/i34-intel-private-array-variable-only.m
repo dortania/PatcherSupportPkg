@@ -1,10 +1,6 @@
-// i34-intel-private-array-variable-only (Intel adapter, IntelTextureAtomics.dylib, i07's rewrite): a private array only
-// ever indexed with variables. i07 was found with arrays written at constant offsets and read in a loop, but an array
-// that is read and updated through variable indices alone in a loop (a[(i + t) & 7] += i; m ^= a[(i * 3) & 7]) comes
-// out wrong as well (250 of 256 threads), so i07 has to take every small array with a variable index, not only those
-// accessed both ways (narrowing it that way was tried and broke this). A fill-and-read pair of loops, and the
-// read-modify-write loop, on the differential fuzzer's 256-thread input, against the CPU reference.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i34-intel-private-array-variable-only: a private array only ever indexed with variables must read back right; it
+// failed too, so i07 takes every small array with a variable index. Fix: IntelTextureAtomics INTEL_PRIVATE_ARRAY_FIX.
+// Checks: a fill-and-read pair of loops and a read-modify-write loop, vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

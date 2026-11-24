@@ -1,10 +1,6 @@
-// i51-intel-narrow-constant-or (Intel adapter, INTEL_NARROW_CONSTANT_LANES_FIX): a narrow vector ORed with constant lanes
-// in a min / max. With i22 widening max(uchar2, uchar2) to 32-bit lanes, uchar2(0, b) | uchar2(199, 32) reached the
-// back end as an OR with MOV r, -57: the constant 199 sign-extended, as in i35, and the max came out 0xffffffc7, so it
-// always picked 199 over bytes 200-255 (mslfuzz2 VEC=1 seed 2464, reduced; the stock compiler is wrong too). The
-// extension to 32-bit lanes goes through AND / OR / XOR with a constant operand, the constant lanes zero-extended.
-// 256 threads on five inputs, against the same code on the CPU. Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name
-// substring (default: Intel).
+// i51-intel-narrow-constant-or: a narrow vector ORed with constant lanes in a min / max must zero-extend them; 199 was
+// sign-extended, so max always picked it. Fix: IntelTextureAtomics INTEL_NARROW_CONSTANT_LANES_FIX.
+// Checks: max of uchar2(0, b) | uchar2(199, 32), five inputs vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

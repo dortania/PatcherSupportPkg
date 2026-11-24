@@ -1,8 +1,6 @@
-// i55-intel-narrow-udiv-mask (Intel adapter, INTEL_NARROW_SHIFT_FIX): a byte-masked lane divided as a ushort.
-// ushort4(..., (ushort)(uchar)x) / (ushort4(...) | 1) reached the back end as AND x, 255 divided (UDIV) by 1 and masked with
-// 0xFFFF in a vector, and iCBE dropped the 255 as in i29: the lane kept bits 8-15 of x (mslfuzz2 VEC=1 seed 4614,
-// reduced; the stock compiler is wrong too). i46's 32-bit AND now also covers UDIV operands. 256 threads on five inputs,
-// against the same code on the CPU. Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i55-intel-narrow-udiv-mask: a byte-masked lane divided as a ushort must keep only its byte; iCBE dropped the AND 255,
+// as in i29. Fix: IntelTextureAtomics INTEL_NARROW_SHIFT_FIX (Kepler: NVAIR_INTRINSICS, NVAIR_I64_FIX).
+// Checks: ushort4(..., (ushort)(uchar)x) / (ushort4(...) | 1), five inputs vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

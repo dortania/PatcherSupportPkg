@@ -1,14 +1,6 @@
-// s13-new-air-metallib (MetalOldCompat item 25; Safari's case also item 13): a precompiled metallib built for macOS
-// 15.4 or later (AIR target air64_v27-apple-macosx15.4.0, as iMovie 10.4.4 and Safari's WebKit ship) on this stack. The
-// library loads, but specializing a function with function constants or building a pipeline from it fails with
-// "incompatible module ... not compatible with the target (air64-apple-macosx14.2.0)"; past that, the AIR 2.6 target
-// rejects !air.version 2.7, and predicated arguments' implicit function constants stay unresolved. iMovie's viewer
-// stayed black; in Safari every WebGL context that needs one of WebKit's internal shaders failed.
-// Two kernels per metallib, run and checked: k (a plain function constant) and kp (a buffer argument predicated on
-// is_function_constant_defined, run with the constant set and unset). The metallib built for macOS 14 is the control.
-// Inputs: s13-air-macos14.metallib and s13-air-macos15.4.metallib (build.sh makes them with Xcode's metal compiler).
-// The compiler runs in MTLCompilerService, so the shim under test must be loaded there too (verify.sh passes it with
-// __XPC_DYLD_INSERT_LIBRARIES). Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// s13-new-air-metallib: a metallib built for macOS 15.4+ (AIR 2.7: iMovie, Safari) must specialize and build; the
+// compiler rejected its target. Fix: MetalOldCompat item 25 (Safari's case also item 13). Checks: kernels k and kp from
+// build.sh's 15.4 and 14 metallibs; the shim must be in MTLCompilerService. Argument: GPU name.
 #import "repro.h"
 
 // Builds kernel `name` with the given constants, runs it over 64 threads and compares out[i] with want(i).

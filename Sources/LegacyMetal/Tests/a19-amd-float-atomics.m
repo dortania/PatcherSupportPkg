@@ -1,11 +1,6 @@
-// a19-amd-float-atomics (AMD adapter): MSL 3.0 float atomics in device memory (atomic_fetch_add / _sub, exchange,
-// compare-exchange on atomic_float) must compile and be atomic. The GPU claims the Mac2 family, which has them, but the
-// AMD compiler has no float forms and stops with an internal error (wgpu float32_atomic). The adapter does exchange and
-// compare-exchange on the integer bits and fetch_add / fetch_sub as a compare-exchange loop.
-// Checked: 4096 threads on the same addresses: fetch_add of 1 returns each of 0..4095 once and ends at 4096; fetch_add
-// of t & 7 and fetch_sub of 0.5 end at the exact sums; exchange returns every value once; one compare-exchange from 0
-// succeeds.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// a19-amd-float-atomics: MSL 3.0 float atomics in device memory must compile and be atomic; the AMD compiler stopped
+// with an internal error (wgpu). Fix: AMDTextureAtomics AMD_FLOAT_ATOMIC_FIX.
+// Checks: fetch_add, fetch_sub, exchange, compare-exchange from 4096 threads on the same addresses. Argument: GPU name.
 #import "repro.h"
 
 enum { kThreads = 4096 };

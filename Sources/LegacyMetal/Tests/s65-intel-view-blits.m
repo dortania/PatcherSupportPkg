@@ -1,12 +1,6 @@
-// s65-intel-view-blits (shim item 49): on the Ivy Bridge driver a blit from or into a texture view ignores the view's
-// offset into its parent and reaches the parent's slice 0 and level 0, while shaders reach the right subresource through
-// the same view. ANGLE copies a cube's faces through single-face 2D views when generateMipmap gives the texture a mip
-// chain, so in Chrome every face of a mipmapped cube map became +X's (WebGL CTS texture-size-cube-maps). Fills each face
-// and level of a mipmapped cube with its own color, then for single-face, single-level 2D views: copies out of the view
-// into a texture and into a buffer, and copies a new color into a view of another face and level, checking every result.
-// The R9 M370X's driver drops one of these too: a buffer-to-texture copy into a view whose first slice is 1 or more,
-// covering the whole slice, is written nowhere (AMDBronzeCompat item 14; s65@AMD).
-// Stock OCLP on an HD 4000: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s65-intel-view-blits: blits from or into a texture view must reach the view's subresource; Ivy Bridge reached
+// level 0, slice 0 (cube maps all +X). Fix: MetalOldCompat item 49, AMDBronzeCompat item 14 AMD_BRONZE_COMPAT.
+// Checks: one-face, one-level views of a mipmapped cube: copies out, to a buffer, and in. Argument: GPU name.
 #import "repro.h"
 
 static void run(id<MTLCommandQueue> queue, void (^encode)(id<MTLBlitCommandEncoder>)) {

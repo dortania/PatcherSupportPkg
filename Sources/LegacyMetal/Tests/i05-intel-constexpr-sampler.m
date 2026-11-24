@@ -1,16 +1,6 @@
-// i05-intel-constexpr-sampler (Intel adapter, IntelTextureAtomics.dylib): constexpr samplers from a metallib built for
-// macOS 15 or later on the 3802 Intel compiler. Such libraries (AIR 2.7, reaching this compiler through MetalOldCompat
-// item 25) store each constexpr sampler as a [2 x i64] constant, where older ones and the runtime compiler store one
-// i64; IGILInlineSamplerLowering reads it as an integer and dereferences null, which kills MTLCompilerService. iMovie
-// 10.4.4's viewer shader (Flexo's textureSamplingShader) is one, so its viewer stays black. A compute kernel reads a
-// 4x4 R32Float texture holding 10 * y + x through five constexpr samplers (clamp to edge in pixel coordinates, repeat,
-// mirrored repeat, clamp to an opaque white border, linear filtering), from a metallib built for macOS 15.4 and from
-// one built for macOS 14 (one-word samplers, the control).
-// Inputs: i05-air-macos14.metallib and i05-air-macos15.4.metallib (build.sh makes them with Xcode's metal compiler from
-// data/i05-samplers.metal). Stock OCLP: FAIL (no pipeline; in-process compiler: crash). Fixed: PASS.
-// On the AMD GPU (the AMD adapter, AMD_SAMPLER_STATE_FIX), libAMDIL902 builds the pipeline but reads such a sampler as 0:
-// stock FAIL (the clamp-to-edge read returns 0), fixed PASS.
-// Argument: GPU name substring (default: Intel).
+// i05-intel-constexpr-sampler: constexpr samplers from macOS 15+ metallibs must work; Intel crashed, AMD read 0. Fix:
+// IntelTextureAtomics INTEL_SAMPLER_STATE_FIX (AMD: AMD_SAMPLER_STATE_FIX; Kepler: NVAIR_SAMPLER_STATE_FIX).
+// Checks: five constexpr samplers from a macOS 15.4 and a macOS 14 metallib (control). Argument: GPU name.
 #import "repro.h"
 
 static const char *const kNames[5] = {"clamp to edge (pixel coordinates)", "repeat", "mirrored repeat",

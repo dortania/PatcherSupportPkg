@@ -1,10 +1,6 @@
-// i57-intel-vector-sign-extend (Intel adapter, INTEL_SIGN_EXTEND_FIX): a vector STOI. In this generated kernel (mslfuzz2
-// VEC=1 seed 4647, reduced: data/i57-vec-fuzz-4647.metal), max(short4(constants) & short4(0, 0, pc[i], b), ...) reached
-// the back end as a whole-vector STOI of the AND, read lane by lane by the max, and one thread in 256 got its vf() hash
-// of the vector wrong (the stock compiler is right here; any of i07, i22, i36 or i38 changing the code around it brings
-// it out). i45's shift pairs now cover vector STOI / BTOI too. Runs the kernel as the fuzzer did, on three inputs, and
-// compares the hash of the output with the same code run on the CPU. Fixed: PASS. Argument: GPU name substring
-// (default: Intel).
+// i57-intel-vector-sign-extend: a whole-vector STOI read lane by lane must be right; one thread in 256 got its hash
+// wrong (i45's shift pairs missed vectors). Fix: IntelTextureAtomics INTEL_SIGN_EXTEND_FIX.
+// Checks: a generated kernel (data/i57-*.metal) on three inputs, output hash vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 int main(int argc, char **argv) { @autoreleasepool {

@@ -1,11 +1,6 @@
-// i14-intel-simd16-clobber (Intel adapter, IntelTextureAtomics.dylib): the GL driver's back end (iCBE) builds a SIMD8
-// and a SIMD16 kernel for each fragment function; under the SIMD16 kernel's register pressure its register allocator
-// can give a compare whose result is only used through the flag a register that still holds a live value, which the
-// compare then overwrites. dEQP's uniformbuffers multi_nested_struct instance_array_mixed (and random
-// nested_structs_arrays cases) end that way and failed in Chrome and Safari: wrong in every SIMD16 dispatch, right in
-// SIMD8 ones. Runs ANGLE's translation of it (data/i14-ubo-mixed-fragment.metal) with its buffer bytes
-// (data/i14-ubo-mixed.bin, three blocks through an argument buffer): every pixel should be white.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i14-intel-simd16-clobber: fragment functions under SIMD16 register pressure must keep live values; a flag-only
+// compare overwrote a register still in use. Fix: IntelTextureAtomics INTEL_SIMD16_CLOBBER_FIX.
+// Checks: ANGLE's translation of a dEQP uniform-block case (data/i14-*) must draw all white. Argument: GPU name.
 #import "repro.h"
 
 int main(int argc, char **argv) {

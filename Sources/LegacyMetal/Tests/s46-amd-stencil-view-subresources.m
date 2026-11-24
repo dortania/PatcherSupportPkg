@@ -1,13 +1,6 @@
-// s46-amd-stencil-view-subresources (AMDBronzeCompat item 1): shaders must read the stencil of a depth-stencil texture
-// right through X32_Stencil8 / X24_Stencil8 views of any level and slice. The 12.5 AMD driver gives such a view an image
-// descriptor whose base address already points past level 0 / slice 0 (from the stencil index it miscounts, plus the
-// first slice's offset) while the descriptor's BASE_LEVEL and BASE_ARRAY select the level and slice again: a view of
-// level 2 reads level 0's stencil, a view of slice 2 reads somewhere in slice 0 / 1. Dawn backs WebGPU's stencil8 with
-// Depth32Float_Stencil8 and reads it through such views.
-// Writes a distinct stencil byte per texel, level and slice with blits into 2D-array textures (20x16 with 3 levels and
-// 33x17 with 6, 3 slices, both formats), then reads every subresource in a compute kernel through a one-level,
-// one-slice array view of it, through a view of levels 1+ and slices 1+, and through a stencil view of a depth-stencil
-// view of levels 1+ and slices 1+. Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// s46-amd-stencil-view-subresources: shaders must read stencil through X32/X24_Stencil8 views of any level and slice;
+// the AMD driver added the offset twice. Fix: AMDBronzeCompat item 1 AMD_BRONZE_COMPAT, MetalOldCompat item 56
+// MTLSHIM_NV_VIEW_OF_VIEW. Checks: every subresource of 2D arrays through several kinds of view. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

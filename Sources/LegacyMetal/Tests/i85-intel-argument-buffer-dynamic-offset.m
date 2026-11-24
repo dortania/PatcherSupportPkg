@@ -1,12 +1,6 @@
-// i85-intel-argument-buffer-dynamic-offset (Intel adapter, IntelTextureAtomics.dylib, item 47's argument-buffer rewrite):
-// a uniform buffer in the first member of an argument buffer, read as bytes at a dynamic offset, as WebKit's WebGPU
-// writes a bind group with hasDynamicOffset: `*(const constant T *)((constant uint8_t *)&ab.global0 + dynamicOffsets[0])`.
-// The member's pointer is loaded through a cast of the argument buffer itself (it is at offset 0, so there is no GEP),
-// which the Ivy Bridge rewrite didn't follow: the back end got a load of a pointer from memory and the compiler service
-// crashed (IGILair_ldst_handling, a null intrinsic name), so the pipeline failed (the WebGPU CTS's depth-init draw in
-// copyTextureToTexture:copy_depth_stencil). Checked: a depth-only quad whose depths come from that uniform lands where
-// it should. Stock OCLP: FAIL (no argument buffers). Without the fix: FAIL (compiler crash). Fixed: PASS.
-// Argument: GPU name substring (default: Intel).
+// i85-intel-argument-buffer-dynamic-offset: a dynamic-offset read of an argument buffer's first member must compile on
+// Ivy Bridge. Fix: IntelTextureAtomics INTEL_IVB_ARGUMENT_BUFFER_FIX, MetalOldCompat MTLSHIM_IVB_ARGUMENT_BUFFERS.
+// Checks: a depth-only quad whose depths come from that uniform must land where it should. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const source =

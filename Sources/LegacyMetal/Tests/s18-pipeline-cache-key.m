@@ -1,13 +1,6 @@
-// s18-pipeline-cache-key (MetalOldCompat item 18; the Blender EEVEE GPU hang): MetalOld's pipeline cache keys compute
-// pipelines on AMD/Intel by an AIRNT "function id" whose pipeline-script hashes are zero on this stack (they come from
-// GPUCompiler 31001's libGPUCompilerUtils, weak-linked and absent on Sequoia). So every compute pipeline of a function
-// shares one cache entry whatever its descriptor: Blender's recompile of eevee_shadow_tilemap_finalize with
-// maxTotalThreadsPerThreadgroup = 1024 got the cached 768-thread pipeline back, dispatched 1024 threads, and hung the
-// AMD GPU (repeated GPU channel resets, WindowServer killed). The fix lets MetalOld key by the driver's function key
-// (MTL_USE_AIRNT_BA=0). This program builds a register-heavy kernel without and then with the descriptor limit and
-// compares the pipelines' maxTotalThreadsPerThreadgroup (in both orders, against cold references). It never dispatches
-// anything. On a GPU whose compiler doesn't raise the kernel to 1024 threads (the Intel GPU here) it SKIPs.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD).
+// s18-pipeline-cache-key: compute pipelines of one function with different descriptors must differ; MetalOld's cache
+// ignored the descriptor (EEVEE hung the GPU). Fix: MetalOldCompat item 18. SKIP where the limit can't differ.
+// Checks: maxTotalThreadsPerThreadgroup with and without a limit, both orders; never dispatches. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

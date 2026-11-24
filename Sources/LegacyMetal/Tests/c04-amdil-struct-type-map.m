@@ -1,13 +1,6 @@
-// c04-amdil-struct-type-map (libAMDIL902 parser fix, patch 5; AMD GCN on the 12.5 stack, reachable through patch 1):
-// a kernel whose two buffer arguments share a struct and an array inside it. libAMDIL902 keeps a global multimap from
-// struct metadata node to the AIRStructTypeInfo objects using it. ~AIRStructTypeInfo removes the first entry holding the
-// same StructTypeInfo, which can be another object's, so the entry of the object being freed stays. A later compile whose
-// node lands on the same address reads that freed object as a pointer and crashes MTLCompilerService in
-// CheckStructIndirectArgumentBuffer. That depends on the allocator (Chrome's WebGPU CTS hits it at random), so this test
-// compiles once and looks for what's left in the map, which needs the compiler in this process (tools/localcc.dylib; run.sh
-// has no such loader, so it restarts the test with it).
-// Patches 1-4 alone: FAIL (entry left behind). Fixed: PASS.
-// Argument: GPU name substring (default: AMD).
+// c04-amdil-struct-type-map: freeing a struct type must drop its own entry from libAMDIL902's struct map; a stale one
+// crashed MTLCompilerService at random (Chrome's WebGPU CTS). Fix: the libAMDIL902 patch 5.
+// Checks: an in-process compile of two buffers sharing a struct, then what's left in the map. Argument: GPU name.
 #import "repro.h"
 #include <libgen.h>
 #include <mach-o/dyld.h>

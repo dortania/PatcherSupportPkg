@@ -1,9 +1,6 @@
-// i10-intel-num-samples (Intel adapter, IntelTextureAtomics.dylib): get_num_samples() returns 1 in a fragment function
-// that takes a buffer argument, at any sample count (without one it's right). Every ANGLE fragment shader takes buffers,
-// and ANGLE's alpha-to-coverage emulation (on for every non-Apple GPU) picks its pattern by sample count: in Chrome and
-// Safari, coverage didn't grow with alpha (dEQP multisample.fbo_*.proportionality_alpha_to_coverage). A fragment function
-// with a buffer argument writes get_num_samples() into 1x, 4x and 8x targets. Stock OCLP: FAIL. Fixed: PASS.
-// Argument: GPU name substring (default: Intel).
+// i10-intel-num-samples: get_num_samples() must return the sample count; in a fragment function with a buffer argument
+// it returned 1 (ANGLE's alpha-to-coverage). Fix: IntelTextureAtomics INTEL_NUM_SAMPLES_FIX.
+// Checks: a fragment function with a buffer argument writes it into 1x, 4x and 8x targets. Argument: GPU name.
 #import "repro.h"
 
 int main(int argc, char **argv) {

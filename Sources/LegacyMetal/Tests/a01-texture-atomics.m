@@ -1,12 +1,6 @@
-// a01-texture-atomics (AMD and Intel texture-atomics adapters; Blender upstream note): MSL 3.1 texture atomics
-// (atomic_fetch_add etc. on read_write R32Uint textures) on the legacy AMD (12.5) and Intel (12.x) drivers. They
-// compile, but the drivers have no texture-atomic instructions behind them: the atomics do nothing (the texels stay 0).
-// Blender assumes texture atomics on every macOS 14+ Mac, so EEVEE's shadow maps stay empty (no shadows). The adapters
-// lower texture atomics to the GPUs' image atomic instructions. 64x64 threads add 1 into 4 texels (1024 each) and
-// record the old values they got back (every value 0..1023 exactly once per texel). A kernel without atomics whose
-// constants look like the AMD adapter's tags (0x7A71AD9B, 0x7A700001) must build and compute too: the adapter took
-// them for tagged atomics, found none to rewrite and failed the pipeline (found by differential fuzzing).
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: AMD; run with Intel for the Intel adapter).
+// a01-texture-atomics: MSL 3.1 texture atomics on R32Uint textures must work (Blender's EEVEE shadows need them); the
+// AMD and Intel drivers compiled them to nothing. Fix: AMDTextureAtomics and IntelTextureAtomics.
+// Checks: 64x64 threads adding into 4 texels; a kernel with constants like the adapter's tags. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

@@ -1,14 +1,6 @@
-// s76-coreimage-builtin-filters (sweep): every built-in Core Image filter rendered on the GPU under test and with Core
-// Image's software renderer, with the same inputs, compared. A regression net for CoreImageOld.dylib and the GPU drivers
-// under it, which Photos, Preview, Quick Look and any app with a CIFilter reach: a filter whose GPU output is missing,
-// or differs from the CPU's beyond the tolerance, fails. Inputs: every CIImage input gets a 64x64 test pattern (smooth
-// gradients, a hard edge, a checker, different per input), everything else its default. Both contexts work in linear
-// float (RGBAf, no colour management) on a 64x64 region at the origin. Filters whose output depends on more than their
-// inputs (random, text, face/ML models) or that Core Image renders differently on CPU and GPU by design are listed in
-// kNotCompared and only checked for a GPU output. Filters whose GPU and CPU paths differ in Core Image itself (the same
-// difference on the Iris Pro and the R9, two vendors' GPUs) are listed in kGPUvsCPU: on a Mac with a second GPU they are
-// compared with it instead, else only checked for a GPU output. S76_VERBOSE=1 prints every filter's difference.
-// Argument: GPU name substring (default: Intel).
+// s76-coreimage-builtin-filters: a sweep: every built-in Core Image filter must render on the GPU as on the CPU.
+// Fix: the whole stack; only the fixed run must pass.
+// Checks: 64x64 patterns in linear float; see kNotCompared, kGPUvsCPU; S76_VERBOSE=1 prints diffs. Argument: GPU name.
 #import "repro.h"
 #import <CoreImage/CoreImage.h>
 #include <math.h>

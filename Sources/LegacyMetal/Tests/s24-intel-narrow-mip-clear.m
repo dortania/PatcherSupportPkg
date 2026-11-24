@@ -1,10 +1,6 @@
-// s24-intel-narrow-mip-clear (shim item 24): clears of R8Unorm / RG8Unorm targets at mip level 1 or higher on the 12.x
-// Intel driver don't happen at all (fast or slow clear). Draws to those levels work, as do level 0 and the other
-// formats (R8Uint, R8Snorm, R16Float, ...). WebGPU zero-initializes textures with such clears (CTS texture_zero
-// r8unorm/rg8unorm). A 32x32 mipmapped texture filled with 0xff is cleared to 0 at levels 1-3, per format. And
-// BGRA8Unorm(_sRGB) clears at level 2 or higher didn't land when those levels don't start on a 16-texel column of the mip
-// layout (Ivy Bridge and Haswell): the same for a 40x40 BGRA8Unorm and BGRA8Unorm_sRGB texture.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s24-intel-narrow-mip-clear: R8Unorm / RG8Unorm clears at level 1+, and some BGRA8 ones at level 2+, must land; the
+// 12.x Intel driver skipped them. Fix: MetalOldCompat item 24.
+// Checks: 32x32 R8/RG8 textures cleared at levels 1-3, a 40x40 BGRA8Unorm(_sRGB) at level 2+. Argument: GPU name.
 #import "repro.h"
 
 int main(int argc, char **argv) {

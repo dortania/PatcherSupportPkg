@@ -1,9 +1,6 @@
-// i21-intel-mad-sat-mul-hi (Intel adapter, IntelTextureAtomics.dylib): madsat, mulhi and madhi on 32-bit integers. The
-// 3802 back end lowers madsat without the carry out of its addition (madsat(a, 3u, b) returned the wrapped a * 3 + b
-// instead of 0xffffffff for most inputs), and mulhi with a constant operand returned 0 (mulhi(a, 3u)); found by
-// differential fuzzing (mslfuzz2: 162 of 195 disagreements). Runs unsigned and signed madsat, mulhi and madhi, with
-// constant and variable operands, on 256 seeded inputs and compares with the same arithmetic on the CPU.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i21-intel-mad-sat-mul-hi: 32-bit madsat, mulhi and madhi must match the CPU; the back end lost madsat's carry and
+// returned 0 for mulhi by a constant. Fix: IntelTextureAtomics INTEL_MAD_SAT_FIX.
+// Checks: unsigned and signed madsat, mulhi, madhi, constant and variable operands, vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

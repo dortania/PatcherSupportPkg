@@ -1,10 +1,6 @@
-// i28-intel-signed-div-pow2 (Intel adapter, IntelTextureAtomics.dylib): signed division by a constant power of two.
-// iCBE turns int / 2^k (and / -2^k) into an arithmetic shift, which rounds toward minus infinity: -7 / 4 gave -2, not
-// -1, for every negative dividend that isn't a multiple (int / 2 on negative values; found by the MacBookPro11,5
-// session's narrow-vector fuzzing through char4(...) / char4(-3, 7, -128, 5)). Remainders were right. The adapter does
-// such divides with the rounding correction. Scalars by 4, -128, 2 and -4096, a remainder by 128, and a char4 divide
-// with power-of-two lanes, on the differential fuzzer's 256-thread input, against the CPU reference.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// i28-intel-signed-div-pow2: signed division by a constant power of two must round toward zero; iCBE made it an
+// arithmetic shift (-7 / 4 gave -2). Fix: IntelTextureAtomics INTEL_SDIV_POW2_FIX.
+// Checks: scalars by 4, -128, 2 and -4096, a remainder by 128 and a char4 divide, vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

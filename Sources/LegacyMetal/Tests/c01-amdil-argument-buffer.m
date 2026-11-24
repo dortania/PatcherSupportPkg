@@ -1,12 +1,6 @@
-// c01-amdil-argument-buffer (libAMDIL902 parser fix, patch 1; AMD GCN on the 12.5 stack, every GCN generation):
-// a kernel that reads textures, a sampler and a buffer through a Metal argument buffer. The 2022 libAMDIL902 parses
-// argument metadata keys in a fixed order; the macOS 14+ compiler adds "air.address_space" (and "air.buffer_stride")
-// before "air.struct_type_info", so the argument buffer's layout is never recorded and
-// ILMetadataPropagation::initializeIABArgTypeSet crashes MTLCompilerService ("Compiler encountered an internal
-// error"). Checks every value read through the argument buffer.
-// Stock OCLP on Sequoia (12.5 libAMDIL902): FAIL (compiler crash). Fixed: PASS. OCLP's Tahoe build (12.5-GCN-25), which
-// returns early from initializeIABArgTypeSet instead, also passes this test (but not c02).
-// Argument: GPU name substring (default: AMD).
+// c01-amdil-argument-buffer: reads through an argument buffer must compile on AMD GCN; libAMDIL902 expected the old
+// metadata key order and crashed MTLCompilerService. Fix: the libAMDIL902 patch 1.
+// Checks: every texture, sampler and buffer value read through an argument buffer. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

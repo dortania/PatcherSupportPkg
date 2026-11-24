@@ -1,14 +1,6 @@
-// s67-intel-sample-mask-stencil (shim item 51): on the Ivy Bridge driver, a fragment function that writes
-// [[sample_mask]] writes no stencil when the render pass has no depth attachment. ANGLE's fragment functions write the
-// sample mask whenever they render multisampled, and a multisampled GL_STENCIL_INDEX8 renderbuffer is a stencil-only
-// attachment, so dEQP fbomultisample stencil_index8 resolved stencil 0 everywhere (Chrome, Safari, Firefox). Draws the
-// left half at depth 0.5 with stencil replace 3 and a sample-mask fragment function into (1) a 4x Stencil8 texture with
-// a 4x color target, and (2) a single-sample Depth32Float_Stencil8 texture attached as stencil only, its depth plane at
-// 0.25; reads the stencil back in a compute kernel and the depth plane with a blit, which must stay 0.25. (3), on Ivy
-// Bridge only, repeats (2) with a Less depth compare and depth writes on: the fix attaches the texture as depth too, and
-// must keep the depth state from applying to it (an M3 Pro passes those fragments and leaves the depth plane alone;
-// Haswell's stock driver rejects most of them, so (3) doesn't run there).
-// Stock OCLP on an HD 4000: FAIL. Fixed: PASS. Argument: GPU name substring (default: Intel).
+// s67-intel-sample-mask-stencil: a fragment function writing [[sample_mask]] must write stencil with no depth attached;
+// Ivy Bridge wrote none. Fix: MetalOldCompat item 51 MTLSHIM_STENCIL_WITH_DEPTH.
+// Checks: 4x Stencil8 and stencil-only Depth32Float_Stencil8 (depth plane kept), a depth-test case. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

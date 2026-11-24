@@ -1,9 +1,6 @@
-// i58-intel-constant-min3 (Intel adapter, INTEL_CONSTANT_CALL_FIX): min3 / max3 / median3 of constants read as bytes.
-// The back end folds these calls itself and then, as for i36's min / max, read every byte of the folded value as byte 0
-// when it was reinterpreted (as_type<uchar4>(as_type<ushort2>(min3(240u, 239u, 177u)))): the hash of the bytes came out
-// 0xb1b08c2c instead of 0xb1 (mslfuzz2 VEC=1 seed 5854, reduced; the stock compiler too). They're folded in the IR with
-// i36's calls. 256 threads on five inputs, against the same code on the CPU. Stock OCLP: FAIL. Fixed: PASS. Argument:
-// GPU name substring (default: Intel).
+// i58-intel-constant-min3: min3 / max3 / median3 of constants reinterpreted as bytes must be right; the back end folded
+// them and read every byte as byte 0. Fix: IntelTextureAtomics INTEL_CONSTANT_CALL_FIX.
+// Checks: as_type<uchar4>(as_type<ushort2>(min3(240u, 239u, 177u))), vs the CPU. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @

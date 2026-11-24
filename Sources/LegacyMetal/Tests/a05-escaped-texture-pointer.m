@@ -1,18 +1,6 @@
-// a05-escaped-texture-pointer (AMD and Intel adapters): a texture or sampler reached through a pointer that was stored
-// to memory and loaded back. MSL texture and sampler array arguments are byval arrays of
-// handles in AIR, which libAMDIL902 places in the argument table (user data API slots 6/7, global memory). It lowers a
-// handle load from an element of such an argument to a global load, but a handle load through a pointer it can't
-// trace back to the argument to a scratch load. ANGLE (Chrome, Safari) keeps `thread texture2d *` / `thread sampler *`
-// pairs for every GLSL sampler in an array of structs and, for sampler arrays indexed in a loop, loads them with a
-// runtime index: the sample then uses a descriptor read from the wrong memory. It returns 0 (WebGL conformance
-// glsl/bugs/sampler-array-using-loop-index: "expected 64,32,16,9 was 0,0,0,0"), and once in a Chrome conformance run
-// it hung the GPU. AMD: any GCN GPU on the 12.5 stack. Intel (3802 compiler): IGILTextureTypeEncode can't follow such
-// a texture and the compiler service crashes (null + 0x20), so the pipeline fails; with ANGLE's shader only on this
-// stack (native macOS 12.7.6 compiles it: its front end gives other AIR). Two 1x1 textures (40,20,10,5), (24,12,6,4):
-//   1. ANGLE's shape: loop i = 1..2 summing env[clamp(i - 1, 0, 1)] -> 64,32,16,9
-//   2. env[n] with n = 0 and n = 1 from a buffer -> each texture's own color
-// Stock OCLP: FAIL (AMD: rarely a GPU restart instead; Intel: pipeline error). Fixed: PASS.
-// Argument: GPU name substring (default: AMD).
+// a05-escaped-texture-pointer: a texture or sampler loaded through a pointer stored in memory must be the right one;
+// AMD read a bad descriptor (0s, once a GPU hang), Intel's compiler crashed. Fix: AMDTextureAtomics AMD_HANDLE_FIX,
+// IntelTextureAtomics INTEL_HANDLE_FIX. Checks: ANGLE's loop over a sampler array, buffer indexes. Argument: GPU name.
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"

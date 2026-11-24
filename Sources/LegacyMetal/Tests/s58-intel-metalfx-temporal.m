@@ -1,10 +1,6 @@
-// s58-intel-metalfx-temporal (MetalOldCompat item 44): a GPU that MetalFX says supports its temporal scaler must get one
-// that encodes. On the Haswell / Ivy Bridge GPUs, MTLFXTemporalScalerDescriptor said yes, but the temporal pass needs
-// quad-group functions these GPUs don't have: its kernel failed to compile and the first encode crashed the app (a nil
-// compute pipeline in the driver's setKernel). If supportsDevice: says yes, creates a 256 -> 512 temporal scaler and
-// encodes a frame of a smooth image; if it says no, the scaler must not be created either.
-// Stock OCLP: crash (no result line). Fixed: PASS (unsupported on the Intel GPU; working on the AMD GPU).
-// Argument: GPU name substring (default: Intel).
+// s58-intel-metalfx-temporal: a temporal scaler MetalFX says is supported must encode; on Haswell / Ivy Bridge it
+// crashed the app. Fix: MetalOldCompat item 44 MTLSHIM_METALFX_TEMPORAL.
+// Checks: if supported, a 256 -> 512 scaler encodes a frame; if not, none is created. Argument: GPU name.
 #import "repro.h"
 #import <MetalFX/MetalFX.h>
 

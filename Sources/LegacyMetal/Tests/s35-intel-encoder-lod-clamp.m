@@ -1,10 +1,6 @@
-// s35-intel-encoder-lod-clamp (MetalOldCompat item 31): LOD clamps passed to the 12.x Intel driver's encoders
-// (setFragmentSamplerState:lodMinClamp:lodMaxClamp:atIndex: and the like) wrap modulo 16: 1000 reads as 8, 100 as 4, -3 as
-// 13. ANGLE binds every WebGL texture's sampler this way with GL's default LOD range (0, 1000), so WebGL never sampled a
-// mip level above 8. A 1024x1 R32Float texture with 11 levels (level n holding n) is sampled in a fragment function at LOD
-// 10 (implicit, and explicit through setFragmentSamplerStates:lodMinClamps:lodMaxClamps:withRange:) with clamps (0, 1000),
-// at level 2 with (-3, 1000), and in a compute function at level 9 with (0, 100). Stock OCLP: FAIL. Fixed: PASS.
-// Argument: GPU name substring (default: Intel).
+// s35-intel-encoder-lod-clamp: LOD clamps passed to encoders must hold; the 12.x Intel driver wrapped them modulo 16
+// (ANGLE's 1000 read as 8). Fix: MetalOldCompat item 31.
+// Checks: an 11-level texture at LOD 10, 2 and 9 with clamps (0, 1000), (-3, 1000), (0, 100). Argument: GPU name.
 #import "repro.h"
 
 int main(int argc, char **argv) {
