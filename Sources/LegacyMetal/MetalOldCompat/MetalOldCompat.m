@@ -1,160 +1,99 @@
-// MetalOldCompat.dylib: fixes for OCLP's Metal 3802 stack (MetalOld.dylib = Metal from macOS 13.2, used for every GPU
-// on Macs that also have a Haswell/Ivy Bridge iGPU) when apps built for macOS 15 drive a GPU whose shaders are compiled
-// by the newer MTLCompiler (the AMD GCN dGPU of MacBookPro11,5 / iMac15,1):
-//   1. MTLDevice methods from the macOS 13.3+/15 SDK that MetalOld lacks ("unrecognized selector" crashes)
-//   2. reflection data wrapped in the newer CompilerOutputReflectionBlock container, which MetalOld can't read
-//   3. MTLTextureUsageShaderAtomic and memoryless storage, which MetalOld rejects in texture validation
-//   7. serialized vertex descriptors, whose layout records changed size between MetalOld and the newer compiler
-//   8. properties and encoder calls from the macOS 13.3-15 SDKs (MTLCompileOptions.mathMode, shaderValidation, ...;
-//      object/mesh stage bindings on GPUs without mesh shaders)
-//   9. MSL 3.2 requests (compiled as 3.1, the newest this stack's front end has; also the default; 3.2's coherence
-//      qualifiers rewritten to their 3.1 equivalents)
-//  10. Metal devices pinned against over-release (Chromium's GPU process)
-//  11. ANGLE (Chromium, Safari's WebKit): past ANGLE's pre-2016-Mac gate, and only family-2 GPUs (the AMD dGPU) for it;
-//      on Macs whose only GPU is family 1, that GPU as family 2, with ANGLE's fallbacks for what it lacks (and past
-//      ANGLE's refusal of NVIDIA GPUs, for Kepler)
-//  13. Safari's ANGLE: its prebuilt internal-shader metallib (too new for this stack) replaced by the same shaders
-//      compiled from source
-//  14. argument encoders in Safari's processes (OCLP's wrapper stubs them out; WebGL 2 uniform blocks need them)
-//  15. 12.x Intel driver: MSAA resolves into a mip level / array slice other than 0 (lost, or a crash); fast clears of
-//      color targets at most 2 texels wide (rows missed)
-//  16. 2D-array texture views that don't start at slice 0 on the 12.x Intel driver (most of their layers unreachable)
-//  18. pipeline cache keys that ignore the pipeline descriptor (a compute pipeline's maxTotalThreadsPerThreadgroup):
-//      MetalOld told to key by the driver's function key
-//  20. 8-byte buffer fills at an offset of 4 mod 8 on the 12.x Intel driver (filled the 8 bytes below instead)
-//  21. depth-only render pipelines on the 12.x Intel driver: without a fragment function they write no usable depth;
-//      they get an empty one
-//  22. HiZ on the 12.x Intel driver for depth textures with several mip levels or slices: blits leave it out of step
-//      with the depth data; such textures are created without HiZ
-//  23. rendering into a depth plane of a 3D texture's mip level 1+ on the 12.x Intel driver (wrong planes written):
-//      through a temporary 2D texture
-//  24. clears of R8Unorm / RG8Unorm targets at mip level 1+ on the 12.x Intel driver (nothing cleared): through a
-//      temporary texture
-//  25. precompiled libraries built for macOS 15.4+ (AIR 2.7, e.g. iMovie's): retargeted to AIR 2.6 in the compiler
-//      service, as MetallibSupportPkg does for the system's metallibs
-//  26. divide by zero in WebKit's WebGPU, which only traps on Intel Macs (kills Safari's GPU process): gives the result
-//      Apple silicon gets
-//  27. blits into depth or stencil that later render passes don't see on the 12.x Intel driver: written again by a
-//      render pass
-//  28. nil buffers encoded into argument buffers on the 12.x Intel driver (a null dereference; Blender's Cycles): the
-//      slot cleared instead
-//  29. a sample mask of 0 from WebKit's WebGPU on the 12.x Intel driver (every sample drawn): a mask that covers none
-//  30. integer cube textures with 1x1 / 2x2 faces sampled in vertex and fragment functions on the 12.x Intel driver (0):
-//      nearest samplers get programmed instead of seamless cube addressing
-//  31. LOD clamps passed to the 12.x Intel driver's encoders (setFragmentSamplerState:lodMinClamp:lodMaxClamp:atIndex: and
-//      the like) wrap modulo 16 (ANGLE's 1000 reads as 8: WebGL never sampled a mip level above 8): clamped to [0, 15.996]
-//  33. stencil attachments on textures with several mip levels or slices on the 12.x Intel driver (passes don't see
-//      what's there and overwrite what blits wrote): rendered through a temporary texture, copied in and out by blits
-//  32. texture views with a swizzle on the 12.x Intel driver (nil: family 1 has no swizzle; Dawn, told the iGPU is family 2
-//      by item 11, makes every depth/stencil view with one and loses the device): a plain view where the swizzle changes
-//      nothing a shader can see
-//  34. coverage from a fragment function (sample_mask output, alpha-to-coverage) in a pipeline with no depth/stencil and
-//      every color writeMask none on the 12.x Intel driver (dropped: occlusion queries count every sample): the first
-//      blendable color attachment is written through a blend that keeps it
-//  35. Metal Performance Shaders' statistics reductions (compute_final_*_statistics) dispatched with 16 threads on these
-//      Intel GPUs, which those kernels can't handle (min/max, mean and variance wrong): 32 threads
-//  36. multisampled Stencil8 textures on the 12.x Intel driver, which shaders read wrong (most of the right half reads
-//      the left half): created as Depth32Float_Stencil8, whose stencil reads right, with Stencil8 views made X32_Stencil8
-//  37. stencil copied between a buffer and a mip level 1+ or a slice 1+ on the 12.x Intel driver with a buffer offset or
-//      bytesPerRow that isn't a multiple of 256 (texels taken from a neighbour, or none): through a level-0 temporary texture
-//      (and on the Ivy Bridge driver, stencil copied into a buffer with padded rows, which kept only its first row: row by row)
-//  38. stencil views (X32_Stencil8, X24_Stencil8) of depth/stencil textures on the 12.x Intel driver, which describe the
-//      stencil plane with the depth plane's 4-texel mip alignment (levels 2+ read 0 for many widths): 8, as laid out
-//  39. size queries (get_width/height) on writable 2D-array views that start at mip level 1+ in fragment functions on
-//      the 12.x Intel driver (level 0's size): the view's render-target surface state gets the level as its min LOD too
-//  40. depth comparisons (sample_compare, gather_compare) through a sampler argument in compute kernels on the 12.x
-//      Intel driver, which always returned 0: the compute path drops the sampler's compare function; it is copied in
-//  41. Photos' portrait editing (CIDepthBlurEffect, the portrait / SDOF filters) crashing in CoreImageOld.dylib, the
-//      14.0 beta 3 Core Image the 3802 payloads install, on every legacy GPU: +[CIKernel / CIColorKernel
-//      SDOFV2MetalKernelNamed:] and SDOFV3MetalKernelNamed: pass a static NSData that the library's once-block stores
-//      without retaining, so once an autorelease pool drains it is freed and the next portrait kernel crashes in
-//      -[CIKernelLibrary initWithData:error:]; NSData returns those metallibs from a cache that keeps them alive
-//  42. viewports 1-15 on the 12.x Intel driver before the app sets a viewport (they cover nothing: primitives sent to them
-//      with [[viewport_array_index]] draw nothing): each render encoder starts with the default viewport set explicitly
-//  43. Metal Performance Shaders' NDArray matrix multiplication on the Haswell / Ivy Bridge GPUs, which encoded nothing
-//      (MPSNDArrayMatrixMultiplication and MPSGraph's matmul left their results at 0): it gets the classic
-//      MPSMatrixMultiplication it uses on the AMD GPU
-//  44. MetalFX's temporal scaler on the Haswell / Ivy Bridge and Kepler GPUs, which said it was supported but whose pass
-//      needs quad-group functions these family-1 GPUs don't have (its kernel failed to compile and the first encode
-//      crashed the app): reported unsupported there, and not created
-//  45. texture reads through Metal 4's read sampler (Xcode 26: every read of a Metal 4.0 library, and SceneKit's, VFX's
-//      and CoreComposite's depth, cube and 1D reads on macOS 26) on Tahoe's compiler, which crashed on those with ushort
-//      coordinates (SceneKit's temporal antialiasing) and passed the rest to back ends that can't build them: rebuilt in
-//      the older form, without the sampler
-//  46. argument encoders on the Ivy Bridge driver, which has none: MetalOld's abort() (Safari's GPU process at the first
-//      WebGL 2 uniform block once item 14 had restored the encoders) becomes nil
-//  47. argument buffers on the Ivy Bridge driver: layouts and encoders, and the buffers they point to bound at the
-//      hidden indices the Intel adapter gives them (WebGL 2 uniform blocks)
-//  48. direct draws after an indirect draw in the same render encoder on the Ivy Bridge driver, which kept the indirect
-//      draw's base instance and base vertex: drawn through an indirect buffer of the shim's own
-//  49. blits from or into texture views on the Ivy Bridge driver, which reached the parent's slice 0 and level 0 (cube
-//      faces after ANGLE's generateMipmap): addressed through the view's parent at its slice and level
-//  50. multisampled depth cleared by a render pass on the Ivy Bridge driver, which later render passes saw only in its
-//      first quarter: a compute read after the pass makes the driver resolve all of it
-//  51. stencil drawn with a sample mask on the Ivy Bridge driver, which wrote none when the render pass had no depth
-//      attachment: a combined depth/stencil texture attached as stencil only is attached as depth too
-//  52. reflection of [[stitchable]] functions (their return type and arguments), which aborted in MetalOld's
-//      MTLStitchingReflectionReader on the reply of Sequoia's compiler service: the reader gets the MTLPSBIN section out of
-//      the reply's newer container. With CoreImageOld's CIKernelReflection::reflect restored in the payload, precompiled
-//      and stitchable Core Image kernels load again (Microsoft Office's picture corrections), and with its own
-//      sections found again, kernels from Metal source (kernelsWithMetalString:, which aborted) and from kernel-language
-//      source, which now take Core Image's Metal path, reflect too
-//  53. small stencil uploads on the Kepler driver (GeForceMTLDriver), which weren't ordered before the blit encoder's next
-//      command: a later copy out of the same texture could read it before the upload landed (zeros)
-//  54. methods the Kepler driver lacks (swizzled texture views, indirect command buffers), which threw "unrecognized
-//      selector": a view without a swizzle that changes nothing a shader can see, nil otherwise (as item 32); no ICB (nil)
-//  55. MSAA resolves into mip level 1 or higher on the Kepler driver, which never arrived after a pass that draws: through a
-//      temporary texture copied to the level, as item 15 on Intel
-//  56. views of texture views on the Kepler driver, which lost the first view's offset: made from the root texture
-//  57. MPSGraph's softmax over any axis but the last on Kepler, which came out wrong: done over the last axis between
-//      two transposes
-//  58. texture atomics on Kepler, which the compiler couldn't build: textures created for them are made linear in a
-//      buffer of their own, bound at the hidden index where the Kepler adapter makes the atomics global atomics
-//  59. visibility results on Kepler, which kept only the last draw's count (and left slots without draws as they were):
-//      each draw counts into a slot of its own, summed into the app's slot when the encoder ends
-//  60. new private buffers and counter sample buffers on Kepler, which came back with a freed buffer's contents: zero-filled
-//  61. counter resolves on Kepler, which read a result buffer nothing made resident (GPU fault, device lost): the result
-//      buffer is put in the command buffer's resources first
-//  62. depth and stencil textures sampled through texture2d in ANGLE's shaders on Kepler, which gave (d, d, d, d): a mask of
-//      depth / stencil bindings at the hidden index where the Kepler adapter makes them (d, 0, 0, 1)
-//  63. blits at levels 1+ of mipmapped depth arrays and cubes on Ivy Bridge, which broke bands of other slices: done by a
-//      compute read and item 27's render pass instead, the encoder's later commands after them in order
-//  64. depth clears on Ivy Bridge of a level or slice above 0 of a mipmapped or cube depth texture, which were lost, and
-//      clears to depths with more than 16 bits of mantissa (Haswell too): a draw writes the clear depth
-//  65. copies between a buffer and several slices of a 3D texture on Kepler with a padded bytesPerImage, which put slices
-//      1+ in the padding: done a slice at a time
-//  66. occlusion queries on Kepler that counted no samples for a draw whose color attachments all have writeMask none and
-//      no depth/stencil attachment: the first blendable attachment is written through a blend that keeps it (item 34's)
-//  67. uploads into the last row of blocks of a BC texture on Kepler, at a height short of a whole block, which wrote
-//      nothing: the copy's height is rounded up to the block
-//  68. render passes at levels 1+ of mipmapped depth arrays and cubes on Ivy Bridge, after which fragment functions read
-//      parts of other slices of level 0 wrong: an empty pass at level 0 slice 0 follows each
-//  69. triangles across the edge of the viewport on Kepler, which the driver clipped there (a guard band no bigger than
-//      the viewport) and drew as a fan, the pixels on its seams running the fragment function once per part with part
-//      of the samples: the guard band 256 times the viewport, as on other drivers for this hardware; and wide points
-//      centered outside the viewport, which it culled whole: the point guard band as wide
-//  70. reversed viewport depth ranges (znear above zfar) on Kepler, which the driver mapped as if in order: the z scale
-//      and translate it keeps for such a viewport are set to zfar - znear and znear
-//  71. the sample positions Metal reports for Kepler's 2x and 8x patterns, which listed the standard positions in another
-//      order than the hardware's: reported in the hardware's order
-//  72. copies between a format and its sRGB variant on Ivy Bridge and Haswell, which converted the texels (BC: garbled): made
-//      through a buffer
-//  77. 2x multisampling on GPUs without it (Ivy Bridge, Haswell), which MetalOld's validation aborted on (Tahoe's Sequoia
-//      wallpaper): 2 samples become 4 in textures, heap sizes, render pipelines and attachment-less passes
-//  79. textures and samplers in item 47's argument buffers (Safari's WebGPU bind groups, whose fragment functions crashed
-//      the compiler service): bound at the adapter's hidden texture / sampler indices around each draw or dispatch
-//  83. blits from two threads at once on the Ivy Bridge driver, which crashed it (SIGFPE in its fixed-function kernel
-//      setup): its blit methods run one at a time
-//  85. vertex functions with 32 inputs on the Ivy Bridge driver, whose input walk never ended (an abort): it is
-//      stopped after the 32nd
-//  86. stencil copied into a mip level of a Depth32Float_Stencil8 texture on the Ivy Bridge driver, which zeroed the depth
-//      of the deeper levels: their depth is kept around the copy
-// (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
-// Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
-// _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
-// sends it to the unified log, for sandboxed XPC services such as WebKit's GPU process; MTLSHIM_DUMP_SOURCES=1 also writes
-// every compiled source and every loaded metallib to the temporary directory). Build with build.sh.
+// MetalOldCompat.dylib: fixes for OCLP's Metal 3802 stack (MetalOld.dylib, the Metal of macOS 13.2, which OCLP uses
+// for every GPU on Macs with a Haswell / Ivy Bridge iGPU or a Kepler GPU): newer SDK methods it lacks, compiler-service
+// output it can't read, and the 12.x / 11.7.10 Intel and Kepler drivers' bugs, worked around at the Metal API. The
+// code refers to the fixes as "item N"; FIXES.md section 1 describes them. (The 12.5 AMD driver's own bugs are fixed
+// in AMDBronzeCompat.dylib: BronzeCompat/.)
+//
+// Installed as Metal.framework/Versions/A/MetalOldCompat.dylib: a weak load command in OCLP's Metal.framework wrapper
+// loads it into every Metal client, WindowServer at boot among them; it does nothing unless _MTLDevice comes from
+// MetalOld.dylib. Tests insert build/MetalOldCompat.dylib (Tests/verify.sh; build/MetalOldCompat-noop.dylib for the
+// "without the fixes" column). Build with build.sh.
+//   MTLSHIM_VERBOSE=1        log what it does to stderr (=oslog: to the unified log, for sandboxed XPC services such as
+//                            WebKit's GPU process)
+//   MTLSHIM_DUMP_SOURCES=1   also write every compiled source and loaded metallib to the temporary directory
 // Methods are only added if the class doesn't already implement them (class_addMethod never overrides).
+//
+// Items:
+//  1. MTLDevice methods from the macOS 13.3-15 SDKs that MetalOld lacks ("unrecognized selector")
+//  2. reflection in the newer compiler's CompilerOutputReflectionBlock container: MetalOld gets the classic part
+//  3. MTLTextureUsageShaderAtomic and memoryless storage, which MetalOld's texture validation rejects
+//  7. serialized vertex descriptors: layout records converted between MetalOld's 12 and the compiler's 16 bytes
+//  8. properties and encoder calls from the 13.3-15 SDKs (mathMode, shaderValidation, object/mesh stage bindings)
+//  9. MSL 3.2 requests: compiled as 3.1 (also the default), 3.2's coherence qualifiers rewritten
+//  10. Metal devices pinned against over-release (Chromium's GPU process)
+//  11. ANGLE: past its pre-2016-Mac gate and NVIDIA refusal; family-2 GPUs only, a family-1-only Mac's GPU as family 2
+//  13. Safari's ANGLE: its prebuilt internal-shader metallib (too new) replaced by the shaders compiled from source
+//  14. argument encoders in Safari's processes, which OCLP's wrapper stubs out (WebGL 2 uniform blocks)
+//  15. 12.x Intel: MSAA resolves into a level or slice above 0 (lost, or a crash); fast clears of targets <= 2 wide
+//  16. 12.x Intel: 2D-array views that don't start at slice 0 (most layers unreachable)
+//  18. pipeline cache keys that ignore the descriptor (maxTotalThreadsPerThreadgroup): the driver's function key used
+//  20. 12.x Intel: 8-byte buffer fills at an offset of 4 mod 8 (filled the 8 bytes below)
+//  21. 12.x Intel: depth-only pipelines without a fragment function write no usable depth: they get an empty one
+//  22. 12.x Intel: HiZ out of step after blits on depth textures with several levels or slices: created without HiZ
+//  23. 12.x Intel: rendering into a 3D texture's depth plane at level 1+ (wrong planes): through a temporary 2D texture
+//  24. 12.x Intel: clears of R8Unorm / RG8Unorm at level 1+ (nothing cleared): through a temporary texture
+//  25. precompiled AIR 2.7 libraries (macOS 15.4+, e.g. iMovie's): retargeted to AIR 2.6 in the compiler service
+//  26. divide by zero in WebKit's WebGPU, which traps only on Intel Macs: gives Apple silicon's result
+//  27. 12.x Intel: blits into depth or stencil that later render passes don't see: written again by a render pass
+//  28. 12.x Intel: nil buffers encoded into argument buffers (a null dereference): the slot cleared instead
+//  29. 12.x Intel: a sample mask of 0 (every sample drawn): a mask that covers none
+//  30. 12.x Intel: integer cube textures with 1x1 / 2x2 faces read 0: nearest samplers get clamped cube addressing
+//  31. 12.x Intel: LOD clamps passed to encoders wrap modulo 16: clamped to [0, 15.996]
+//  32. 12.x Intel: swizzled texture views (nil on family 1): a plain view where the swizzle changes nothing visible
+//  33. 12.x Intel: stencil attachments on textures with several levels or slices: through a temporary texture and blits
+//  34. 12.x Intel: coverage dropped with no depth/stencil and every writeMask none: a write through a keep blend
+//  35. MPS statistics reductions dispatched with 16 threads on these Intel GPUs (wrong results): 32 threads
+//  36. 12.x Intel: multisampled Stencil8 read wrong: created as Depth32Float_Stencil8, its views X32_Stencil8
+//  37. 12.x Intel: stencil buffer copies at level / slice 1+, offset or row unaligned: via a level-0 temporary texture
+//  38. 12.x Intel: stencil views laid out with the depth plane's 4-texel mip alignment: 8, as the stencil plane is
+//  39. 12.x Intel: size queries on writable 2D-array views at level 1+ in fragment functions: the min LOD set too
+//  40. 12.x Intel: compute depth comparisons through a sampler argument returned 0: the compare function copied in
+//  41. Photos' portrait filters crashing in CoreImageOld.dylib (a static NSData freed): kept alive in a cache
+//  42. 12.x Intel: viewports 1-15 cover nothing until the app sets one: each render encoder sets the defaults
+//  43. MPS NDArray matrix multiplication encoding nothing on Haswell / Ivy Bridge: the classic MPSMatrixMultiplication
+//  44. MetalFX's temporal scaler on Haswell / Ivy Bridge / Kepler (needs quad-group functions): reported unsupported
+//  45. reads through Metal 4's read sampler on Tahoe's compiler (crash or unbuildable): rebuilt without the sampler
+//  46. Ivy Bridge: argument encoders, which the driver lacks: MetalOld's abort() becomes nil
+//  47. Ivy Bridge: argument buffers: layouts, encoders, the buffers they point to bound at the adapter's hidden indices
+//  48. Ivy Bridge: direct draws after an indirect one kept its base instance / vertex: drawn through an indirect buffer
+//  49. Ivy Bridge: blits from or into texture views reached the parent's slice 0 level 0: addressed through the parent
+//  50. Ivy Bridge: MSAA depth cleared by a pass seen in its first quarter only: a compute read makes the driver resolve
+//  51. Ivy Bridge: stencil drawn with a sample mask and no depth attachment wrote none: attached as depth too
+//  52. [[stitchable]] reflection aborting on Sequoia's compiler reply: the reader gets the reply's MTLPSBIN section
+//  53. Kepler: small stencil uploads not ordered before the blit encoder's next command: ordered
+//  54. Kepler: methods the driver lacks (swizzled views, indirect command buffers): a plain view as item 32, no ICB
+//  55. Kepler: MSAA resolves into level 1+ never arrived after a pass that draws: through a temporary texture
+//  56. Kepler: views of texture views lost the first view's offset: made from the root texture
+//  57. Kepler: MPSGraph's softmax over an axis but the last came out wrong: over the last axis between transposes
+//  58. Kepler: texture atomics: such textures made linear in a buffer bound at the Kepler adapter's hidden index
+//  59. Kepler: visibility results kept only the last draw's count: a slot per draw, summed when the encoder ends
+//  60. Kepler: new private and managed buffers and counter sample buffers held a freed buffer's contents: zero-filled
+//  61. Kepler: counter resolves read a result buffer nothing made resident (device lost): made resident first
+//  62. Kepler: depth / stencil read through texture2d gave (d, d, d, d): a binding mask at the adapter's hidden index
+//  63. Ivy Bridge: blits at levels 1+ of mipmapped depth arrays and cubes broke other slices: compute read + item 27
+//  64. Ivy Bridge: depth clears at a level / slice above 0 lost, and >16-bit-mantissa clear depths (Haswell too): drawn
+//  65. Kepler: buffer / 3D texture copies over several slices with a padded bytesPerImage: a slice at a time
+//  66. Kepler: occlusion queries counting nothing with every writeMask none and no depth/stencil: item 34's blend
+//  67. Kepler: uploads into a BC texture's last, partial row of blocks wrote nothing: height rounded up to the block
+//  68. Ivy Bridge: passes at levels 1+ of mipmapped depth arrays and cubes spoil level-0 reads: an empty level-0 pass
+//  69. Kepler: triangles across the viewport edge drawn as fans, wide points outside it culled: guard bands 256x
+//  70. Kepler: reversed viewport depth ranges mapped as if in order: z scale and translate set to zfar - znear, znear
+//  71. Kepler: 2x and 8x sample positions reported in another order than the hardware's: reported in its order
+//  72. Ivy Bridge / Haswell: copies between a format and its sRGB variant converted the texels: through a buffer
+//  73. All: pipelines and passes without attachments, which MetalOld's validation aborts on: a hidden R8 attachment
+//  74. All: MoltenVK 1.4.0 / 1.4.1 Vulkan memory in placement heaps, which family-1 GPUs lack: MVK_CONFIG_USE_MTLHEAP=0
+//  75. Tahoe: OCLP's libLLVM wrapper relabelled old AIR modules, which then crashed the compiler: returned as they are
+//  76. GCN: the 14.2-era compiler's extra reflection cached under uninitialized keys: only keyed blocks, caches cleared
+//  77. Ivy Bridge / Haswell: 2x multisampling, which MetalOld's validation aborts on: 2 samples become 4
+//  79. Ivy Bridge: textures and samplers in item 47's argument buffers: bound at the adapter's hidden indices
+//  80. Kepler: depth-only buffer/texture copies with DepthFromDepthStencil moved 32-bit floats: the option dropped
+//  81. Kepler: stencil clear values above 255 broke the pass: masked to 8 bits
+//  82. Kepler: managed buffers / textures freed before the commit that uploads them crashed it: kept until then
+//  83. Ivy Bridge: blits from two threads at once crashed the driver: its blit methods run one at a time
+//  84. Kepler, Haswell, Ivy Bridge, GCN: new depth, stencil and 3D textures held old memory (Safari relies on zeroed):
+//      cleared in WebKit's GPU process
+//  85. Ivy Bridge: vertex functions with 32 inputs, whose input walk never ended: stopped after the 32nd
+//  86. Ivy Bridge: stencil copied into a level of a Depth32Float_Stencil8 zeroed deeper levels' depth: kept around it
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <objc/message.h>
@@ -174,15 +113,15 @@
 #include <pthread.h>
 #import <IOKit/IOKitLib.h>
 #include <os/log.h>
-// Replacements for methods of the new / copy / init families return an owned (+1) object like the methods they replace,
-// and init replacements consume self: without these annotations ARC treats them as returning +0, retains and autoreleases
-// what they return, and every such object then lives until an autorelease pool drains, never in a process that drains
-// none (dawn.node, command-line tools: 15000 textures in 25 s of WebGPU CTS image_copy).
+// Replacements for new / copy / init family methods return an owned (+1) object, and init replacements consume self:
+// without these annotations ARC retains and autoreleases what they return, which then lives until a pool drains (never,
+// in processes that drain none, such as dawn.node).
 #define RETURNS_RETAINED __attribute__((ns_returns_retained))
 #define CONSUMED __attribute__((ns_consumed))
 #include <stdarg.h>
 
 static void shimLog(const char *format, ...) __attribute__((format(printf, 1, 2)));
+static bool verbose(void) { return getenv("MTLSHIM_VERBOSE") != NULL; }
 static void shimLog(const char *format, ...) {
     char line[1024];
     va_list args;
@@ -236,15 +175,14 @@ static dispatch_data_t unwrapReflection(dispatch_data_t data) {
     if (!header || h32[0] != kReflBlockMagic || h32[1] != kReflBlockEntries) return data;
     uint64_t offset = h64[2], length = h64[3], total = dispatch_data_get_size(data);
     if (offset < kReflBlockHeaderSize || offset > total || length > total - offset) return data;
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] unwrapped reflection block (%llu bytes at 0x%llx of %llu)\n", length, offset, total);
+    if (verbose()) shimLog("[mtlshim] unwrapped reflection block (%llu bytes at 0x%llx of %llu)\n", length, offset, total);
     return dispatch_data_create_subrange(data, offset, length);
 }
 
-// Serialized vertex descriptors: MetalOld writes layout records of 12 bytes {u32 bufferIndex|stepFunction<<5,
-// u32 stepRate, u32 stride}; the 14.2-era MTLCompiler that compiles for the AMD GPU reads 16-byte records with a u64
-// stride at +8. Header (u16 size, u16 counts: layouts in bits 6-10 and attributes in bits 11+, u16 layout table
-// offset, u16 attribute table offset) and the 8-byte attribute records are the same in both. Only the first layout
-// happens to parse correctly in the old format, so every multi-buffer vertex descriptor breaks.
+// Serialized vertex descriptors (item 7): MetalOld writes 12-byte layout records {u32 bufferIndex|stepFunction<<5,
+// u32 stepRate, u32 stride}; the 14.2-era MTLCompiler reads 16-byte ones with a u64 stride at +8. The header (u16 size,
+// u16 counts: layouts in bits 6-10, attributes in bits 11+, u16 layout and attribute table offsets) and the 8-byte
+// attribute records are the same in both.
 enum { kVDHeaderSize = 8, kVDOldLayoutSize = 12, kVDNewLayoutSize = 16, kVDAttributeSize = 8 };
 
 // The descriptor may follow a prefix (the vertex-stage request starts with 12 bytes of other data); find it by its
@@ -284,7 +222,7 @@ static dispatch_data_t convertVertexDescriptor(dispatch_data_t data, BOOL toNew)
     memcpy(dst + kVDHeaderSize + layouts * to, src + attrsOff, tail);
     *(uint16_t *)(dst + 0) = (uint16_t)(outSize - off);
     *(uint16_t *)(dst + 6) = (uint16_t)(kVDHeaderSize + layouts * to);
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] vertex descriptor (%u layouts, at +%zu) converted to %s format\n", layouts, off, toNew ? "14.2" : "13.2");
+    if (verbose()) shimLog("[mtlshim] vertex descriptor (%u layouts, at +%zu) converted to %s format\n", layouts, off, toNew ? "14.2" : "13.2");
     return dispatch_data_create(out, outSize, NULL, DISPATCH_DATA_DESTRUCTOR_FREE);
 }
 
@@ -304,7 +242,7 @@ static id vertexStage(id self, SEL _cmd, void *fragment, id fragmentVariant, id 
                       id archive, NSUInteger options, void *reflection, id stats, id fragmentTimeData, id archiverId, void *error, id handler) RETURNS_RETAINED;
 static id vertexStage(id self, SEL _cmd, void *fragment, id fragmentVariant, id vertexFunction, dispatch_data_t vertexDesc, id descriptor,
                       id archive, NSUInteger options, void *reflection, id stats, id fragmentTimeData, id archiverId, void *error, id handler) {
-    if (getenv("MTLSHIM_VERBOSE")) {
+    if (verbose()) {
         const uint8_t *b = NULL; size_t s = 0;
         dispatch_data_t m = vertexDesc ? dispatch_data_create_map(vertexDesc, (const void **)&b, &s) : nil;
         shimLog("[mtlshim] vertex stage: new-format compiler=%d descriptor=%s %zu bytes, header %02x%02x %02x%02x %02x%02x %02x%02x\n",
@@ -368,16 +306,10 @@ static id initFunction(CONSUMED id self, SEL _cmd, id device, dispatch_data_t da
 typedef BOOL (*ValidateTextureIMP)(id, SEL, id);
 static ValidateTextureIMP origValidateTexture;
 
-// 77. 2x multisampling on GPUs without it. Ivy Bridge and Haswell have 4x and 8x only (supportsTextureSampleCount:2 is NO
-// on the HD 4000 and the Iris Pro), and MetalOld's texture validation aborts on a 2x texture ("MTLTextureDescriptor
-// sampleCount (2) is not supported by device."). Tahoe's Sequoia wallpaper (WallpaperSequoiaExtension) renders its
-// scene into a 2x Depth16Unorm target without asking, so the extension crashed and the wallpaper fell back to Tahoe's
-// default. Where the device itself says it has no 2x but has 4x, a sample count of 2 becomes 4 everywhere it can come in,
-// together, so a pass and its pipelines keep agreeing: texture descriptors (in validation, which every texture path
-// runs), heap sizing (heapTextureSizeAndAlignWithDescriptor:), render pipelines (adjustedPipeline) and the default raster
-// sample count of passes without attachments (before item 73's stand-in target). supportsTextureSampleCount:2 still says
-// NO, so apps that ask keep choosing 4x themselves. Shaders that read [[sample_id]], get_num_samples() or sample
-// positions see 4 samples. MTLSHIM_MSAA2=0 turns it off. Test: s83 (and tools/wallpaper-check.sh builtin:sequoia).
+// 77. Ivy Bridge and Haswell have no 2x MSAA, and MetalOld's texture validation aborts on a 2x texture (Tahoe's Sequoia
+// wallpaper renders into one). Where the device has 4x but no 2x, a sample count of 2 becomes 4 everywhere it can come
+// in, together: texture descriptors, heap sizing, render pipelines and passes without attachments (before item 73's
+// stand-in). supportsTextureSampleCount:2 still says NO. Test: s83.
 static char kTwoSamplesKey;
 static BOOL promotesTwoSamples(id<MTLDevice> device) {
     static int enabled = -1;
@@ -393,25 +325,24 @@ static BOOL promotesTwoSamples(id<MTLDevice> device) {
 static BOOL validateTexture(id self, SEL _cmd, id device) {
     MTLTextureDescriptor *desc = self;
     if (desc.sampleCount == 2 && promotesTwoSamples(device)) {  // item 77
-        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] 2x multisampled texture made 4x (the device has no 2x)\n");
+        if (verbose()) shimLog("[mtlshim] 2x multisampled texture made 4x (the device has no 2x)\n");
         desc.sampleCount = 4;
     }
     if (desc.usage & MTLTextureUsageShaderAtomic) {
-        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] dropped MTLTextureUsageShaderAtomic (usage 0x%lx)\n", (unsigned long)desc.usage);
+        if (verbose()) shimLog("[mtlshim] dropped MTLTextureUsageShaderAtomic (usage 0x%lx)\n", (unsigned long)desc.usage);
         desc.usage = (desc.usage & ~MTLTextureUsageShaderAtomic) | MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
     }
     // Only Apple GPUs have memoryless storage, and MetalOld aborts on it. Safari 27's WebGPU asks for it for transient attachments.
     if (desc.storageMode == MTLStorageModeMemoryless) {
-        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] memoryless texture made private\n");
+        if (verbose()) shimLog("[mtlshim] memoryless texture made private\n");
         desc.storageMode = MTLStorageModePrivate;
     }
     return origValidateTexture(self, _cmd, device);
 }
 
-// 8. Properties and encoder calls from the macOS 13.3-15 SDKs that MetalOld (13.2) lacks; apps built for macOS 15 set
-// them unconditionally (Chromium's ANGLE: -[MTLCompileOptions setMathMode:], an "unrecognized selector" abort).
-// Stored values are kept as associated objects; mathMode also drives MetalOld's fastMathEnabled (Fast = on; Safe and
-// Relaxed = off, the precise side), and the attributeStride encoder calls use the static vertex layout stride.
+// 8. Properties and encoder calls from the macOS 13.3-15 SDKs that MetalOld lacks, which apps built for macOS 15 call
+// unconditionally (Chromium's setMathMode:). Values are kept as associated objects; mathMode also drives
+// fastMathEnabled (Fast = on), and the attributeStride encoder calls use the static vertex layout stride.
 static char kMathModeKey;
 
 static void setMathMode(id self, SEL _cmd, NSUInteger mode) {
@@ -440,7 +371,7 @@ static void addStoredProperty(Class c, const char *getter, NSUInteger defaultVal
     });
     BOOL a = class_addMethod(c, sel_registerName(getter), get, isBool ? "B@:" : "Q@:");
     BOOL b = class_addMethod(c, sel_registerName(setter), set, isBool ? "v@:B" : "v@:Q");
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] %s %s: %s\n", class_getName(c), getter, a || b ? "added" : "already present");
+    if (verbose()) shimLog("[mtlshim] %s %s: %s\n", class_getName(c), getter, a || b ? "added" : "already present");
 }
 
 static NSUInteger shaderValidationDefault(id self, SEL _cmd) { return 0; /* MTLShaderValidationDefault */ }
@@ -470,10 +401,8 @@ static void setBytesStride(id self, SEL _cmd, const void *bytes, NSUInteger leng
     ((void (*)(id, SEL, const void *, NSUInteger, NSUInteger))objc_msgSend)(self, @selector(setBytes:length:atIndex:), bytes, length, index);
 }
 
-// MSL language version: the shader front end behind MetalOld accepts up to metal3.1, so a 3.2 request ("-std=metal3.2",
-// what apps built for macOS 15 ask for, e.g. Firefox's wgpu) fails every compile. Compile those as 3.1 (3.2 adds
-// features on top of 3.1; shaders that use them get a normal compile error), and make 3.1 the default, as the newest
-// version this stack has (MetalOld's own default is 3.0, which hides 3.1 features such as texture atomics).
+// 9. The front end behind MetalOld takes up to metal3.1, so 3.2 requests (apps built for macOS 15) failed every
+// compile: they compile as 3.1, and 3.1 is the default (MetalOld's 3.0 hides 3.1 features such as texture atomics).
 enum { kNewestLanguageVersion = 0x30001 /* MTLLanguageVersion3_1 */ };
 typedef void (*SetLanguageVersionIMP)(id, SEL, NSUInteger);
 static SetLanguageVersionIMP origSetLanguageVersion;
@@ -485,22 +414,17 @@ static const void *kNewerVersionRequested = &kNewerVersionRequested;
 static void setLanguageVersion(id self, SEL _cmd, NSUInteger version) {
     BOOL newer = version > kNewestLanguageVersion;
     if (newer) {
-        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MSL %lu.%lu requested, compiling as 3.1\n", (unsigned long)(version >> 16), (unsigned long)(version & 0xffff));
+        if (verbose()) shimLog("[mtlshim] MSL %lu.%lu requested, compiling as 3.1\n", (unsigned long)(version >> 16), (unsigned long)(version & 0xffff));
         version = kNewestLanguageVersion;
     }
     objc_setAssociatedObject(self, kNewerVersionRequested, newer ? @YES : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     origSetLanguageVersion(self, _cmd, version);
 }
 
-// The 3.2 feature translators generate most: memory coherence (MSL 4.8). Metal implements it for Apple silicon only, so
-// on these GPUs 3.1 code means the same; rewrite it the way SPIRV-Cross (MoltenVK) writes Coherent for MSL < 3.2:
-// `coherent device` / `coherent(device)` -> `volatile`, `coherent(threadgroup)` (the default) and the texture argument
-// `memory_coherence_device` / `_threadgroup` dropped.
-// And fences: from MSL 3.2 SPIRV-Cross writes a SPIR-V memory barrier as atomic_thread_fence(flags, order, scope), which
-// this front end doesn't have in any form (MoltenVK picks 3.2 on macOS 15 and 4.0 on 26 from the OS version alone; Godot
-// 4.7's compute shaders failed to build). Before 3.2 it wrote threadgroup_barrier(flags), or simdgroup_barrier(flags) for
-// a simdgroup or thread scope, and so does this rewrite: a barrier is a fence too, and SPIRV-Cross only writes fences in
-// kernels, where barriers are allowed. A control barrier after the fence stays, as a second barrier. Test: s80.
+// Rewrites what translators generate for 3.2 the way SPIRV-Cross writes it for MSL < 3.2: memory coherence (Apple
+// silicon only, so 3.1 means the same here) becomes volatile or is dropped, and atomic_thread_fence, which this front
+// end lacks, becomes threadgroup_barrier / simdgroup_barrier (fences only appear in kernels, where barriers are
+// allowed). Test: s80.
 static NSString *downgradeSource(NSString *source, id options) {
     if (!source || !options || !objc_getAssociatedObject(options, kNewerVersionRequested)) return source;
     if ([source rangeOfString:@"coheren"].location == NSNotFound && [source rangeOfString:@"atomic_thread_fence"].location == NSNotFound)
@@ -526,7 +450,7 @@ static NSString *downgradeSource(NSString *source, id options) {
     NSString *out = source;
     for (NSArray *rule in rules)
         out = [rule[0] stringByReplacingMatchesInString:out options:0 range:NSMakeRange(0, out.length) withTemplate:rule[1]];
-    if (getenv("MTLSHIM_VERBOSE") && ![out isEqualToString:source]) shimLog("[mtlshim] MSL 3.2 coherence qualifiers / fences rewritten for 3.1\n");
+    if (verbose() && ![out isEqualToString:source]) shimLog("[mtlshim] MSL 3.2 coherence qualifiers / fences rewritten for 3.1\n");
     return out;
 }
 
@@ -541,7 +465,7 @@ static id newLibraryData(id self, SEL _cmd, dispatch_data_t data, NSError **erro
 
 // MTLSHIM_VERBOSE: log failed source compiles, and save the source to the temporary directory (sandboxed processes).
 static void reportCompileFailure(NSString *source, NSError *error) {
-    if (!getenv("MTLSHIM_VERBOSE") || !error) return;
+    if (!verbose() || !error) return;
     static int n;
     NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:
                       [NSString stringWithFormat:@"mtlshim-failed-%d-%d.metal", getpid(), __sync_fetch_and_add(&n, 1)]];
@@ -600,14 +524,13 @@ static void addMethods(Class c, const char *what, const MethodEntry *methods, si
     if (!c) return;
     for (size_t i = 0; i < count; i++) {
         BOOL added = class_addMethod(c, sel_registerName(methods[i].sel), methods[i].imp, methods[i].types);
-        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] %s %s: %s\n", what, methods[i].sel, added ? "added" : "already present");
+        if (verbose()) shimLog("[mtlshim] %s %s: %s\n", what, methods[i].sel, added ? "added" : "already present");
     }
 }
 
-// Object/mesh stage bindings (macOS 13): MetalOld's _MTLCommandEncoder has them as stubs that throw (unrecognized
-// selector) for drivers to override, and the 12.5 AMD and 13.2 Intel drivers don't. These GPUs can't make mesh
-// pipelines (no Metal 3), so a binding call has nothing to bind to; callers that set immediates for every stage (wgpu)
-// would crash. Draw calls keep the throwing stub.
+// Object / mesh stage bindings: MetalOld's encoder stubs throw for drivers to override, and these drivers don't. These
+// GPUs have no mesh pipelines, so a binding has nothing to bind to (wgpu sets immediates for every stage); draw calls
+// keep the throwing stub.
 static void ignoreBinding(id self, SEL _cmd) {}
 static BOOL definesMethod(const char *cls, const char *sel);
 static IMP swizzle(const char *cls, const char *sel, IMP imp);
@@ -682,16 +605,14 @@ static BOOL definesMethod(const char *cls, const char *sel) {
 static IMP swizzle(const char *cls, const char *sel, IMP imp) {
     Method m = class_getInstanceMethod(objc_getClass(cls), sel_registerName(sel));
     if (!m) return NULL;
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] hooked -[%s %s]\n", cls, sel);
+    if (verbose()) shimLog("[mtlshim] hooked -[%s %s]\n", cls, sel);
     return method_setImplementation(m, imp);
 }
 
-// The Kepler driver has each encoder class twice, once for each of its 3D classes, with the same code: _KEPLER_A for the
-// GK104, GK106 and GK107 (GTX 650-770 and most other 600 / 700 cards) and _KEPLER_B for the GK110 and GK208 (GTX 780 and
-// Titan, GT 710 / 720 / 730), and _KEPLER_COMPUTE_A / _B likewise. keplerSwizzle hooks a selector of an _A class and, when
-// its _B twin defines it too, the twin, with the same hook; it returns the _A original, as swizzle does. A hook calls its
-// original through NVO(orig) (NVOR(orig, receiver) for another receiver), which is that original for an _A encoder and
-// the _B twin's for a _B one (a chained hook's "original" is the earlier hook, the same for both).
+// The Kepler driver has each encoder class twice, with the same code: _KEPLER_A (GK104 / 106 / 107: most 600 / 700
+// cards) and _KEPLER_B (GK110, GK208), and _KEPLER_COMPUTE_A / _B. keplerSwizzle hooks an _A selector and its _B twin
+// with the same hook and returns the _A original. A hook calls its original through NVO(orig) (NVOR(orig, receiver) for
+// another receiver), which is the _B twin's for a _B encoder.
 typedef struct { IMP a, b; } NVTwin;
 static NVTwin nvTwins[64];
 static int nvTwinCount;
@@ -730,14 +651,11 @@ static IMP nvOriginal(__unsafe_unretained id receiver, IMP a) {
 #define NVOR(orig, receiver) ((__typeof__(orig))nvOriginal((receiver), (IMP)(orig)))
 #define NVO(orig) NVOR(orig, self)
 
-// 14. OCLP's Metal wrapper replaces -[_MTLFunction newArgumentEncoderWithBufferIndex:reflection:functionReflection:] and
-// -[_MTLDevice newArgumentEncoderWithBufferBinding:] with stubs that return nil in every process whose path contains
-// "Safari" (Safari and its WebKit XPC services). MetalOld aborts the process (_MTLReportFailure, "bufferIndex N does not
-// identify an argument buffer") when asked for an encoder for an index that is not a buffer argument of the function
-// (so does macOS 12.7's own Metal on a MacBookPro11,4); the stubs avoid that, but they also leave WebKit's ANGLE without
-// the argument encoder it puts every WebGL 2 uniform block in, so each draw with a uniform block fails. MetalOld's
-// implementations are saved here (this library's initializer runs before the wrapper's, which loads it) and put back
-// behind a check that returns nil instead of aborting, once more when the first device is created (after the wrapper).
+// 14. OCLP's Metal wrapper stubs out the argument-encoder methods (nil) in Safari's processes, because MetalOld aborts
+// when asked for an encoder for an index that isn't a buffer argument; that leaves WebKit's ANGLE without the encoder
+// it puts WebGL 2 uniform blocks in. MetalOld's implementations are saved here (this initializer runs before the
+// wrapper's) and put back behind a check that returns nil instead of aborting, again when the first device is created.
+// (s14, s65)
 typedef id (*FunctionEncoderIMP)(id, SEL, NSUInteger, id *, id) __attribute__((ns_returns_retained));
 typedef id (*BindingEncoderIMP)(id, SEL, id) __attribute__((ns_returns_retained));
 static FunctionEncoderIMP origFunctionEncoder;
@@ -750,7 +668,7 @@ static id functionEncoder(id self, SEL _cmd, NSUInteger index, id *reflection, i
     for (id<MTLBinding> argument in [functionReflection arguments])  // MetalOld's MTLArguments
         if (argument.type == MTLBindingTypeBuffer && argument.index == index)
             return origFunctionEncoder(self, _cmd, index, reflection, functionReflection);
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] no argument encoder: buffer %lu is not an argument of %s\n", (unsigned long)index,
+    if (verbose()) shimLog("[mtlshim] no argument encoder: buffer %lu is not an argument of %s\n", (unsigned long)index,
                                            [[self name] UTF8String] ?: "?");
     return nil;
 }
@@ -778,22 +696,18 @@ static void restoreArgumentEncoders(void) {
         IMP current = m ? method_getImplementation(m) : NULL;
         if (!*hooks[i].orig && fromMetalOld(current)) *hooks[i].orig = current;
         if (!*hooks[i].orig || current == hooks[i].imp) continue;
-        if (getenv("MTLSHIM_VERBOSE") && !fromMetalOld(current))
+        if (verbose() && !fromMetalOld(current))
             shimLog("[mtlshim] -[%s %s] was replaced (wrapper stub); MetalOld's put back\n", hooks[i].cls, hooks[i].sel);
         swizzle(hooks[i].cls, hooks[i].sel, hooks[i].imp);
     }
     os_unfair_lock_unlock(&lock);
 }
 
-// 46. Argument encoders on the Ivy Bridge driver (OCLP's 11.7.10 AppleIntelHD4000GraphicsMTLDriver), which has no
-// argument-buffer layouts or encoders of its own (the 12.x Intel driver has MTLIGEmulationIndirectArgumentEncoder): the
-// request ends in MetalOld's -[MTLIOAccelDevice newIndirectArgumentEncoderWithLayout:], which is abort(). With item 14
-// that took down Safari's GPU process at the first WebGL 2 draw with a uniform block, and every WebGL context of the
-// page with it, where the wrapper's stub had given ANGLE nil. MetalOld's abort becomes nil (drivers that implement the
-// method themselves never reach it). MTLSHIM_ARGUMENT_ENCODER_GUARD=0 turns it off. (s60)
+// 46. The Ivy Bridge driver has no argument-buffer layouts or encoders, so a request ends in MetalOld's abort()
+// (Safari's GPU process at the first WebGL 2 uniform block, with item 14): it returns nil instead. (s60)
 static id nilIndirectArgumentEncoder(id self, SEL _cmd, id layout) __attribute__((ns_returns_retained));
 static id nilIndirectArgumentEncoder(id self, SEL _cmd, id layout) {
-    if (getenv("MTLSHIM_VERBOSE"))
+    if (verbose())
         shimLog("[mtlshim] %s has no argument encoders: nil instead of MetalOld's abort\n", class_getName(object_getClass(self)));
     return nil;
 }
@@ -805,32 +719,18 @@ static void guardArgumentEncoders(void) {
         !fromMetalOld(method_getImplementation(m)))
         return;
     method_setImplementation(m, (IMP)nilIndirectArgumentEncoder);
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MetalOld's argument-encoder abort guarded\n");
+    if (verbose()) shimLog("[mtlshim] MetalOld's argument-encoder abort guarded\n");
 }
 
-// 47. Argument buffers on the Ivy Bridge driver. Its plugin doesn't emulate them and its driver has no argument-buffer
-// runtime (item 46): WebGL 2 uniform blocks, which WebKit's ANGLE puts in an argument buffer, couldn't work at all. The
-// Intel adapter (IntelTextureAtomics, INTEL_IVB_ARGUMENT_BUFFER_FIX) makes each pointer member of an argument buffer a
-// hidden buffer parameter, at a buffer index the function doesn't use, counted down from 30 over every pointer member
-// in order of argument buffer index and id (vertex functions keep 0-16 for vertex buffers). Here:
-//  - the device gets argument-buffer layouts (the struct's C layout, which the compiled shaders read constants by) and
-//    encoders: a pointer member holds a token (buffer id << 32 | offset; ids name buffers weakly), constants their data;
-//  - each pipeline gets that index assignment worked out from its reflection, which lists every buffer argument
-//    (unused ones too) and each argument buffer's struct;
-//  - before each draw or dispatch, the buffers the bound argument buffers point to are bound at their hidden indices
-//    with the driver's own setters, and whatever the app had bound there is put back afterwards.
-// Nested argument buffers, arrays of textures or samplers and tessellation draws aren't covered.
-// Ivy Bridge driver only (a device class without argument encoders of its own). MTLSHIM_IVB_ARGUMENT_BUFFERS=0 turns it
-// off. (s61)
-// 79. Textures and samplers in those argument buffers. WebKit's WebGPU puts each bind group in an argument buffer,
-// textures and samplers included, and fills it with an argument encoder; a fragment function that sampled one crashed
-// the compiler service, so Safari's WebGPU render pipelines failed (device lost). The adapter
-// (INTEL_IVB_ARGUMENT_BUFFER_TEXTURES) makes each texture or sampler member a hidden texture / sampler parameter, at a
-// texture index counted down from 30 / a sampler index counted down from 15 over the ones the function doesn't use, in
-// the same order as the buffers. Here the encoder writes a token for each (the object's id, as for buffers), the
-// pipeline gets those indices from its reflection, and each draw or dispatch binds them with the driver's setters and
-// puts back what the app had bound there (samplers with their LOD clamps). MTLSHIM_IVB_ARGUMENT_BUFFER_TEXTURES=0 turns
-// it off. (s86)
+// 47. Argument buffers on the Ivy Bridge driver, which has no argument-buffer runtime (item 46). The Intel adapter
+// makes each pointer member a hidden buffer parameter at a free buffer index counted down from 30, in order of argument
+// buffer index and id (vertex functions keep 0-16). Here the device gets layouts (the struct's C layout) and encoders
+// (a pointer member holds a token: buffer id << 32 | offset), each pipeline works out the index assignment from its
+// reflection, and each draw or dispatch binds the pointed-to buffers at their hidden indices and puts back what was
+// there. Not covered: nested argument buffers, arrays of textures or samplers, tessellation. (s61)
+// 79. Texture and sampler members, which crashed the compiler service: the adapter makes them hidden texture / sampler
+// parameters counted down from 30 / 15 in the same order; the encoder writes their tokens, and each draw or dispatch
+// binds them (samplers with their LOD clamps) and puts back what was there. (s86)
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"  // MetalOld has only the macOS 12 reflection API (MTLArgument)
 @interface _MTLIndirectArgumentBufferLayout : NSObject
@@ -1026,7 +926,7 @@ static id abBufferForId(uint32_t i) {
     return s && p && abOffset + s->offset < abBuffer.length ? p + abOffset + s->offset : NULL;
 }
 - (void)unsupported:(const char *)what {
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] argument buffer on the Ivy Bridge GPU: %s not supported\n", what);
+    if (verbose()) shimLog("[mtlshim] argument buffer on the Ivy Bridge GPU: %s not supported\n", what);
 }
 - (void)setTexture:(id<MTLTexture>)texture atIndex:(NSUInteger)index {  // item 79: the texture's id, as for buffers
     if (!abTexturesOn) return [self unsupported:"textures"];
@@ -1122,7 +1022,7 @@ static void abAttach(id pipeline, NSArray *vertex, NSArray *fragment, NSArray *c
     abStageBindings(compute, 2, bindings);
     if (!bindings.length) return;
     objc_setAssociatedObject(pipeline, kABBindingsKey, bindings, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] pipeline with %lu argument-buffer pointer(s)/handle(s) bound at hidden indices\n",
+    if (verbose()) shimLog("[mtlshim] pipeline with %lu argument-buffer pointer(s)/handle(s) bound at hidden indices\n",
                                            (unsigned long)(bindings.length / sizeof(ABBinding)));
 }
 
@@ -1156,7 +1056,7 @@ static id abRenderRefl(id self, SEL _cmd, MTLRenderPipelineDescriptor *d, MTLPip
     NSError *failure = nil;
     id pipeline = abOrigRenderRefl(self, _cmd, d, options | kABReflection, &r, &failure);
     if (error) *error = failure;
-    if (!pipeline && getenv("MTLSHIM_VERBOSE"))
+    if (!pipeline && verbose())
         shimLog("[mtlshim] render pipeline failed (vertex %s, fragment %s): %.600s\n", d.vertexFunction.name.UTF8String ?: "-",
                 d.fragmentFunction.name.UTF8String ?: "-", failure.localizedDescription.UTF8String ?: "?");
     abAttach(pipeline, r.vertexArguments, r.fragmentArguments, nil);
@@ -1537,18 +1437,14 @@ static void installIvbArgumentBuffers(void) {
         if (abOrigComputeFnOptAsync) swizzle("_MTLDevice", "newComputePipelineStateWithFunction:completionHandler:", (IMP)abComputeFnAsync);
     }
     ivbArgumentBuffersOn = YES;
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] argument buffers on the Ivy Bridge GPU: encoders and hidden bindings installed\n");
+    if (verbose()) shimLog("[mtlshim] argument buffers on the Ivy Bridge GPU: encoders and hidden bindings installed\n");
 }
 #pragma clang diagnostic pop
 
-// 48. Direct draws after an indirect draw on the Ivy Bridge driver: once a render encoder has drawn through an indirect
-// buffer, every later direct draw in it keeps that draw's base instance, and in vertex functions that read
-// [[vertex_id]] (the Intel adapter declares BASE_VERTEX_ID for them, i13) its base or start vertex too: [[instance_id]]
-// and [[vertex_id]] come out as the indirect draw's. Setting the pipeline again doesn't reset it; a new encoder does.
-// MoltenVK and WebGPU mix both kinds of draw in one pass. Indirect draws are right whatever came before, so once an
-// encoder has drawn indirectly, its direct draws go through an indirect buffer of the shim's own (20 bytes a draw, in
-// 4 KB shared buffers the command buffer keeps until it completes). Ivy Bridge driver only.
-// MTLSHIM_IVB_DRAW_PARAMETERS=0 turns it off. (i13)
+// 48. On the Ivy Bridge driver, once a render encoder has drawn indirectly, its later direct draws keep that draw's
+// base instance (and base vertex, for functions that read [[vertex_id]]). Indirect draws are right, so such an
+// encoder's direct draws go through an indirect buffer of the shim's own (20 bytes a draw, in 4 KB shared buffers kept
+// until the command buffer completes). (i13)
 @interface MTLShimDrawArguments : NSObject {
 @public
     id<MTLBuffer> buffer;
@@ -1686,17 +1582,14 @@ static void ivbDrawParameters(void) {
         if (!definesMethod(kRender, draws[i].sel)) return;
     done = YES;
     for (size_t i = 0; i < sizeof draws / sizeof *draws; i++) *draws[i].orig = swizzle(kRender, draws[i].sel, draws[i].imp);
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Ivy Bridge: direct draws after an indirect draw go through an indirect buffer\n");
+    if (verbose()) shimLog("[mtlshim] Ivy Bridge: direct draws after an indirect draw go through an indirect buffer\n");
 }
 
 static BOOL patched;
 
-// 21. Depth-only render pipelines on the 12.x Intel driver: a pipeline without a fragment function leaves its depth
-// attachment unusable: a later draw of the same triangles with compare Equal passes nowhere, single- or multisampled
-// (WebGPU CTS copyTextureToTexture copy_depth_stencil / copy_multisampled_depth, rendering/stencil). With an empty
-// fragment function the same pipeline writes correct depth, so on the Intel GPU a rasterizing pipeline with no
-// fragment function, no color attachments and a depth or stencil attachment gets one (compiled once per device).
-// Pipelines with color attachments are left as they are.
+// 21. On the 12.x Intel driver a pipeline without a fragment function leaves its depth attachment unusable (later Equal
+// compares pass nowhere); with an empty fragment function it writes correct depth. Rasterizing pipelines with no
+// fragment function, no color attachments and a depth or stencil attachment get one. (s21)
 static const void *kEmptyFragmentKey = &kEmptyFragmentKey;
 typedef id (*NewRenderPipelineIMP)(id, SEL, MTLRenderPipelineDescriptor *, NSError **) RETURNS_RETAINED;
 typedef id (*NewRenderPipelineReflIMP)(id, SEL, MTLRenderPipelineDescriptor *, MTLPipelineOption,
@@ -1728,21 +1621,17 @@ static MTLRenderPipelineDescriptor *withEmptyFragment(id<MTLDevice> device, MTLR
     if (!empty) return descriptor;
     MTLRenderPipelineDescriptor *copy = [descriptor copy];
     copy.fragmentFunction = empty;
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] depth-only render pipeline given an empty fragment function\n");
+    if (verbose()) shimLog("[mtlshim] depth-only render pipeline given an empty fragment function\n");
     return copy;
 }
 
-// 34. Coverage that a fragment function computes (a [[sample_mask]] output, or its alpha with alpha-to-coverage) travels
-// with the color write on the 12.x Intel driver. In a pipeline with no depth or stencil attachment whose color attachments
-// all have writeMask none, the fragment function runs but its coverage is dropped: every sample counts as drawn, and
-// occlusion queries count them all (WebGPU CTS occlusionQuery sample_mask and alpha_to_coverage with writeMask 0; Dawn
-// does GPUMultisampleState.mask with a sample_mask output). Discards and buffer writes are unaffected. On the Intel GPU,
-// such pipelines with several samples or alpha-to-coverage write their first blendable color attachment through a blend
-// that keeps what's there (source x 0 + destination x 1). Test: s38. MTLSHIM_COVERAGE_WRITE=0 turns it off.
-// 66. The Kepler driver counts no samples at all for such a pipeline: a draw with every color attachment at writeMask
-// none (a blendable format: an integer one still counts) and no depth or stencil attachment leaves an occlusion query at
-// 0, at any sample count (GTX 770; WebGPU CTS occlusionQuery basic, reuse and scissor with writeMask 0). On Kepler such
-// pipelines get the same blend that keeps the attachment. MTLSHIM_NV_MASKED_DRAWS=0 turns it off. Test: n16 on the GTX 770.
+// 34. On the 12.x Intel driver a fragment function's coverage ([[sample_mask]], alpha-to-coverage) travels with the
+// color write: with no depth/stencil attachment and every writeMask none it is dropped, and occlusion queries count
+// every sample. Such pipelines with several samples or alpha-to-coverage write their first blendable color attachment
+// through a blend that keeps it (source x 0 + destination x 1). Test: s38.
+// 66. The Kepler driver counts no occlusion samples for a draw whose color attachments all have writeMask none and that
+// has no depth or stencil attachment (blendable formats; integer ones count): such pipelines get item 34's blend that
+// writes nothing. Test: n16 on the GTX 770.
 static BOOL blendableFormat(MTLPixelFormat f) {
     switch (f) {
     case MTLPixelFormatR8Uint: case MTLPixelFormatR8Sint: case MTLPixelFormatR16Uint: case MTLPixelFormatR16Sint:
@@ -1782,19 +1671,14 @@ static MTLRenderPipelineDescriptor *withCoverageWrite(id<MTLDevice> device, MTLR
     a.rgbBlendOperation = a.alphaBlendOperation = MTLBlendOperationAdd;
     a.sourceRGBBlendFactor = a.sourceAlphaBlendFactor = MTLBlendFactorZero;
     a.destinationRGBBlendFactor = a.destinationAlphaBlendFactor = MTLBlendFactorOne;
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] render pipeline without writes: color attachment %d written through a blend that keeps it\n", target);
+    if (verbose()) shimLog("[mtlshim] render pipeline without writes: color attachment %d written through a blend that keeps it\n", target);
     return copy;
 }
 
-// 73. Rendering without attachments: a render pipeline with no color, depth or stencil attachment, drawn in a pass that
-// has only a render target size (Vulkan subpasses without attachments, which MoltenVK always takes Metal to support; Godot
-// 4.7's editor makes them at start). On the family-1 GPUs MetalOld's validation aborts the app when such a pipeline is
-// made ("No valid pixelFormats set"; Kepler, and the 12.x Intel driver). Such pipelines get a color attachment 0 of
-// R8Unorm with writeMask none, and such passes a private R8Unorm texture of the render target's size, layer count and
-// sample count (kept per device), loaded and stored as don't-care. The fragment function, its buffer and texture writes
-// and visibility results stay as they are (item 66 makes Kepler count samples for the masked attachment). Family-2 GPUs
-// are left alone. Vertex-only pipelines (rasterization off) without attachments get the same attachment: Safari's WebGPU makes
-// one for its indirect-draw clamp. MTLSHIM_NO_ATTACHMENTS=0 turns it off. Test: s79.
+// 73. Rendering without attachments (MoltenVK's subpasses, Godot's editor): MetalOld's validation aborts on such a
+// pipeline on the family-1 GPUs ("No valid pixelFormats set"). Such pipelines, vertex-only ones too, get a color
+// attachment 0 of R8Unorm with writeMask none, and such passes a private R8Unorm texture of the target's size, layers
+// and sample count (kept per device), loaded and stored as don't-care. Family-2 GPUs are left alone. Test: s79.
 static BOOL familyTwo(const void *device);
 static BOOL attachmentsEmulated(id<MTLDevice> device) {
     static int setting;  // 1 on, -1 off
@@ -1818,7 +1702,7 @@ static MTLRenderPipelineDescriptor *withDummyAttachment(id<MTLDevice> device, MT
     MTLRenderPipelineDescriptor *copy = [descriptor copy];
     copy.colorAttachments[0].pixelFormat = MTLPixelFormatR8Unorm;
     copy.colorAttachments[0].writeMask = MTLColorWriteMaskNone;
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] render pipeline without attachments: a masked R8Unorm color attachment added\n");
+    if (verbose()) shimLog("[mtlshim] render pipeline without attachments: a masked R8Unorm color attachment added\n");
     return copy;
 }
 
@@ -1863,7 +1747,7 @@ static MTLRenderPassDescriptor *withDummyTarget(id<MTLCommandBuffer> buffer, MTL
     copy.colorAttachments[0].texture = target;
     copy.colorAttachments[0].loadAction = MTLLoadActionDontCare;
     copy.colorAttachments[0].storeAction = MTLStoreActionDontCare;
-    if (getenv("MTLSHIM_VERBOSE"))
+    if (verbose())
         shimLog("[mtlshim] render pass without attachments: an R8Unorm target of %s added\n", key.UTF8String);
     return copy;
 }
@@ -1873,7 +1757,7 @@ static MTLRenderPipelineDescriptor *withFourSamples(id<MTLDevice> device, MTLRen
     if (!descriptor || descriptor.rasterSampleCount != 2 || !promotesTwoSamples(device)) return descriptor;
     MTLRenderPipelineDescriptor *copy = [descriptor copy];
     copy.rasterSampleCount = 4;
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] 2x render pipeline made 4x (the device has no 2x)\n");
+    if (verbose()) shimLog("[mtlshim] 2x render pipeline made 4x (the device has no 2x)\n");
     return copy;
 }
 
@@ -1882,7 +1766,7 @@ static MTLRenderPassDescriptor *passWithFourSamples(id<MTLCommandBuffer> buffer,
     if (!descriptor || descriptor.defaultRasterSampleCount != 2 || !promotesTwoSamples(buffer.device)) return descriptor;
     MTLRenderPassDescriptor *copy = [descriptor copy];
     copy.defaultRasterSampleCount = 4;
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] 2x render pass made 4x (the device has no 2x)\n");
+    if (verbose()) shimLog("[mtlshim] 2x render pass made 4x (the device has no 2x)\n");
     return copy;
 }
 
@@ -1938,12 +1822,10 @@ static void fillEmptyFragments(void) {
             "_MTLDevice", "newRenderPipelineStateWithDescriptor:options:completionHandler:", (IMP)newRenderPipelineOptAsync);
 }
 
-// MetalOld keys its shader cache for AMD/Intel GPUs (target cpuType 0x1000013-15) by an AIRNT "function id": the
-// bitcode hash plus hashes of the pipeline script: its own framework hash (all zero for compute), GPUCompiler 31001's
-// libGPUCompilerUtils hash (weak-linked and absent on Sequoia: zero) and the driver's vendor plugin id (the 12.x drivers
-// have none: zero). Every compute pipeline of a function then shares one cache entry whatever its descriptor says: Blender's recompile
-// with maxTotalThreadsPerThreadgroup = 1024 got the cached 768-thread variant back and its 1024-thread dispatches hung
-// the GPU. With MTL_USE_AIRNT_BA=0 MetalOld keys by the driver's own function key, as the 12.x Metal framework did.
+// 18. MetalOld keys its shader cache for AMD / Intel GPUs by an AIRNT function id whose hashes are all zero on this
+// stack, so every compute pipeline of a function shared one entry whatever its descriptor (Blender's 1024-thread
+// variant got the cached 768-thread one and hung the GPU). With MTL_USE_AIRNT_BA=0 MetalOld keys by the driver's own
+// function key, as the 12.x Metal framework did. (s18)
 static void useDriverPipelineKeys(void) {
     setenv("MTL_USE_AIRNT_BA", "0", 0);  // read once, at the first compile; an explicit setting is kept
 }
@@ -1976,7 +1858,7 @@ static void patchDeviceBase(void) {
     };
     for (size_t i = 0; i < sizeof(methods) / sizeof(methods[0]); i++) {
         BOOL added = class_addMethod(base, sel_registerName(methods[i].sel), methods[i].imp, methods[i].types);
-        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] _MTLDevice %s: %s\n", methods[i].sel, added ? "added" : "already present");
+        if (verbose()) shimLog("[mtlshim] _MTLDevice %s: %s\n", methods[i].sel, added ? "added" : "already present");
     }
     addNewerSDKAPI();
     ignoreMeshStageBindings();
@@ -1996,20 +1878,12 @@ static void patchDeviceBase(void) {
     }
 }
 
-// 13. Safari's ANGLE (WebKit) ships its internal shaders (blits, clears, index conversion, mipmaps) as a metallib built
-// with the macOS 27 SDK, AIR target air64_v27-apple-macosx15.4.0. This stack loads it, but specializing or linking its
-// functions fails ("incompatible module ... not compatible with the target (air64-apple-macosx14.2.0)"), so every WebGL
-// context that needs one (alpha:false, multisample resolves, canvas copies) fails, and WebKit's GPU process hangs.
-// Chromium's ANGLE loads the same shaders built for macOS 10.14 (isTooOldANGLELibrary). When ANGLE loads that metallib,
-// compile ANGLE's internal-shader source (ANGLEInternalShaders.h, generated by make_angle_shaders.py from WebKit's
-// mtl_internal_shaders_autogen.metal) and return that library if it has every function of the prebuilt one, with the same
-// function type and function constants (functions only the source has are fine: ANGLE asks for the names it knows; Chromium
-// 120's library lacks saturateDepth, and its blits aborted the compiler on Tahoe, s74 on the Iris Pro); otherwise the
-// prebuilt library is returned as before. Safari 18.6 on Sequoia has an older ANGLE (early
-// 2025), whose library targets air64-apple-macosx15.8.0 (AIR 2.7: "air version set to 2.7.0, but expecting 2.6") and
-// does texture/buffer copies with kernels the newer source replaced (readFromBufferToFloatTexture, ...): every
-// antialiased WebGL context failed its multisample resolve, so nothing drew. That library gets the source of WebKit's
-// matching ANGLE (ANGLEInternalShadersSafari18.h, WebKit 23cdc2123a51) instead.
+// 13. Safari's ANGLE ships its internal shaders as a metallib for AIR air64_v27 (macOS 15.4), which this stack loads
+// but can't specialize or link (WebGL contexts that need one fail, WebKit's GPU process hangs). When ANGLE loads it,
+// the shim compiles ANGLE's internal-shader source (ANGLEInternalShaders.h, made by make_angle_shaders.py from WebKit's
+// mtl_internal_shaders_autogen.metal) and returns that library if it has every function of the prebuilt one with the
+// same type and function constants, else the prebuilt one. Safari 18.6's older ANGLE gets its own WebKit's source
+// (ANGLEInternalShadersSafari18.h, WebKit 23cdc2123a51). (s74)
 #include "ANGLEInternalShaders.h"
 #include "ANGLEInternalShadersSafari18.h"
 static BOOL fromChromium(const void *returnAddress);
@@ -2036,15 +1910,9 @@ static BOOL isTooNewANGLELibrary(dispatch_data_t data) {
     return found;
 }
 
-// Chromium's ANGLE (Chrome, Electron apps) ships the same library built for macOS 10.14 (air64-apple-macosx10.14.0, AIR 2.1),
-// whose texture reads and samples return the texel alone, where the 14.2 front end's own modules (AIR 2.6) have them return
-// { texel, i8 }. Tahoe's compiler for this stack can't take such a library down to the 3802 back ends: OCLP's libLLVM
-// wrapper (libLLVM_helper's fixIr) relabels every module the front end reads AIR 2.5 / macOS 13.2 without touching its
-// calls, specializing makes that 2.6, and the downgrade then rewrites calls that already have the old form (an insertvalue
-// into a <4 x float>, an argument dropped). The 3802 reader aborts MTLCompilerService on what was written ("INSERTVAL:
-// Invalid type", "Invalid record"), three times per pipeline. Functions without function constants (the mipmap kernels) go
-// to the downgrade as they are and come out the same way. Every blit pipeline ANGLE builds fails. Such a library gets the
-// source too. MTLSHIM_OLD_ANGLE_LIBRARY=0 turns it off.
+// Chromium's ANGLE ships the same library built for macOS 10.14 (AIR 2.1), whose texture reads return the texel alone.
+// Tahoe's compiler for this stack mislabels such modules and then downgrades their calls a second time, and the 3802
+// reader aborts the compiler service, so every ANGLE blit pipeline failed. Such a library gets the source too.
 static BOOL isTooOldANGLELibrary(dispatch_data_t data) {
     const void *bytes = NULL;
     size_t size = 0;
@@ -2080,7 +1948,7 @@ static BOOL hasFunctionsOf(id<MTLLibrary> compiled, id<MTLLibrary> prebuilt) {  
 
 static id newLibraryData(id self, SEL _cmd, dispatch_data_t data, NSError **error) {
     id library = origNewLibraryData(self, _cmd, data, error);
-    if (getenv("MTLSHIM_VERBOSE")) {
+    if (verbose()) {
         Dl_info info;
         const char *caller = dladdr(__builtin_return_address(0), &info) && info.dli_fname ? info.dli_fname : "?";
         shimLog("[mtlshim] newLibraryWithData: %zu bytes from %s: %s, Chromium/WebKit caller %d, too new for this compiler %d, too old %d\n",
@@ -2104,67 +1972,38 @@ static id newLibraryData(id self, SEL _cmd, dispatch_data_t data, NSError **erro
     id<MTLLibrary> compiled = [self newLibraryWithSource:@(safari18 ? kANGLEInternalShadersSafari18 : kANGLEInternalShaders)
                                                  options:[MTLCompileOptions new] error:&failure];
     BOOL usable = compiled && hasFunctionsOf(compiled, library);
-    if (getenv("MTLSHIM_VERBOSE"))
+    if (verbose())
         shimLog("[mtlshim] ANGLE internal shaders: prebuilt library too %s; source-compiled one (%s) %s%s\n", tooNew ? "new" : "old", safari18 ? "Safari 18" : "current",
                 usable ? "used" : compiled ? "differs, kept the prebuilt one" : "failed: ",
                 compiled ? "" : failure.localizedDescription.UTF8String ?: "?");
     return usable ? compiled : library;
 }
 
-// 10. Metal devices are pinned (one extra retain the first time a process sees each). MetalOld's devices can be freed
-// when a client over-releases one, which Apple's Metal tolerates; Chromium's GPU process does (ANGLE's default-device
-// check), and its next MTLCopyAllDevices then copies MetalOld's device list with the freed device in it (crash).
-// 11. ANGLE in Chromium (Chrome, Chromium, Edge, Electron apps, ...) and WebKit (Safari): ANGLE, the only GL backend
-// current Chromium has on macOS and the one Safari's WebGL uses,
-// disables its Metal renderer on Macs older than 2016 by IOPlatformExpertDevice "model" (MacBookPro < 13,1, ...), so
-// these Macs get no GPU acceleration at all; and ANGLE refuses a Metal family-1 GPU (Haswell / Ivy Bridge: no Mac2),
-// which automatic graphics switching often makes the active one. For calls from a Chromium
-// framework image ("<Product> Framework") or WebKit's ANGLE: report a post-2015 model, and list only family-2 GPUs (the
-// AMD dGPU) to ANGLE, Skia Graphite and Dawn. Everything else in the process sees the real model and all GPUs.
-// Where no GPU is family 2 (Macs with only the Intel iGPU), those callers are told the iGPU supports
-// MTLGPUFamilyMac2. ANGLE built for macOS 13 or later (Chrome, Safari) asks Mac2 for its family-1 checks too, such as
-// format capabilities and the number of color attachments. Of what ANGLE then expects from family 2, the 12.x Intel
-// driver lacks three: swizzled texture views (it returns nil), stencil MSAA resolves (nothing is written) and render
-// pipelines without attachments (MetalOld's validation aborts). Its compiler also can't build a depth comparison with
-// gradients (sample_compare(..., gradient2d(...)) aborts MTLCompilerService), which ANGLE uses for textureGrad on shadow
-// samplers. Before ANGLE sets up its features, all four are added to ANGLE_FEATURE_OVERRIDES_DISABLED (hasTextureSwizzle,
-// hasStencilAutoResolve, allowRenderpassWithoutAttachment, allowSamplerCompareGradient), which ANGLE reads once, so it
-// takes its own fallbacks. On Kepler (GTX 600/700, family 1 too) ANGLE also refuses the GPU by vendor
-// (disableMetalOnNvidia: "the Metal display didn't initialize", no WebGL in Firefox or Safari), so that feature goes on
-// the same list. MTLSHIM_ANGLE_MAC2=0 turns this part off.
-// ANGLE also turns its MTLSharedEvent syncs (feature hasEvents) off on NVIDIA ("Fence sync is flaky on Nvidia",
-// crbug.com/1136673), which takes GL_ARB_sync, GL_OES_EGL_sync, GL_NV_fence and EGL_KHR_fence_sync away. Safari 18's WebKit
-// requires GL_ARB_sync for every WebGL context (GraphicsContextGLCocoa::platformInitializeExtensions), so on Kepler every
-// WebGL and WebGL 2 context was created lost: getContext returned a context whose isContextLost() was already true
-// (CONTEXT_LOST_WEBGL), with nothing logged. On this stack Kepler's shared events and ANGLE's fences on them work (s69:
-// hundreds of glFenceSync/glClientWaitSync, flush-and-poll and EGL fences, none timed out), so when WebKit (WebCore,
-// WebKit or its libANGLE-shared.dylib) is the caller, hasEvents goes on ANGLE_FEATURE_OVERRIDES_ENABLED (a no-op on Intel,
-// where it's on already). Chromium and Firefox keep ANGLE's choice. MTLSHIM_ANGLE_EVENTS=0 turns this part off.
+// 10. Metal devices are pinned (one extra retain the first time a process sees each): Chromium's GPU process
+// over-releases one, and its next MTLCopyAllDevices copied MetalOld's device list with the freed device in it. (s10)
+// 11. ANGLE (Chromium, Safari's WebKit) disables its Metal renderer on pre-2016 Mac models and refuses family-1 GPUs.
+// For calls from a Chromium framework image or WebKit's ANGLE: a post-2015 model, and only family-2 GPUs listed to
+// ANGLE, Skia Graphite and Dawn; on Macs with no family-2 GPU, the iGPU reports MTLGPUFamilyMac2. What the 12.x Intel
+// driver then lacks (swizzled views, stencil MSAA resolves, passes without attachments, compares with gradients) and
+// ANGLE's NVIDIA refusal (disableMetalOnNvidia) go on ANGLE_FEATURE_OVERRIDES_DISABLED before ANGLE reads it, so it
+// takes its fallbacks. For WebKit callers, hasEvents goes on ANGLE_FEATURE_OVERRIDES_ENABLED: ANGLE turns it off on
+// NVIDIA, and Safari 18 needs GL_ARB_sync for every WebGL context (on Kepler all were created lost); Kepler's shared
+// events work here (s69). (s31, s36, s48, s63)
 typedef void (*EndEncodingIMP)(id, SEL);
 
-// 15. MSAA resolves on the 12.x Intel driver (Haswell / Ivy Bridge): IGRenderPass::generateResolveOptions always resolves
-// into level 0, slice 0 of the resolve texture. It ignores resolveLevel/resolveSlice and a view's offset into its parent
-// (nothing reaches the intended level or slice) and crashes in generateResourceOptions when resolveLevel isn't 0 (wgpu
-// render_target::resolve_to_2d_view; browsers/resolveview). For a color attachment that resolves anywhere else, the
-// pass resolves into a temporary 2D texture instead, which a blit copies to the real level/slice when the encoder ends.
-// Store actions left unknown at encoder creation and parallel render encoders are not changed.
+// 15. The 12.x Intel driver (IGRenderPass::generateResolveOptions) always resolves MSAA into level 0, slice 0, and
+// crashes when resolveLevel isn't 0. A color attachment that resolves anywhere else resolves into a temporary 2D
+// texture, which a blit copies to the real level and slice when the encoder ends (not for store actions unknown at
+// creation, nor parallel render encoders). (s15a, s15b)
 static const void *kPendingResolveCopies = &kPendingResolveCopies;
 static const void *kPendingDepthTouch = &kPendingDepthTouch;  // item 50
 static BOOL ivbDepthTouch;
 
-// 51. Stencil written by a fragment function that writes [[sample_mask]] on the Ivy Bridge driver: when the render pass
-// has no depth attachment, none of its stencil writes land (a Depth32Float_Stencil8 or Stencil8 stencil attachment, at
-// 1x and 4x alike); with the same Depth32Float_Stencil8 texture attached as depth too, they do. ANGLE's fragment
-// functions write the sample mask whenever they render multisampled, and a multisampled GL_STENCIL_INDEX8 renderbuffer
-// is a stencil-only attachment (item 36 makes it Depth32Float_Stencil8), so every draw's stencil was lost: dEQP
-// fbomultisample stencil_index8 in Chrome, Safari and Firefox resolved stencil 0 everywhere. A pass with a combined
-// depth/stencil texture as its stencil attachment and no depth attachment gets the same texture as its depth attachment
-// (loaded and stored, so the depth plane keeps its contents), and its depth/stencil states are swapped for copies that
-// write no depth and compare Always, except a Never compare, which stays: that's what a pass without a depth attachment
-// does on Apple's GPUs (measured on an M3 Pro: Never rejects every fragment, the other compares pass them, and the depth
-// plane is left alone). A Stencil8 texture can't be attached
-// as depth, so a single-sample Stencil8 stencil-only pass drawn with a sample mask still loses its stencil (ANGLE only
-// writes the mask when multisampled). MTLSHIM_STENCIL_WITH_DEPTH=0 turns it off. (s67)
+// 51. On the Ivy Bridge driver no stencil lands from a fragment function that writes [[sample_mask]] when the pass has
+// no depth attachment (ANGLE writes the mask whenever multisampled). A pass with a combined depth/stencil texture as
+// its only stencil attachment gets it as depth too (loaded and stored), with depth/stencil states that write no depth
+// and compare Always (Never stays Never), as passes without depth behave on Apple GPUs. A single-sample Stencil8 can't
+// be attached as depth and is left as it was. (s67)
 static const void *kDepthAddedForStencil = &kDepthAddedForStencil;
 static const void *kDepthStencilDescriptor = &kDepthStencilDescriptor;
 static const void *kWithoutDepthTest = &kWithoutDepthTest;
@@ -2209,11 +2048,9 @@ static id<MTLTexture> rootTexture(id<MTLTexture> texture, NSUInteger *level, NSU
     return texture;
 }
 
-// The same driver's fast clear (all channels 0 or 1) of a color target at most 2 texels wide misses half of the rows
-// below row 16 (bands of 16; formats of 4+ bytes per texel; wgpu zero_init copy_texture_to_buffer_unaligned_offset_row_
-// padding_init on a 1x512 texture; browsers/t2bpad/narrowclear.m). Blits and sampling see the texture the same way, so
-// such a target is cleared through a 4-texel-wide temporary texture (where the clear works) and a blit, and the pass
-// loads it instead.
+// The same driver's fast clear of a color target at most 2 texels wide misses half the rows below row 16 (formats of 4+
+// bytes per texel): such a target is cleared through a 4-texel-wide temporary texture and a blit, and the pass loads
+// it.
 static BOOL clearsNarrowly(MTLRenderPassColorAttachmentDescriptor *a, id<MTLTexture> *root, NSUInteger *level, NSUInteger *slice) {
     if (!a.texture || a.loadAction != MTLLoadActionClear || a.texture.sampleCount > 1) return NO;
     *level = a.level;
@@ -2227,12 +2064,9 @@ static BOOL clearsNarrowly(MTLRenderPassColorAttachmentDescriptor *a, id<MTLText
     return YES;
 }
 
-// 24. The same driver doesn't clear R8Unorm or RG8Unorm targets at mip level 1 or higher at all (fast or slow clear;
-// draws to those levels work, as do level 0 and the other formats, R8Uint and RG8Snorm included; WebGPU CTS texture_zero
-// r8unorm/rg8unorm). Such a clear also goes through a temporary texture, of the level's size. So does one of a
-// BGRA8Unorm(_sRGB) 2D or cube texture at level 2 or higher (Ivy Bridge and Haswell) when those levels don't start on a 16-texel
-// column of the mip layout, i.e. level 1's width rounded up to 4 isn't a multiple of 16 (base widths 8-24, 40-56, 80,
-// 100...): nothing landed there, first clear or not, while RGBA8 and the other formats, blits and draws were right.
+// 24. The same driver doesn't clear R8Unorm or RG8Unorm targets at mip level 1+, nor BGRA8Unorm(_sRGB) 2D or cube
+// levels 2+ that don't start on a 16-texel column of the mip layout (level 1's width rounded up to 4 not a multiple of
+// 16; Ivy Bridge too). Such clears go through a temporary texture of the level's size. (s24)
 static BOOL clearsNarrowFormatMip(MTLRenderPassColorAttachmentDescriptor *a, id<MTLTexture> *root, NSUInteger *level, NSUInteger *slice) {
     if (!a.texture || a.loadAction != MTLLoadActionClear || a.texture.sampleCount > 1) return NO;
     *level = a.level;
@@ -2265,13 +2099,11 @@ static void clearThroughTemporary(id<MTLCommandBuffer> commandBuffer, MTLRenderP
     [blit endEncoding];
 }
 
-// 42. Until the app sets a viewport, Metal's default viewport covers the render target, in every one of the 16 viewport
-// slots on Apple GPUs. The 12.x Intel driver sets that up only for slot 0: slots 1-15 cover nothing until setViewport:
-// or setViewports:count:, so primitives sent to one with [[viewport_array_index]] are dropped (the 12.5 AMD driver does
-// the same: AMDBronzeCompat item 13). The driver's setViewport: fills every slot, so each encoder starts with the
-// default viewport set explicitly: renderTargetWidth/Height when given, otherwise the smallest attachment, as on Apple
-// GPUs (for attachments of different sizes the driver's own slot 0 took the first color attachment's).
-// MTLSHIM_DEFAULT_VIEWPORTS=0 turns this off. Test: s56.
+// 42. The 12.x Intel driver sets up the default viewport for slot 0 only, so primitives sent to slots 1-15 with
+// [[viewport_array_index]] are dropped until the app sets a viewport (AMDBronzeCompat item 13 on AMD). Each encoder
+// starts with the default viewport set explicitly (renderTargetWidth / Height, else the smallest attachment, as on
+// Apple GPUs).
+// Test: s56.
 static void setDefaultViewport(id<MTLRenderCommandEncoder> encoder, MTLRenderPassDescriptor *descriptor) {
     static int enabled = -1;
     if (enabled < 0) enabled = !(getenv("MTLSHIM_DEFAULT_VIEWPORTS") && !strcmp(getenv("MTLSHIM_DEFAULT_VIEWPORTS"), "0"));
@@ -2292,17 +2124,11 @@ static void setDefaultViewport(id<MTLRenderCommandEncoder> encoder, MTLRenderPas
     [encoder setViewport:(MTLViewport){0, 0, (double)width, (double)height, 0, 1}];
 }
 
-// 64. Depth clears on Ivy Bridge. A render-pass clear of a level above 0 or a slice above 0 of a mipmapped, cube or
-// cube-array depth texture (Depth16Unorm, Depth32Float, Depth32Float_Stencil8) doesn't land once that subresource has
-// been written, unless slice 0 is cleared in the same command buffer: it keeps what it held (a point-light shadow cube
-// whose faces 1-5 were updated without face 0 kept their old depth wherever nothing was drawn; a mip level 1 likewise;
-// single-level 2D arrays and plain 2D textures are right). And where a clear
-// does land on Depth32Float, it keeps about 16 bits of mantissa (0.05 became 0.0499999523; 0, 1, 0.5 and 0.25 are exact),
-// on every slice of Depth32Float_Stencil8 too. Haswell's driver keeps the same 16 bits on single-level 2D and multisampled
-// 2D Depth32Float and Depth32Float_Stencil8 textures (the Iris Pro; its re-clears all land), and the R9 gets both right.
-// These textures keep HiZ on Ivy Bridge (item 22), and draws there are right, so after such a clear the pass starts with
-// a full-screen draw that writes the clear depth exactly (compare always; color and stencil untouched), and the encoder's
-// depth state and viewport are put back as they were. MTLSHIM_DEPTH_CLEAR_DRAW=0 turns it off. Test: s71.
+// 64. On Ivy Bridge a render-pass clear of a level or slice above 0 of a mipmapped, cube or cube-array depth texture
+// doesn't land once that subresource was written (unless slice 0 is cleared in the same command buffer), and clears of
+// Depth32Float keep about 16 bits of mantissa (Haswell too, on single-level and multisampled 2D). Draws are right, so
+// after such a clear the pass starts with a full-screen draw of the clear depth (compare always; color and stencil
+// untouched), and the encoder's depth state and viewport are put back. Test: s71.
 static BOOL ivbDepthClearDraw, hswDepthClearDraw;
 static BOOL depthClearNeedsDraw(MTLRenderPassDescriptor *pass) {
     MTLRenderPassDepthAttachmentDescriptor *dp = pass.depthAttachment;
@@ -2354,7 +2180,7 @@ static id<MTLRenderPipelineState> depthClearPipeline(id<MTLDevice> device, MTLRe
     }
     NSError *error = nil;
     pipeline = library ? [device newRenderPipelineStateWithDescriptor:descriptor error:&error] : nil;
-    if (!pipeline && getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] depth clear pipeline: %s\n", error.localizedDescription.UTF8String);
+    if (!pipeline && verbose()) shimLog("[mtlshim] depth clear pipeline: %s\n", error.localizedDescription.UTF8String);
     os_unfair_lock_lock(&lock);
     if (pipeline) pipelines[key] = pipeline;
     os_unfair_lock_unlock(&lock);
@@ -2382,19 +2208,13 @@ static void drawDepthClear(id<MTLRenderCommandEncoder> encoder, MTLRenderPassDes
     [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     [encoder setDepthStencilState:none];
     setDefaultViewport(encoder, original);
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] depth clear to %.9g written by a draw\n", value);
+    if (verbose()) shimLog("[mtlshim] depth clear to %.9g written by a draw\n", value);
 }
 
-// 68. Render passes at levels 1+ of mipmapped depth arrays on Ivy Bridge. After any render pass with a depth attachment at
-// level 1 or higher of a Depth16Unorm or Depth32Float 2D-array, cube or cube-array texture with several levels (even one
-// that only loads and stores), fragment functions sampling level 0 read parts of some other slices wrong (a 57x13x7 array
-// with 6 levels: slice 3 after a pass at level 2 or 3, slices 4 and 5 after one at level 1, whichever slice the pass was
-// on; a cube: face 1). The texels themselves are right: compute read() sees them, and so does sampling once a pass at
-// level 0 has run. Plain 2D textures with mips are right. Item 63's own render passes into such levels (in place of the
-// blits) hit it: WebKit's ANGLE fills depth arrays and cubes level by level, which failed dEQP texstorage2d/3d
-// format_depth_stencil (cube, 2d_array) and textureformat sized_depth_stencil in Safari. Such textures keep HiZ on
-// Ivy Bridge (item 22). When such a pass ends, an empty pass at level 0 slice 0 (load and store) follows it.
-// MTLSHIM_DEPTH_LEVEL_REPAIR=0 turns it off. Test: s72 on the HD 4000.
+// 68. On Ivy Bridge, after any pass with a depth attachment at level 1+ of a mipmapped Depth16Unorm / Depth32Float
+// 2D-array, cube or cube-array texture, fragment functions sampling level 0 read parts of other slices wrong (the
+// texels are right, and a pass at level 0 repairs it; item 63's passes hit it too). When such a pass ends, an empty
+// pass at level 0 slice 0 (load and store) follows. Test: s72 on the HD 4000.
 static BOOL ivbDepthLevelRepair;
 static const void *kPendingDepthLevelRepair = &kPendingDepthLevelRepair;
 static id<MTLTexture> depthLevelPassTexture(MTLRenderPassDescriptor *pass) {
@@ -2413,14 +2233,11 @@ static void repairDepthLevels(id<MTLCommandBuffer> commandBuffer, id<MTLTexture>
     pass.depthAttachment.loadAction = MTLLoadActionLoad;
     pass.depthAttachment.storeAction = MTLStoreActionStore;
     [[commandBuffer renderCommandEncoderWithDescriptor:pass] endEncoding];
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] depth pass at a level above 0: empty pass at level 0 after it\n");
+    if (verbose()) shimLog("[mtlshim] depth pass at a level above 0: empty pass at level 0 after it\n");
 }
 
-// 81. A stencil clear value above 255: the stencil formats keep 8 bits, and WebGPU (stencilClearValue) and Metal take the
-// low ones, but on Kepler a clearStencil of 258 left the pass's stencil and the copy after it unwritten, and 65539 failed the
-// command buffer (Safari's WebGPU passes the value through; WebGPU CTS clear_value:stencil_clear_value in WebKit, every
-// stencil format; Chrome masks it and passes). The pass's clearStencil is masked to 8 bits here. MTLSHIM_STENCIL_CLEAR_MASK=0
-// turns it off. Test: n49.
+// 81. Stencil clear values above 255: on Kepler 258 left the pass's stencil unwritten and 65539 failed the command
+// buffer (Safari's WebGPU passes the value through). The pass's clearStencil is masked to its 8 bits. Test: n49.
 static MTLRenderPassDescriptor *withMaskedStencilClear(MTLRenderPassDescriptor *descriptor) {
     static int setting;  // 1 on, -1 off
     if (!setting) {
@@ -2448,7 +2265,7 @@ static id igRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor
             copies = [NSMutableArray array];
         }
         redirected.colorAttachments[i].loadAction = MTLLoadActionLoad;
-        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] color target cleared through a temporary texture\n");
+        if (verbose()) shimLog("[mtlshim] color target cleared through a temporary texture\n");
     }
     for (NSUInteger i = 0; descriptor && i < 8; i++) {
         MTLRenderPassColorAttachmentDescriptor *a = descriptor.colorAttachments[i];
@@ -2473,10 +2290,9 @@ static id igRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor
         r.resolveLevel = r.resolveSlice = r.resolveDepthPlane = 0;
         [copies addObject:@[temporary, target, @(level), @(slice), @(a.resolveDepthPlane)]];
     }
-    // 23. A 3D color target at mip level 1 or higher on the same driver: a pass on depth plane 0 also writes plane 1,
-    // and one on plane 1 writes neither (clears and draws; through views too; WebGPU CTS 3d_texture_slices with mip
-    // levels; browsers/... view3d.m). Level 0 and blits are right. The pass renders into a temporary 2D texture of the
-    // level's size instead, loaded from the plane first if the pass loads, and copied to the plane when the encoder ends.
+    // 23. A 3D color target at level 1+ on the same driver writes the wrong depth planes (one on plane 0 also writes
+    // plane 1, one on plane 1 neither): the pass renders into a temporary 2D texture of the level's size, loaded from
+    // the plane first if the pass loads, and copied to the plane when the encoder ends. (s23)
     for (NSUInteger i = 0; descriptor && i < 8; i++) {
         MTLRenderPassColorAttachmentDescriptor *a = (redirected ?: descriptor).colorAttachments[i];
         NSUInteger level = a.level, slice = a.slice;
@@ -2504,19 +2320,13 @@ static id igRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor
         r.texture = temporary;
         r.level = r.slice = r.depthPlane = 0;
         if (a.storeAction == MTLStoreActionStore) [copies addObject:@[temporary, root, @(level), @0, @(plane)]];
-        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] 3D target (level %lu, plane %lu) rendered through a 2D texture\n", (unsigned long)level, (unsigned long)plane);
+        if (verbose()) shimLog("[mtlshim] 3D target (level %lu, plane %lu) rendered through a 2D texture\n", (unsigned long)level, (unsigned long)plane);
     }
-    // 33. Stencil textures with several mip levels or array slices on the same driver: render passes on them and blits
-    // into them don't agree. A pass at a level or slice other than 0 doesn't load what's there (a stencil test against
-    // it fails, and so does a write that has to read first: write masks, INCR) unless a color target is at the same
-    // level and slice; and a pass that loads and stores level 0 / slice 0 makes every subresource read back by a shader
-    // as what that pass saw, overwriting what blits wrote. Blits and shader reads agree everywhere, and so do clears and
-    // REPLACE draws made through a single-level texture copied in by a blit (WebGPU CTS copyTextureToTexture
-    // copy_depth_stencil and image_copy *_depth_stencil; s17). A render pass with a stencil attachment on such a texture,
-    // or a depth attachment on a Depth32Float_Stencil8 one (written by these blits too), renders into a temporary texture
-    // of the subresource's size instead (depth and stencil together, as they share the texture), copied
-    // from the subresource by a blit first if the pass loads either, and back to it when the encoder ends if it stores
-    // either. MTLSHIM_STENCIL_SUBRESOURCE=0 turns it off.
+    // 33. On the same driver render passes and blits disagree on stencil textures with several levels or slices (a pass
+    // above level / slice 0 doesn't load what's there; one at level 0 overwrites what blits wrote, as shaders see it).
+    // A pass with a stencil attachment on such a texture, or a depth attachment on a Depth32Float_Stencil8 one, renders
+    // into a temporary texture of the subresource's size, copied in by a blit if the pass loads and back if it stores.
+    // (s17, s37)
     {
         MTLRenderPassDescriptor *current = redirected ?: descriptor;
         MTLRenderPassStencilAttachmentDescriptor *st = current.stencilAttachment;
@@ -2560,7 +2370,7 @@ static id igRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor
                     redirected.depthAttachment.level = redirected.depthAttachment.slice = redirected.depthAttachment.depthPlane = 0;
                 }
                 if (stores) [copies addObject:@[temporary, root, @(level), @(slice), @0]];
-                if (getenv("MTLSHIM_VERBOSE"))
+                if (verbose())
                     shimLog("[mtlshim] stencil at level %lu slice %lu rendered through a temporary texture\n", (unsigned long)level, (unsigned long)slice);
             }
         }
@@ -2582,7 +2392,7 @@ static id igRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor
             dp.loadAction = MTLLoadActionLoad;
             dp.storeAction = MTLStoreActionStore;
             depthAdded = YES;
-            if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] stencil-only pass: depth attached as well\n");
+            if (verbose()) shimLog("[mtlshim] stencil-only pass: depth attached as well\n");
         }
     }
     id encoder = origIGRenderEncoder(self, _cmd, redirected ?: descriptor);
@@ -2596,19 +2406,15 @@ static id igRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor
         descriptor.depthAttachment.loadAction == MTLLoadActionClear)
         objc_setAssociatedObject(encoder, kPendingDepthTouch, @[self, depth], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     if (encoder && copies.count) {
-        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] %lu attachment(s) copied out of temporary textures at the end\n", (unsigned long)copies.count);
+        if (verbose()) shimLog("[mtlshim] %lu attachment(s) copied out of temporary textures at the end\n", (unsigned long)copies.count);
         objc_setAssociatedObject(encoder, kPendingResolveCopies, @[self, copies], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     return encoder;
 }
 
-// 50. Multisampled depth cleared by a render pass on the Ivy Bridge driver: the clear is a fast clear, and before a later
-// render pass samples the texture the driver resolves only its first width/2 x height/2 texels (single-sample extents
-// on the 4x surface); the rest reads 0. Ahead of a compute dispatch it resolves all of it. ANGLE resolves a multisampled
-// depth renderbuffer for glBlitFramebuffer by sampling it in a fragment shader, so cleared depth copied out of one came
-// out as 0 (WebGL CTS multisampled-depth-renderbuffer-initialization; three.js resolves the depth of multisampled render
-// targets that way). After a pass that clears a sampleable multisampled depth attachment, a one-thread compute dispatch
-// reads the texture. MTLSHIM_MSAA_DEPTH_RESOLVE=0 turns it off. (s66)
+// 50. On the Ivy Bridge driver a render-pass clear of multisampled depth is a fast clear that a later pass sampling the
+// texture sees only in its first quarter; a compute dispatch makes the driver resolve all of it. After a pass that
+// clears a sampleable multisampled depth attachment, a one-thread compute dispatch reads the texture. (s66)
 static void touchMultisampledDepth(id<MTLCommandBuffer> commandBuffer, id<MTLTexture> texture) {
     static id<MTLComputePipelineState> pipeline;
     static id<MTLBuffer> scratch;
@@ -2632,7 +2438,7 @@ static void touchMultisampledDepth(id<MTLCommandBuffer> commandBuffer, id<MTLTex
     [compute setBuffer:b offset:0 atIndex:0];
     [compute dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
     [compute endEncoding];
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] cleared multisampled depth resolved by a compute read\n");
+    if (verbose()) shimLog("[mtlshim] cleared multisampled depth resolved by a compute read\n");
 }
 
 // Copies each {temporary, destination, level, slice, depth plane} of an encoder's pending list to its destination (items 15, 55).
@@ -2666,12 +2472,9 @@ static void igRenderEndEncoding(id self, SEL _cmd) {
     copyOutOfTemporaries(pending);
 }
 
-// 55. MSAA resolves into mip level 1 or higher on the Kepler driver (GeForceMTLDriver): after a pass that draws, nothing
-// reaches the level (any slice, RGBA8 and sRGB alike; the target keeps what it held); level 0, every slice, and a pass
-// that only clears are right (GTX 770; s25's level 1 resolve read 255 from an uninitialized texture). As item 15 does on
-// Intel, such a color attachment resolves into a temporary 2D texture of the level's size, which a blit copies to the
-// level and slice when the encoder ends. Store actions unknown at encoder creation and parallel render encoders are
-// not changed. MTLSHIM_NV_RESOLVE_LEVEL=0 turns it off. Test: s25 on the GTX 770.
+// 55. On the Kepler driver an MSAA resolve into mip level 1+ never arrives after a pass that draws (clear-only passes
+// and level 0 are right). As item 15 on Intel, it resolves into a temporary 2D texture that a blit copies to the level
+// when the encoder ends. Test: s25 on the GTX 770.
 static RenderEncoderIMP origNVRenderEncoder;
 static EndEncodingIMP origNVRenderEndEncoding;
 static BOOL nvResolveLevels;  // item 55 on
@@ -2701,7 +2504,7 @@ static id nvRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor
         r.resolveTexture = temporary;
         r.resolveLevel = r.resolveSlice = r.resolveDepthPlane = 0;
         [copies addObject:@[temporary, target, @(level), @(slice), @(a.resolveDepthPlane)]];
-        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] resolve into level %lu slice %lu through a temporary texture\n", (unsigned long)level, (unsigned long)slice);
+        if (verbose()) shimLog("[mtlshim] resolve into level %lu slice %lu through a temporary texture\n", (unsigned long)level, (unsigned long)slice);
     }
     id encoder = origNVRenderEncoder(self, _cmd, redirected ?: descriptor);
     if (encoder && copies.count) objc_setAssociatedObject(encoder, kPendingResolveCopies, @[self, copies], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -2724,13 +2527,10 @@ static void keplerResolveLevels(void) {
     origNVRenderEncoder = (RenderEncoderIMP)swizzle(kBuffer, "renderCommandEncoderWithDescriptor:", (IMP)nvRenderEncoder);
 }
 
-// 16. 2D-array texture views on the 12.x Intel driver: a view whose first slice isn't 0 can only reach slices below its
-// layer count (the base slice + count - 1 limit is set to count - 1), so with count > base slice its other layers read
-// as 0 (read) or as the first one (sample) (Dawn TextureViewSamplingTest.Texture2DArrayView*; browsers/arrayview: views
-// of 6 layers, base 1-2). -[MTLIGAccelTexture initializeHWSurfaceState] builds the sampler state from _arrayLength and
-// m_Info.relativeSlice; after the driver initializes such a view it is run once more with _arrayLength = base slice +
-// count, which makes every layer reachable, and _arrayLength is put back. Only if m_Info.relativeLevel / relativeSlice
-// are where this driver keeps them (the view's base level and slice, checked against the parent's).
+// 16. 12.x Intel 2D-array views whose first slice isn't 0 reach only slices below their layer count (the limit is set
+// to count - 1). After the driver initializes such a view, -[MTLIGAccelTexture initializeHWSurfaceState] runs again
+// with _arrayLength = base slice + count, and _arrayLength is put back; only if m_Info.relativeLevel / relativeSlice
+// sit where this driver keeps them (checked against the parent). (s16)
 typedef void *(*InitViewIMP)(void *, SEL, void *, MTLPixelFormat, MTLTextureType, NSRange, NSRange);  // init: no ARC
 static InitViewIMP origIGInitView;
 static ptrdiff_t igInfoOffset = -1, igArrayLengthOffset = -1;
@@ -2751,37 +2551,26 @@ static void *igInitView(void *self, SEL _cmd, void *parent, MTLPixelFormat forma
     *arrayLength = baseSlice + count;
     ((void (*)(void *, SEL))objc_msgSend)(view, sel_registerName("initializeHWSurfaceState"));
     *arrayLength = count;
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] 2D-array view (slices %u..%u) surface state rebuilt\n", baseSlice,
+    if (verbose()) shimLog("[mtlshim] 2D-array view (slices %u..%u) surface state rebuilt\n", baseSlice,
                                            (unsigned)(baseSlice + count - 1));
     return view;
 }
 
-// 38. Stencil views of depth/stencil textures on the 12.x Intel driver: shaders reading the stencil of
-// Depth32Float_Stencil8 (or Depth24Unorm_Stencil8) through an X32_Stencil8 view read 0 at mip level 2 and above for
-// many widths (20, 24, 36: level 2 of a 20x16 texture; 12, 16, 28, 32 were right). The view's surface state takes the
-// depth plane's horizontal mip alignment (4), but the stencil plane is laid out with 8, like a Stencil8 texture (whose
-// views read right): levels 2+, placed to the right of level 1 at its width rounded up to the alignment, are looked
-// for where level 1's width rounds differently. After the driver builds a stencil view's surface state
-// (-[MTLIGAccelTexture initializeHWSurfaceState]), its horizontal alignment is set to 8. Dawn backs WebGPU's stencil8
-// with Depth32Float_Stencil8. Only if m_Info.hwSurfaceState has the Gen7 SURFACE_STATE layout this expects.
-// MTLSHIM_STENCIL_VIEW_ALIGN=0 turns it off. Test: s43.
+// 38. The 12.x Intel driver gives stencil views (X32_Stencil8, X24_Stencil8) the depth plane's horizontal mip alignment
+// (4), but the stencil plane is laid out with 8, so levels 2+ read 0 for many widths. After the driver builds a stencil
+// view's surface state, its horizontal alignment is set to 8, if hwSurfaceState has the Gen7 SURFACE_STATE layout
+// expected.
+// Test: s43.
 typedef void (*InitSurfaceStateIMP)(id, SEL);
 static InitSurfaceStateIMP origIGInitSurfaceState;
 static ptrdiff_t igSurfaceStateOffset = -1;
 
-// 40. Compute kernels get their samplers' hardware state from CHAL_INTEL::ChalContext::PatchSamplerObject, which copies
-// the filters, address modes and LOD clamps of the app's MTLIGSampler into the kernel's sampler-state template but keeps
-// the template's low byte of DW1, where the shadow (compare) function is: an argument sampler's compare function never
-// reaches the hardware, so every sample_compare and gather_compare in a compute kernel compared with "never" and returned
-// 0 (WebGPU CTS textureGatherCompare in compute: 300 cases, textureSampleCompareLevel too). Constexpr samplers don't go
-// through it and were right; vertex and fragment functions are too. The function is wrapped (an inline hook on its
-// standard 12-byte prologue, the first 42 bytes checked against this driver's) to copy DW1 bits 3:1 from the sampler
-// object afterwards. The Ivy Bridge driver's build of the function (its own 40 bytes checked, a 17-byte prologue, the
-// packet's heap at 0x1f0) has the same template and the same bug. MTLSHIM_COMPUTE_SAMPLER_COMPARE=0 turns it off. Test: s50.
-// The same template has LOD PreClamp Enable (DW0 bit 28) clear, so the hardware chose between the min and mag filters
-// on the unclamped LOD: a level at or below 0 magnified (base level only) even with a lodMinClamp of 0.25, which should
-// have blended a quarter of level 1 in (WebGPU CTS textureSampleLevel lodClamp in compute, linear filter: 90 cases).
-// The bit is copied from the sampler object too. MTLSHIM_COMPUTE_LOD_PRECLAMP=0 leaves it. Test: s51.
+// 40. CHAL_INTEL::ChalContext::PatchSamplerObject copies an argument sampler into a compute kernel's sampler-state
+// template but keeps the template's DW1 low byte, where the compare function is, so compute sample_compare /
+// gather_compare always compared with never (MTLSHIM_COMPUTE_SAMPLER_COMPARE; s50); and the template has LOD PreClamp
+// Enable (DW0 bit 28) clear, so the min / mag filter choice ignored lodMinClamp (MTLSHIM_COMPUTE_LOD_PRECLAMP; s51). The function is wrapped (an inline
+// hook on its 12-byte prologue, the first 42 bytes checked; Ivy Bridge: 40 bytes, a 17-byte prologue, the packet's heap
+// at 0x1f0) to copy DW1 bits 3:1 and DW0 bit 28 from the sampler object afterwards.
 typedef void (*PatchSamplerObjectFn)(void *, const void *, const void *, void *, const void *);
 static PatchSamplerObjectFn origPatchSamplerObject;
 static ptrdiff_t igSamplerStateIvarOffset;
@@ -2849,22 +2638,15 @@ static void computeSamplerCompare(void) {
     computeLodPreClamp = !(preclamp && !strcmp(preclamp, "0")) && strstr(ivar_getTypeEncoding(state), "\"LODPreClampEnable\"b1\"TextureBorderColorMode\"b1\"\"b1\"SamplerDisable\"b1");
     origPatchSamplerObject = (PatchSamplerObjectFn)(ivb ? hookPrologue(entry, 17, (void *)computePatchSamplerObject)
                                                         : hookStandardPrologue(entry, (void *)computePatchSamplerObject));
-    if (getenv("MTLSHIM_VERBOSE"))
+    if (verbose())
         shimLog("[mtlshim] compute sampler compare functions: %s%s\n", origPatchSamplerObject ? "hooked" : "hook failed",
                 computeLodPreClamp ? ", LOD pre-clamp" : "");
 }
 
-// 39. A texture view that starts at mip level L carries two surface states: the sampler's (min LOD L) and, for writes,
-// a render-target one, where the LOD field is L and the min LOD 0. Typed writes use the LOD field; the sampler's
-// resinfo (get_width / get_height) uses the min LOD. In fragment functions the driver binds the render-target state
-// for writable 2D-array views, so their size queries returned level 0's size (WebGPU CTS textureDimensions storage:
-// write, 2d-array, base level 1-2, every format: 40 cases; compute functions and 2D views got the sampler's). The
-// render-target state's min LOD is set to its LOD, which only the sampler reads. MTLSHIM_TARGET_MIN_LOD=0 turns it off.
-// Test: s45. The same goes for the layer count of a 2D-array view whose first layer isn't 0: the render-target state
-// keeps the whole texture's Depth (array size - 1; the sampler's has the view's, with Minimum Array Element as the offset),
-// so get_array_size() on such a writable view in a fragment function returned the texture's layer count (WebGPU CTS
-// textureNumLayers storage, write, partial views: 40 cases). The sampler's Depth is copied in; typed writes still land at
-// Minimum Array Element + index (they don't bound-check against Depth). MTLSHIM_TARGET_DEPTH=0 turns that off. Test: s49.
+// 39. The render-target surface state the driver binds for writable 2D-array views in fragment functions has min LOD 0
+// and the whole texture's Depth, so get_width / get_height returned level 0's size (s45) and get_array_size() the
+// texture's layer count (MTLSHIM_TARGET_DEPTH; s49). Its min LOD is set to its LOD and the sampler state's Depth copied
+// in; only the sampler reads them (typed writes don't bound-check against Depth).
 static void targetMinLod(id self) {
     static int enabled = -1;
     if (enabled < 0) { const char *setting = getenv("MTLSHIM_TARGET_MIN_LOD"); enabled = !(setting && !strcmp(setting, "0")); }
@@ -2873,7 +2655,7 @@ static void targetMinLod(id self) {
     uint32_t lod = *dword5 & 0xf, minLod = (*dword5 >> 4) & 0xf;
     if (!lod || minLod) return;
     *dword5 |= lod << 4;
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] render-target surface state of a view at level %u: min LOD %u\n", lod, lod);
+    if (verbose()) shimLog("[mtlshim] render-target surface state of a view at level %u: min LOD %u\n", lod, lod);
 }
 static void targetDepth(id self) {
     static int enabled = -1;
@@ -2883,7 +2665,7 @@ static void targetDepth(id self) {
     uint32_t samplerDepth = sampler[3] >> 21, targetDepth = target[3] >> 21, minimumElement = (sampler[4] >> 18) & 0x7ff;
     if (!minimumElement || targetDepth <= samplerDepth || (sampler[0] >> 29) != 1 /* SURFTYPE_2D */) return;
     target[3] = (target[3] & 0x1fffff) | (samplerDepth << 21);
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] render-target surface state of a view from layer %u: depth %u\n", minimumElement, samplerDepth);
+    if (verbose()) shimLog("[mtlshim] render-target surface state of a view from layer %u: depth %u\n", minimumElement, samplerDepth);
 }
 
 static void igInitSurfaceState(id self, SEL _cmd) {
@@ -2895,7 +2677,7 @@ static void igInitSurfaceState(id self, SEL _cmd) {
     uint32_t *dword0 = (uint32_t *)((uint8_t *)(__bridge void *)self + igSurfaceStateOffset);
     if (*dword0 & (1u << 15)) return;
     *dword0 |= 1u << 15;  // SurfaceHorizontalAlignment: HALIGN_8
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] stencil view: surface horizontal alignment 8\n");
+    if (verbose()) shimLog("[mtlshim] stencil view: surface horizontal alignment 8\n");
 }
 
 static void stencilViewAlignment(void) {
@@ -2926,11 +2708,8 @@ static void stencilViewAlignment(void) {
 typedef void (^BlitCommand)(id<MTLBlitCommandEncoder>);
 static BOOL deferBlit(id encoder, BlitCommand command);  // item 63: YES if `command` waits for the encoder's end
 
-// 20. Buffer fills on the 12.x Intel driver: -[MTLIGAccelBlitCommandEncoder fillBuffer:range:value:] fills the wrong
-// bytes when the length is exactly 8 and the offset is 4 mod 8: it fills the 8-aligned bytes below (offset 4 -> 0..7).
-// Other lengths and offsets are right. wgpu (Firefox's WebGPU) zero-fills buffer tails this way: a 4-byte copy into
-// a 12-byte buffer was wiped by the clear of bytes 4..11 (WebGPU CTS clearBuffer, copyBufferToBuffer). Such a fill is
-// issued as two 4-byte fills.
+// 20. -[MTLIGAccelBlitCommandEncoder fillBuffer:range:value:] fills the 8-aligned bytes below when the length is 8 and
+// the offset is 4 mod 8 (wgpu zero-fills buffer tails this way): such a fill is issued as two 4-byte fills. (s20)
 typedef void (*FillBufferIMP)(id, SEL, id, NSRange, uint8_t);
 static FillBufferIMP origIGFillBuffer;
 
@@ -2942,16 +2721,13 @@ static void igFillBuffer(id self, SEL _cmd, id buffer, NSRange range, uint8_t va
     }
     origIGFillBuffer(self, _cmd, buffer, NSMakeRange(range.location, 4), value);
     origIGFillBuffer(self, _cmd, buffer, NSMakeRange(range.location + 4, 4), value);
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] 8-byte fill at offset %lu split in two\n", (unsigned long)range.location);
+    if (verbose()) shimLog("[mtlshim] 8-byte fill at offset %lu split in two\n", (unsigned long)range.location);
 }
 
-// 22. HiZ on the 12.x Intel driver: for a depth texture with more than one mip level or slice, blits don't keep the
-// hierarchical depth buffer in step with the depth data of levels and slices other than 0. Depth copied into such a
-// level fails every later depth test against it, and a depth clear there isn't seen by a later copy out (WebGPU CTS
-// copy_depth_stencil, texture_zero with depth formats). The driver creates a texture without HiZ while its device's
-// bHizDisable is set (read at creation), and these depth textures are created that way. Single-level depth buffers,
-// almost every renderer's main depth buffer, keep HiZ. Multisampled depth has the same problem with blits but is left
-// alone: copying it is rare, and HiZ matters most to multisampled rendering.
+// 22. On the 12.x Intel driver blits don't keep HiZ in step with the depth of levels and slices above 0 of depth
+// textures with several levels or slices. The driver creates a texture without HiZ while its device's bHizDisable is
+// set (read at creation), and such depth textures are created that way. Single-level depth buffers keep HiZ;
+// multisampled depth is left alone (copying it is rare, and HiZ matters most there). (s22, s42)
 typedef id (*NewTextureIMP)(id, SEL, MTLTextureDescriptor *) RETURNS_RETAINED;
 static NewTextureIMP origIGNewTexture, origIGHeapNewTexture;
 static ptrdiff_t igHizDisableOffset;
@@ -2994,18 +2770,13 @@ static bool beginWithoutHiZ(id device) {
 static void endWithoutHiZ(id device, bool saved) {
     *(bool *)((char *)(__bridge void *)device + igHizDisableOffset) = saved;
     pthread_mutex_unlock(hizLock());
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] depth texture with several levels/slices created without HiZ\n");
+    if (verbose()) shimLog("[mtlshim] depth texture with several levels/slices created without HiZ\n");
 }
 
-// 36. Multisampled Stencil8 textures on the 12.x Intel driver: render passes write their stencil right, but shaders read
-// it wrong. The sampler addresses only part of the surface: past the largest power of two below the width, most rows read
-// the left half again (a 4x 256x128 texture: 14464 of 32768 texels wrong). ANGLE reads it that way to resolve or blit a
-// GL_STENCIL_INDEX8 multisampled renderbuffer (dEQP fbomultisample stencil_index8). The stencil of
-// Depth32Float_Stencil8 reads right at every size, also as a stencil-only attachment drawn with a pipeline that says
-// Stencil8, so multisampled Stencil8 textures made on the device are created as Depth32Float_Stencil8 (5 bytes a sample
-// instead of 1), and Stencil8 views of them become X32_Stencil8 views. The texture reports Depth32Float_Stencil8; ANGLE
-// then makes its stencil view from that by itself. Heap textures are left alone (the heap was sized for Stencil8).
-// MTLSHIM_MSAA_STENCIL8=0 turns it off. Test: s40.
+// 36. Shaders read multisampled Stencil8 wrong on the 12.x Intel driver (past the largest power of two below the width,
+// rows read the left half again), while Depth32Float_Stencil8's stencil reads right. Multisampled Stencil8 textures
+// made on the device are created as Depth32Float_Stencil8 (5 bytes a sample) and their Stencil8 views as X32_Stencil8;
+// the texture reports its real format. Heap textures are left alone (the heap was sized for Stencil8). Test: s40.
 static MTLTextureDescriptor *sampleableStencilStandIn(MTLTextureDescriptor *descriptor) {
     if (descriptor.pixelFormat != MTLPixelFormatStencil8 || descriptor.sampleCount <= 1) return nil;
     const char *setting = getenv("MTLSHIM_MSAA_STENCIL8");
@@ -3013,7 +2784,7 @@ static MTLTextureDescriptor *sampleableStencilStandIn(MTLTextureDescriptor *desc
     MTLTextureDescriptor *standIn = [descriptor copy];
     standIn.pixelFormat = MTLPixelFormatDepth32Float_Stencil8;
     standIn.usage |= MTLTextureUsagePixelFormatView;
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] multisampled Stencil8 texture created as Depth32Float_Stencil8\n");
+    if (verbose()) shimLog("[mtlshim] multisampled Stencil8 texture created as Depth32Float_Stencil8\n");
     return standIn;
 }
 static MTLPixelFormat sampleableStencilView(id texture, MTLPixelFormat format) {
@@ -3080,7 +2851,7 @@ static void intelDepthWithoutHiZ(void) {
         origIGNewView = (NewViewIMP)swizzle("MTLIGAccelTexture", "newTextureViewWithPixelFormat:", (IMP)igNewView);
     if (definesMethod("MTLIGAccelTexture", "newTextureViewWithPixelFormat:textureType:levels:slices:"))
         origIGNewViewRange = (NewViewRangeIMP)swizzle("MTLIGAccelTexture", "newTextureViewWithPixelFormat:textureType:levels:slices:", (IMP)igNewViewRange);
-    if (getenv("MTLSHIM_VERBOSE"))
+    if (verbose())
         shimLog("[mtlshim] Intel textures: HiZ fix %s, multisampled Stencil8 stand-in on, views %s/%s\n", igHizDisableOffset ? "on" : "off",
                 origIGNewView ? "on" : "off", origIGNewViewRange ? "on" : "off");
 }
@@ -3089,15 +2860,11 @@ static BOOL definesMethod(const char *cls, const char *sel);
 static IMP swizzle(const char *cls, const char *sel, IMP imp);
 
 // Driver classes come from the driver bundles, which load with the first device: patched when a device is first seen.
-// 27. Blits into depth and stencil on the 12.x Intel driver: render passes don't see what a blit wrote there. Stencil
-// copied in (copyFromBuffer:...toTexture: with StencilFromDepthStencil, copyFromTexture:...toTexture:) reads back right
-// with a blit, but a later render pass still tests against the old stencil; depth copied into a small texture that keeps
-// HiZ (item 22; 4x4 here, 8x8 and larger were right) after a render pass cleared it still tests as the cleared value. ANGLE copies stencil that way on Intel GPUs,
-// so glBlitFramebuffer lost it. When a blit encoder that wrote into such a texture (a single-sample render target) ends,
-// each region is read back into a buffer with a blit and written again by a render pass: depth by a fragment function's
-// depth output, stencil cleared and then set one bit per draw (these GPUs have no stencil output). On the Ivy Bridge
-// driver, which keeps HiZ on depth textures with several levels or slices (item 22 can't create them without it there),
-// depth blitted into those is rewritten the same way. Tests: s32, s22 on the HD 4000.
+// 27. On the 12.x Intel driver render passes don't see stencil a blit wrote, nor depth blitted into a small texture
+// that keeps HiZ (item 22). When a blit encoder that wrote into such a single-sample render target ends, each region is
+// read back into a buffer and written again by a render pass: depth through a fragment function's depth output, stencil
+// cleared and set one bit per draw (these GPUs have no stencil output). On Ivy Bridge also depth blitted into textures
+// with several levels or slices, which keep HiZ there. Tests: s32, s22 on the HD 4000.
 typedef id (*BlitEncoderIMP)(id, SEL);
 typedef void (*BufferToTextureIMP)(id, SEL, id, NSUInteger, NSUInteger, NSUInteger, MTLSize, id, NSUInteger, NSUInteger, MTLOrigin);
 typedef void (*BufferToTextureOptionsIMP)(id, SEL, id, NSUInteger, NSUInteger, NSUInteger, MTLSize, id, NSUInteger, NSUInteger, MTLOrigin,
@@ -3111,31 +2878,19 @@ static BufferToTextureIMP origIGBufferToTexture;
 static BufferToTextureOptionsIMP origIGBufferToTextureOptions;
 static TextureToTextureIMP origIGTextureToTexture;
 static TextureToTextureOptionsIMP origIGTextureToTextureOptions;
-// 49. Blits through texture views on the Ivy Bridge driver: a blit from or into a view (between textures, or with a
-// buffer) ignores the view's offset into its parent and reaches the parent's slice 0 and level 0; shaders reach the right
-// subresource through the same view. ANGLE copies a cube's faces through single-face 2D views when generateMipmap gives
-// the texture a mip chain, so every face became +X's (WebGL CTS texture-size-cube-maps, texture-sub-image-cube-maps,
-// texture-mips). Such blits address the view's parent (of the same pixel format) at the view's slice and level instead.
-// MTLSHIM_VIEW_BLITS=0 turns it off. (s65)
+// 49. On the Ivy Bridge driver a blit from or into a texture view ignores the view's offset into its parent (ANGLE's
+// cube face copies after generateMipmap all became +X): such blits address the parent at the view's slice and level.
+// (s65)
 static BOOL ivbViewBlits;
 static id<MTLTexture> viewBlitTarget(id<MTLTexture> t, NSUInteger *slice, NSUInteger *level) {
     return ivbViewBlits && t.parentTexture ? rootTexture(t, level, slice) : t;
 }
 
-// 37. Stencil copied between a buffer and mip level 1 or higher on the 12.x Intel driver, when the buffer offset or
-// bytesPerRow isn't a multiple of 256: some texels come from their left neighbour (at mip 2 of a 20x16 texture, the 5th
-// texel of each row reads or writes as the 4th), for Stencil8 and the stencil of depth/stencil formats alike. Dawn
-// copies a tight buffer's last row on its own with bytesPerRow = its width, so WebGPU CTS
-// image_copy rowsPerImage_and_bytesPerRow_depth_stencil lost the last texel (9 cases). Slice 1+ of a Stencil8 array goes
-// wrong the same way: with such a buffer offset, a copy out of it reads 0 and a copy into it with such a bytesPerRow
-// writes nothing (wgpu's copy_unaligned_rows). Copies at level 0 / slice 0, and texture to texture copies at any level
-// and slice, are right. Such copies go through a level-0 temporary texture of the same format: out of
-// the level by a texture copy, then to the buffer; or into the temporary (filled from the level first, which keeps the
-// depth of a depth/stencil texture) and back by a texture copy, which item 27 sees. The Ivy Bridge driver writes only
-// the first row of any stencil copy into a buffer whose bytesPerRow isn't the region's width, at every level and slice
-// (copies into textures, and depth, are right): WebGPU's bytesPerRow is a multiple of 256, so every stencil read-back
-// there lost all but its first row. There such a copy is made one row at a time, each row tight at its own offset.
-// MTLSHIM_STENCIL_COPY=0 turns both off. Tests: s41, s55, s62 on the HD 4000.
+// 37. On the 12.x Intel driver stencil copied between a buffer and level 1+ (or slice 1+ of a Stencil8 array) with a
+// buffer offset or bytesPerRow that isn't a multiple of 256 takes texels from a neighbour, or none: such copies go
+// through a level-0 temporary texture of the same format (filled from the level first, which keeps a depth/stencil
+// texture's depth), which item 27 sees. The Ivy Bridge driver writes only the first row of a stencil copy into a buffer
+// with padded rows: there it is copied a row at a time. Tests: s41, s55, s62 on the HD 4000.
 typedef void (*TextureToBufferIMP)(id, SEL, id, NSUInteger, NSUInteger, MTLOrigin, MTLSize, id, NSUInteger, NSUInteger, NSUInteger);
 typedef void (*TextureToBufferOptionsIMP)(id, SEL, id, NSUInteger, NSUInteger, MTLOrigin, MTLSize, id, NSUInteger, NSUInteger, NSUInteger,
                                           MTLBlitOption);
@@ -3154,7 +2909,7 @@ static id<MTLTexture> stencilCopyTemporary(id<MTLTexture> t, NSUInteger slice, N
     d.storageMode = MTLStorageModePrivate;
     d.usage = MTLTextureUsageShaderRead;
     id<MTLTexture> temporary = [t.device newTextureWithDescriptor:d];
-    if (temporary && getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] stencil copy at level %lu slice %lu through a level-0 temporary\n", (unsigned long)level, (unsigned long)slice);
+    if (temporary && verbose()) shimLog("[mtlshim] stencil copy at level %lu slice %lu through a level-0 temporary\n", (unsigned long)level, (unsigned long)slice);
     return temporary;
 }
 static void textureCopy(id encoder, id<MTLTexture> from, NSUInteger fromSlice, NSUInteger fromLevel, MTLOrigin fromOrigin, MTLSize size,
@@ -3198,7 +2953,7 @@ static void textureToBuffer(id self, SEL _cmd, id<MTLTexture> t, NSUInteger slic
         if (withOptions) origIGTextureToBufferOptions(self, _cmd, t, slice, level, o, s, buffer, offset + y * row, r, i, options);
         else origIGTextureToBuffer(self, _cmd, t, slice, level, o, s, buffer, offset + y * row, r, i);
     }
-    if (rows > 1 && getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] stencil copied out in %lu rows (bytesPerRow %lu)\n", (unsigned long)rows, (unsigned long)row);
+    if (rows > 1 && verbose()) shimLog("[mtlshim] stencil copied out in %lu rows (bytesPerRow %lu)\n", (unsigned long)rows, (unsigned long)row);
 }
 static void igTextureToBuffer(id self, SEL _cmd, id t, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLSize size, id buffer,
                               NSUInteger offset, NSUInteger row, NSUInteger image) {
@@ -3232,13 +2987,10 @@ static void igTextureToBufferOptions(id self, SEL _cmd, id t, NSUInteger slice, 
     textureCopy(self, t, slice, level, origin, size, temporary, 0, 0, MTLOriginMake(0, 0, 0));
     textureToBuffer(self, _cmd, temporary, 0, 0, MTLOriginMake(0, 0, 0), size, buffer, offset, row, image, options, YES);
 }
-// 53. Small stencil uploads on the Kepler driver: a copy from a buffer into Stencil8, or into the stencil of a depth/stencil
-// texture (MTLBlitOptionStencilFromDepthStencil), of at most 16 KB isn't ordered before the blit encoder's next command,
-// so a copy out of the same texture right after it can run first and read the old contents (zeros in a new texture).
-// Measured on a GTX 770 (Sequoia, OCLP's 11.0 Beta 3 GeForceMTLDriver), 30 runs per size, read-back in the same encoder:
-// 4x3 to 128x128 fail 10% to 83% of runs, 256x256 and up never; colour and Depth32Float uploads never. Any command in
-// between orders it (a new encoder too): after every stencil upload a 4-byte fillBuffer into a scratch buffer of the
-// device follows, which made all sizes 30 of 30. MTLSHIM_NV_STENCIL_ORDER=0 turns it off. Test: s62 on the GTX 770.
+// 53. On the Kepler driver a stencil upload of at most 16 KB isn't ordered before the blit encoder's next command, so a
+// copy out right after can read the old contents (sizes 4x3 to 128x128 failed in 10-83% of runs on a GTX 770). Any
+// command in between orders it: a 4-byte fillBuffer into a scratch buffer follows every stencil upload. Test: s62 on
+// the GTX 770.
 static BufferToTextureIMP origNVBufferToTexture;
 static BufferToTextureOptionsIMP origNVBufferToTextureOptions;
 static const void *kNVOrderScratch = &kNVOrderScratch;
@@ -3256,7 +3008,7 @@ static void nvOrderStencilUpload(id encoder, id<MTLTexture> t, MTLBlitOption opt
         objc_setAssociatedObject(device, kNVOrderScratch, scratch, OBJC_ASSOCIATION_RETAIN);
     }
     [(id<MTLBlitCommandEncoder>)encoder fillBuffer:scratch range:NSMakeRange(0, 4) value:0];
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] stencil upload ordered (format %lu)\n", (unsigned long)f);
+    if (verbose()) shimLog("[mtlshim] stencil upload ordered (format %lu)\n", (unsigned long)f);
 }
 static void nvBufferToTexture(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInteger row, NSUInteger image, MTLSize size, id t,
                               NSUInteger slice, NSUInteger level, MTLOrigin origin) {
@@ -3279,25 +3031,15 @@ static void nvStencilUploadOrder(void) {
     if (definesMethod(kEncoder, withOptions))
         origNVBufferToTextureOptions = (BufferToTextureOptionsIMP)keplerSwizzle(kEncoder, withOptions, (IMP)nvBufferToTextureOptions);
 }
-// 65. 3D copies with a padded image stride on the Kepler driver. A copy between a buffer and more than one slice of a 3D
-// texture whose bytesPerImage is more than bytesPerRow x height read or wrote slice n at n x bytesPerRow x height, in
-// the padding instead of the next image: all formats, both directions (GTX 770; WebGPU CTS image_copy
-// rowsPerImage_and_bytesPerRow, all 114 failing cases 3D; Dawn copies 2D arrays a slice at a time, and those were right).
-// Such a copy is done a slice at a time. MTLSHIM_NV_VOLUME_COPY=0 turns it off. Test: n15 on the GTX 770.
-// 67. Uploads into the last row of blocks of a block-compressed texture on the Kepler driver. A copy from a buffer into a
-// BC texture whose region ends at the level's bottom edge with a height that isn't a whole number of blocks (13x1 at
-// y = 12 of a 13-texel level: the edge row, 1 texel high) wrote nothing, as if the block rows were rounded down; edge
-// columns, whole levels and copies out were right (GTX 770; WebGPU CTS image_copy compressed_textures,
-// unaligned_mip_level_0, all BC formats). Such a copy's height is rounded up to the block: the level's memory holds whole
-// blocks, and the driver takes the size. MTLSHIM_NV_BLOCK_EDGE=0 turns it off. Test: n17 on the GTX 770.
+// 65. On the Kepler driver a buffer / 3D texture copy over several slices with bytesPerImage above bytesPerRow x height
+// put slice n in the padding (at n x bytesPerRow x height): done a slice at a time. Test: n15 on the GTX 770.
+// 67. An upload into a BC texture that ends at the level's bottom edge with a height short of a whole block wrote
+// nothing: the height is rounded up to the block (the level's memory holds whole blocks). Test: n17 on the GTX 770.
 static BOOL nvVolumeOn, nvBlockEdgeOn;
 
-// 80. Kepler copies between a buffer and a depth-only texture wrong when asked for MTLBlitOptionDepthFromDepthStencil:
-// from a Depth16Unorm texture it writes 32-bit floats (00 00 80 3f for 1.0, two texels' worth), and into one it reads
-// them (16-bit depth values arrived as 0); without the option both copies are right. The option only means something for
-// a combined depth/stencil texture, and Safari's WebGPU passes it for every depth copy (WebGPU CTS storeOp
-// depth_stencil_attachment_only with depth16unorm, through tools/webkit-cts.sh; Chrome doesn't pass it). For Depth16Unorm
-// and Depth32Float it's dropped. MTLSHIM_NV_DEPTH_COPY=0 turns it off. Test: n48.
+// 80. Kepler copies between a buffer and a Depth16Unorm texture wrong with MTLBlitOptionDepthFromDepthStencil (as
+// 32-bit floats), which Safari's WebGPU passes for every depth copy; it only matters for combined formats, so it's
+// dropped for Depth16Unorm and Depth32Float. Test: n48.
 static BOOL nvDepthCopyOn;
 static MTLBlitOption nvDepthOnlyOption(id<MTLTexture> t, MTLBlitOption options) {
     if (!nvDepthCopyOn || !(options & MTLBlitOptionDepthFromDepthStencil)) return options;
@@ -3420,10 +3162,8 @@ static unsigned depthStencilRewrite(id<MTLTexture> t, MTLBlitOption options) {
 static void noteDepthStencilWrite(id encoder, id<MTLTexture> t, NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLSize size,
                                   MTLBlitOption options) {
     unsigned what = depthStencilRewrite(t, options);
-    // Not for stencil textures with several levels or slices: render passes on those go through a temporary texture
-    // loaded by a blit (item 33), and the rewrite's own render passes there would break them. The depth of such a
-    // Depth32Float_Stencil8 texture goes through that temporary too, so it never meets the texture's own HiZ (and its
-    // rewrite would end in item 33's copy back, a blit into it again).
+    // Not for stencil textures with several levels or slices: their passes go through item 33's temporary, which the
+    // rewrite's own passes would break; their depth goes through it too and never meets the texture's HiZ.
     if (t.mipmapLevelCount > 1 || t.arrayLength > 1) {
         what &= ~kRewriteStencil;
         if (t.pixelFormat == MTLPixelFormatDepth32Float_Stencil8) what &= ~kRewriteDepth;
@@ -3444,17 +3184,11 @@ static void noteDepthStencilWrite(id encoder, id<MTLTexture> t, NSUInteger slice
                          [NSValue valueWithBytes:&size objCType:@encode(MTLSize)], @(what)]];
 }
 
-// 86. Stencil copied into a mip level of a Depth32Float_Stencil8 texture on the Ivy Bridge driver: a stencil copy into
-// level 1 (copyFromBuffer:...toTexture: with StencilFromDepthStencil, or a texture copy, which takes both aspects) lands,
-// but for some sizes it also zeroes the depth of every deeper level (63x63: levels 2-4 all lost their depth; 48x48 part
-// of level 2; 32x32 and 33x33 nothing). WebKit zero-fills a texture's levels that weren't written yet with such blits
-// before it reads them, so the depth a render pass had put in another level read back as 0 (WebGPU CTS texture_zero,
-// depth32float-stencil8 with 5 levels, the canary on levels 2 and 4). Item 37's and item 33's texture copies into such
-// a level do the same. Around every stencil copy into level 1 or deeper of a mipmapped 2D Depth32Float_Stencil8 texture,
-// the depth of the deeper levels is copied out to a scratch buffer first and back in after it, in the same encoder.
-// Arrays and cubes lose it the same way (only the slice copied into) and still do: their depth copies go through item
-// 63's passes, and render passes on them through item 33's temporary, whose stencil copy back is such a copy again.
-// MTLSHIM_STENCIL_KEEPS_DEPTH=0 turns it off. Test: s90.
+// 86. On the Ivy Bridge driver a stencil copy into level 1 of a Depth32Float_Stencil8 texture can zero the depth of
+// every deeper level (63x63: levels 2-4), which WebKit's zero-fills of unwritten levels set off (items 37's and 33's
+// copies too). Around every stencil copy into a level above 0 of a mipmapped 2D Depth32Float_Stencil8 texture, the
+// deeper levels' depth is copied out to a scratch buffer and back in, in the same encoder. Arrays and cubes still lose
+// it. Test: s90.
 static BOOL ivbStencilKeepsDepth(void) {
     static BOOL on;
     static dispatch_once_t once;
@@ -3497,7 +3231,7 @@ static void keepingDeeperDepth(id encoder, id<MTLTexture> t, NSUInteger slice, N
     }
     id<MTLCommandBuffer> commandBuffer = objc_getAssociatedObject(encoder, kBlitCommandBuffer);
     [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> done) { (void)keep; }];  // kept until the GPU is done with it
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] stencil copy into level %lu: depth of levels %lu-%lu kept\n", (unsigned long)level, (unsigned long)level + 1, (unsigned long)levels - 1);
+    if (verbose()) shimLog("[mtlshim] stencil copy into level %lu: depth of levels %lu-%lu kept\n", (unsigned long)level, (unsigned long)level + 1, (unsigned long)levels - 1);
 }
 
 static id igBlitEncoder(id self, SEL _cmd) {
@@ -3533,15 +3267,9 @@ static void igBufferToTextureOptions(id self, SEL _cmd, id buffer, NSUInteger of
     });
     noteDepthStencilWrite(self, t, slice, level, origin, size, options);
 }
-// 72. Copies between a format and its sRGB variant on Ivy Bridge and Haswell. copyFromTexture:...toTexture: from RGBA8Unorm to
-// RGBA8Unorm_sRGB (and back, and BGRA8, BC1, BC3) doesn't copy the bytes, as Metal says it does: RGBA8 and BGRA8 texels
-// come out converted (a 1 became 13, the sRGB encoding of 1/255; the other way 3 became 0), and BC blocks garbled, at
-// every level (the HD 4000 and the Iris Pro; the R9 is right). Copies within one format, and between textures and buffers,
-// are right. WebGPU's copyTextureToTexture between rgba8unorm and rgba8unorm-srgb (and bgra8 and the BC pairs) failed
-// (WebGPU CTS copyTextureToTexture color_textures; Dawn copies through a view of the other format, which goes wrong the
-// same way). Such copies, through
-// views too, go through a temporary buffer between the root textures: out of the source, then into the destination.
-// MTLSHIM_SRGB_COPY=0 turns it off. Test: s73 on the HD 4000 and the Iris Pro.
+// 72. On Ivy Bridge and Haswell copyFromTexture:...toTexture: between a format and its sRGB variant (RGBA8, BGRA8 and
+// the BC formats) converts the texels (BC blocks: garbled) instead of copying the bytes. Such copies, through views too, go
+// through a temporary buffer between the root textures. Test: s73 on the HD 4000 and the Iris Pro.
 static BOOL ivbSrgbCopies;
 static BOOL srgbPairLayout(MTLPixelFormat f, NSUInteger *block, NSUInteger *bytes) {
     switch (f) {
@@ -3581,7 +3309,7 @@ static BOOL srgbPairCopy(id encoder, id<MTLTexture> source, NSUInteger sourceSli
      destinationOffset:0 destinationBytesPerRow:row destinationBytesPerImage:image];
     [e copyFromBuffer:temporary sourceOffset:0 sourceBytesPerRow:row sourceBytesPerImage:image sourceSize:size toTexture:t destinationSlice:slice
      destinationLevel:level destinationOrigin:origin];
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] copy between a format and its sRGB variant made through a buffer\n");
+    if (verbose()) shimLog("[mtlshim] copy between a format and its sRGB variant made through a buffer\n");
     return YES;
 }
 
@@ -3651,7 +3379,7 @@ static id<MTLRenderPipelineState> depthStencilWriter(id<MTLDevice> device, MTLPi
     if (format != MTLPixelFormatStencil8) descriptor.depthAttachmentPixelFormat = format;
     if (format == MTLPixelFormatStencil8 || format == MTLPixelFormatDepth32Float_Stencil8) descriptor.stencilAttachmentPixelFormat = format;
     pipeline = library ? [device newRenderPipelineStateWithDescriptor:descriptor error:&error] : nil;
-    if (!pipeline && getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] depth/stencil rewrite pipeline: %s\n", error.localizedDescription.UTF8String);
+    if (!pipeline && verbose()) shimLog("[mtlshim] depth/stencil rewrite pipeline: %s\n", error.localizedDescription.UTF8String);
     os_unfair_lock_lock(&lock);
     if (pipeline) pipelines[key] = pipeline;
     os_unfair_lock_unlock(&lock);
@@ -3672,20 +3400,11 @@ static id<MTLDepthStencilState> depthStencilWriteState(id<MTLDevice> device, BOO
     return [device newDepthStencilStateWithDescriptor:descriptor];
 }
 
-// 63. Blits at levels 1+ of mipmapped depth arrays on Ivy Bridge. Any blit that reads or writes level 1 or higher of a
-// Depth16Unorm or Depth32Float 2D-array, cube or cube-array texture with several levels (into or out of a buffer or another
-// texture, even 4x4 texels) left bands of the whole texture wrong: rows of other slices zeroed or overwritten with another
-// level's (in a 2-layer, 3-level 64x64 cube array, a copy out of level 1 face 0 broke parts of 13 other slices), and the copy
-// itself read or wrote the same wrong layout. Shader reads before the blit were right, and blits at level 0 change nothing
-// (Ivy Bridge only: the Iris Pro and the R9 read every slice right). Such textures keep HiZ on Ivy Bridge (item 22), and
-// the driver's resolve for a blit at a lower level seems to use a layout of its own. These copies no longer reach the
-// driver: when the blit encoder ends, in order with item 22's rewrites, a compute pass reads the texels with read() (into
-// the destination buffer, or into a temporary one), and texels for the texture are written by item 22's render pass from a
-// temporary buffer, filled in place by a buffer copy (or by the driver's copy out of a texture the bug doesn't touch). The
-// encoder's later commands (copies, buffer copies, fills, synchronizes, mipmap generation) then wait too and run after it
-// in order, so a copy of the destination or a synchronize of a managed buffer sees the result. Copies of
-// Depth32Float_Stencil8 go this way only with MTLBlitOptionDepthFromDepthStencil. MTLSHIM_DEPTH_LEVEL_BLITS=0 turns it off.
-// Test: s70 on the HD 4000.
+// 63. On Ivy Bridge any blit at level 1+ of a mipmapped Depth16Unorm / Depth32Float 2D-array, cube or cube-array
+// texture left bands of other slices wrong (these keep HiZ there, item 22). Such copies no longer reach the driver:
+// when the blit encoder ends, in order with item 27's rewrites, a compute pass reads the texels with read(), and texels
+// for the texture are written by item 27's render pass from a temporary buffer. The encoder's later commands wait and
+// run after it, in order. Depth32Float_Stencil8 only with MTLBlitOptionDepthFromDepthStencil. Test: s70 on the HD 4000.
 static BOOL ivbDepthLevelBlits;
 static NSString *const kDepthCopy = @"depth copy";
 
@@ -3714,7 +3433,7 @@ static BOOL queueDepthCopy(id encoder, id<MTLTexture> from, NSUInteger slice, NS
     NSMutableArray *pending = objc_getAssociatedObject(encoder, kPendingDepthStencil);
     if (!pending) objc_setAssociatedObject(encoder, kPendingDepthStencil, pending = [NSMutableArray array], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(encoder, kDeferRest, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    // [0] marker, [1] slice, [2] level, [3] origin, [4] size (as item 22's entries, whose dedup reads [3] and [4]), then the rest
+    // [0] marker, [1] slice, [2] level, [3] origin, [4] size (as item 27's entries, whose dedup reads [3] and [4]), then the rest
     [pending addObject:@[kDepthCopy, @(slice), @(level), [NSValue valueWithBytes:&origin objCType:@encode(MTLOrigin)],
                          [NSValue valueWithBytes:&size objCType:@encode(MTLSize)], from ?: (id)NSNull.null, data ?: (id)NSNull.null,
                          buffer ?: (id)NSNull.null, @(offset), @(bytesPerRow), to ?: (id)NSNull.null, @(toSlice), @(toLevel),
@@ -3797,7 +3516,7 @@ static id<MTLComputePipelineState> depthReader(id<MTLDevice> device, MTLTextureT
                       sixteen ? 16 : 32];
     id<MTLFunction> function = [library newFunctionWithName:name];
     pipeline = function ? [device newComputePipelineStateWithFunction:function error:&error] : nil;
-    if (!pipeline && getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] depth level copy pipeline: %s\n", error.localizedDescription.UTF8String);
+    if (!pipeline && verbose()) shimLog("[mtlshim] depth level copy pipeline: %s\n", error.localizedDescription.UTF8String);
     os_unfair_lock_lock(&lock);
     if (pipeline) pipelines[key] = pipeline;
     os_unfair_lock_unlock(&lock);
@@ -3807,7 +3526,7 @@ static id<MTLComputePipelineState> depthReader(id<MTLDevice> device, MTLTextureT
 static id<MTLRenderPipelineState> depthStencilWriter(id<MTLDevice> device, MTLPixelFormat format, int kind);
 static id<MTLDepthStencilState> depthStencilWriteState(id<MTLDevice> device, BOOL depth, uint32_t stencilMask);
 
-// Writes depth from a tight buffer (rows of size.width texels) into a region of `t`, with item 22's render pass
+// Writes depth from a tight buffer (rows of size.width texels) into a region of `t`, with item 27's render pass
 static void writeDepthRegion(id<MTLCommandBuffer> commandBuffer, id<MTLTexture> t, NSUInteger slice, NSUInteger level, MTLOrigin origin,
                              MTLSize size, id<MTLBuffer> data) {
     id<MTLRenderPipelineState> pipeline = depthStencilWriter(t.device, t.pixelFormat, kRewriteDepth);
@@ -3868,7 +3587,7 @@ static void runDepthCopy(id<MTLCommandBuffer> commandBuffer, NSArray *entry) {
     }
     if (to && data) {
         if (depthLevelBlit(to, toLevel, MTLBlitOptionDepthFromDepthStencil)) writeDepthRegion(commandBuffer, to, toSlice, toLevel, toOrigin, size, data);
-        else {  // a destination the bug doesn't touch: a blit, which goes through the hooks (item 22 rewrites it where needed)
+        else {  // a destination the bug doesn't touch: a blit, which goes through the hooks (item 27 rewrites it where needed)
             NSUInteger row = size.width * depthBytes(to);
             id<MTLBlitCommandEncoder> blit = [commandBuffer blitCommandEncoder];
             [blit copyFromBuffer:data sourceOffset:0 sourceBytesPerRow:row sourceBytesPerImage:row * size.height sourceSize:size toTexture:to
@@ -3877,7 +3596,7 @@ static void runDepthCopy(id<MTLCommandBuffer> commandBuffer, NSArray *entry) {
             [blit endEncoding];
         }
     }
-    if (getenv("MTLSHIM_VERBOSE"))
+    if (verbose())
         shimLog("[mtlshim] depth copy %s level %lu (%lux%lu) done with %s\n", from ? "out of" : "into", (unsigned long)(from ? level : toLevel),
                 (unsigned long)size.width, (unsigned long)size.height, from ? "a compute pass" : "a render pass");
 }
@@ -4003,7 +3722,7 @@ static void rewriteDepthStencil(id<MTLCommandBuffer> commandBuffer, NSArray *pen
             }
         }
         [encoder endEncoding];
-        if (getenv("MTLSHIM_VERBOSE"))
+        if (verbose())
             shimLog("[mtlshim] blit into %s: %lux%lu region written again by a render pass\n",
                     what == (kRewriteDepth | kRewriteStencil) ? "depth and stencil" : what == kRewriteDepth ? "depth" : "stencil",
                     (unsigned long)size.width, (unsigned long)size.height);
@@ -4083,12 +3802,9 @@ static void blitsIntoDepthStencil(void) {
         }
 }
 
-// 28. Argument buffers on the 12.x Intel driver are emulated (tier 1), and the emulated encoder's
-// setBuffer:offset:atIndex: and setBuffers:offsets:withRange: read the buffer's GPU address without checking for nil:
-// encoding nil into an unused slot, which Metal allows, dereferences null. Cycles (Blender 3.6's GPU renderer) does that
-// before every kernel, so a GPU render crashed Blender. A nil buffer gets a cleared slot instead (no buffer, offset 0,
-// GPU address 0), what the driver's slot holds before anything is encoded. Textures and samplers store only the object,
-// so nil is already fine there.
+// 28. The 12.x Intel driver's emulated argument encoder reads a nil buffer's GPU address (Blender's Cycles encodes nil
+// into unused slots): a nil buffer gets a cleared slot instead, what the slot holds before anything is encoded.
+// Textures and samplers store only the object, so nil is fine there. (s33)
 typedef void (*ArgSetBufferIMP)(id, SEL, id, NSUInteger, NSUInteger);
 typedef void (*ArgSetBuffersIMP)(id, SEL, const __unsafe_unretained id *, const NSUInteger *, NSRange);
 static ArgSetBufferIMP origIGArgSetBuffer;
@@ -4102,7 +3818,7 @@ static void clearArgumentBufferSlot(id self, NSUInteger index) {
     if (!destination || !layout) return;  // no argument buffer set: the driver would crash on a real buffer too
     NSUInteger offset = ((NSUInteger (*)(id, SEL, NSUInteger))objc_msgSend)(layout, sel_registerName("offsetForBuffer:"), index);
     memset(destination + offset, 0, 3 * sizeof(uint64_t));  // buffer, offset, GPU address
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] nil buffer encoded into argument buffer slot %lu\n", (unsigned long)index);
+    if (verbose()) shimLog("[mtlshim] nil buffer encoded into argument buffer slot %lu\n", (unsigned long)index);
 }
 
 static void igArgSetBuffer(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInteger index) {
@@ -4138,18 +3854,12 @@ static void nilArgumentBuffers(void) {
     origIGArgSetBuffers = (ArgSetBuffersIMP)swizzle(kClass, "setBuffers:offsets:withRange:", (IMP)igArgSetBuffers);
 }
 
-// 30. Integer cube textures with 1x1 or 2x2 faces sample as 0 in vertex and fragment functions on the 12.x Intel driver
-// (compute kernels and float formats are right). The driver's sampler state asks for seamless cube addressing
-// (CubeSurfaceControlMode = override), and the sampler can't do that for integer formats on faces this small. Integer
-// textures are only sampled with nearest filtering, where seamless addressing changes nothing (a nearest texel never
-// spans a face edge), so samplers whose min and mag filters are nearest get the programmed (clamped) addressing. The
-// WebGL suite uploads such faces from canvases and ImageData (integer-cubemap-texture-sampling, tex-2d-*ui-*_integer-*:
-// about 2400 failures in Chrome and Safari). A nearest gather's 2x2 footprint does span face edges, so the Intel adapter
-// gives cube gathers a linear constexpr sampler, which this leaves seamless (i20). Samplers with a compare function get
-// the programmed addressing too: ANGLE passes GL's default compare function (LEQUAL) to every sampler, comparison on or
-// off, so leaving those seamless (as tried for WebGPU's compare gathers) broke every WebGL integer cube again (s52). A
-// cube gather_compare at a face edge through a nearest compare sampler therefore reads one face (WebGPU CTS
-// textureGatherCompare, 60 cases), the smaller loss. MTLSHIM_NEAREST_CUBE_CLAMP=0 turns it off.
+// 30. On the 12.x Intel driver integer cube textures with 1x1 or 2x2 faces sample as 0 in vertex and fragment
+// functions: the sampler can't do the seamless cube addressing the driver asks for on faces that small. Integer
+// textures are sampled nearest, where seamless changes nothing, so nearest samplers, and those with a compare function
+// (ANGLE gives every sampler GL's LEQUAL; s52), get the programmed (clamped) addressing. Cube gathers get a linear
+// constexpr sampler from the Intel adapter (i20), which stays seamless; a nearest compare gather at a face edge reads
+// one face, the smaller loss.
 typedef void (*InitSamplerStateIMP)(id, SEL, id);
 static InitSamplerStateIMP origIGInitSamplerState;
 static ptrdiff_t igSamplerStateOffset = -1;
@@ -4160,7 +3870,7 @@ static void igInitSamplerState(id self, SEL _cmd, id descriptor) {
     BOOL nearest = !((state[0] >> 14) & 7) && !((state[0] >> 17) & 7);  // MinModeFilter, MagModeFilter
     if (nearest && (state[1] & 1)) {
         state[1] &= ~1u;  // CubeSurfaceControlMode: programmed
-        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] nearest sampler: programmed cube addressing\n");
+        if (verbose()) shimLog("[mtlshim] nearest sampler: programmed cube addressing\n");
     }
 }
 
@@ -4180,13 +3890,9 @@ static void nearestCubeClamp(void) {
     origIGInitSamplerState = (InitSamplerStateIMP)swizzle("MTLIGSampler", "initializeSamplerState:", (IMP)igInitSamplerState);
 }
 
-// 31. The 12.x Intel driver's encoders pack the LOD clamps of setVertexSamplerState:lodMinClamp:lodMaxClamp:atIndex: and
-// the like (vertex, fragment, tile and compute stages, one sampler or a range) into the sampler state's 4.8 fixed-point
-// LOD fields without saturating them, so they wrap modulo 16: 1000 reads as 8, 20 as 4, -3 as 13. Sampler descriptors'
-// clamps are saturated (newSamplerStateWithDescriptor:). ANGLE binds every texture's sampler with GL's TEXTURE_MIN_LOD /
-// TEXTURE_MAX_LOD this way, by default 0 and 1000, so in Chrome and Safari WebGL never sampled a mip level above 8
-// (textures over 256 texels, minified: conformance2/glsl3/texture-bias.html). The clamps are clamped to the fields' range
-// [0, 4095 / 256] first. MTLSHIM_ENCODER_LOD_CLAMP=0 turns it off. Test: s35.
+// 31. The 12.x Intel driver packs the encoders' sampler LOD clamps
+// (setFragmentSamplerState:lodMinClamp:lodMaxClamp:atIndex: and the like) into 4.8 fixed point without saturating, so
+// they wrap modulo 16 (ANGLE's default 1000 reads as 8). They are clamped to [0, 4095 / 256] first. Test: s35.
 typedef void (*SetSamplerLodIMP)(id, SEL, id, float, float, NSUInteger);
 typedef void (*SetSamplersLodIMP)(id, SEL, const id __unsafe_unretained *, const float *, const float *, NSRange);
 enum { kLodVertex, kLodFragment, kLodTile, kLodCompute, kLodStages };
@@ -4237,15 +3943,10 @@ static void encoderLodClamps(void) {
     }
 }
 
-// 32. The 12.x Intel driver returns nil from newTextureViewWithPixelFormat:textureType:levels:slices:swizzle: (family 1 has
-// no texture swizzle). Item 11 tells Chromium that a lone Intel iGPU is family 2, which Dawn (WebGPU) takes to mean
-// swizzled views work, and Dawn makes every depth/stencil view it needs (a stencil-only view of Depth32Float_Stencil8,
-// which backs stencil8; depth textures bound to shaders) with the swizzle (R, 0, 0, 1): nil, and the device is lost
-// ("Failed to create MTLTexture view"). ANGLE is told not to use swizzles (item 11). Where the driver says nil and the
-// swizzle changes nothing a shader can see, the view is made without it: the identity; a format's own channels (R001 for
-// one-channel formats, RG01 for two); and R001 for depth and stencil formats, which shaders read in R only (sampling
-// one as float, G, B and A then come from the driver instead of 0, 0, 1). Other swizzles still get nil.
-// MTLSHIM_SWIZZLE_VIEW=0 turns it off. Test: s36.
+// 32. The 12.x Intel driver returns nil for swizzled texture views (family 1), and Dawn, told by item 11 the iGPU is
+// family 2, makes every depth/stencil view with the swizzle (R, 0, 0, 1) and loses the device. Where the driver says
+// nil and the swizzle changes nothing a shader can see (the identity, a format's own channels, R001 for depth and
+// stencil), the view is made without it; other swizzles still get nil. Test: s36.
 typedef id (*SwizzleViewIMP)(id, SEL, MTLPixelFormat, MTLTextureType, NSRange, NSRange, MTLTextureSwizzleChannels) RETURNS_RETAINED;
 static SwizzleViewIMP origIGSwizzleView;
 
@@ -4289,12 +3990,12 @@ static id igSwizzleView(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType
     id view = origIGSwizzleView(self, _cmd, format, type, levels, slices, swizzle);
     if (view) return view;
     if (!swizzleChangesNothing(format, swizzle)) {
-        if (getenv("MTLSHIM_VERBOSE"))
+        if (verbose())
             shimLog("[mtlshim] swizzled texture view (format %lu, swizzle %d%d%d%d): nil, as the driver said\n", (unsigned long)format, swizzle.red,
                     swizzle.green, swizzle.blue, swizzle.alpha);
         return nil;
     }
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] swizzled texture view: made without the swizzle\n");
+    if (verbose()) shimLog("[mtlshim] swizzled texture view: made without the swizzle\n");
     return ((NewViewRangeIMP)objc_msgSend)(
         self, @selector(newTextureViewWithPixelFormat:textureType:levels:slices:), format, type, levels, slices);
 }
@@ -4308,20 +4009,16 @@ static void swizzledViews(void) {
                                                 (IMP)igSwizzleView);
 }
 
-// 54. Methods the Kepler driver (GeForceMTLDriver) lacks, which MetalOld's classes don't provide either, so calling them threw
-// "unrecognized selector" and aborted the process:
-//   - -[NVMTLTexture newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:]. Kepler is family 1 (no swizzle), but
-//     on a Mac whose only GPU it is, item 11 makes it family 2 for Chromium, whose Dawn makes its depth/stencil views with
-//     the swizzle (R, 0, 0, 1). As item 32 on Intel: a swizzle that changes nothing a shader can see makes the view without
-//     it, any other gets nil (what a driver without swizzle returns).
-//   - -[NVMTLDevice newIndirectCommandBufferWithDescriptor:maxCount:options:], which MetalOld's
-//     newIndirectCommandBufferWithDescriptor:maxCommandCount:options: calls for every driver. Kepler has no indirect command
-//     buffers (not Mac2): nil, as for other GPUs without them (wgpu asks for one on any GPU).
-// MTLSHIM_KEPLER_METHODS=0 turns it off. Tests: s36, s42 and s54 on the GTX 770.
+// 54. Methods the Kepler driver lacks, which threw "unrecognized selector":
+//   - -[NVMTLTexture newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:] (Dawn's depth/stencil views on a
+//     Kepler-only Mac, family 2 by item 11): as item 32, a view without a swizzle that changes nothing, else nil;
+//   - -[NVMTLDevice newIndirectCommandBufferWithDescriptor:maxCount:options:], which MetalOld calls for every driver:
+//     nil (Kepler has no indirect command buffers).
+// Tests: s36, s42 and s54 on the GTX 770.
 static id nvSwizzleView(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices, MTLTextureSwizzleChannels swizzle) RETURNS_RETAINED;
 static id nvSwizzleView(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices, MTLTextureSwizzleChannels swizzle) {
     if (!swizzleChangesNothing(format, swizzle)) {
-        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] swizzled texture view on Kepler: swizzle not supported, nil\n");
+        if (verbose()) shimLog("[mtlshim] swizzled texture view on Kepler: swizzle not supported, nil\n");
         return nil;
     }
     return ((NewViewRangeIMP)objc_msgSend)(
@@ -4329,7 +4026,7 @@ static id nvSwizzleView(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType
 }
 static id nvNoIndirectCommandBuffer(id self, SEL _cmd, id descriptor, NSUInteger count, MTLResourceOptions options) RETURNS_RETAINED;
 static id nvNoIndirectCommandBuffer(id self, SEL _cmd, id descriptor, NSUInteger count, MTLResourceOptions options) {
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] indirect command buffer on Kepler: not supported, nil\n");
+    if (verbose()) shimLog("[mtlshim] indirect command buffer on Kepler: not supported, nil\n");
     return nil;
 }
 static void keplerMissingMethods(void) {
@@ -4348,18 +4045,16 @@ static void keplerMissingMethods(void) {
     addMethods(device, "Kepler device", icbMethod, 1);
 }
 
-// 56. Views of views on the Kepler driver: a view made from a texture view of levels 1+ and slices 1+ dropped the first
-// view's offset into its parent (a stencil view of a depth-stencil view of level 2, slice 2 read level 1's or slice 1's
-// texels: s46; Dawn reads WebGPU's stencil8 through such views). Views of the texture itself are right. A view of a view
-// is made from the root texture with the offsets added, which is what Metal defines it as. MTLSHIM_NV_VIEW_OF_VIEW=0 turns
-// it off. Test: s46 on the GTX 770.
+// 56. On the Kepler driver a view of a texture view of levels or slices 1+ dropped the first view's offset (Dawn reads
+// WebGPU's stencil8 through such views): a view of a view is made from the root texture with the offsets added, as
+// Metal defines it. Test: s46 on the GTX 770.
 static NewViewRangeIMP origNVNewViewRange;
 static id nvNewViewRange(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices) RETURNS_RETAINED;
 static id nvNewViewRange(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices) {
     if (!((id<MTLTexture>)self).parentTexture) return origNVNewViewRange(self, _cmd, format, type, levels, slices);
     NSUInteger level = levels.location, slice = slices.location;
     id<MTLTexture> root = rootTexture(self, &level, &slice);
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] view of a view made from the root texture (level %lu, slice %lu)\n", (unsigned long)level, (unsigned long)slice);
+    if (verbose()) shimLog("[mtlshim] view of a view made from the root texture (level %lu, slice %lu)\n", (unsigned long)level, (unsigned long)slice);
     return origNVNewViewRange(root, _cmd, format, type, NSMakeRange(level, levels.length), NSMakeRange(slice, slices.length));
 }
 static void keplerViewsOfViews(void) {
@@ -4369,25 +4064,15 @@ static void keplerViewsOfViews(void) {
     origNVNewViewRange = (NewViewRangeIMP)swizzle(kTexture, kView, (IMP)nvNewViewRange);
 }
 
-// 58. Texture atomics on the Kepler driver. MSL 3.1 texture atomics (atomic_fetch_add etc. on a read_write
-// texture2d<uint> / <int>) have no body in GeForceAIRPlugin's library, and the GPU's surface atomics can't be reached
-// from it: the compile crashed the compiler (a01; Blender assumes texture atomics on every macOS 14+ Mac). Kepler can
-// do them as global atomics if the texels are in a buffer: each R32Uint / R32Sint 2D texture of one level, one sample
-// and no render-target use that is created with MTLTextureUsageShaderAtomic (which Metal requires for texture atomics,
-// and which item 3 drops for the driver) is made a linear texture in a buffer of its own, after a 256-byte header
-// {magic, row pitch in words, width, height} (written by a blit for private storage). The Kepler adapter
-// (GeForceAIRCompat, NVAIR_TEXTURE_ATOMICS) turns each texture atomic into a global atomic on a hidden buffer
-// parameter; its index is worked out here the same way from the pipeline's reflection: each read_write
-// texture2d<uint> / <int> argument (not arrays), in order of its index, gets one, counted down from 30 over the buffer
-// indices the function doesn't use (vertex functions keep 0-16 for vertex buffers). Before each draw or dispatch with
-// such a pipeline, the buffer of the texture bound at that texture index (through views too) is bound at the hidden
-// index, or a dummy without the header for any other texture (the atomics then land on a word of the dummy, as they
-// do for coordinates outside the texture), and whatever the app had bound there is put back afterwards. 2D arrays, 3D
-// and 1D textures have no linear form on Kepler (supportsLinearTexture2DArray is NO) and textures from heaps aren't
-// covered: their atomics do nothing. The encoders keep track of their bindings only once a pipeline with such a texture
-// argument exists (until then the hooks cost a branch: tracking every bind cost ~100 ns a call): an encoder that was
-// already recording then can't know what it had bound before. MTLSHIM_NV_TEXTURE_ATOMICS=0 turns it off. Test: a01 and
-// n04 on the GTX 770.
+// 58. Texture atomics on Kepler, which GeForceAIRPlugin can't compile (a01; Blender assumes them on macOS 14+), are
+// done as global atomics on texels in a buffer: each one-level, single-sample R32Uint / R32Sint 2D texture created with
+// MTLTextureUsageShaderAtomic (which item 3 drops for the driver) and no render-target use is made linear in a buffer
+// of its own, after a 256-byte header {magic, row pitch in words, width, height}. The Kepler adapter
+// (NVAIR_TEXTURE_ATOMICS) turns each texture atomic into a global atomic on a hidden buffer parameter: each read_write
+// texture2d<uint> / <int> argument, in index order, gets one, counted down from 30 over free buffer indices (vertex
+// functions keep 0-16). Before each draw or dispatch the texture's buffer (or a header-less dummy for other textures)
+// is bound there and the app's binding put back. Not covered: arrays, 3D, 1D and heap textures (their atomics do
+// nothing). Encoders track bindings only once such a pipeline exists. Test: a01 and n04 on the GTX 770.
 static BOOL ktaOn;
 static volatile BOOL ktaTracking;  // a pipeline with hidden bindings exists
 static const uint32_t kKTAMagic = 0x4154564E;  // "NVTA", as GeForceAIRCompat's kTexAtomicMagic
@@ -4457,12 +4142,12 @@ static id ktaNewTexture(id self, SEL _cmd, MTLTextureDescriptor *d) {
         written = cb.status == MTLCommandBufferStatusCompleted;
     }
     if (!written) {
-        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] texture atomics: no linear texture for %lux%lu, a tiled one instead\n",
+        if (verbose()) shimLog("[mtlshim] texture atomics: no linear texture for %lux%lu, a tiled one instead\n",
                                                (unsigned long)d.width, (unsigned long)d.height);
         return ktaOrigNewTexture(self, _cmd, d);
     }
     objc_setAssociatedObject(texture, kKTABufferKey, buffer, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] texture atomics: %lux%lu texture made linear (%lu bytes a row)\n",
+    if (verbose()) shimLog("[mtlshim] texture atomics: %lux%lu texture made linear (%lu bytes a row)\n",
                                            (unsigned long)d.width, (unsigned long)d.height, (unsigned long)row);
     return texture;
 }
@@ -4519,7 +4204,7 @@ static void ktaAttach(id pipeline, NSArray *vertex, NSArray *fragment, NSArray *
     if (!bindings.length) return;
     objc_setAssociatedObject(pipeline, kKTABindingsKey, bindings, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     ktaTracking = YES;
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] texture atomics: pipeline with %lu atomic-capable texture(s) at hidden buffer indices\n",
+    if (verbose()) shimLog("[mtlshim] texture atomics: pipeline with %lu atomic-capable texture(s) at hidden buffer indices\n",
                                            (unsigned long)(bindings.length / sizeof(KTABinding)));
 }
 
@@ -4743,16 +4428,11 @@ KTA_DRAW(DG, (__unsafe_unretained id self, SEL _cmd, MTLSize g, MTLSize t), (sel
 KTA_DRAW(DT, (__unsafe_unretained id self, SEL _cmd, MTLSize g, MTLSize t), (self, _cmd, g, t))
 KTA_DRAW(DInd, (__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id indirect, NSUInteger o, MTLSize t), (self, _cmd, indirect, o, t))
 
-// 62. Kepler's sampler returns a depth texture's depth in all four channels, (d, d, d, d), and a stencil view's value as
-// (s, s, s, s), sampling and reading through texture2d<float> / <uint>, where OpenGL ES wants (d, 0, 0, 1) and (s, 0, 0, 1).
-// Metal leaves those channels undefined, and ANGLE puts them right with swizzled views, which it only makes on GPU
-// family Mac2 (and this driver's swizzled views come out empty): WebGL's depth texture tests failed in Chrome and
-// Firefox (Khronos WebGL 2.0.1: depth texture formats, fboinvalidate unbind_read_*, about 12 pages). In ANGLE's shaders
-// (the functions with an ANGLE_angleUniforms argument), the Kepler adapter (NVAIR_DEPTH_CHANNELS) makes each sample or read
-// of a texture argument (x, 0, 0, 1) when bit n of a mask at a hidden buffer index is set; the index is the next one
-// after item 58's, worked out here from the pipeline's reflection the same way, and before each draw the mask gets a bit
-// for each depth or stencil texture bound (item 58's bindings and tracking). MTLSHIM_NV_DEPTH_CHANNELS=0 turns it off.
-// Test: n11 on the GTX 770.
+// 62. Kepler's sampler returns depth as (d, d, d, d) and stencil as (s, s, s, s), where OpenGL ES wants (d, 0, 0, 1);
+// ANGLE fixes that with swizzled views, only on Mac2, and this driver's come out empty. In ANGLE's shaders the Kepler
+// adapter (NVAIR_DEPTH_CHANNELS) makes each sample or read of texture argument n (x, 0, 0, 1) when bit n of a mask is
+// set, at the hidden buffer index after item 58's (worked out here the same way); before each draw the mask gets a bit
+// per depth or stencil texture bound. Test: n11 on the GTX 770.
 static void keplerTextureAtomics(void) {
     static BOOL done;
     static const char *const kDevice = "NVMTLDevice", *const kRender = "NVMTLRenderCommandEncoder_KEPLER_A",
@@ -4831,18 +4511,13 @@ static void keplerTextureAtomics(void) {
     }
     ktaOrigNewTexture = (KTANewTextureIMP)swizzle(kDevice, "newTextureWithDescriptor:", (IMP)ktaNewTexture);
     ktaOn = YES;
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] texture atomics on the Kepler GPU: linear textures and hidden bindings installed\n");
+    if (verbose()) shimLog("[mtlshim] texture atomics on the Kepler GPU: linear textures and hidden bindings installed\n");
 }
 
-// 59. Visibility results on the Kepler driver (GeForceMTLDriver): each draw made while a visibility result mode is set
-// writes its own sample count (0 included) to the slot, replacing what the slot held, so the slot ends up with the LAST
-// draw's count, not the sum over the pass's draws that Metal specifies (two draws, the second outside the scissor or
-// behind earlier depth: 0, on a GTX 770). WebGL occlusion queries in Chrome reported visible targets invisible (Khronos
-// WebGL 2.0.1 deqp occlusionquery_strict / _conservative: two target draws per query). A render pass with a visibility
-// result buffer gets a private buffer of the shim's instead: while a mode is set, every draw gets a slot of its own
-// there, and when the encoder ends, a compute pass on the same command buffer writes each app slot the sum of its draws
-// (a slot a mode was set on without any draw gets 0, as Apple's GPUs write it; the driver leaves such slots as they were,
-// and WebGPU's empty occlusion queries read old values). MTLSHIM_NV_VISIBILITY_SUM=0 turns it off. Test: n08 on the GTX 770.
+// 59. On the Kepler driver each draw under a visibility result mode overwrites the slot with its own count, so the slot
+// ends with the last draw's count instead of the pass's sum, and slots set without a draw keep old values. Such passes
+// get a private buffer of the shim's with a slot per draw, and when the encoder ends a compute pass writes each app
+// slot the sum of its draws (0 for none, as Apple's GPUs). Test: n08 on the GTX 770.
 enum { kVisSlots = 16384 };
 static id (*visDriverNewBuffer)(id, SEL, NSUInteger, MTLResourceOptions) RETURNS_RETAINED;  // set by item 60
 @interface MTLShimVisState : NSObject {
@@ -4942,7 +4617,7 @@ static id<MTLComputePipelineState> visSumPipeline(id<MTLDevice> device) {
     id<MTLFunction> function = [library newFunctionWithName:@"shimVisibilitySum"];
     pipeline = function ? [device newComputePipelineStateWithFunction:function error:&error] : nil;
     if (pipeline) objc_setAssociatedObject(device, kKey, pipeline, OBJC_ASSOCIATION_RETAIN);
-    else if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] visibility sums: no pipeline (%s)\n", error.localizedDescription.UTF8String);
+    else if (verbose()) shimLog("[mtlshim] visibility sums: no pipeline (%s)\n", error.localizedDescription.UTF8String);
     return pipeline;
 }
 static void visEndEncoding(id self, SEL _cmd) {
@@ -4969,20 +4644,13 @@ static void visEndEncoding(id self, SEL _cmd) {
     [encoder setBytes:&count length:sizeof count atIndex:3];
     [encoder dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
     [encoder endEncoding];
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] visibility results: %u draw(s) and empty slot(s) written\n", count);
+    if (verbose()) shimLog("[mtlshim] visibility results: %u draw(s) and empty slot(s) written\n", count);
 }
-// 60. New private buffers on the Kepler driver aren't zero-filled: a freed private buffer's memory comes back, as it was,
-// in the next private buffer of the same size (a 1 MB one read all 0xAB after one filled with 0xAB was released; fresh
-// sizes were 0). Metal documents newBufferWithLength:options: as clearing the buffer, and Dawn relies on it instead of
-// clearing WebGPU buffers itself: the WebGPU CTS read old values from unused query slots (queries, occlusionQuery
-// initial and timestampQuery unused_slots_are_zero), and a buffer could show data another part of the app had freed.
-// Managed buffers the same way: their GPU copy came back as a freed managed buffer's had left it (every byte, at 256 B,
-// 4 KB and 1 MB), while the CPU copy read 0, so whatever the GPU read first was another buffer's old data. Both copies of
-// a new managed buffer are cleared.
-// Every private buffer it makes is filled with zeros by a blit on a queue of the shim's, waited for before it is
-// returned (some 0.2-0.3 ms per buffer); so is a new counter sample buffer's result buffer (below). Heap buffers keep
-// their undefined contents, as Metal specifies.
-// MTLSHIM_NV_ZERO_BUFFERS=0 turns it off. Test: n09 on the GTX 770 (private and managed).
+// 60. The Kepler driver doesn't zero new private buffers (a freed one's memory comes back as it was), nor the GPU copy
+// of new managed ones, though Metal documents newBufferWithLength:options: as clearing and Dawn relies on it. Every
+// private buffer, both copies of a managed one and a new counter sample buffer's result buffer are zero-filled by a
+// blit on a queue of the shim's, waited for before they are returned (0.2-0.3 ms each). Heap buffers stay undefined, as
+// Metal specifies. Test: n09 on the GTX 770.
 typedef id (*NVNewBufferIMP)(id, SEL, NSUInteger, MTLResourceOptions) RETURNS_RETAINED;
 static NVNewBufferIMP origNVNewBuffer;
 static id<MTLCommandQueue> zeroQueue(id device) {  // the shim's own queue on the device, for the fills
@@ -5041,23 +4709,13 @@ static void keplerZeroBuffers(void) {
     visDriverNewBuffer = origNVNewBuffer;
     if (definesMethod("NVMTLDevice", "newCounterSampleBufferWithDescriptor:error:"))
         origNVNewCounterBuffer = (NVNewCounterBufferIMP)swizzle("NVMTLDevice", "newCounterSampleBufferWithDescriptor:error:", (IMP)nvNewCounterBuffer);
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Kepler private buffers: zero-filled at creation\n");
+    if (verbose()) shimLog("[mtlshim] Kepler private buffers: zero-filled at creation\n");
 }
-// 82. Managed buffers and textures freed before a commit uploads them, on the Kepler driver. -[NVMTLBuffer
-// didModifyRange:] puts the buffer on its device's list of CPU writes to upload (under the device's mutex, with a
-// "pending" flag), and the next -[NVMTLCommandBuffer commit] on any queue walks that list and copies each range to the
-// GPU. A buffer released after didModifyRange: and before it was uploaded, while another thread committed, was freed
-// under that commit, which then read a nil _res (EXC_BAD_ACCESS at 0x2f0 in -[NVMTLCommandBuffer commit]) or
-// over-released it in the command buffer's resource list (objc_release in MTLResourceListChunkFreeEntries). Safari's
-// WebGPU crashed its GPU process that way (WebKit writes its managed buffers and frees them from any thread). On the
-// stock driver, two threads making, writing and freeing managed buffers while another commits crashed within 8-19 s,
-// with two committing threads within half a second; serializing commits didn't help, and freeing them between commits
-// on one thread never crashed. Managed textures written with replaceRegion: (which takes the device's mutex too, but
-// not through didModifyData) and freed the same way crashed in the resource list as well. Each buffer given to
-// didModifyRange: and each texture given to replaceRegion: is now kept (retained in a set of its device's) until a
-// commit that starts after that call has returned, so the driver never frees one still queued; those the app frees in
-// between are freed then, on the committing thread. No lock is held across a call into the driver.
-// MTLSHIM_NV_MODIFIED_RETAIN=0 turns it off. Test: n50 on the GTX 770 (buffers and textures).
+// 82. On the Kepler driver a managed buffer released after didModifyRange: (or a texture after replaceRegion:) and
+// before a commit uploaded it was freed under that commit, which then crashed (a nil _res in -[NVMTLCommandBuffer
+// commit], or an over-release in the resource list); Safari's WebGPU frees managed buffers from any thread. Each such
+// buffer or texture is kept (retained in a set of its device's) until a commit that starts after the call has returned,
+// then freed on the committing thread. No lock is held across a call into the driver. Test: n50 on the GTX 770.
 typedef void (*NVModifyIMP)(id, SEL, NSRange);
 typedef void (*NVCommitIMP)(id, SEL);
 static NVModifyIMP origNVModify;
@@ -5118,25 +4776,15 @@ static void keplerModifiedRetain(void) {
         origNVReplace4 = (NVReplace4IMP)swizzle("NVMTLTexture", "replaceRegion:mipmapLevel:withBytes:bytesPerRow:", (IMP)nvReplace4);
     if (definesMethod("NVMTLTexture", "replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:"))
         origNVReplace6 = (NVReplace6IMP)swizzle("NVMTLTexture", "replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:", (IMP)nvReplace6);
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Kepler managed buffers and textures: kept from didModifyRange: / replaceRegion: until the next commit\n");
+    if (verbose()) shimLog("[mtlshim] Kepler managed buffers and textures: kept from didModifyRange: / replaceRegion: until the next commit\n");
 }
-// 84. New depth and stencil textures, and new 3D textures, hold what the memory held before, on the Kepler, Haswell/Ivy
-// Bridge and GCN drivers alike: a 64x64 Depth32Float, Depth16Unorm or Stencil8 texture made after one of the same size
-// was cleared (depth 0.7, stencil 0x5a) and freed read that texture's values back, every time (GTX 770, Iris Pro, R9
-// M370X, HD 4000), and so did a 16x16x8 RGBA8 3D render target (GTX 770). Apple's GPUs hand out zeroed memory, and
-// Safari's WebGPU relies on it. It clears a never-written color attachment that a pass loads, but a depth or stencil
-// one only when the pass doesn't store it, so a new depth/stencil texture that a pass loads and stores keeps the old
-// contents (WebGPU CTS resource_init,texture_zero:uninitialized_texture_is_zero, dimension 2d, every DepthTest and
-// StencilTest case with uninitializeMethod "Creation": 8 failing on the GTX 770). And it tracks a 3D texture's clears
-// per level, not per depth plane, so a pass into one plane leaves the level's other planes as the memory left them
-// (rendering,3d_texture_slices:one_color_attachment,mip_levels: 13 failing). A page could read another resource's freed
-// data either way. In WebKit's GPU process (Safari's and any WKWebView's), each new depth, stencil or 3D texture that
-// can be a render target (not from a heap, whose resources Metal leaves undefined) is now cleared to zero, every level
-// and slice or depth plane, by passes on the shim's queue that are waited for before it is returned, as item 60 does
-// for buffers, in each of the three drivers' newTextureWithDescriptor: (NVMTLDevice, after item 58's hook;
-// MTLIGAccelDevice, after intelDepthWithoutHiZ's; BronzeMtlDevice). That costs some 1.5-3 ms per texture (GTX 770),
-// which other apps don't need: Chrome's Dawn, Firefox's wgpu and ANGLE clear what they haven't written themselves.
-// MTLSHIM_ZERO_DEPTH=1 turns it on in any process, =0 off. Test: s89.
+// 84. New depth, stencil and 3D textures hold the memory's old contents on the Kepler, Haswell / Ivy Bridge and GCN
+// drivers (Apple's GPUs hand out zeroed memory). Safari's WebGPU relies on zeroed memory: it doesn't clear a new
+// depth/stencil texture that a pass loads and stores, and tracks 3D clears per level. In WebKit's GPU process each new
+// depth, stencil or 3D texture that can be a render target (not from a heap) is cleared to zero, every level and slice
+// or plane, by passes on the shim's queue waited for before it is returned, in each driver's newTextureWithDescriptor:
+// (after item 58's and intelDepthWithoutHiZ's hooks). About 1.5-3 ms a texture, which Chrome, Firefox and ANGLE don't
+// need. MTLSHIM_ZERO_DEPTH=1 turns it on in any process, =0 off. Test: s89.
 typedef id (*ZeroDepthNewTextureIMP)(id, SEL, MTLTextureDescriptor *) RETURNS_RETAINED;
 static ZeroDepthNewTextureIMP origNVZeroDepth, origIGZeroDepth, origBronzeZeroDepth;
 static id zeroDepthTexture(id device, id<MTLTexture> texture, MTLTextureDescriptor *d) {
@@ -5218,16 +4866,11 @@ static void zeroDepthTextures(void) {  // after item 58's and intelDepthWithoutH
         origIGZeroDepth = (ZeroDepthNewTextureIMP)swizzle("MTLIGAccelDevice", "newTextureWithDescriptor:", (IMP)igZeroDepthNewTexture);
     if (definesMethod("BronzeMtlDevice", "newTextureWithDescriptor:"))
         origBronzeZeroDepth = (ZeroDepthNewTextureIMP)swizzle("BronzeMtlDevice", "newTextureWithDescriptor:", (IMP)bronzeZeroDepthNewTexture);
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] depth, stencil and 3D textures: zeroed at creation (WebKit GPU process, or MTLSHIM_ZERO_DEPTH=1)\n");
+    if (verbose()) shimLog("[mtlshim] depth, stencil and 3D textures: zeroed at creation (WebKit GPU process, or MTLSHIM_ZERO_DEPTH=1)\n");
 }
-// 61. The Kepler driver's -resolveCounters:inRange:destinationBuffer:destinationOffset: reads the samples from the sample
-// buffer's own result buffer (counterResultBuffer, 16 bytes a sample) but leaves it out of the command buffer's resources,
-// so nothing makes it resident: when its pages aren't mapped the GPU faults (kernel log: "Access Violation Error (MMU
-// Error 2)", FAULT_PTE) and the driver kills the context, failing the next command buffer with
-// kIOAccelCommandBufferCallbackErrorInvalidResource. WebGPU's resolveQuerySet of timestamp queries hit it in Chrome
-// (device lost in the CTS's timestampQuery resolve_unused_slots); whether a process faults depends on its allocations.
-// Each resolve first copies 4 bytes of the result buffer to a small buffer of the shim's in the same encoder, which puts
-// the result buffer in the command buffer's resources. MTLSHIM_NV_RESOLVE_RESIDENCY=0 turns it off.
+// 61. The Kepler driver's resolveCounters:inRange:destinationBuffer:destinationOffset: reads the sample buffer's result
+// buffer without adding it to the command buffer's resources, so nothing makes it resident (a GPU fault, the context
+// killed). Each resolve first copies 4 bytes of that buffer to a small buffer of the shim's in the same encoder.
 typedef void (*NVResolveCountersIMP)(id, SEL, id, NSRange, id, NSUInteger);
 static NVResolveCountersIMP origNVResolveCounters;
 static void nvResolveCounters(id self, SEL _cmd, id sampleBuffer, NSRange range, id destination, NSUInteger offset) {
@@ -5256,15 +4899,13 @@ static void keplerResolveResidency(void) {
     if (done || (setting && !strcmp(setting, "0")) || !definesMethod(kClass, kSel)) return;
     done = YES;
     origNVResolveCounters = (NVResolveCountersIMP)keplerSwizzle(kClass, kSel, (IMP)nvResolveCounters);
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Kepler counter resolves: result buffer made resident\n");
+    if (verbose()) shimLog("[mtlshim] Kepler counter resolves: result buffer made resident\n");
 }
 
-// Item 69's other half. The driver keeps drawing inside the viewport only through that tight guard band: the pixel clip
-// rectangle it gives the GPU (VIEWPORT_HORIZ / VERT, methods 0xc00 / 0xc04) is the render target, not the viewport (nouveau
-// sets it to the viewport). With the guard band widened, a triangle or wide point reaching past a viewport smaller than
-// the target drew outside the viewport (a full-screen triangle through an 8x8 viewport in a 16x16 target: 44 pixels
-// outside). So the scissor rectangles the driver gets are the app's (none: unbounded) intersected with the viewports',
-// the pixels whose centers are inside; a fragment outside its viewport is scissored as clipping would have removed it.
+// Item 69's other half: the driver keeps drawing inside the viewport only through that tight guard band, since the
+// pixel clip rectangle it gives the GPU (VIEWPORT_HORIZ / VERT, methods 0xc00 / 0xc04) is the render target, not the
+// viewport. So the scissor rectangles the driver gets are the app's (none: unbounded) intersected with the viewports'
+// (pixel centers inside).
 typedef struct {
     MTLViewport viewports[16];
     MTLScissorRect scissors[16];
@@ -5338,22 +4979,12 @@ static void clipSetScissors(__unsafe_unretained id self, SEL _cmd, const MTLScis
     else NVO(origClipSetScissors)(self, _cmd, rects, count);
 }
 
-// 69. Triangles across the edge of the viewport on the Kepler driver. The driver sets SET_VIEWPORT_CLIP_CONTROL (method
-// 0x193c) to 0x49d with its depth clip mode's bits (0xc9d before a viewport is set), and bit 7 of that makes the
-// geometry guard band the viewport itself: a triangle that crosses the viewport's edge is clipped to it, and the
-// polygon left is drawn as a fan of triangles. With multisampling, a pixel on a seam of the fan runs the fragment
-// function once for each part, each time with only that part's samples in [[sample_mask]] (WebGPU CTS fragment_builtins
-// inputs,sample_mask: 7 then 8 for a pixel with all 4 samples covered, every case with an edge of the triangle inside
-// the target), and a fragment function's writes to buffers and atomics happen twice there (the usual full-screen
-// triangle at 4x: 20 runs for 16 pixels). With bit 7 clear the guard band is 256 times the viewport, as nouveau has it
-// on this hardware: such triangles are rasterized whole, and clipped only beyond it. Depth clipping doesn't depend on
-// it (still done for each triangle that crosses the near or far plane). The value is an immediate in the driver's code,
-// the same instruction pair in 10 places for each of the two; those 20 bytes are patched once the driver is in, if all
-// 20 are there. MTLSHIM_NV_GUARD_BAND=0 turns it off.
-// Bit 10 does the same for the line and point cull guard band: a point whose center was outside the viewport was culled,
-// with the part of a wide point that's inside (Khronos WebGL clipping-wide-points: 8-pixel points centered just past an
-// edge drew nothing; nouveau leaves it clear too). It's cleared in the same immediates; MTLSHIM_NV_POINT_GUARD_BAND=0
-// keeps it.
+// 69. The Kepler driver sets SET_VIEWPORT_CLIP_CONTROL (method 0x193c) to 0x49d (0xc9d before a viewport is set). Bit 7
+// makes the geometry guard band the viewport itself, so triangles crossing its edge are clipped and drawn as fans whose
+// seams run the fragment function once per part with part of the samples; with it clear the guard band is 256 times the
+// viewport, as nouveau has it. Bit 10 does the same for points (wide points centered outside were culled whole;
+// MTLSHIM_NV_POINT_GUARD_BAND=0 keeps it). The value is an immediate in the driver's code, the same instruction pair in
+// 10 places for each of the two; those 20 bytes are patched once the driver is in, if all 20 are there. (n20, n23, n24)
 static void keplerGuardBand(void) {
     static BOOL done;
     const char *setting = getenv("MTLSHIM_NV_GUARD_BAND"), *pointSetting = getenv("MTLSHIM_NV_POINT_GUARD_BAND");
@@ -5397,17 +5028,14 @@ static void keplerGuardBand(void) {
         origClipSetScissor = (ClipSetScissorIMP)keplerSwizzle(kRender, "setScissorRect:", (IMP)clipSetScissor);
         origClipSetScissors = (ClipSetScissorsIMP)keplerSwizzle(kRender, "setScissorRects:count:", (IMP)clipSetScissors);
     }
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Kepler guard band: viewport clip control patched at %d of 20 places\n", patched);
+    if (verbose()) shimLog("[mtlshim] Kepler guard band: viewport clip control patched at %d of 20 places\n", patched);
 }
 
-// 70. Reversed viewport depth ranges on the Kepler driver. Its setViewport: and setViewports:count: keep each viewport's
-// transform as six floats in the encoder's state (scale x, y, z and translate x, y, z, 0x18 bytes apart from 0x950),
-// which the next draw sends to the GPU, and take z as scale |zfar - znear| and translate min(znear, zfar): a viewport
-// with znear above zfar, which Metal allows ("which you can flip", in setViewport:'s documentation) and MoltenVK passes
-// on from Vulkan, wasn't reversed (znear 1, zfar 0 stored a z of 0.25 as 0.25, not 0.75). After the driver's setter,
-// such a viewport's z scale becomes zfar - znear and its translate znear. The state is the driver's own ivar, at the
-// offset its setter reads first; both setters' code is checked for the stores this relies on. Depth clamping (to
-// [0, 1] on this driver) is unchanged. MTLSHIM_NV_REVERSED_DEPTH=0 turns it off.
+// 70. The Kepler driver's setViewport: / setViewports:count: store z as scale |zfar - znear| and translate min(znear,
+// zfar), so reversed depth ranges (Metal allows them; MoltenVK passes them on) weren't reversed. After the driver's
+// setter such a viewport's z scale becomes zfar - znear and its translate znear, in the encoder's six-float state
+// (scale x y z, translate x y z, 0x18 bytes apart from 0x950), the offset its setter reads first; both setters' code is
+// checked for the stores this relies on. (n21)
 typedef void (*NVSetViewportIMP)(id, SEL, MTLViewport);
 typedef void (*NVSetViewportsIMP)(id, SEL, const MTLViewport *, NSUInteger);
 static NVSetViewportIMP origNVSetViewport;
@@ -5470,15 +5098,12 @@ static void keplerReversedDepth(void) {
     if (oneB >= 0 && oneB == manyB) nvRenderStateOffsetB = oneB;
     origNVSetViewport = (NVSetViewportIMP)keplerSwizzle(kClass, "setViewport:", (IMP)nvSetViewport);
     origNVSetViewports = (NVSetViewportsIMP)keplerSwizzle(kClass, "setViewports:count:", (IMP)nvSetViewports);
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Kepler reversed viewport depth ranges: setters wrapped\n");
+    if (verbose()) shimLog("[mtlshim] Kepler reversed viewport depth ranges: setters wrapped\n");
 }
 
-// 71. Sample positions of Kepler's 2x and 8x patterns. The hardware uses the standard positions, but in another order
-// than the one Metal reports (getDefaultSamplePositions:count:, which only MetalOld's _MTLDevice defines): at 2x samples
-// 0 and 1 are swapped, at 8x sample 0 is at (0.0625, 0.4375), which Metal gave as sample 5's, and so on (4x is right). So
-// anything that matches sample indices to positions (a custom resolve, a per-sample technique) got the wrong sample.
-// NVMTLDevice gets its own getDefaultSamplePositions:count:, with the order measured on a GTX 770 for 2 and 8 samples
-// (n22) and MetalOld's for any other count. MTLSHIM_NV_SAMPLE_POSITIONS=0 turns it off.
+// 71. Kepler's 2x and 8x sample patterns use the standard positions in another order than Metal reports
+// (getDefaultSamplePositions:count:, only in MetalOld's _MTLDevice). NVMTLDevice gets its own, with the order measured
+// on a GTX 770 for 2 and 8 samples (n22) and MetalOld's for other counts.
 typedef void (*SamplePositionsIMP)(id, SEL, MTLSamplePosition *, NSUInteger);
 static SamplePositionsIMP origSamplePositions;
 static void nvSamplePositions(id self, SEL _cmd, MTLSamplePosition *positions, NSUInteger count) {
@@ -5500,7 +5125,7 @@ static void keplerSamplePositions(void) {
         return;
     done = YES;
     origSamplePositions = (SamplePositionsIMP)method_getImplementation(inherited);
-    if (class_addMethod(device, sel, (IMP)nvSamplePositions, method_getTypeEncoding(inherited)) && getenv("MTLSHIM_VERBOSE"))
+    if (class_addMethod(device, sel, (IMP)nvSamplePositions, method_getTypeEncoding(inherited)) && verbose())
         shimLog("[mtlshim] Kepler 2x / 8x sample positions: reported in the hardware's order\n");
 }
 static void keplerVisibilitySums(void) {
@@ -5526,17 +5151,13 @@ static void keplerVisibilitySums(void) {
     visOrigMode = (VisModeIMP)keplerSwizzle(kRender, "setVisibilityResultMode:offset:", (IMP)visSetMode);
     visOrigEndEncoding = (EndEncodingIMP)keplerSwizzle(kRender, "endEncoding", (IMP)visEndEncoding);
     visOrigEncoder = (RenderEncoderIMP)swizzle(kBuffer, "renderCommandEncoderWithDescriptor:", (IMP)visRenderEncoder);
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Kepler visibility results: per-draw slots summed at the end of each pass\n");
+    if (verbose()) shimLog("[mtlshim] Kepler visibility results: per-draw slots summed at the end of each pass\n");
 }
 
-// 35. Metal Performance Shaders' image statistics (MPSImageStatisticsMinAndMax and MeanAndVariance; Core Image's
-// CIAreaMinMax and the filters built on it) finish with a compute_final_*_statistics kernel that reduces one value per
-// thread through threadgroup memory and always folds in tg[tid + 16], tg[tid + 8], ...: it assumes at least 32 threads.
-// MPS dispatches it with the pipeline's threadExecutionWidth threads and memory for that many, which on these Intel GPUs
-// is 16: the first step reads past the threadgroup memory as 0, so minimums came out 0, maximums of negative data 0 and
-// means and variances wrong. On the Intel GPU, a pipeline MPS labels compute_final_..._statistics that is dispatched with
-// fewer than 32 threads in one row gets 32, and its threadgroup memory grows to match (the kernels loop over any width).
-// Test: s39. MTLSHIM_MPS_STATISTICS=0 turns it off.
+// 35. MPS's image statistics finish with a compute_final_*_statistics kernel that assumes at least 32 threads, and MPS
+// dispatches it with threadExecutionWidth threads, 16 on these Intel GPUs (minimums came out 0). On the Intel GPU such
+// a pipeline dispatched with fewer than 32 threads in a row gets 32, and its threadgroup memory grows to match. Test:
+// s39.
 typedef void (*SetComputePipelineIMP)(id, SEL, id);
 typedef void (*SetThreadgroupMemoryIMP)(id, SEL, NSUInteger, NSUInteger);
 typedef void (*DispatchThreadgroupsIMP)(id, SEL, MTLSize, MTLSize);
@@ -5570,7 +5191,7 @@ static void igDispatchThreadgroups(id self, SEL _cmd, MTLSize groups, MTLSize th
     if (statisticsEncoder == (__bridge void *)self && threads.width && threads.width < 32 && threads.height == 1 && threads.depth == 1) {
         for (NSUInteger i = 0; i < 4; i++)
             if (statisticsMemory[i]) origIGSetThreadgroupMemory(self, @selector(setThreadgroupMemoryLength:atIndex:), (statisticsMemory[i] * 32 / threads.width + 15) & ~(NSUInteger)15, i);
-        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MPS statistics reduction dispatched with %lu threads: 32\n", (unsigned long)threads.width);
+        if (verbose()) shimLog("[mtlshim] MPS statistics reduction dispatched with %lu threads: 32\n", (unsigned long)threads.width);
         threads.width = 32;
     }
     origIGDispatchThreadgroups(self, _cmd, groups, threads);
@@ -5588,10 +5209,9 @@ static void mpsStatisticsWidth(void) {
     origIGDispatchThreadgroups = (DispatchThreadgroupsIMP)swizzle(cls, "dispatchThreadgroups:threadsPerThreadgroup:", (IMP)igDispatchThreadgroups);
 }
 
-// 29. WebKit's WebGPU sets GPUMultisampleState.mask with the render pipeline descriptor's sample mask. The 12.x Intel driver
-// takes 0 to mean no mask and draws every sample, where nothing should be drawn (WebGPU CTS occlusionQuery sample_mask,
-// sampleMask=0), as the 12.5 AMD driver does (AMDBronzeCompat item 7, which only loads with the AMD driver). A bit past the
-// last sample of any target isn't 0 to the driver and covers no sample. Only WebKit calls this SPI. Test: s30.
+// 29. WebKit's WebGPU sets GPUMultisampleState.mask through this SPI, and the 12.x Intel driver takes 0 as no mask
+// (every sample drawn), as the 12.5 AMD driver does (AMDBronzeCompat item 7). A bit past the last sample covers none.
+// Test: s30.
 typedef void (*SetSampleMaskIMP)(id, SEL, NSUInteger);
 static SetSampleMaskIMP origSetSampleMask;
 
@@ -5599,14 +5219,10 @@ static void compatSetSampleMask(id self, SEL _cmd, NSUInteger mask) {
     origSetSampleMask(self, _cmd, mask ? mask : 0x100);
 }
 
-// 83. Blits from two threads at once on the Ivy Bridge driver: every buffer fill and copy (and texture copy) runs one of
-// the driver's fixed-function kernels, set up in CHAL_INTEL::ChalContext::SetupFixedFunctionKernelExecute from state the
-// driver shares between command buffers, and two threads encoding such blits at the same time (each on its own queue)
-// read it half written: a division by zero, and the process died with SIGFPE in the middle of -[MTLIGAccelBlitCommandEncoder
-// fillBuffer:range:value:] or copyFromBuffer:... (two threads filling 256-byte buffers crashed within a second; one thread
-// ran 50,000 fills). Apps that stream resources on a thread of their own while another blits, or a GPU process serving
-// several pages, do that. The driver's blit methods run one at a time here (a recursive lock: the shim's own blit hooks
-// call others). Ivy Bridge only. MTLSHIM_IVB_BLIT_LOCK=0 turns it off. Test: s87.
+// 83. Every buffer fill and copy on the Ivy Bridge driver runs a fixed-function kernel set up from state shared between
+// command buffers (CHAL_INTEL::ChalContext::SetupFixedFunctionKernelExecute), and blits encoded on two threads at once
+// read it half written (SIGFPE). The driver's blit methods run one at a time (a recursive lock: the shim's own blit
+// hooks call others). Test: s87.
 static pthread_mutex_t ivbBlitLock = PTHREAD_RECURSIVE_MUTEX_INITIALIZER;
 #define IVB_LOCKED_BLIT(name, params, args)                                                                              \
     typedef void (*IvbBlit##name##IMP) params;                                                                           \
@@ -5655,19 +5271,14 @@ static void ivbSerializedBlits(void) {
             *blits[i].orig = swizzle("MTLIGAccelBlitCommandEncoder", blits[i].sel, blits[i].imp);
             n++;
         }
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Ivy Bridge: %d blit methods run one at a time\n", n);
+    if (verbose()) shimLog("[mtlshim] Ivy Bridge: %d blit methods run one at a time\n", n);
 }
 
-// 85. Vertex functions with 32 inputs on the Ivy Bridge driver: -[MTLIGRenderPipelineState generate3DStateVF:] walks the
-// vertex function's inputs (its attributes and its [[vertex_id]] and [[instance_id]], in the function's order) while
-// their bit is set in a 32-bit mask, testing bit (i mod 32) after each; with exactly 32 inputs the mask is full, so after
-// the last one it tests bit 0 again, walks on past its 32 records, asks for vertex attribute 7680 (or 65536), and Metal
-// aborts the process. WebKit's WebGPU offers 30 attributes, so a page using all of them with vertex_index and
-// instance_index crashed Safari's GPU process (CTS vertex_state, max_buffers_and_attribs and overlapping_attributes); 31
-// attributes with [[vertex_id]] crashed any app. The mask is read again after every input, so for such a function bit 0
-// is cleared once the walk is past the first input (when it first asks the vertex descriptor for an attribute) and put
-// back when the driver is done: the walk then ends after the 32nd. 33 inputs (31 attributes and both IDs) are past the
-// driver's table and still draw wrong. Ivy Bridge only. MTLSHIM_IVB_VERTEX_INPUTS=0 turns it off. Test: s88.
+// 85. -[MTLIGRenderPipelineState generate3DStateVF:] on the Ivy Bridge driver walks a vertex function's inputs while
+// their bit is set in a 32-bit mask, testing bit (i mod 32): with exactly 32 inputs it never stops and Metal aborts
+// (WebGPU's 30 attributes with vertex_index and instance_index). The mask is read again after every input, so bit 0 is
+// cleared once the walk is past the first input and put back when the driver is done. 33 inputs still draw wrong.
+// Test: s88.
 typedef BOOL (*GenerateVFIMP)(id, SEL, void *);
 typedef id (*AttributeAtIndexIMP)(id, SEL, NSUInteger);
 static GenerateVFIMP origIvbGenerateVF;
@@ -5697,7 +5308,7 @@ static BOOL ivbGenerateVF(id self, SEL _cmd, void *arg) {
     ivbFullInputMask = NULL;
     memcpy(program + kIvbInputMask, &mask, 4);
     pthread_mutex_unlock(&ivbVertexInputsLock);
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] vertex function with 32 inputs: the driver's walk stopped after the last\n");
+    if (verbose()) shimLog("[mtlshim] vertex function with 32 inputs: the driver's walk stopped after the last\n");
     return result;
 }
 static void ivbVertexInputs(void) {
@@ -5794,10 +5405,9 @@ static void pinDevice(const void *device) {
     if (!seen) patchDriverClasses();
 }
 
-// ANGLE's callers: a Chromium framework image ("<Product> Framework"), WebKit's libANGLE-shared.dylib / WebGPU.framework
-// and WebCore / WebKit, which pick the device they hand to ANGLE (MTLCreateSystemDefaultDevice: the Intel iGPU under
-// automatic graphics switching, and ANGLE can't run WebGL on family 1), or ANGLE's own libGLESv2.dylib (Firefox's
-// WebGL, which failed with FEATURE_FAILURE_NO_DISPLAY on these Macs).
+// ANGLE's callers: a Chromium framework image ("<Product> Framework"), WebKit's libANGLE-shared.dylib /
+// WebGPU.framework and WebCore / WebKit (which pick the device they hand ANGLE), or ANGLE's own libGLESv2.dylib
+// (Firefox's WebGL).
 static BOOL fromChromium(const void *returnAddress) {
     Dl_info info;
     if (!dladdr(returnAddress, &info) || !info.dli_fname) return NO;
@@ -5823,10 +5433,8 @@ static BOOL familyTwo(const void *device) {
     return ((BOOL (*)(id, SEL, NSInteger))objc_msgSend)(object, selector, MTLGPUFamilyMac2);
 }
 
-// Test only: MTLSHIM_TEST_IGPU_ONLY=1 makes a Mac with an AMD or NVIDIA card look, to ANGLE's and Dawn's callers, like one
-// whose only GPU is the Intel one: they get the iGPU, as family 2 (item 11), so the Intel path of Chromium and WebKit can
-// be tested on a dual-GPU Mac too (Chromium runs on the Iris Pro on a MacBookPro11,3, but on the R9 on a MacBookPro11,5).
-// Off by default.
+// Test only: MTLSHIM_TEST_IGPU_ONLY=1 makes a dual-GPU Mac look, to ANGLE's and Dawn's callers, like one whose only GPU
+// is the Intel one (as family 2, item 11), to test that path. Off by default.
 static BOOL testIGPUOnly(void) {
     static int state = -1;
     if (state < 0) state = getenv("MTLSHIM_TEST_IGPU_ONLY") && strcmp(getenv("MTLSHIM_TEST_IGPU_ONLY"), "0");
@@ -5879,12 +5487,10 @@ static BOOL familyOneAsTwo(void) {
 static void disableFeaturesFamilyOneLacks(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        // disableMetalOnNvidia: ANGLE turns its Metal display off on NVIDIA GPUs (upstream had none to test on), and on this
-        // stack there is no other backend for WebGL in Firefox and Safari; Kepler (GTX 770) passes s63 and s64 with it off.
-        // ANGLE only reads it for NVIDIA GPUs.
-        // allowRenderpassWithoutAttachment only when item 73 is off: with it, passes and pipelines without attachments get
-        // a dummy target, and ANGLE needs them for WEBGL_shader_pixel_local_storage (Chrome 158 offers it; its planes are
-        // read_write textures here, so a PLS draw has no attachment, and ANGLE refused the pipeline and lost the context).
+        // disableMetalOnNvidia: ANGLE turns its Metal display off on NVIDIA, and Firefox and Safari have no other WebGL
+        // backend on this stack (Kepler passes s63 and s64 with it off). allowRenderpassWithoutAttachment only when
+        // item 73 is off: with it, ANGLE gets the dummy target and needs such passes for
+        // WEBGL_shader_pixel_local_storage.
         static const char kLacking[] = "hasTextureSwizzle:hasStencilAutoResolve:allowSamplerCompareGradient:disableMetalOnNvidia";
         const char *attachments = getenv("MTLSHIM_NO_ATTACHMENTS");
         BOOL emulated = !(attachments && !strcmp(attachments, "0"));
@@ -5895,7 +5501,7 @@ static void disableFeaturesFamilyOneLacks(void) {
             value = NULL;
         setenv("ANGLE_FEATURE_OVERRIDES_DISABLED", value ? value : kLacking, 1);
         free(value);
-        if (getenv("MTLSHIM_VERBOSE"))
+        if (verbose())
             shimLog("[mtlshim] ANGLE on a family-1 GPU: ANGLE_FEATURE_OVERRIDES_DISABLED=%s\n", getenv("ANGLE_FEATURE_OVERRIDES_DISABLED"));
     });
 }
@@ -5915,19 +5521,16 @@ static void enableEventsForWebKit(const void *returnAddress) {
         if (set && *set && asprintf(&value, "%s:hasEvents", set) < 0) value = NULL;
         setenv("ANGLE_FEATURE_OVERRIDES_ENABLED", value ? value : "hasEvents", 1);
         free(value);
-        if (getenv("MTLSHIM_VERBOSE"))
+        if (verbose())
             shimLog("[mtlshim] WebKit's ANGLE on a family-1 GPU: ANGLE_FEATURE_OVERRIDES_ENABLED=%s\n", getenv("ANGLE_FEATURE_OVERRIDES_ENABLED"));
     });
 }
 
-// Dawn (Chromium's WebGPU) asks `supportsFamily:Apple6 || supportsFamily:Mac2` before it offers the subgroups feature, which
-// these GPUs' compiler can't build (simd_sum, simd_ballot and the like abort MTLCompilerService, and Chrome's GPU process
-// went down with it during the WebGPU CTS subgroup tests). Right after that it asks Apple7 from the same function, then
-// `supportsFamily:Mac2 || supportsFamily:Apple2` (whether to offer texture-component-swizzle); this driver makes no
-// swizzled views (item 32 covers only those that change nothing), so pages that used the feature got no texture. Those
-// two Mac2 questions get the real answer: one that comes right after an Apple6 question on the same thread from code a
-// few bytes away, and one that comes right after such an Apple6, Mac2, Apple7 run. ANGLE asks Apple 1-3 or 7 and then
-// Mac2 (its Mac 1 check), from two helper functions far apart, and keeps getting yes.
+// Dawn asks `supportsFamily:Apple6 || supportsFamily:Mac2` before offering subgroups, which these GPUs' compiler can't
+// build, and then Apple7 and `Mac2 || Apple2` for texture-component-swizzle, which this driver can't do (item 32 covers
+// only swizzles that change nothing). Those two Mac2 questions get the real answer: one right after an Apple6 question
+// on the same thread from code a few bytes away, and one right after such an Apple6, Mac2, Apple7 run. ANGLE keeps
+// getting yes.
 static __thread NSInteger familiesAsked[3] = {-1, -1, -1};  // the last three questions on this thread, newest first
 static __thread uintptr_t familyCallers[3];
 static BOOL near(uintptr_t a, uintptr_t b) { return (a > b ? a - b : b - a) < 256; }
@@ -5948,11 +5551,11 @@ static BOOL compatSupportsFamily(id self, SEL _cmd, NSInteger family) {
     }
     if (real || family != MTLGPUFamilyMac2 || !fromChromium(__builtin_return_address(0)) || !familyOneAsTwo()) return real;
     if (previous == MTLGPUFamilyApple6 && near(caller, previousCaller)) {
-        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Mac2 asked right after Apple6 (Dawn's subgroups check): no\n");
+        if (verbose()) shimLog("[mtlshim] Mac2 asked right after Apple6 (Dawn's subgroups check): no\n");
         return real;
     }
     if (swizzleCheck) {
-        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Mac2 asked after Dawn's Apple7 check (its texture swizzle check): no\n");
+        if (verbose()) shimLog("[mtlshim] Mac2 asked after Dawn's Apple7 check (its texture swizzle check): no\n");
         return real;
     }
     disableFeaturesFamilyOneLacks();
@@ -5962,7 +5565,7 @@ static BOOL compatSupportsFamily(id self, SEL _cmd, NSInteger family) {
 
 static CFTypeRef compatRegistryEntryCreateCFProperty(io_registry_entry_t entry, CFStringRef key, CFAllocatorRef allocator, IOOptionBits options) {
     CFTypeRef value = IORegistryEntryCreateCFProperty(entry, key, allocator, options);
-    if (getenv("MTLSHIM_VERBOSE") && key && CFStringCompare(key, CFSTR("model"), 0) == kCFCompareEqualTo)
+    if (verbose() && key && CFStringCompare(key, CFSTR("model"), 0) == kCFCompareEqualTo)
         shimLog("[mtlshim] IORegistryEntryCreateCFProperty(model) from %s\n", callerImage(__builtin_return_address(0)));
     if (!value || !key || CFGetTypeID(value) != CFDataGetTypeID() || CFStringCompare(key, CFSTR("model"), 0) != kCFCompareEqualTo)
         return value;
@@ -5975,22 +5578,16 @@ static CFTypeRef compatRegistryEntryCreateCFProperty(io_registry_entry_t entry, 
         enableEventsForWebKit(__builtin_return_address(0));
     }
     static const char model[] = "MacBookPro13,3";  // past ANGLE's gate (MacBookPro >= 13,1)
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Chromium: IOPlatformExpertDevice model -> %s\n", model);
+    if (verbose()) shimLog("[mtlshim] Chromium: IOPlatformExpertDevice model -> %s\n", model);
     CFRelease(value);
     return CFDataCreate(allocator, (const UInt8 *)model, sizeof model);
 }
 
-// 41. Metal's validation layers. Sequoia's and Tahoe's MetalTools (MTL_DEBUG_LAYER=1, Xcode's API validation) and their
-// shader validation (MTL_SHADER_VALIDATION=1) are built for the OS's own Metal. On MetalOld, API validation reads the
-// pipeline states' internals by the new layout and reports nonsense (a render pipeline's sample count 1065353216, the
-// bits of 1.0f, and the wrong pixel format) before aborting the process, calls functions the Metal wrapper only exports
-// as placeholder data (validateDispatchThreadsPerThreadgroupWithRTPTG: every compute dispatch crashed) and passes its
-// feature numbers to MetalOld's MTLValidateFeatureSupport, which numbers them differently ("Bicubic filtering of 16-bit
-// normalized values is not supported" on an indirect command buffer). Shader validation instruments shaders with the
-// OS's compiler, whose AIR the legacy compiler rejects, and throws on a missing pipeline-descriptor method first. So
-// both are switched off, with a note on stderr, before a device is made: at load for the launch environment, and in
-// MTLCreateSystemDefaultDevice / MTLCopyAllDevices for programs that set them at run time (wgpu's GPU tests). The
-// program then runs without validation instead of aborting. MTLSHIM_VALIDATION=1 leaves them on. Test s54.
+// 41. Sequoia's and Tahoe's MetalTools API validation (MTL_DEBUG_LAYER=1) and shader validation
+// (MTL_SHADER_VALIDATION=1) are built for the OS's own Metal: on MetalOld they misread pipeline internals, call
+// placeholder exports and abort. Both are switched off, with a note on stderr, before a device is made (at load, and in
+// MTLCreateSystemDefaultDevice / MTLCopyAllDevices for programs that set them at run time). MTLSHIM_VALIDATION=1 leaves
+// them on. Test: s54.
 static void dropValidationLayers(void) {
     const char *keep = getenv("MTLSHIM_VALIDATION");
     if (keep && strcmp(keep, "0")) return;
@@ -6008,11 +5605,9 @@ static void installMPSMatmulFallback(void);  // item 43
 static void installMPSGraphSoftMax(void);  // item 57
 static void installMetalFXTemporalLimit(void);  // item 44
 
-// Item 11 on Tahoe: OCLP's wrapper answers WebKit's processes yes to Mac2 by itself, so WebKit's ANGLE never asks
-// compatSupportsFamily, and the features a family-1 GPU lacks stayed on: with hasTextureSwizzle, ANGLE made every
-// COMPRESSED_RGB_S3TC_DXT1 texture a BC1 view with the swizzle (R, G, B, 1), the driver returned nil, and WebGL sampled
-// (0, 0, 0, 0) from it (conformance/extensions/s3tc-and-rgtc, webgl-compressed-texture-s3tc-srgb). ANGLE asks for its
-// device before it sets up its features, so they're turned off there too.
+// Item 11 on Tahoe: OCLP's wrapper answers WebKit's processes yes to Mac2 itself, so WebKit's ANGLE never asks
+// compatSupportsFamily and the family-1 feature overrides were never set (S3TC textures sampled as 0 through swizzled
+// BC1 views). ANGLE asks for its device before it sets up its features, so they're set there too.
 static void angleFeaturesForCaller(const void *returnAddress) {
     if (!fromChromium(returnAddress) || !familyOneAsTwo()) return;
     disableFeaturesFamilyOneLacks();
@@ -6026,13 +5621,13 @@ static id<MTLDevice> compatCreateSystemDefaultDevice(void) {
     installMetalFXTemporalLimit();
     angleFeaturesForCaller(__builtin_return_address(0));  // item 11
     id<MTLDevice> device = MTLCreateSystemDefaultDevice();
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MTLCreateSystemDefaultDevice from %s -> %s\n", callerImage(__builtin_return_address(0)), device.name.UTF8String);
+    if (verbose()) shimLog("[mtlshim] MTLCreateSystemDefaultDevice from %s -> %s\n", callerImage(__builtin_return_address(0)), device.name.UTF8String);
     pinDevice((__bridge const void *)device);
     if (device && fromChromium(__builtin_return_address(0)) && familyTwo((__bridge const void *)device) == testIGPUOnly()) {
         for (id<MTLDevice> other in MTLCopyAllDevices())
             if (familyTwo((__bridge const void *)other) != testIGPUOnly()) {
                 pinDevice((__bridge const void *)other);
-                if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Chromium: default device %s -> %s\n", device.name.UTF8String, other.name.UTF8String);
+                if (verbose()) shimLog("[mtlshim] Chromium: default device %s -> %s\n", device.name.UTF8String, other.name.UTF8String);
                 return other;
             }
     }
@@ -6046,7 +5641,7 @@ static CFArrayRef compatCopyAllDevices(void) {
     installMetalFXTemporalLimit();
     angleFeaturesForCaller(__builtin_return_address(0));  // item 11
     CFArrayRef all = (__bridge_retained CFArrayRef)MTLCopyAllDevices();
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MTLCopyAllDevices from %s\n", callerImage(__builtin_return_address(0)));
+    if (verbose()) shimLog("[mtlshim] MTLCopyAllDevices from %s\n", callerImage(__builtin_return_address(0)));
     for (CFIndex i = 0; all && i < CFArrayGetCount(all); i++) pinDevice(CFArrayGetValueAtIndex(all, i));
     return fromChromium(__builtin_return_address(0)) ? familyTwoOnly(all) : all;
 }
@@ -6084,18 +5679,12 @@ __attribute__((unused)) static CFArrayRef interposedCopyAllDevices(void) {
 __attribute__((unused)) static CFArrayRef interposedCopyAllDevicesWithObserver(id<NSObject> __strong *observer, MTLDeviceNotificationHandler handler) {
     return onMetalOld() ? compatCopyAllDevicesWithObserver(observer, handler) : (__bridge_retained CFArrayRef)MTLCopyAllDevicesWithObserver(observer, handler);
 }
-// 25. Precompiled libraries built for macOS 15.4 or later (AIR 2.7: iMovie 10.4.4, Safari's ANGLE, apps built with
-// Xcode 16.3+). This stack's compiler service runs Sequoia's own compiler (GPUCompiler 32023), which reads AIR 2.7, but
-// MetalOld asks it for the macOS 14.2 target (AIR 2.6), so it rejects such a module: "incompatible module ... not
-// compatible with the target", then "air version set to 2.7.0 ... but expecting 2.6", and function-constant
-// predicates of predicated arguments (__metal_implicit_fc_pred_*) stay unresolved while the triple says 2.7. In
-// MTLCompilerService, each AIR 2.7 module is retargeted when the compiler first looks at it (upgradeAIRModule reads
-// !air.version first): triple air64_v26-apple-macosx14.0.0, !air.version 2.6.0, !air.language_version Metal 3.1, the
-// same changes dortania/MetallibSupportPkg makes when it rebuilds Sequoia's system metallibs for these GPUs. Hooked by
-// pointing the 32023 libGPUCompilerImpl images' import slots for llvm::Module::getNamedMetadata at a wrapper (these
-// libraries come extracted from a shared cache, with their imports in a "dsce.got" segment that dyld's own
-// interposing doesn't reach), LLVM resolved with dlsym (no link-time dependency on libLLVM). MTLSHIM_AIR27=0 turns
-// this off.
+// 25. Sequoia's compiler in this stack's compiler service reads AIR 2.7 (macOS 15.4+ libraries: iMovie, Safari's ANGLE,
+// Xcode 16.3+), but MetalOld asks for the macOS 14.2 target (AIR 2.6), so such modules were rejected. In
+// MTLCompilerService each AIR 2.7 module is retargeted when the compiler first reads its !air.version (triple
+// air64_v26-apple-macosx14.0.0, AIR 2.6, Metal 3.1), as dortania/MetallibSupportPkg does for the system's metallibs.
+// Hooked through the 32023 libGPUCompilerImpl images' import slots for llvm::Module::getNamedMetadata (their imports
+// sit in a "dsce.got" segment that dyld's interposing doesn't reach); LLVM resolved with dlsym.
 typedef struct { const char *data; size_t length; } LLVMStringRef;
 typedef void *LLVMRef;
 static struct {
@@ -6170,7 +5759,7 @@ static LLVMRef retargetingGetNamedMetadata(const void *module, const void *name)
     const char *triple = llvm32023.getTarget(module);
     static const char kAIR27[] = "air64_v27-apple-macosx";
     if (!triple || strncmp(triple, kAIR27, sizeof kAIR27 - 1)) return node;
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] AIR 2.7 module (%s) retargeted to AIR 2.6 / macOS 14\n", triple);
+    if (verbose()) shimLog("[mtlshim] AIR 2.7 module (%s) retargeted to AIR 2.6 / macOS 14\n", triple);
     llvm32023.setTarget((void *)module, "air64_v26-apple-macosx14.0.0");
     lowerVersionNode(module, node, 0, 2, 7, 6);
     // Twine("air.language_version"): a C string on the left, nothing on the right (CStringKind / EmptyKind). This
@@ -6213,7 +5802,7 @@ static void interposeCompilerImage(const struct mach_header *mh, intptr_t slide)
         strncmp(info.dli_fname + dirLength, "libGPUCompilerImpl", 18) || !resolveLLVM32023())
         return;
     int slots = rebindImports(mh, slide, (const void *)llvm32023.getNamedMetadata, (const void *)retargetingGetNamedMetadata);
-    if (getenv("MTLSHIM_VERBOSE"))
+    if (verbose())
         shimLog("[mtlshim] AIR 2.7 retargeting: %d import slot(s) in %s\n", slots, info.dli_fname + dirLength);
 }
 
@@ -6235,18 +5824,11 @@ static void installAIR27Retargeting(void) {
     _dyld_register_func_for_add_image(interposeCompilerImage);  // also called for the images already loaded
 }
 
-// 75. Shader libraries built for macOS 13.1 or older, on Tahoe. Tahoe's compiler for this stack (the macOS 14.2 front end,
-// installed as GPUCompiler 31001) reads every module through OCLP's libLLVM wrapper, whose libLLVM_helper fixIr()
-// relabels it air64-apple-macosx13.2.0 / AIR 2.5 so that Tahoe's AIR 2.8 libraries load. On an older module that hides
-// its version from 31001's own upgrade pass (MTLCompilerObject::upgradeAIRModule, which runs on every module a request
-// reads, the downgrade request's too): it takes the module for AIR 2.5 and leaves its texture calls in their AIR 2.1-era
-// form (the texel alone, where AIR 2.6 returns { texel, i8 }), which the downgrade for the 3802 back ends then rewrites
-// into invalid IR ("INSERTVAL: Invalid type", "Invalid record") and the 3802 reader aborts MTLCompilerService. So any
-// app's library built for macOS 10.14 that reads textures crashed the compiler service on Intel and Kepler (s75), and
-// so did Chromium's prebuilt ANGLE library, which item 13 replaces for that reason too (s74); Gabriel-AGH traced the
-// mechanism. fixIr now returns modules whose triple is older than macOS 13.2 as they are, and the upgrade pass converts
-// them. Hooked by pointing the wrapper's import slot for fixIr (in its __got) at a wrapper, fixIr resolved with dlsym (no
-// link-time dependency). MTLSHIM_OLD_AIR=0 turns this off.
+// 75. On Tahoe, OCLP's libLLVM wrapper (libLLVM_helper's fixIr) relabels every module AIR 2.5 / macOS 13.2 so Tahoe's
+// AIR 2.8 libraries load, which hides an older module's version from the 31001 compiler's upgrade pass: its texture
+// calls stay in the AIR 2.1-era form, the downgrade for the 3802 back ends makes invalid IR, and the reader aborts
+// MTLCompilerService (s75; Chromium's ANGLE library, s74). fixIr now returns modules older than macOS 13.2 as they are,
+// for the upgrade pass to convert. Hooked through the wrapper's __got slot for fixIr, resolved with dlsym.
 static NSData *(*origFixIr)(NSData *);
 static const char kLLVMWrapper31001[] = "/System/Library/PrivateFrameworks/GPUCompiler.framework/Versions/31001/Libraries/libLLVM.dylib";
 
@@ -6264,7 +5846,7 @@ static bool olderThanMacOS132(NSData *module) {  // the "-apple-macosxMAJOR.MINO
 
 static NSData *fixIrKeepingOldModules(NSData *module) {
     if (module && olderThanMacOS132(module)) {
-        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] module older than macOS 13.2 left as it is for the upgrade pass\n");
+        if (verbose()) shimLog("[mtlshim] module older than macOS 13.2 left as it is for the upgrade pass\n");
         return module;
     }
     return origFixIr(module);
@@ -6304,11 +5886,11 @@ static void interposeLLVMWrapper(const struct mach_header *mh, intptr_t slide) {
     if (origFixIr || !llvmWrapper31001.mh || !llvmHelper31001.mh) return;
     origFixIr = (NSData *(*)(NSData *))symbolInImage(llvmHelper31001.mh, llvmHelper31001.slide, "__Z5fixIrP6NSData");
     if (!origFixIr) {
-        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] old modules past fixIr: no fixIr in libLLVM_helper\n");
+        if (verbose()) shimLog("[mtlshim] old modules past fixIr: no fixIr in libLLVM_helper\n");
         return;
     }
     int slots = rebindImports(llvmWrapper31001.mh, llvmWrapper31001.slide, (const void *)origFixIr, (const void *)fixIrKeepingOldModules);
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] old modules past fixIr: %d import slot(s) in libLLVM 31001\n", slots);
+    if (verbose()) shimLog("[mtlshim] old modules past fixIr: %d import slot(s) in libLLVM 31001\n", slots);
 }
 
 static void installOldAIRPassThrough(void) {
@@ -6317,21 +5899,12 @@ static void installOldAIRPassThrough(void) {
     _dyld_register_func_for_add_image(interposeLLVMWrapper);  // also called for the images already loaded
 }
 
-// 76. MetalOld's function cache with the AMD GPUs' compiler. The 14.2-era compiler that compiles for them returns a
-// reflection block with every render stage, where the 13.2 compiler MetalOld was written for returned one only when the
-// app asked for reflection. -[MTLCompiler cacheCompilerData:cachedData:hashMap:libraryData:functionCache:] stores every
-// block it got under hashMap[type], and MetalOld computes a reflection key only for reflection it asked for: operator[]
-// then adds a key that isn't initialized, mostly on the memory of the key freed just before, which is the linking key of
-// the fragment stage compiled for the same pipeline. So the vertex stage's reflection replaced the fragment stage's
-// fragment-input list in the cache, and the next pipeline that took that fragment stage from the cache sent the
-// reflection block as its input list: the compiler's parser wrote past a fixed array and MTLCompilerService crashed
-// (Chrome for Testing 124's WebGL on the R9). Only blocks whose type had a key are cached now, and each app's function
-// caches, which may hold such entries, are cleared once. MTLSHIM_CACHE_KEYS=0 turns this off.
-// They are cleared again whenever this build changes: Metal keys a cached function on its code and the compiler plugin,
-// not on the adapters the plugins load (IntelTextureAtomics, AMDTextureAtomics, GeForceAIRCompat, the patched
-// libAMDIL902), so after an update apps kept the functions the old adapters had compiled (WebKit's GPU process kept
-// fragment functions that read argument-buffer constants from the wrong offsets after the fix for that was installed).
-// The marker holds this dylib's and each adapter's size and modification time, and a different one clears the caches.
+// 76. The 14.2-era AMD compiler returns reflection for every render stage, and -[MTLCompiler cacheCompilerData:...]
+// caches each block under a key MetalOld computes only for reflection it asked for, so operator[] added an
+// uninitialized key (often the freed fragment linking key) and the vertex reflection replaced the fragment input list,
+// which crashed the compiler service later. Only blocks whose type had a key are cached, and each app's function caches
+// are cleared once. They are cleared again whenever this dylib or an adapter changes (Metal keys cached functions on
+// code and the plugin, not the adapters): the marker holds each one's size and modification time.
 typedef void (*CacheCompilerDataIMP)(id, SEL, void *, void *, void *, void *, const void *);
 typedef void (*AddCompiledOutputIMP)(id, SEL, id, id, id, id, const void *, int, const void *);
 static CacheCompilerDataIMP origCacheCompilerData;
@@ -6357,17 +5930,17 @@ static void cacheCompilerData(id self, SEL _cmd, void *outputs, void *cached, vo
 static void addCompiledOutput(id self, SEL _cmd, id output, id cachedOutput, id symbols, id libraries, const void *hashKey, int type,
                               const void *functionCache) {
     if (inCacheCompilerData && (type < 0 || type >= 32 || !(cacheableTypes & (1u << type)))) {
-        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] function cache: block type %d had no key, not cached\n", type);
+        if (verbose()) shimLog("[mtlshim] function cache: block type %d had no key, not cached\n", type);
         return;
     }
     origAddCompiledOutput(self, _cmd, output, cachedOutput, symbols, libraries, hashKey, type, functionCache);
 }
 
 // <user cache folder>/<bundle id>/com.apple.metal/<GPU>/functions.{data,list}; a marker file records that it was done.
-// Not from the constructor: it runs in WindowServer and loginwindow at boot, where confstr's lookup of the user's cache
-// folder (dirhelper, opendirectoryd) and file work may wait on services that aren't up yet (the HD 4000's Tahoe stopped
-// booting where WindowServer starts). It runs on the process's first compile request instead, before that request reads
-// the cache, and only in apps run by a user (bundle id, uid 501 and up): the Chrome case, not system daemons.
+// Not from the constructor: it runs in WindowServer and loginwindow at boot, where the cache folder lookup (dirhelper,
+// opendirectoryd) and file work may wait on services that aren't up yet (the HD 4000's Tahoe stopped booting). It runs
+// on the process's first compile request, before that request reads the cache, only in apps run by a user (bundle id,
+// uid 501 and up).
 // What the functions an app has cached were compiled with: this dylib and the adapters, by size and modification time.
 static NSData *functionCacheBuild(void) {
     static const char *const kAdapters[] = {
@@ -6407,7 +5980,7 @@ static void clearFunctionCachesOnce(void) {
             cleared += [files removeItemAtPath:[[root stringByAppendingPathComponent:gpu] stringByAppendingPathComponent:name] error:nil];
     NSData *was = [NSData dataWithContentsOfFile:marker];
     BOOL written = [build writeToFile:marker options:0 error:nil];  // not atomically: WebKit's GPU process may not make the temporary file
-    if (getenv("MTLSHIM_VERBOSE"))
+    if (verbose())
         shimLog("[mtlshim] function cache: %d file(s) cleared in %s (build key %lu bytes, marker had %ld, written %d)\n", cleared, root.UTF8String,
                 (unsigned long)build.length, was ? (long)was.length : -1L, written);
 }
@@ -6436,20 +6009,12 @@ static void installFunctionCacheKeys(void) {
     if (request) origCompileRequest = (CompileRequestIMP)method_setImplementation(request, (IMP)compileRequest);
 }
 
-// 45. Texture reads through the read sampler. Xcode 26's front end builds every texture read of a Metal 4.0 library, and
-// depth, cube and 1D reads in some of macOS 26's own libraries (SceneKit, VFX, CoreComposite), as
-// air.read_<texture>(texture, air.get_read_sampler(), ...): the older form's arguments with the sampler second and, for
-// 2D, 2D-array, 3D and depth 2D(-array) textures, a texel offset after the coordinates (or the layer). Tahoe's compiler
-// on this stack (the macOS 14.2 front end, installed as GPUCompiler 31001) predates the form: its
-// AIR16BitTextureCoordinateEmulationPass, which widens ushort coordinates for these GPUs, takes the sampler for the
-// coordinates and crashes MTLCompilerService on such a read with ushort coordinates (SceneKit's temporal_aa, behind
-// SCNView's temporal antialiasing; any Metal 4.0 kernel reading with a ushort thread position), and MetalOld resends the
-// request forever. The other reads reach the back ends as they are, and libAMDIL902 can't build them ("SC compilation
-// failure There is a call to an undefined label": SceneKit's HDR exposure adaptation, cube and depth copies). A read takes
-// no sampler state, so before that pass every such call is rebuilt in the older form, the one the runtime compiler
-// emits: without the sampler, the offset added to the coordinates. The pass is wrapped by an inline hook (its 14-byte
-// prologue checked), the module edited through the C API of the same libLLVM. MTLSHIM_READ_SAMPLER=0 turns it off.
-// Test: s59.
+// 45. Xcode 26's front end builds Metal 4.0 texture reads (and some of macOS 26's own: SceneKit, VFX, CoreComposite) as
+// air.read_<texture>(texture, air.get_read_sampler(), ...). Tahoe's compiler on this stack predates that form: its
+// AIR16BitTextureCoordinateEmulationPass crashes MTLCompilerService on such a read with ushort coordinates, and
+// libAMDIL902 can't build the rest. A read takes no sampler state, so before that pass every such call is rebuilt in
+// the older form (no sampler, the offset added to the coordinates). The pass is wrapped by an inline hook (its 14-byte
+// prologue checked), the module edited through the same libLLVM's C API. Test: s59.
 static struct {
     LLVMRef (*getNamedFunction)(LLVMRef module, const char *name);
     LLVMRef (*firstFunction)(LLVMRef module);
@@ -6590,7 +6155,7 @@ static unsigned plainReads(LLVMRef module) {
     for (unsigned i = 0; i < deadCount; i++) llvmFE.eraseInstruction(dead[i]);
     free(dead);
     if (!llvmFE.firstUse(sampler)) llvmFE.deleteFunction(sampler);
-    if (rebuilt && getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] %u texture read(s) rebuilt without the read sampler\n", rebuilt);
+    if (rebuilt && verbose()) shimLog("[mtlshim] %u texture read(s) rebuilt without the read sampler\n", rebuilt);
     return rebuilt;
 }
 
@@ -6615,7 +6180,7 @@ static void hookCoordinateEmulation(const struct mach_header *mh, intptr_t slide
     void *llvm = dlopen(path, RTLD_NOLOAD | RTLD_LAZY);
     unsigned char *entry = impl ? dlsym(impl, "_ZN4llvm3air38AIR16BitTextureCoordinateEmulationPass3runERNS_6ModuleERNS_15AnalysisManagerIS2_JEEE") : NULL;
     if (!llvm || !entry || memcmp(entry, kPrologue, sizeof kPrologue)) {
-        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] read sampler rewrite: compiler not as expected, left alone\n");
+        if (verbose()) shimLog("[mtlshim] read sampler rewrite: compiler not as expected, left alone\n");
         return;
     }
     const char *names[] = {"LLVMGetNamedFunction", "LLVMGetFirstFunction", "LLVMGetNextFunction", "LLVMGetValueName2",
@@ -6632,7 +6197,7 @@ static void hookCoordinateEmulation(const struct mach_header *mh, intptr_t slide
     for (size_t i = 0; i < sizeof names / sizeof *names; i++)
         if (!(slots[i] = dlsym(llvm, names[i]))) return;
     origCoordinateEmulationRun = (PassRunFn)hookPrologue(entry, sizeof kPrologue, (void *)coordinateEmulationRun);
-    if (getenv("MTLSHIM_VERBOSE"))
+    if (verbose())
         shimLog("[mtlshim] read sampler rewrite: %s\n", origCoordinateEmulationRun ? "installed" : "hook failed");
 }
 
@@ -6663,7 +6228,7 @@ static void rebindStubs(const struct mach_header *mh, intptr_t slide, const void
                 if (vm_protect(mach_task_self(), page, getpagesize(), FALSE, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY) != KERN_SUCCESS) continue;
                 *slot = to;
                 vm_protect(mach_task_self(), page, getpagesize(), FALSE, VM_PROT_READ);
-                if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] WebKit in the shared cache: import slot %p rebound\n", slot);
+                if (verbose()) shimLog("[mtlshim] WebKit in the shared cache: import slot %p rebound\n", slot);
             }
         }
     }
@@ -6681,11 +6246,10 @@ static void routeWebKitImage(const struct mach_header *mh, intptr_t slide) {
     rebindStubs(mh, slide, (const void *)IORegistryEntryCreateCFProperty, (const void *)interposedRegistryEntryCreateCFProperty);
 }
 
-// Item 26. WebKit's WebGPU divides by zero on Intel Macs: CommandEncoder::beginRenderPass rounds up to a multiple of
-// Texture::renderTargetPixelByteAlignment(format), which is 0 when the attachment has no usable format, such as a canvas
-// texture destroyed by a resize (WebGPU CTS web_platform,canvas,getCurrentTexture:resize). On Apple silicon `udiv` by zero
-// gives 0 and validation goes on to report the error; on x86 `div` traps, the SIGFPE kills the GPU process, and every page
-// gets a null adapter from then on. So give the Apple silicon result. All of this framework's divides have register operands.
+// Item 26. WebKit's WebGPU rounds up to a multiple of renderTargetPixelByteAlignment(format), which is 0 for an
+// attachment without a usable format (a canvas texture destroyed by a resize); on Apple silicon udiv by zero gives 0,
+// on x86 div traps and kills the GPU process. So give Apple silicon's result. All of this framework's divides have
+// register operands.
 static uintptr_t webGPUTextStart, webGPUTextEnd;
 
 // Back to the interrupted code. Returning from the handler doesn't work there: sigreturn fails in WebKit's GPU process and
@@ -6753,22 +6317,17 @@ static void guardWebGPUImage(const struct mach_header *mh, intptr_t slide) {
         struct sigaction action = {.sa_flags = SA_SIGINFO | SA_NODEFER};  // SA_NODEFER: resumeThread doesn't unblock SIGFPE
         action.sa_sigaction = webGPUDivideByZero;
         sigaction(SIGFPE, &action, NULL);
-        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] WebGPU: divide by zero handled like Apple silicon\n");
+        if (verbose()) shimLog("[mtlshim] WebGPU: divide by zero handled like Apple silicon\n");
     }
 }
 
 // ---- 41. CoreImageOld's portrait kernel library data ------------------------------------------------------------------
-// CoreImageOld.dylib (OCLP's 14.0 beta 3 Core Image for the 3802 stack) loads the Metal kernels of its portrait / SDOF
-// filters through +[CIKernel SDOFV2MetalKernelNamed:] (and SDOFV3, and the same pair on CIColorKernel). Each reads a
-// static NSData that a once-block fills with [NSData dataWithContentsOfURL:] of CoreImage.framework's
-// CIPortraitBlur[Stitchable]V2/V3.metallib and stores without retaining it (non-ARC code). The first portrait filter
-// uses it while it is still alive; once an autorelease pool drains it is freed, and the next one passes a dangling
-// pointer to -[CIKernelLibrary initWithData:error:], which crashes in objc_retain: CIDepthBlurEffect, Photos' portrait
-// editing, on the Iris Pro and the R9 M370X alike. +[NSData dataWithContentsOfURL:] returns those four files from a
-// cache that keeps them alive, so the static stays valid. (MetalOld lists no functions in Sequoia's metallibs; it finds
-// them by name, but CIKernelLibrary builds its table from functionNames, so the portrait kernels still come back nil
-// and CIDepthBlurEffect returns its input without the blur instead of crashing.) Installed only where
-// CoreImageOld.dylib exists. MTLSHIM_SDOF_LIBRARY=0 turns it off.
+// CoreImageOld.dylib's +[CIKernel / CIColorKernel SDOFV2MetalKernelNamed:] (and SDOFV3) keep a static NSData from
+// dataWithContentsOfURL: without retaining it, so once an autorelease pool drains the next portrait filter crashes in
+// -[CIKernelLibrary initWithData:error:] (Photos' portrait editing). +[NSData dataWithContentsOfURL:] returns those
+// four metallibs from a cache that keeps them alive. (The portrait kernels still come back nil: CIKernelLibrary lists
+// functions MetalOld doesn't, so CIDepthBlurEffect returns its input unblurred.) Installed only where
+// CoreImageOld.dylib exists.
 static IMP origDataWithContentsOfURL;
 static id keptPortraitLibrary(id self, SEL _cmd, NSURL *url) {
     NSString *file = url.isFileURL ? url.lastPathComponent : nil;
@@ -6782,7 +6341,7 @@ static id keptPortraitLibrary(id self, SEL _cmd, NSURL *url) {
         if (!data) {
             data = ((id (*)(id, SEL, NSURL *))origDataWithContentsOfURL)(self, _cmd, url);
             if (data) kept[url.path] = data;
-            if (data && getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] %s kept alive for CoreImageOld (item 41)\n", file.UTF8String);
+            if (data && verbose()) shimLog("[mtlshim] %s kept alive for CoreImageOld (item 41)\n", file.UTF8String);
         }
         return data;
     }
@@ -6795,25 +6354,14 @@ static void keepPortraitLibraries(void) {
 }
 
 // ---- 52. Reflection of stitchable functions ---------------------------------------------------------------------------
-// MetalOld reflects a [[stitchable]] function (its return type and arguments, filled in by -[_MTLFunctionInternal
-// initializeStitchableFunctionMetadata] when something asks for them) with a reflection-only request to
-// MTLCompilerService, whose reply MTLStitchingReflectionReader reads. 13.2.1's reader takes the reply to be the reflection
-// itself, an "MTLPSBIN" section, or a section without that header. Sequoia's compiler service puts the section in a newer
-// container: a 0x50-byte header (a 0xef13c710 magic, then the offset and size of each of four sections), so the reader
-// read a header word as the first argument's kind (0x50000000 where it wants 0x14) and called abort(). The section inside
-// is in a format the reader knows (version 2.0, which it reads as 1.2 or later: the same argument records). Core Image
-// reflects every kernel it loads from a metallib this way, through CIKernelReflection::reflect, and OCLP's CoreImageOld.dylib
-// (the 14.0 beta 3 Core Image of the 3802 payloads) has reflect stubbed out to avoid that abort, which also made every
-// precompiled Core Image kernel an app makes come back nil without an error: +[CIKernel kernelWithFunctionName:
-// fromMetalLibraryData:error:], behind Microsoft Office's picture corrections, colour and artistic effects (Oimg.metallib).
-// The payload's CoreImageOld has reflect back (tools/make_coreimage_fix.py), and here the reply handler of
-// -[MTLCompiler reflectionWithFunction:options:sync:pipelineLibrary:binaryArchives:completionHandler:], which the other
-// reflectionWithFunction: variants call, gets just the MTLPSBIN section when the reply is such a container. Precompiled
-// and stitchable Core Image kernels then build and render on the Iris Pro and the R9 M370X, the 237 built-in filters render
-// the same pixels as before, and CIDepthBlurEffect's portrait kernels (item 41), which are stitchable, reflect instead of
-// aborting, as they would with reflect restored alone. Replies in any other form are passed on as they are.
-// MTLSHIM_STITCHING_REFLECTION=0 turns it off (with the payload's CoreImageOld, stitchable kernels then abort again).
-// Test: s68.
+// MetalOld reflects a [[stitchable]] function with a reflection-only request whose reply MTLStitchingReflectionReader
+// reads as an MTLPSBIN section; Sequoia's compiler service wraps the section in a newer container (a 0x50-byte header:
+// magic 0xef13c710 and four section offsets and sizes), so the reader aborted. The section inside is a version it
+// reads. The reply handler of -[MTLCompiler
+// reflectionWithFunction:options:sync:pipelineLibrary:binaryArchives:completionHandler:], which the other variants
+// call, gets just the MTLPSBIN section of such a container. With the payload's CoreImageOld reflect restored
+// (tools/make_coreimage_fix.py), precompiled and stitchable Core Image kernels build (Microsoft Office's picture
+// corrections) and item 41's portrait kernels reflect; with this off, stitchable kernels abort again. Test: s68.
 typedef void (^ReflectionHandler)(NSUInteger status, dispatch_data_t reflection, NSString *error);
 typedef void (*ReflectionIMP)(id, SEL, id function, NSUInteger options, BOOL sync, id pipelineLibrary, id binaryArchives,
                               ReflectionHandler handler);
@@ -6829,7 +6377,7 @@ static dispatch_data_t stitchingReflectionSection(dispatch_data_t reply) {
         memcpy(&length, (const char *)bytes + entry + 8, 8);
         if (offset < 0x50 || offset > size || length < 12 || length > size - offset || memcmp((const char *)bytes + offset, "MTLPSBIN", 8))
             continue;
-        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] stitchable function reflection: MTLPSBIN section of the reply's container (%zu -> %llu bytes)\n", size, length);
+        if (verbose()) shimLog("[mtlshim] stitchable function reflection: MTLPSBIN section of the reply's container (%zu -> %llu bytes)\n", size, length);
         return dispatch_data_create_subrange(reply, offset, length);
     }
     return reply;
@@ -6851,18 +6399,12 @@ static void installStitchingReflection(void) {
 }
 
 // ---- 43. MPS NDArray matrix multiplication on the Intel GPU --------------------------------------------------------
-// MPSNDArrayMatrixMultiplication (and through it MPSGraph's matrixMultiplication, the matmul of anything built on
-// MPSGraph) multiplies with its own NDArray kernels on GPUs that MPSCore's device record types as 18-24, and with an
-// MPSMatrixMultiplication it creates in -initWithDevice:sourceCount: (its _mmul) on the others. MPSCore types the
-// Haswell / Ivy Bridge GPUs 24 (the R9 M370X 26), so on them no _mmul is made, and the NDArray path has no kernel for
-// these family-1 GPUs: the encode opens and closes a compute encoder with no dispatch, and every result stays 0 (any
-// size, transposed, batched, float16, with a bias). MPSMatrixMultiplication itself runs right there: MPS's classic API
-// uses its MatrixMultiplyNN kernels on the Iris Pro. So before an encode on such a GPU, an
-// MPSNDArrayMatrixMultiplication without _mmul gets the same MPSMatrixMultiplication it creates on the AMD GPU, and
-// then takes the AMD GPU's path. Installed (an override of the encode method it inherits from
-// MPSNDArrayMultiaryKernel, through which the public encodes and MPSGraph's both pass) once MPSNDArray is loaded, from
-// this library's initializer and the device calls that come before any MPS kernel. Only the class itself (not its
-// gather / quantized subclasses) on the 12.x Intel driver's devices. MTLSHIM_MPS_MATMUL=0 turns it off. Test: s57.
+// MPSNDArrayMatrixMultiplication (and MPSGraph's matmul) uses its NDArray kernels on GPUs MPSCore types 18-24, which
+// includes Haswell / Ivy Bridge (24) though they have no such kernel: the encode dispatches nothing and results stay 0.
+// MPSMatrixMultiplication runs right there, so before an encode on the 12.x Intel driver's devices an instance without
+// _mmul gets the MPSMatrixMultiplication it creates on the AMD GPU and takes that path. Installed as an override of the
+// encode method inherited from MPSNDArrayMultiaryKernel once MPSNDArray is loaded; the class itself only, not its
+// subclasses. Test: s57.
 @interface NSObject (MetalOldCompatMPSMatmul)  // MPSMatrixMultiplication's initializer (this library doesn't link MPS)
 - (instancetype)initWithDevice:(id)device transposeLeft:(BOOL)transposeLeft transposeRight:(BOOL)transposeRight resultRows:(NSUInteger)rows
                  resultColumns:(NSUInteger)columns interiorColumns:(NSUInteger)interior alpha:(double)alpha beta:(double)beta;
@@ -6882,20 +6424,16 @@ static void encodeMatmulWithFallback(id self, SEL _cmd, void *encoder, void *com
             id kernel = [[matmul alloc] initWithDevice:device transposeLeft:NO transposeRight:NO resultRows:1 resultColumns:1 interiorColumns:1
                                                  alpha:1 beta:0];
             if (kernel) *fallback = (__bridge_retained void *)kernel;  // owned by the object, as its own _mmul would be
-            if (kernel && getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MPSNDArrayMatrixMultiplication: classic MPSMatrixMultiplication added\n");
+            if (kernel && verbose()) shimLog("[mtlshim] MPSNDArrayMatrixMultiplication: classic MPSMatrixMultiplication added\n");
         }
     }
     inheritedMPSEncode(self, _cmd, encoder, commandBuffer, sources, state, destination, dag);
 }
 
 // ---- 57. MPSGraph's softmax on Kepler --------------------------------------------------------------------------------
-// -[MPSGraph softMaxWithTensor:axis:name:] over any axis but the last came out wrong on the GTX 770: over axis 0 of a 100x16
-// tensor it wrote only element [0][0] and left the rest 0 (i71), over axes 0 and 1 of an 8x10x6 one every element was
-// wrong. Over the last axis it's right, and so is every operation a softmax is made of, alone and composed in separate
-// graphs; built from them in one graph, MPSGraph fuses them back into the same kernels (the same wrong values). So where a
-// Kepler device is present (GeForceMTLDriver's NVMTLDevice), a softmax over another axis of a tensor of static shape is
-// done over the last axis between two transposes, which MPSGraph keeps. MTLSHIM_MPSGRAPH_SOFTMAX=0 turns it off.
-// Test: i71 on the GTX 770.
+// -[MPSGraph softMaxWithTensor:axis:name:] over any axis but the last comes out wrong on Kepler (the last axis, and
+// each operation it's made of, are right; MPSGraph fuses them back). Where a Kepler device is present, a softmax over
+// another axis of a tensor of static shape is done over the last axis between two transposes. Test: i71 on the GTX 770.
 typedef id (*SoftMaxIMP)(id, SEL, id, NSInteger, id);
 static SoftMaxIMP origSoftMax;
 static BOOL anyKeplerDevice(void);
@@ -6910,7 +6448,7 @@ static id compositeSoftMax(id self, SEL _cmd, id tensor, NSInteger axis, id name
     id moved = ((Transpose)objc_msgSend)(self, transpose, tensor, (NSUInteger)a, (NSUInteger)last, nil);
     id soft = moved ? origSoftMax(self, _cmd, moved, last, nil) : nil;
     if (!soft) return origSoftMax(self, _cmd, tensor, axis, name);
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MPSGraph softmax over axis %ld of %ld done over the last axis\n", (long)a, (long)rank);
+    if (verbose()) shimLog("[mtlshim] MPSGraph softmax over axis %ld of %ld done over the last axis\n", (long)a, (long)rank);
     return ((Transpose)objc_msgSend)(self, transpose, soft, (NSUInteger)a, (NSUInteger)last, name);
 }
 static BOOL anyKeplerDevice(void) {
@@ -6937,7 +6475,7 @@ static void installMPSGraphSoftMax(void) {
             class_getInstanceMethod(graph, @selector(reductionMaximumWithTensor:axis:name:)) &&
             class_getInstanceMethod(graph, @selector(reductionSumWithTensor:axis:name:))) {
             origSoftMax = (SoftMaxIMP)method_setImplementation(m, (IMP)compositeSoftMax);
-            if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MPSGraph softmax hook installed (active where a Kepler GPU is)\n");
+            if (verbose()) shimLog("[mtlshim] MPSGraph softmax hook installed (active where a Kepler GPU is)\n");
         }
     }
     os_unfair_lock_unlock(&lock);
@@ -6962,21 +6500,17 @@ static void installMPSMatmulFallback(void) {
             mpsMatmulClass = matmul;
             mpsMatmulFallbackOffset = ivar_getOffset(fallback);
             BOOL added = class_addMethod(matmul, encode, (IMP)encodeMatmulWithFallback, method_getTypeEncoding(inherited));
-            if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MPS NDArray matmul fallback %s\n", added ? "installed" : "not installed (the class has its own encode)");
+            if (verbose()) shimLog("[mtlshim] MPS NDArray matmul fallback %s\n", added ? "installed" : "not installed (the class has its own encode)");
         }
     }
     os_unfair_lock_unlock(&lock);
 }
 
 // ---- 44. MetalFX's temporal scaler on the Intel and Kepler GPUs --------------------------------------------------------
-// +[MTLFXTemporalScalerDescriptor supportsDevice:] says yes for the Haswell / Ivy Bridge GPUs, but the temporal pass
-// (unified_pass_tile / unified_pass_kern) uses quad_shuffle_xor and quad_sum, which these family-1 GPUs don't have: the
-// IGIL back end's built-in inliner aborts on them (the stock compiler too), MetalFX keeps going without the pipeline
-// and the first -encodeToCommandBuffer: crashes the app in the driver's setKernel. Emulating quad operations would need
-// threadgroup memory and barriers at every use, which is only safe in uniform control flow. So on the 12.x Intel
-// driver's devices the temporal scaler is reported unsupported and not created (nil, as for any unsupported device),
-// and apps take their path without it; the spatial scaler works there. The same on Kepler (below).
-// MTLSHIM_METALFX_TEMPORAL=0 turns this off. Test: s58.
+// +[MTLFXTemporalScalerDescriptor supportsDevice:] says yes for Haswell / Ivy Bridge, but the temporal pass uses
+// quad_shuffle_xor and quad_sum, which these family-1 GPUs lack: the compile aborts and the first encode crashes the
+// app. On the 12.x Intel driver's devices (and Kepler, below) the temporal scaler is reported unsupported and not
+// created; the spatial scaler works. Test: s58.
 typedef BOOL (*SupportsDeviceIMP)(id, SEL, id);
 typedef id (*NewTemporalIMP)(id, SEL, id) RETURNS_RETAINED;
 typedef id (*NewTemporalCompilerIMP)(id, SEL, id, id) RETURNS_RETAINED;
@@ -6998,7 +6532,7 @@ static BOOL temporalSupportsDevice(id self, SEL _cmd, id device) {
 static id newTemporalScaler(id self, SEL _cmd, id device) RETURNS_RETAINED;
 static id newTemporalScaler(id self, SEL _cmd, id device) {
     if (!noQuadGroupDevice(device)) return origNewTemporalScaler(self, _cmd, device);
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MetalFX temporal scaler: not on this GPU (no quad-group functions)\n");
+    if (verbose()) shimLog("[mtlshim] MetalFX temporal scaler: not on this GPU (no quad-group functions)\n");
     return nil;
 }
 static id newTemporalScalerCompiler(id self, SEL _cmd, id device, id compiler) RETURNS_RETAINED;
@@ -7025,7 +6559,7 @@ static void installMetalFXTemporalLimit(void) {
             origNewTemporalScaler = (NewTemporalIMP)method_setImplementation(create, (IMP)newTemporalScaler);
         if (createCompiler && !strcmp(method_getTypeEncoding(createCompiler), "@32@0:8@16@24"))
             origNewTemporalScalerCompiler = (NewTemporalCompilerIMP)method_setImplementation(createCompiler, (IMP)newTemporalScalerCompiler);
-        if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MetalFX temporal scaler limit installed\n");
+        if (verbose()) shimLog("[mtlshim] MetalFX temporal scaler limit installed\n");
     }
     os_unfair_lock_unlock(&lock);
 }
@@ -7049,17 +6583,17 @@ __attribute__((used, section("__DATA,__interpose"))) static const struct { const
 #endif
 
 // This library links MetalOld.dylib, so dyld has registered MetalOld's classes and run its initializers before this
-// one; patching here needs no dyld callbacks (calling into the ObjC runtime from those risks lock-order deadlocks).
+// one;
+// patching here needs no dyld callbacks (calling into the ObjC runtime from those risks lock-order deadlocks).
 // Build with -DMETALOLDCOMPAT_NOOP for a copy that loads the same way but changes nothing.
-// 74. MoltenVK 1.4.0 and 1.4.1 (Godot 4.7, apps built with Vulkan SDK 1.4.3xx) take every Mac GPU for a family-2 one and
-// put Vulkan memory in placement heaps, which the family-1 GPUs don't have: MetalOld's validation aborts the app at the
-// first allocation ("Placement heap type is not supported"; Kepler, Ivy Bridge, Haswell). MoltenVK 1.4.2 asks the GPU
-// again, and keeps heaps off on AMD by default. On this stack every GPU is one or the other, so MVK_CONFIG_USE_MTLHEAP
-// gets the value 0 (never) unless the environment sets it. Test: s81.
+// 74. MoltenVK 1.4.0 / 1.4.1 put Vulkan memory in placement heaps on every Mac GPU, which family-1 GPUs lack
+// (MetalOld's validation aborts at the first allocation). MVK_CONFIG_USE_MTLHEAP gets 0 (never) unless the environment
+// sets it.
+// Test: s81.
 static void preferNoMTLHeaps(void) {
     if (getenv("MVK_CONFIG_USE_MTLHEAP")) return;
     setenv("MVK_CONFIG_USE_MTLHEAP", "0", 0);
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] MoltenVK: MVK_CONFIG_USE_MTLHEAP=0 (no placement heaps on these GPUs)\n");
+    if (verbose()) shimLog("[mtlshim] MoltenVK: MVK_CONFIG_USE_MTLHEAP=0 (no placement heaps on these GPUs)\n");
 }
 
 __attribute__((constructor)) static void init(void) {

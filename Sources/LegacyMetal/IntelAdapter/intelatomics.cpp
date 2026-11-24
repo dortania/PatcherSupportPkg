@@ -1674,8 +1674,8 @@ static unsigned moveEmulatedReferenceSlotsToLocation(LLVMModuleRef module) {
 // OCLP's 11.7.10 Ivy Bridge plugin doesn't emulate argument buffers and its driver has no argument-buffer runtime: a
 // pointer member was read as an offset into the argument buffer itself, and vertex and fragment functions failed to
 // build (i85, s61; WebKit's ANGLE puts every WebGL 2 uniform block in one). Each pointer member becomes a hidden buffer
-// parameter __ivbab_<argument buffer index>_<id> at a free buffer index counted down from 30, which MetalOldCompat item
-// 47 binds; texture and sampler members, which crashed the compiler service, likewise become hidden texture and sampler
+// parameter __ivbab_<argument buffer index>_<id> at a free buffer index counted down from 30 (vertex functions keep
+// 0-16 for vertex buffers), which MetalOldCompat item 47 binds; texture and sampler members, which crashed the compiler service, likewise become hidden texture and sampler
 // parameters counted down from 30 and 15 (s86, MetalOldCompat item 79). Constants stay in the argument buffer.
 // (LLVMGetAttributeCountAtIndex dereferences an empty attribute set in this LLVM, so the attributes go over whole)
 extern "C" void functionCopyAttributesFrom(void *function, const void *source) asm("__ZN4llvm8Function18copyAttributesFromEPKNS_11GlobalValueE");
