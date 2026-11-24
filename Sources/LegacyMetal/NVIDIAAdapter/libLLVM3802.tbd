@@ -180,7 +180,6 @@ exports:
                    _LLVMSetValueName,
                    _LLVMSetVolatile,
                    _LLVMStructGetTypeAtIndex,
-                   _LLVMStructTypeInContext,
                    _LLVMTypeOf,
                    _LLVMVectorType,
                    _LLVMVoidTypeInContext ]

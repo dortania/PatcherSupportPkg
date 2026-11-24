@@ -115,127 +115,14 @@
 #include <string>
 #include <vector>
 
-extern "C" {
-typedef struct LLVMOpaqueModule *LLVMModuleRef;
-typedef struct LLVMOpaqueContext *LLVMContextRef;
-typedef struct LLVMOpaqueType *LLVMTypeRef;
-typedef struct LLVMOpaqueValue *LLVMValueRef;
-typedef struct LLVMOpaqueBasicBlock *LLVMBasicBlockRef;
-typedef struct LLVMOpaqueBuilder *LLVMBuilderRef;
-typedef struct LLVMOpaqueUse *LLVMUseRef;
-typedef struct LLVMOpaquePassManager *LLVMPassManagerRef;
-typedef struct LLVMOpaqueAttributeRef *LLVMAttributeRef;
+#include "LLVMC.h"
+
 enum { LLVMIntEQ = 32, LLVMIntNE, LLVMIntUGT, LLVMIntUGE, LLVMIntULT, LLVMIntULE, LLVMIntSGT, LLVMIntSGE, LLVMIntSLT, LLVMIntSLE };
 enum { LLVMInternalLinkage = 8 };
 enum { LLVMIntegerTypeKind = 8 };
 static const unsigned LLVMAttributeFunctionIndex = ~0u;
-char *LLVMPrintModuleToString(LLVMModuleRef);
-void LLVMDisposeMessage(char *);
-LLVMContextRef LLVMGetModuleContext(LLVMModuleRef);
-LLVMValueRef LLVMGetFirstFunction(LLVMModuleRef);
-LLVMValueRef LLVMGetNextFunction(LLVMValueRef);
-LLVMValueRef LLVMGetNamedFunction(LLVMModuleRef, const char *);
-LLVMTypeRef LLVMVoidTypeInContext(LLVMContextRef);
-LLVMValueRef LLVMIsAConstantExpr(LLVMValueRef);
-unsigned LLVMGetConstOpcode(LLVMValueRef);
-LLVMValueRef LLVMConstVector(LLVMValueRef *, unsigned);
-LLVMValueRef LLVMConstArray(LLVMTypeRef, LLVMValueRef *, unsigned);
-LLVMValueRef LLVMConstNamedStruct(LLVMTypeRef, LLVMValueRef *, unsigned);
-LLVMValueRef LLVMConstStructInContext(LLVMContextRef, LLVMValueRef *, unsigned, int);
-LLVMTypeRef LLVMHalfTypeInContext(LLVMContextRef);
-const char *LLVMGetStructName(LLVMTypeRef);
-int LLVMIsPackedStruct(LLVMTypeRef);
-LLVMValueRef LLVMIsAConstantStruct(LLVMValueRef);
-LLVMValueRef LLVMIsAConstantArray(LLVMValueRef);
-LLVMValueRef LLVMGetBasicBlockTerminator(LLVMBasicBlockRef);
-LLVMBasicBlockRef LLVMGetInstructionParent(LLVMValueRef);
-unsigned LLVMGetNumSuccessors(LLVMValueRef);
-LLVMBasicBlockRef LLVMGetSuccessor(LLVMValueRef, unsigned);
-LLVMValueRef LLVMIsAUnreachableInst(LLVMValueRef);
-LLVMValueRef LLVMBuildRetVoid(LLVMBuilderRef);
-LLVMValueRef LLVMBuildUnreachable(LLVMBuilderRef);
-LLVMValueRef LLVMIsAReturnInst(LLVMValueRef);
-LLVMBasicBlockRef LLVMGetEntryBasicBlock(LLVMValueRef);
-unsigned LLVMGetAlignment(LLVMValueRef);
-int LLVMGetVolatile(LLVMValueRef);
-unsigned LLVMGetNumArgOperands(LLVMValueRef);
-LLVMValueRef LLVMAddFunction(LLVMModuleRef, const char *, LLVMTypeRef);
-const char *LLVMGetValueName(LLVMValueRef);
-int LLVMIsDeclaration(LLVMValueRef);
-LLVMUseRef LLVMGetFirstUse(LLVMValueRef);
-void LLVMSetLinkage(LLVMValueRef, int);
-LLVMTypeRef LLVMTypeOf(LLVMValueRef);
-LLVMTypeRef LLVMGetElementType(LLVMTypeRef);
-LLVMTypeRef LLVMGetReturnType(LLVMTypeRef);
-unsigned LLVMCountParamTypes(LLVMTypeRef);
-void LLVMGetParamTypes(LLVMTypeRef, LLVMTypeRef *);
-int LLVMGetTypeKind(LLVMTypeRef);
-unsigned LLVMGetIntTypeWidth(LLVMTypeRef);
-LLVMTypeRef LLVMInt1TypeInContext(LLVMContextRef);
-LLVMTypeRef LLVMInt16TypeInContext(LLVMContextRef);
-LLVMTypeRef LLVMInt32TypeInContext(LLVMContextRef);
-LLVMTypeRef LLVMInt64TypeInContext(LLVMContextRef);
-LLVMTypeRef LLVMFunctionType(LLVMTypeRef, LLVMTypeRef *, unsigned, int);
-LLVMValueRef LLVMConstInt(LLVMTypeRef, unsigned long long, int);
-LLVMValueRef LLVMGetParam(LLVMValueRef, unsigned);
-LLVMBasicBlockRef LLVMAppendBasicBlockInContext(LLVMContextRef, LLVMValueRef, const char *);
-LLVMBuilderRef LLVMCreateBuilderInContext(LLVMContextRef);
-void LLVMPositionBuilderAtEnd(LLVMBuilderRef, LLVMBasicBlockRef);
-void LLVMDisposeBuilder(LLVMBuilderRef);
-LLVMValueRef LLVMBuildRet(LLVMBuilderRef, LLVMValueRef);
-LLVMValueRef LLVMBuildICmp(LLVMBuilderRef, int, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildSelect(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildAdd(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildSub(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildMul(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildAnd(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildLShr(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildZExt(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
-LLVMValueRef LLVMBuildTrunc(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
-LLVMValueRef LLVMBuildCall(LLVMBuilderRef, LLVMValueRef, LLVMValueRef *, unsigned, const char *);
-unsigned LLVMGetEnumAttributeKindForName(const char *, size_t);
-LLVMAttributeRef LLVMCreateEnumAttribute(LLVMContextRef, unsigned, unsigned long long);
-void LLVMAddAttributeAtIndex(LLVMValueRef, unsigned, LLVMAttributeRef);
-void LLVMRemoveEnumAttributeAtIndex(LLVMValueRef, unsigned, unsigned);
 enum { LLVMUDiv = 14, LLVMSDiv = 15, LLVMURem = 17, LLVMSRem = 18, LLVMShl = 20, LLVMLShr = 21, LLVMAShr = 22, LLVMTrunc = 30, LLVMZExt = 31, LLVMSExt = 32 };
-int LLVMGetInstructionOpcode(LLVMValueRef);
-int LLVMGetICmpPredicate(LLVMValueRef);
-LLVMValueRef LLVMBuildSDiv(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildSRem(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildSExt(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
-LLVMBasicBlockRef LLVMGetFirstBasicBlock(LLVMValueRef);
-LLVMBasicBlockRef LLVMGetNextBasicBlock(LLVMBasicBlockRef);
-LLVMValueRef LLVMGetFirstInstruction(LLVMBasicBlockRef);
-LLVMValueRef LLVMGetNextInstruction(LLVMValueRef);
-LLVMValueRef LLVMGetOperand(LLVMValueRef, unsigned);
-LLVMValueRef LLVMIsAConstantInt(LLVMValueRef);
-LLVMValueRef LLVMIsAInstruction(LLVMValueRef);
-LLVMValueRef LLVMIsAConstant(LLVMValueRef);
-void LLVMReplaceAllUsesWith(LLVMValueRef, LLVMValueRef);
-void LLVMInstructionEraseFromParent(LLVMValueRef);
-void LLVMPositionBuilderBefore(LLVMBuilderRef, LLVMValueRef);
-LLVMValueRef LLVMBuildCondBr(LLVMBuilderRef, LLVMValueRef, LLVMBasicBlockRef, LLVMBasicBlockRef);
-LLVMValueRef LLVMBuildBr(LLVMBuilderRef, LLVMBasicBlockRef);
-LLVMValueRef LLVMBuildPhi(LLVMBuilderRef, LLVMTypeRef, const char *);
-void LLVMAddIncoming(LLVMValueRef, LLVMValueRef *, LLVMBasicBlockRef *, unsigned);
-LLVMValueRef LLVMBuildOr(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildShl(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildAShr(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildUDiv(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildURem(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildNeg(LLVMBuilderRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildNot(LLVMBuilderRef, LLVMValueRef, const char *);
-LLVMTypeRef LLVMStructTypeInContext(LLVMContextRef, LLVMTypeRef *, unsigned, int);
 enum { LLVMArrayTypeKind = 11, LLVMVectorTypeKind = 13 };
-unsigned LLVMGetVectorSize(LLVMTypeRef);
-LLVMValueRef LLVMGetUndef(LLVMTypeRef);
-LLVMValueRef LLVMBuildExtractElement(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildInsertElement(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMPassManagerRef LLVMCreatePassManager(void);
-void LLVMAddAlwaysInlinerPass(LLVMPassManagerRef);
-int LLVMRunPassManager(LLVMPassManagerRef, LLVMModuleRef);
-void LLVMDisposePassManager(LLVMPassManagerRef);
-}
 extern "C" int passManagerRun(void *self, LLVMModuleRef module) asm("__ZN4llvm6legacy11PassManager3runERNS_6ModuleE");
 
 static const char *const kPluginSuffix = "/GeForceAIRPlugin";
@@ -523,7 +410,6 @@ static LLVMValueRef divideLane(Gen &g, LLVMBuilderRef b, int op, LLVMValueRef x,
 // i1, which Kepler's code generation got wrong next to a threadgroup load after a barrier (the shift's result came out
 // 0: LONG fuzz seeds 1295 and 1853, reduced), though the IR was right. Every 32-bit shift amount is masked into 0-31, so
 // nothing is poison.
-extern "C" LLVMValueRef LLVMBuildXor(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
 static LLVMValueRef shiftLane(Gen &g, LLVMBuilderRef b, int op, LLVMValueRef x, LLVMValueRef amount) {
     LLVMTypeRef params[2] = {g.i32, g.i32};
     LLVMValueRef minArgs[2] = {LLVMBuildAnd(b, LLVMBuildTrunc(b, amount, g.i32, ""), g.c32(63), ""), g.c32(63)};
@@ -595,30 +481,6 @@ static unsigned fixWideInstructions(LLVMModuleRef module, Gen &g) {
 }
 
 // ---- constexpr samplers from newer front ends ([2 x i64] -> i64 with bit 63 set; IntelAdapter's fixSamplerStateWords) ----
-extern "C" {
-unsigned LLVMGetNamedMetadataNumOperands(LLVMModuleRef, const char *);
-void LLVMGetNamedMetadataOperands(LLVMModuleRef, const char *, LLVMValueRef *);
-LLVMValueRef LLVMIsAMDNode(LLVMValueRef);
-LLVMValueRef LLVMIsAMDString(LLVMValueRef);
-unsigned LLVMGetMDNodeNumOperands(LLVMValueRef);
-void LLVMGetMDNodeOperands(LLVMValueRef, LLVMValueRef *);
-const char *LLVMGetMDString(LLVMValueRef, unsigned *);
-LLVMValueRef LLVMIsAGlobalVariable(LLVMValueRef);
-LLVMValueRef LLVMGetInitializer(LLVMValueRef);
-void LLVMSetInitializer(LLVMValueRef, LLVMValueRef);
-LLVMValueRef LLVMIsAConstantDataArray(LLVMValueRef);
-LLVMValueRef LLVMIsAConstantAggregateZero(LLVMValueRef);
-LLVMValueRef LLVMGetElementAsConstant(LLVMValueRef, unsigned);
-unsigned long long LLVMConstIntGetZExtValue(LLVMValueRef);
-unsigned LLVMGetArrayLength(LLVMTypeRef);
-LLVMValueRef LLVMAddGlobalInAddressSpace(LLVMModuleRef, LLVMTypeRef, const char *, unsigned);
-void LLVMSetGlobalConstant(LLVMValueRef, int);
-int LLVMGetLinkage(LLVMValueRef);
-void LLVMSetAlignment(LLVMValueRef, unsigned);
-unsigned LLVMGetPointerAddressSpace(LLVMTypeRef);
-LLVMValueRef LLVMConstBitCast(LLVMValueRef, LLVMTypeRef);
-void LLVMSetValueName(LLVMValueRef, const char *);
-}
 extern "C" void mdNodeReplaceOperand(void *node, unsigned index, void *replacement) asm("__ZN4llvm6MDNode18replaceOperandWithEjPNS_8MetadataE");
 extern "C" void *valueAsMetadata(LLVMValueRef value) asm("__ZN4llvm15ValueAsMetadata3getEPNS_5ValueE");
 
@@ -679,18 +541,6 @@ static unsigned fixSamplerStateWords(LLVMModuleRef module, Gen &g) {
 // 0 (a truncation is turned back into an i1 load), stores zero-extend, both volatile so the optimizer doesn't shrink
 // the global again. The i1 global stays, unused and renamed (the plugin keeps pointers to the module's objects across
 // the run, as with its declarations). NVAIR_THREADGROUP_BOOL_FIX=0 turns it off.
-extern "C" {
-LLVMValueRef LLVMGetFirstGlobal(LLVMModuleRef);
-LLVMValueRef LLVMGetNextGlobal(LLVMValueRef);
-LLVMValueRef LLVMIsALoadInst(LLVMValueRef);
-LLVMValueRef LLVMIsAStoreInst(LLVMValueRef);
-LLVMTypeRef LLVMInt8TypeInContext(LLVMContextRef);
-void LLVMSetVolatile(LLVMValueRef, int);
-LLVMUseRef LLVMGetNextUse(LLVMUseRef);
-LLVMValueRef LLVMGetUser(LLVMUseRef);
-LLVMValueRef LLVMBuildLoad(LLVMBuilderRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildStore(LLVMBuilderRef, LLVMValueRef, LLVMValueRef);
-}
 
 static unsigned widenThreadgroupBools(LLVMModuleRef module, Gen &g) {
     LLVMTypeRef i8 = LLVMInt8TypeInContext(g.context);
@@ -738,12 +588,6 @@ static unsigned widenThreadgroupBools(LLVMModuleRef module, Gen &g) {
 // A cube array sample, gather or compare with an index below 0 read another cube than the first (a09, WebGPU CTS cube
 // array cases with negative indices, which ask for the nearest layer): the index is raised to 0 first, with a compare
 // and select (a new air.max declaration would be one the plugin has no body for). NVAIR_CUBE_ARRAY_FIX=0 turns it off.
-extern "C" {
-void LLVMSetOperand(LLVMValueRef, unsigned, LLVMValueRef);
-LLVMValueRef LLVMIsACallInst(LLVMValueRef);
-LLVMValueRef LLVMIsASelectInst(LLVMValueRef);
-int LLVMGetNumOperands(LLVMValueRef);
-}
 
 static unsigned clampCubeArrayIndices(LLVMModuleRef module, Gen &g) {
     static const struct { const char *prefix; unsigned index; } kForms[] = {
@@ -793,11 +637,6 @@ static unsigned clampCubeArrayIndices(LLVMModuleRef module, Gen &g) {
 // reads the same texel as before. A body that isn't exactly that (two size queries at 0, one sample with that sampler)
 // is left alone; one given the level in an earlier run (the plugin runs its pass managers twice) is skipped.
 // NVAIR_CUBE_READ_LEVEL=0 turns it off.
-extern "C" {
-LLVMValueRef LLVMConstIntToPtr(LLVMValueRef, LLVMTypeRef);
-unsigned LLVMCountParams(LLVMValueRef);
-LLVMValueRef LLVMGetCalledValue(LLVMValueRef);
-}
 enum { kOpIntToPtr = 40 };  // LLVM-C's LLVMIntToPtr
 static bool startsWith(const char *s, const char *prefix);
 
@@ -894,9 +733,6 @@ static unsigned fixCubeReadLevels(LLVMModuleRef module, Gen &g) {
 // library body for air.atomic.local.cmpxchg.* lacks the store of the found value into *expected that its
 // air.atomic.global.cmpxchg.* body makes where the exchange fails, and marks the pointer readonly. Each such body gets the
 // store, at the start of its failure block, and loses readonly. NVAIR_LOCAL_CMPXCHG=0 turns it off.
-extern "C" {
-LLVMValueRef LLVMIsAICmpInst(LLVMValueRef);
-}
 enum { kOpBr = 2, kOpStore = 28 };  // LLVM-C's LLVMBr, LLVMStore
 
 static unsigned fixLocalCompareExchange(LLVMModuleRef module, Gen &g) {
@@ -949,12 +785,6 @@ static unsigned fixLocalCompareExchange(LLVMModuleRef module, Gen &g) {
 // threadgroup counter off by multiples of the two values' difference; device atomics alike). Each such operand (a phi,
 // or casts, arithmetic and selects over one) goes through a volatile private slot before the atomic, which the back end
 // can't take for uniform. NVAIR_ATOMIC_JOIN_FIX=0 turns it off.
-extern "C" {
-LLVMValueRef LLVMIsAPHINode(LLVMValueRef);
-LLVMValueRef LLVMIsABinaryOperator(LLVMValueRef);
-LLVMValueRef LLVMIsACastInst(LLVMValueRef);
-LLVMValueRef LLVMBuildAlloca(LLVMBuilderRef, LLVMTypeRef, const char *);
-}
 static bool reachesPhi(LLVMValueRef v, int depth) {
     if (!v || !LLVMIsAInstruction(v)) return false;
     if (LLVMIsAPHINode(v)) return true;
@@ -1045,17 +875,6 @@ static unsigned fixSignedBoolConversions(LLVMModuleRef module, Gen &g) {
 // functions lose anisotropy for these samples). NVAIR_VERTEX_3D_GRADIENT_FIX=0 turns it off. 3D gradients in fragment
 // functions keep the hardware's level, with anisotropy (within 0.11 of the exact level for diagonal gradients, a
 // formula OpenGL allows; deqp's fragment cases pass).
-extern "C" {
-LLVMValueRef LLVMBuildFMul(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildFAdd(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildFSub(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildFDiv(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildFNeg(LLVMBuilderRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildFCmp(LLVMBuilderRef, int, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildPointerCast(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
-LLVMValueRef LLVMConstReal(LLVMTypeRef, double);
-LLVMTypeRef LLVMFloatTypeInContext(LLVMContextRef);
-}
 enum { LLVMRealOGE = 3, LLVMRealOLT = 4 };
 
 struct FloatGen {
@@ -1268,19 +1087,6 @@ static unsigned fixDepthCompareLevels(LLVMModuleRef module, Gen &g) {
 // A 2D comparison with a texel offset keeps it when the offset is a constant (the hardware takes it as an immediate);
 // one with a computed offset is left as it is. The newer front ends' { float, i8 } result gets the comparison in the
 // float. NVAIR_COMPARE_GRADIENT_FIX=0 turns it off.
-extern "C" {
-LLVMValueRef LLVMBuildInsertValue(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, unsigned, const char *);
-LLVMTypeRef LLVMVectorType(LLVMTypeRef, unsigned);
-LLVMTypeRef LLVMPointerType(LLVMTypeRef, unsigned);
-LLVMValueRef LLVMGetCalledValue(LLVMValueRef);
-LLVMValueRef LLVMBuildBitCast(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
-LLVMValueRef LLVMConstNull(LLVMTypeRef);
-LLVMTypeRef LLVMStructGetTypeAtIndex(LLVMTypeRef, unsigned);
-unsigned LLVMCountStructElementTypes(LLVMTypeRef);
-LLVMValueRef LLVMIsAConstantAggregateZero(LLVMValueRef);
-LLVMValueRef LLVMIsAConstantDataVector(LLVMValueRef);
-LLVMValueRef LLVMIsAConstantVector(LLVMValueRef);
-}
 static unsigned fixGradientCompares(LLVMModuleRef module, Gen &g) {
     enum { kStructKind = 10, kPointerKind = 12 };
     LLVMTypeRef f32 = LLVMFloatTypeInContext(g.context), v2 = LLVMVectorType(f32, 2), v3 = LLVMVectorType(f32, 3), v4 = LLVMVectorType(f32, 4);
@@ -1413,14 +1219,6 @@ static unsigned defineCountOfZero(LLVMModuleRef module, Gen &g) {
 // any change to the rest of the adapter (FIXES.md, Known limitations: VEC=1 seeds 2603, 3890 and 4417 and FRAG=1 VEC=1
 // seeds 1089 and 2712 at the end). With the masked loads instead, 2603, 3890 and 1089 are right, n02 still passes, and none
 // of the other seeds that ever failed went wrong. NVAIR_PRIVATE_ARRAY_WORDS=1 brings the word array back.
-extern "C" {
-LLVMValueRef LLVMIsAAllocaInst(LLVMValueRef);
-LLVMTypeRef LLVMGetAllocatedType(LLVMValueRef);
-LLVMValueRef LLVMIsAGetElementPtrInst(LLVMValueRef);
-LLVMValueRef LLVMBuildAlloca(LLVMBuilderRef, LLVMTypeRef, const char *);
-LLVMTypeRef LLVMArrayType(LLVMTypeRef, unsigned);
-LLVMValueRef LLVMBuildGEP(LLVMBuilderRef, LLVMValueRef, LLVMValueRef *, unsigned, const char *);
-}
 
 // Private arrays wrapped in a struct: ANGLE writes GLSL arrays as metal::array<T, N>, a struct holding the array, so such a
 // private array reaches the back end as alloca {[N x T]} with GEPs (s, 0, 0, i), where the C arrays the private-array fixes
@@ -1431,12 +1229,6 @@ LLVMValueRef LLVMBuildGEP(LLVMBuilderRef, LLVMValueRef, LLVMValueRef *, unsigned
 // (s, 0, 0, rest) becomes (a, 0, rest), (s, 0, 0) becomes a, and any other use (lifetime markers, a memcpy, (s, 0)) gets
 // the array's address cast to the struct's pointer type: the same memory. NVAIR_ARRAY_STRUCT_FIX=0 turns it off.
 // Tests: n44, n45, n46 (n26, n02 and n31 with metal::array).
-extern "C" {
-unsigned LLVMCountStructElementTypes(LLVMTypeRef);
-void LLVMGetStructElementTypes(LLVMTypeRef, LLVMTypeRef *);
-void LLVMSetAlignment(LLVMValueRef, unsigned);
-LLVMValueRef LLVMBuildBitCast(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
-}
 
 static unsigned unwrapArrayStructs(LLVMModuleRef module, Gen &g) {
     enum { kStructKind = 10, kArrayKind = 11 };
@@ -1892,20 +1684,6 @@ static unsigned hideNarrowProducts(LLVMModuleRef module, Gen &g) {
 // from the pipeline's reflection, which can't see what the plugin adds. The function is rebuilt with a parameter per
 // texture its atomics use (__nvta_<n>); the old one stays, empty and renamed. Other texture types (1D, 2D arrays, 3D,
 // texture buffers) have no linear form on Kepler and are left as they are. NVAIR_TEXTURE_ATOMICS=0 turns it off.
-extern "C" {
-LLVMValueRef LLVMBuildBitCast(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
-LLVMTypeRef LLVMPointerType(LLVMTypeRef, unsigned);
-LLVMTypeRef LLVMVectorType(LLVMTypeRef, unsigned);
-LLVMValueRef LLVMConstNull(LLVMTypeRef);
-LLVMValueRef LLVMMDStringInContext(LLVMContextRef, const char *, unsigned);
-LLVMValueRef LLVMMDNodeInContext(LLVMContextRef, LLVMValueRef *, unsigned);
-unsigned LLVMCountParams(LLVMValueRef);
-void LLVMRemoveBasicBlockFromParent(LLVMBasicBlockRef);
-int LLVMIsFunctionVarArg(LLVMTypeRef);
-LLVMValueRef LLVMGetCalledValue(LLVMValueRef);
-LLVMBasicBlockRef LLVMGetInstructionParent(LLVMValueRef);
-LLVMValueRef LLVMGetBasicBlockParent(LLVMBasicBlockRef);
-}
 extern "C" void functionCopyAttributesFrom(void *function, const void *source) asm("__ZN4llvm8Function18copyAttributesFromEPKNS_11GlobalValueE");
 extern "C" void basicBlockInsertInto(void *block, void *function, void *before) asm("__ZN4llvm10BasicBlock10insertIntoEPNS_8FunctionEPS0_");
 
@@ -3197,7 +2975,6 @@ static unsigned scalarizeOddVectors(LLVMModuleRef module, Gen &g) {
 // ANGLE writes __asm__("") into every loop body it translates; it arrives as `call void asm sideeffect "", ""()`, a call
 // without a called function, and the plugin reads that function's name (null: the compiler service crashes, as on
 // Intel). The call is dropped. NVAIR_INLINE_ASM_FIX=0 turns it off.
-extern "C" LLVMValueRef LLVMIsAInlineAsm(LLVMValueRef);
 static unsigned dropInlineAsm(LLVMModuleRef module) {
     unsigned dropped = 0;
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
