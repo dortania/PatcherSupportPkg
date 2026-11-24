@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "LLVMC.h"
+#include "LLVM38.h"
 
 enum { LLVMIntEQ = 32, LLVMIntNE, LLVMIntUGT, LLVMIntUGE, LLVMIntULT, LLVMIntULE, LLVMIntSGT, LLVMIntSGE, LLVMIntSLT, LLVMIntSLE };
 enum { LLVMInternalLinkage = 8 };
@@ -390,21 +391,6 @@ static unsigned fixWideInstructions(LLVMModuleRef module, Gen &g) {
 extern "C" void mdNodeReplaceOperand(void *node, unsigned index, void *replacement) asm("__ZN4llvm6MDNode18replaceOperandWithEjPNS_8MetadataE");
 extern "C" void *valueAsMetadata(LLVMValueRef value) asm("__ZN4llvm15ValueAsMetadata3getEPNS_5ValueE");
 
-static std::vector<LLVMValueRef> metadataOperands(LLVMValueRef node) {
-    std::vector<LLVMValueRef> out(node && LLVMIsAMDNode(node) ? LLVMGetMDNodeNumOperands(node) : 0);
-    if (!out.empty()) LLVMGetMDNodeOperands(node, out.data());
-    return out;
-}
-static void *metadataOf(LLVMValueRef value) {  // MetadataAsValue::MD: +0x20 in this LLVM, as LLVMGetMDNodeNumOperands reads it
-    if (!value || !LLVMIsAMDNode(value)) return nullptr;
-    void *md = *(void **)((char *)value + 0x20);
-    return md && *(unsigned *)((char *)md + 8) == LLVMGetMDNodeNumOperands(value) ? md : nullptr;
-}
-static bool isString(LLVMValueRef value, const char *text) {
-    unsigned length = 0;
-    const char *s = value && LLVMIsAMDString(value) ? LLVMGetMDString(value, &length) : nullptr;
-    return s && length == strlen(text) && !memcmp(s, text, length);
-}
 
 static unsigned fixSamplerStateWords(LLVMModuleRef module, Gen &g) {
     enum { kArrayKind = 11 };  // LLVMTypeKind
@@ -2644,22 +2630,6 @@ static unsigned scalarizeOddVectors(LLVMModuleRef module, Gen &g) {
     return (unsigned)ops.size();
 }
 
-// ---- inline asm (IntelAdapter's dropInlineAsm) ----------------------------------------------------------------------
-// ANGLE puts __asm__("") in every loop; the plugin reads the name of the call's absent function and crashes: dropped.
-// NVAIR_INLINE_ASM_FIX. (i81)
-static unsigned dropInlineAsm(LLVMModuleRef module) {
-    unsigned dropped = 0;
-    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
-        for (LLVMBasicBlockRef block = LLVMGetFirstBasicBlock(f); block; block = LLVMGetNextBasicBlock(block))
-            for (LLVMValueRef inst = LLVMGetFirstInstruction(block), next; inst; inst = next) {
-                next = LLVMGetNextInstruction(inst);
-                if (!LLVMIsACallInst(inst) || !LLVMIsAInlineAsm(LLVMGetCalledValue(inst)) || LLVMGetFirstUse(inst)) continue;
-                LLVMInstructionEraseFromParent(inst);
-                dropped++;
-            }
-    return dropped;
-}
-
 // The module fixes, in the order they run (each counts what it rewrote; 0 = nothing to do). A null switch name: the
 // fix reads its own switches. needsInlining: the fix calls bodies made internal and always_inline, inlined afterwards.
 struct ModuleFix {
@@ -2669,7 +2639,7 @@ struct ModuleFix {
     bool needsInlining;
 };
 static const ModuleFix kModuleFixes[] = {
-    {"NVAIR_INLINE_ASM_FIX", [](LLVMModuleRef m, Gen &) { return dropInlineAsm(m); }, "[nvair] %u inline asm call(s) dropped\n", false},
+    {"NVAIR_INLINE_ASM_FIX", [](LLVMModuleRef m, Gen &) { return dropUnusedInlineAsmCalls(m); }, "[nvair] %u inline asm call(s) dropped\n", false},
     {"NVAIR_ARRAY_STRUCT_FIX", unwrapArrayStructs, "[nvair] %u private array(s) in a struct (metal::array) made plain arrays\n", false},  // before the private-array fixes
     {"NVAIR_TEXTURE_ATOMICS", lowerTextureAtomics, "[nvair] %u texture atomic(s) made global atomics on linear texture buffers\n", false},
     {"NVAIR_DEPTH_CHANNELS", fixDepthChannels, nullptr, false},
@@ -2740,23 +2710,6 @@ static int hookedRun(void *self, LLVMModuleRef module) {
 }
 
 // Redirect the plugin's imported pointer to PassManager::run (found by value in its data segments).
-static unsigned redirectPassManager(const mach_header_64 *header, intptr_t slide) {
-    unsigned patched = 0;
-    const char *p = (const char *)(header + 1);
-    for (uint32_t i = 0; i < header->ncmds; i++, p += ((const load_command *)p)->cmdsize) {
-        const segment_command_64 *seg = (const segment_command_64 *)p;
-        if (seg->cmd != LC_SEGMENT_64 || strncmp(seg->segname, "__DATA", 6)) continue;
-        void **start = (void **)(seg->vmaddr + slide), **end = (void **)(seg->vmaddr + slide + seg->vmsize);
-        for (void **slot = start; slot < end; slot++) {
-            if (*slot != (void *)passManagerRun) continue;
-            vm_protect(mach_task_self(), (vm_address_t)slot & ~(vm_address_t)(vm_page_size - 1), vm_page_size, false,
-                       VM_PROT_READ | VM_PROT_WRITE);
-            *slot = (void *)hookedRun;
-            patched++;
-        }
-    }
-    return patched;
-}
 
 static void installIntoPlugin() {
     static bool done;
@@ -2766,7 +2719,8 @@ static void installIntoPlugin() {
         size_t len = name ? strlen(name) : 0, suffix = strlen(kPluginSuffix);
         if (len < suffix || strcmp(name + len - suffix, kPluginSuffix)) continue;
         done = true;
-        unsigned n = redirectPassManager((const mach_header_64 *)_dyld_get_image_header(i), _dyld_get_image_vmaddr_slide(i));
+        unsigned n = redirectImportedPointer((const mach_header_64 *)_dyld_get_image_header(i), _dyld_get_image_vmaddr_slide(i),
+                                             (void *)passManagerRun, (void *)hookedRun);
         if (logging()) fprintf(stderr, "[nvair] %s: %u import(s) redirected\n", name, n);
     }
 }
