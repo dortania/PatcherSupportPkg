@@ -124,7 +124,7 @@ Loaded by the Metal.framework wrapper in `13.2.1-24` and `13.2.1-25` (Tahoe), so
 | — | s42 | The vertex-stage hook took MetalOld's retained render pipeline as unowned, so every pipeline lived until a pool drained. | The owned pipeline is passed through. | — |
 | — | s42 | Pipelines made through items 21, 47 and 58, and Ivy Bridge's depth/stencil states (item 51), were retained once too often and never freed. | The owned objects are passed through. | — |
 
-Not fixed: MoltenVK 1.4.0 and 1.4.1 offer Vulkan subgroups, which Kepler's compiler can't build and which can't be emulated, so Godot's Forward+ renderer fails there; MoltenVK 1.4.2 offers none, and Godot's Mobile renderer works.
+Not fixed: MoltenVK 1.4.0 and 1.4.1 offer Vulkan subgroups, which the Kepler and Intel compilers can't build and which can't be emulated, so Godot's Forward+ renderer fails there; MoltenVK 1.4.2 offers none, and Godot's Mobile renderer works.
 
 ## 2. `AMDTextureAtomics.dylib`
 
