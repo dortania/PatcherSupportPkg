@@ -34,14 +34,7 @@ int main(int argc, char **argv) { @autoreleasepool {
         }
     }
     memset(out.contents, 0xcd, out.length);
-    id<MTLCommandBuffer> cb = [[dev newCommandQueue] commandBuffer];
-    id<MTLComputeCommandEncoder> ce = [cb computeCommandEncoder];
-    [ce setComputePipelineState:ps];
-    [ce setBuffer:in offset:0 atIndex:0];
-    [ce setBuffer:out offset:0 atIndex:1];
-    [ce dispatchThreadgroups:MTLSizeMake(T / 64, 1, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
-    [ce endEncoding];
-    if (!reproRun(cb)) return FAIL(bug, "%s: command buffer failed", name);
+    if (!reproDispatch([dev newCommandQueue], ps, @[in, out], MTLSizeMake(T / 64, 1, 1), MTLSizeMake(64, 1, 1))) return FAIL(bug, "%s: command buffer failed", name);
     const uint32_t *got = out.contents;
     for (int i = 0; i < T; i++) {
         uint32_t a = pairs[i * 2], b = pairs[i * 2 + 1];

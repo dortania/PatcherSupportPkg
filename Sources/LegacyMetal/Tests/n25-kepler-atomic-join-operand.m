@@ -38,15 +38,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     for (int i = 0; i < T * 4; i++) { x ^= x << 13; x ^= x >> 17; x ^= x << 5; input[i] = (i % 7 == 0) ? (x & 0xff) : x; }
     memset(out.contents, 0xcd, out.length);
     memset(counters.contents, 0, counters.length);
-    id<MTLCommandBuffer> cb = [[dev newCommandQueue] commandBuffer];
-    id<MTLComputeCommandEncoder> ce = [cb computeCommandEncoder];
-    [ce setComputePipelineState:ps];
-    [ce setBuffer:in offset:0 atIndex:0];
-    [ce setBuffer:out offset:0 atIndex:1];
-    [ce setBuffer:counters offset:0 atIndex:2];
-    [ce dispatchThreadgroups:MTLSizeMake(T / 64, 1, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
-    [ce endEncoding];
-    if (!reproRun(cb)) return FAIL(bug, "%s: command buffer failed", name);
+    if (!reproDispatch([dev newCommandQueue], ps, @[in, out, counters], MTLSizeMake(T / 64, 1, 1), MTLSizeMake(64, 1, 1))) return FAIL(bug, "%s: command buffer failed", name);
     uint32_t arm = (input[0] < 4 ? 4 : input[0]) & 255, wantDevice[2] = {0, 0};
     for (int group = 0; group < T / 64; group++) {
         uint32_t want[2] = {0, 0};

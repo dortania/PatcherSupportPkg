@@ -38,14 +38,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     for (int i = 0; i < T * 4; i++) { x ^= x << 13; x ^= x >> 17; x ^= x << 5; p[i] = x; }
     for (int t = 0; t < T; t += 8) { p[t * 4] &= ~0xffu; p[t * 4 + 1] &= ~0xff00u; p[t * 4 + 1] &= ~0xffu; }  // zero products
     memset(out.contents, 0xcd, out.length);
-    id<MTLCommandBuffer> cb = [[dev newCommandQueue] commandBuffer];
-    id<MTLComputeCommandEncoder> ce = [cb computeCommandEncoder];
-    [ce setComputePipelineState:ps];
-    [ce setBuffer:in offset:0 atIndex:0];
-    [ce setBuffer:out offset:0 atIndex:1];
-    [ce dispatchThreadgroups:MTLSizeMake(T / 64, 1, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
-    [ce endEncoding];
-    if (!reproRun(cb)) return FAIL(bug, "%s: command buffer failed", name);
+    if (!reproDispatch([dev newCommandQueue], ps, @[in, out], MTLSizeMake(T / 64, 1, 1), MTLSizeMake(64, 1, 1))) return FAIL(bug, "%s: command buffer failed", name);
     const uint32_t *r = out.contents;
     static const char *what[8] = {"subsat(~0u, byte * 213)", "subsat(~0u, (y & 0xff00) * 3)", "subsat(INT_MAX, byte * 213)", "subsat(int z, byte * 213)",
                                   "addsat(int z, byte * 213)", "addsat(byte * 213, int w)", "uint2 subsat, lane x", "uint2 subsat, lane y"};

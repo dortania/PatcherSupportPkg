@@ -34,14 +34,7 @@ int main(int argc, char **argv) { @autoreleasepool {
         uint32_t *p = in.contents, x = 4480u * 2654435761u + 12345u;
         for (int i = 0; i < T * 4; i++) { x ^= x << 13; x ^= x >> 17; x ^= x << 5; p[i] = x; }
         memset(out.contents, 0xcd, out.length);
-        id<MTLCommandBuffer> cb = [[dev newCommandQueue] commandBuffer];
-        id<MTLComputeCommandEncoder> ce = [cb computeCommandEncoder];
-        [ce setComputePipelineState:ps];
-        [ce setBuffer:in offset:0 atIndex:0];
-        [ce setBuffer:out offset:0 atIndex:1];
-        [ce dispatchThreadgroups:MTLSizeMake(T / 64, 1, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
-        [ce endEncoding];
-        if (!reproRun(cb)) return FAIL(bug, "%s: command buffer failed", name);
+        if (!reproDispatch([dev newCommandQueue], ps, @[in, out], MTLSizeMake(T / 64, 1, 1), MTLSizeMake(64, 1, 1))) return FAIL(bug, "%s: command buffer failed", name);
         const uint32_t *r = out.contents;
         for (int t = 0; t < T; t++) {
             uint32_t vx = p[t * 4], vy = p[t * 4 + 1], vz = p[t * 4 + 2], vw = p[t * 4 + 3];

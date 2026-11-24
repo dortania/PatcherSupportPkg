@@ -102,6 +102,17 @@ __attribute__((unused)) static id<MTLComputePipelineState> reproComputePipeline(
     if (!ps) *why = [NSString stringWithFormat:@"%@: pipeline: %@", dev.name, err.localizedDescription];
     return ps;
 }
+// Dispatches ps on `queue` with `buffers` bound at indices 0, 1, ... and waits; NO if the command buffer failed.
+__attribute__((unused)) static BOOL reproDispatch(id<MTLCommandQueue> queue, id<MTLComputePipelineState> ps, NSArray<id<MTLBuffer>> *buffers,
+                                                  MTLSize groups, MTLSize perGroup) {
+    id<MTLCommandBuffer> cb = [queue commandBuffer];
+    id<MTLComputeCommandEncoder> ce = [cb computeCommandEncoder];
+    [ce setComputePipelineState:ps];
+    for (NSUInteger i = 0; i < buffers.count; i++) [ce setBuffer:buffers[i] offset:0 atIndex:i];
+    [ce dispatchThreadgroups:groups threadsPerThreadgroup:perGroup];
+    [ce endEncoding];
+    return reproRun(cb);
+}
 // Runs a fuzz kernel k(in [[buffer(0)]], out [[buffer(1)]]) as mslfuzz2.py does (fast math off, the inputs of seed 1,
 // 256 threads in groups of 64) and checks each thread's 8 words, as FNV-1a, against the CPU reference's `want`.
 __attribute__((unused)) static int reproFuzzKernel(const char *bug, id<MTLDevice> dev, NSString *src, const uint32_t want[256],
@@ -118,14 +129,8 @@ __attribute__((unused)) static int reproFuzzKernel(const char *bug, id<MTLDevice
     uint32_t x = 1u * 2654435761u + 12345u;  // the fuzzer's inputs, seed 1
     for (int i = 0; i < T * 4; i++) { x ^= x << 13; x ^= x >> 17; x ^= x << 5; ((uint32_t *)in.contents)[i] = (i % 7 == 0) ? (x & 0xff) : x; }
     memset(out.contents, 0xcd, out.length);
-    id<MTLCommandBuffer> cb = [[dev newCommandQueue] commandBuffer];
-    id<MTLComputeCommandEncoder> ce = [cb computeCommandEncoder];
-    [ce setComputePipelineState:ps];
-    [ce setBuffer:in offset:0 atIndex:0];
-    [ce setBuffer:out offset:0 atIndex:1];
-    [ce dispatchThreadgroups:MTLSizeMake(T / 64, 1, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
-    [ce endEncoding];
-    if (!reproRun(cb)) return FAIL(bug, "%s: command buffer failed", name);
+    if (!reproDispatch([dev newCommandQueue], ps, @[in, out], MTLSizeMake(T / 64, 1, 1), MTLSizeMake(64, 1, 1)))
+        return FAIL(bug, "%s: command buffer failed", name);
     const uint32_t *o = out.contents;
     int wrong = 0, first = -1;
     for (int t = 0; t < T; t++) {
