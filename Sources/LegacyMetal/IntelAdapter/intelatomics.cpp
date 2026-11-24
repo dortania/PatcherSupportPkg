@@ -3876,6 +3876,56 @@ static unsigned widenThreadgroupBools(LLVMModuleRef module) {
     return fixed;
 }
 
+// ---- threadgroup atomics that only ever hold constants -------------------------------------------------------------
+// The back end turns relaxed threadgroup atomics into plain loads and stores before its GlobalOpt, which then shrinks an
+// atomic only ever stored constants to an i1 it can't store ("Cannot select ... Constant:i1", i86). A volatile read of it
+// at the start of each function that stores to it keeps GlobalOpt off it; the atomics themselves stay.
+
+enum { kThreadgroupAddressSpace = 3, kMaxConstantExprDepth = 8 };
+static LLVMValueRef threadgroupGlobalUnder(LLVMValueRef pointer) {  // the global a constant GEP / bitcast chain starts at
+    for (int depth = 0; pointer && depth < kMaxConstantExprDepth; depth++) {
+        if (LLVMIsAGlobalVariable(pointer))
+            return LLVMGetPointerAddressSpace(LLVMTypeOf(pointer)) == kThreadgroupAddressSpace ? pointer : nullptr;
+        if (!LLVMIsAConstantExpr(pointer) || LLVMGetNumOperands(pointer) < 1) return nullptr;
+        pointer = LLVMGetOperand(pointer, 0);
+    }
+    return nullptr;
+}
+static bool isThreadgroupAtomicStore(LLVMValueRef inst) {
+    static const char kAtomicStorePrefix[] = "air.atomic.local.store.";
+    LLVMValueRef callee = LLVMIsACallInst(inst) ? LLVMGetCalledValue(inst) : nullptr;
+    const char *name = callee ? LLVMGetValueName(callee) : nullptr;
+    return name && !strncmp(name, kAtomicStorePrefix, sizeof kAtomicStorePrefix - 1);
+}
+struct ThreadgroupAtomicStore { LLVMValueRef global, function, pointer; };
+static unsigned pinConstantThreadgroupAtomics(LLVMModuleRef module) {
+    if (disabled("INTEL_THREADGROUP_ATOMIC_FIX")) return 0;
+    std::map<LLVMValueRef, bool> storesOnlyConstants;
+    std::vector<ThreadgroupAtomicStore> stores;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                if (!isThreadgroupAtomicStore(inst)) continue;
+                LLVMValueRef pointer = LLVMGetOperand(inst, 0), global = threadgroupGlobalUnder(pointer);
+                if (!global || !LLVMIsAConstantExpr(pointer)) continue;
+                bool constant = LLVMIsAConstantInt(LLVMGetOperand(inst, 1)) != nullptr;
+                auto known = storesOnlyConstants.find(global);
+                storesOnlyConstants[global] = (known == storesOnlyConstants.end() || known->second) && constant;
+                stores.push_back({global, f, pointer});
+            }
+    LLVMBuilderRef b = nullptr;
+    std::set<std::pair<LLVMValueRef, LLVMValueRef>> pinned;  // (function, global)
+    for (const ThreadgroupAtomicStore &store : stores) {
+        if (!storesOnlyConstants[store.global] || !pinned.insert({store.function, store.global}).second) continue;
+        LLVMValueRef first = LLVMGetFirstInstruction(LLVMGetFirstBasicBlock(store.function));
+        if (!b) b = LLVMCreateBuilderInContext(LLVMGetModuleContext(module));
+        LLVMPositionBuilderBefore(b, first);
+        LLVMSetVolatile(LLVMBuildLoad(b, store.pointer, ""), 1);
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return (unsigned)pinned.size();
+}
+
 // ---- over-aligned byte accesses to private memory ------------------------------------------------------------------
 // A byte or halfword load from private memory aligned to 4 or more (the first small field of a 16-byte-aligned struct
 // in a dynamically indexed private array) has no instruction pattern in the back end and aborts MTLCompilerService
@@ -5526,6 +5576,7 @@ static const ModuleFix kModuleFixes[] = {
     {fixSamplerStateWords, "%u constexpr sampler(s) in the [2 x i64] form rewritten as i64"},
     {remapComputeLevels, "%u explicit level(s) in a compute kernel remapped for the sampler's mip blend"},
     {widenThreadgroupBools, "%u threadgroup bool(s) widened to i8"},
+    {pinConstantThreadgroupAtomics, "%u threadgroup atomic(s) holding only constants read once, volatile"},
     {wordPrivateSubwords, "%u aligned byte/halfword access(es) to private memory done on the 32-bit word"},
     {fixFloat3Inputs, "%u float3 vertex/fragment input(s) read through fmax"},
     {foldNumSamples, "%u get_num_samples() call(s) replaced by the pipeline's sample count"},
