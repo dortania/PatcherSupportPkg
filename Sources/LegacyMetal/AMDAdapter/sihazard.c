@@ -1,26 +1,15 @@
-// sihazard.c: inserts the wait states the 12.5 AMD shader compiler (ATIRadeonX4000SCLib) leaves out on Southern
-// Islands (GCN1: Tahiti, Pitcairn, Cape Verde, Oland) between a scalar ALU write of an SGPR and an s_buffer_load that
-// reads it as its descriptor (or SGPR offset).
-//
-// The hardware reads the old register value, so the load uses a half-written descriptor. LLVM's AMDGPU backend works
-// around the same undocumented SI behaviour with 4 wait states (GCNHazardRecognizer::checkSMRDHazards). The 2022 compiler
-// hits it whenever a shader loads through a pointer that came from memory: Metal argument buffers (ANGLE puts every
-// WebGL uniform block in one), where each pointer is expanded into a buffer descriptor with s_mov/s_movk right before
-// the load. With a stale num_records the load is out of range and returns 0 (deqp ubo.random.basic_types.19:
-// `s_movk_i32 s2, 0xffff` immediately followed by `s_buffer_load_dwordx4 s[16:19], s[0:3], 0x40`).
-//
-// siFixBufferLoadHazards() decodes the SI machine code, inserts `s_nop` before each such load and moves the branch
-// offsets past the inserted instructions. Code it can't decode completely is left unchanged.
-//
-// siBypassL1ForWrittenResources(): a wavefront that stores to memory and reads the same address back can
-// get the OLD value from SI's vector L1 cache (a load that misses while the write-through store is still on its way to
-// L2 fills the line with stale data, and later loads hit it). The 12.5 compiler keeps private structs in scratch memory
-// and does exactly that: Blender EEVEE's G-buffer writer stores normal_len (buffer_store_byte ... offset:638) and loads
-// it straight back; wavefronts that read the stale 0 wrote the glass thickness over the surface normal (black 8x8
-// blocks behind glass and water). Setting GLC (bypass L1) on every load from a buffer that the shader also writes -
-// same descriptor SGPRs as a store or atomic - and on image loads in shaders that store to images fixes it
-// (shader/object_info: 6/6 broken -> 0/6, identical to the reference). Read-only data (constants, vertex fetch,
-// sampled textures) keeps its L1 caching.
+// sihazard.c: two fixes for Southern Islands (GCN1: Tahiti, Pitcairn, Cape Verde, Oland) machine code from the 12.5 AMD
+// shader compiler (ATIRadeonX4000SCLib).
+// siFixBufferLoadHazards(): SC leaves out the wait states between a scalar ALU write of an SGPR and an s_buffer_load
+// that reads it as its descriptor or offset; the hardware then reads the old value, so loads through Metal argument
+// buffers (ANGLE's WebGL uniform blocks) used a half-written descriptor and returned 0 (a02). LLVM's AMDGPU back end
+// inserts 4 wait states for the same undocumented behaviour (GCNHazardRecognizer::checkSMRDHazards); here s_nops go in
+// and branch offsets move past them. Code it can't decode completely is left unchanged.
+// siBypassL1ForWrittenResources(): a wavefront that stores to memory and reads the same address back can get the old
+// value from SI's vector L1 (a miss while the write-through store is on its way to L2 fills the line with stale data);
+// SC's scratch-memory private structs do exactly that (Blender EEVEE's G-buffer writer: black blocks behind glass;
+// a03). GLC (bypass L1) is set on loads from buffers the shader also writes (the same descriptor SGPRs as a store or
+// atomic) and on image loads in shaders that store to images; read-only data keeps its L1 caching.
 #include "sihazard.h"
 #include <stdlib.h>
 #include <string.h>

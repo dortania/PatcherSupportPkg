@@ -1,77 +1,22 @@
-// texatomic.dylib: MSL texture atomics (Metal 3.1) for the 12.5 AMD shader compiler (AMDShared + libAMDIL902 +
-// ATIRadeonX4000SCLib) that OCLP installs for GCN GPUs on macOS 14+.
+// AMDTextureAtomics.dylib: fixes for the 12.5 AMD shader compiler (AMDShared + libAMDIL902 + ATIRadeonX4000SCLib) that
+// OCLP installs for GCN GPUs on macOS 14+. It works in three places:
+//   - ILPluginHelper::compileShader, on the LLVM 5 AIR module before libAMDIL902 lowers it: the module fixes
+//     (kModuleFixes), and texture atomics, which libAMDIL902 drops: each becomes a texture write whose lod operand
+//     carries a tag (0x7A7000xx) naming the operation;
+//   - SCCompileShader, on the AMD IL before SC compiles it: tagged stores become uav_<op>_ext_direct atomics, plus the
+//     IL fixes;
+//   - after SCCompileShader, Southern Islands only: the wait states and L1 bypasses SC leaves out (sihazard.c).
+// The LLVM 5 internals it pokes are pinned to libAMDIL902 by UUID and __TEXT hash. FIXES.md section 2 lists the fixes,
+// each with the switch that turns it off and its test.
 //
-// libAMDIL902 doesn't know the air.atomic_*_explicit_texture_* intrinsics and silently drops the calls, but the GCN
-// hardware and the shader compiler support typed-image atomics. Two steps:
-//   1. Before ILPluginHelper::compileShader: retarget each texture-atomic call whose result is unused to the texture
-//      write intrinsic with the same arguments (texture, coords, [array,] value, i32, i32) and replace its memory-order
-//      operand (always 0, the write's lod operand) with a tag 0x7A7000xx naming the atomic operation. The backend then
-//      emits the texture's descriptor, coordinates and value followed by `uav_store_mip_ext_direct... lodreg`.
-//   2. Before SCCompileShader: disassemble the IL tokens, turn every store whose lod register was loaded with a tag
-//      into `uav_<op>_ext_direct_view(typed)...` (the same operands minus mem0 and the lod), reassemble.
-// LLVM 5.0.2 internals (Twine, Use, Value layouts) are pinned to the stock libAMDIL902 by its SHA-256.
-//
-// Second job, Southern Islands GPUs only (GCN1, SC family 110): after SCCompileShader, insert the wait states SC leaves
-// out between a scalar write of a buffer descriptor and the s_buffer_load reading it (sihazard.c). Without them, loads
-// through Metal argument buffers can read a half-written descriptor and return 0. Also set GLC (bypass the vector L1)
-// on loads from memory the same shader writes: SI can return a stale value for a load right after a store to the same
-// address (Blender EEVEE's scratch-memory G-buffer writer -> black blocks behind glass). AMD_SI_HAZARD_FIX=0 turns
-// both off, AMD_SI_L1_FIX=0 only the L1 bypass.
-//
-// Third job: keep compares false for NaN under fast math, as Apple's current compilers do (keepCompareNaNs; Blender
-// EEVEE's volume lighting depends on it). AMD_NAN_FIX=0 turns it off.
-//
-// Fourth job: compute ldexp on half as float (ldexpHalfAsFloat): libAMDIL902 crashes on half3 and returns wrong values
-// for the other widths. AMD_LDEXP_FIX=0 turns it off.
-//
-// Fifth job: make gather on integer textures read the right texels (shiftIntegerGatherCoords, normalizeFetch4).
-// AMD_GATHER_FIX=0 turns it off.
-//
-// Sixth job: clamp cube array indices (clampCubeArrayIndices): GCN reads the wrong face for one below 0.
-// AMD_CUBE_ARRAY_FIX=0 turns it off.
-//
-// Seventh job: load threadgroup bools as bytes (loadThreadgroupBoolsAsBytes): libAMDIL902 reads them as false.
-// AMD_LDS_BOOL_FIX=0 turns it off.
-//
-// Eighth job, with the 12.5-24 Bronze driver on Sequoia only (Darwin 24, no MetalOld): read multisample textures without their
-// FMASK (identityFmaskLookups). There the driver leaves the FMASK descriptor table (API slot 13) unset for render
-// stages, so a fragment shader's texture2d_ms read loads its FMASK descriptor from GPU address 0 and the GPU resets;
-// compute reads get a stale table and wrong samples. Both encoders expand compressed MSAA textures when they're bound
-// (BronzeCompressionMgr_SubmitCondExpand), so the identity sample map is right. AMD_FMASK_FIX=0 turns it off,
-// AMD_FMASK_FIX=1 turns it on with any driver.
-//
-// Ninth job: constexpr samplers from newer front ends (twoWordSamplerStates): libraries built for macOS 15 or later (AIR 2.7)
-// store each one as a [2 x i64] constant, which libAMDIL902 can't read, so the sampler comes out as 0.
-// AMD_SAMPLER_STATE_FIX=0 turns it off.
-//
-// Tenth job: unpack normalized integers exactly (exactUnpackNorm): libAMDIL902's unpack_snorm2x16_to_float is up to
-// 6 ulp off, unpack_unorm2x16_to_float 2. AMD_UNPACK_FIX=0 turns it off.
-//
-// Eleventh job: private arrays written at variable indexes (privateArrayIndexedStores): SC's M0-relative register
-// writes lose updates across branches and loop iterations; such arrays are accessed at constant indexes only.
-// AMD_PRIVATE_STORE_FIX=0 turns it off.
-//
-// Twelfth job: unsigned saturating adds and subtracts as plain arithmetic (plainSaturatingAddSub): SC turns
-// `usub_sat x, 0` into a float clamp. AMD_SATURATE_FIX=0 turns it off.
-//
-// Thirteenth job: rotates as shifts (rotatesAsShifts): SC folds a constant rotate by a multiple of 8 the wrong way.
-// AMD_ROTATE_FIX=0 turns it off.
-//
-// Sixteenth job: 8- and 16-bit divisions, remainders, right shifts and comparisons done in 32 bits
-// (narrowUnsignedConstants): libAMDIL902 neither clears nor extends the upper bits of narrow values. AMD_NARROW_CONSTANT_FIX=0
-// turns it off.
-//
-// Fifteenth job: single-bit tests as bit-field extracts (singleBitTests): libAMDIL902 drops the `& 1` of `(x & 1) != 0`
-// once the comparison is or'ed with another one. AMD_BIT_TEST_FIX=0 turns it off.
-//
-// Fourteenth job (AMD IL, before SC): loops whose last if/else ends both branches with break + continue get a single
-// exit (singleLoopExits): SC loses track of which threads take the else branch. AMD_LOOP_EXIT_FIX=0 turns it off.
-//
-// Installed: AMDShared.bundle/Contents/MacOS/AMDTextureAtomics.dylib, loaded by a weak load command in AMDShared.
-// Test use (in-process compiling): DYLD_INSERT_LIBRARIES=Tests/tools/localcc.dylib:build/texatomic.dylib <app>
-//   TEXATOMIC_LOG=1   log what is rewritten
-//   TEXATOMIC_DUMP_DIR=<dir>   write each module (as received and after these jobs) and its IL there; it also works in
-//   MTLCompilerService (__XPC_TEXATOMIC_DUMP_DIR, with __XPC_DYLD_LIBRARY_PATH naming a folder with AMDShared and this library)
+// Installed as AMDShared.bundle/Contents/MacOS/AMDTextureAtomics.dylib, a weak dependency of AMDShared. Tests compile
+// in-process with it from build/ (Tests/verify.sh, Tests/fuzz/gpu.sh BUILD=1: Tests/tools/localcc.dylib).
+//   TEXATOMIC_LOG=1             log each rewrite
+//   TEXATOMIC_DUMP_DIR=<dir>    each module (as received and after the fixes) and its IL; from MTLCompilerService
+//                               through __XPC_TEXATOMIC_DUMP_DIR, with __XPC_DYLD_LIBRARY_PATH naming a folder with
+//                               AMDShared and this library
+//   TEXATOMIC_DUMP_MODULE=1, TEXATOMIC_DUMP=1   the module / the IL on stderr
+//   TEXATOMIC_LLVM_ARGS="..."   libAMDIL902's own LLVM options (e.g. -print-after-all)
 #include "sihazard.h"
 #include <CommonCrypto/CommonDigest.h>
 #include <dlfcn.h>
@@ -100,16 +45,17 @@ extern void *operatorNewArray(unsigned long) asm("__Znam");  // AMDShared frees 
 extern void operatorDeleteArray(void *) asm("__ZdaPv");
 
 static bool logging(void) { return getenv("TEXATOMIC_LOG") != NULL; }
+// A fix is on unless its switch is set to 0.
+static bool disabled(const char *setting) {
+    const char *value = getenv(setting);
+    return value && !strcmp(value, "0");
+}
 
 // ---- pinned LLVM 5 API inside libAMDIL902 -----------------------------------------------------------------------
-// Stock 12.5 libAMDIL902, and the same file patched by libAMDIL902/make_parser_fix.py (metadata parser fixes 1-3, the
-// GEP Select insertion-point fix 4, the struct map fix 5 and the BFE combine guard 6), which leave symbols and data
-// layouts unchanged. Tahoe's 12.5-GCN-25 copy is the stock file with OCLP's stub in initializeIABArgTypeSet; its
-// patched builds keep the stub instead of fix 1.
-// Identified independently of the code signature (Dortania's release signing, PatcherSupportPkg's ad-hoc copies and
-// local re-signing all differ): the LC_UUID plus the SHA-256 of the __TEXT segment's file bytes after the load
-// commands, which covers the code, the constants and the header padding the patches use (tools/textpin.py computes
-// the same values).
+// The stock 12.5 libAMDIL902, the same file patched by libAMDIL902/make_parser_fix.py (fixes 1-6, which keep symbols
+// and data layouts), and Tahoe's 12.5-GCN-25 copy (OCLP's stub in initializeIABArgTypeSet; its patched builds keep the
+// stub instead of fix 1). Identified by the LC_UUID and the SHA-256 of the __TEXT segment's bytes after the load
+// commands, independent of the code signature (tools/textpin.py computes the same values).
 static const unsigned char kProviderUUID[16] = {
     0xd5, 0xcf, 0x00, 0x07, 0x89, 0x35, 0x31, 0x93, 0xb3, 0xf1, 0xd0, 0xb3, 0xdd, 0x0d, 0xcc, 0x91};
 static const unsigned char kProviderTextHashes[10][32] = {{
@@ -350,14 +296,20 @@ static bool resolveAPI(void) {
 // FunctionType: ContainedTys @16, [0] = return type. GlobalValue::ValueType @24.
 enum { kUseSize = 24, kOpcodeFSub = 14, kOpcodeFDiv = 19, kOpcodeZExt = 37, kOpcodeUIToFP = 41, kOpcodeFPTrunc = 43, kOpcodeFPExt = 44, kOpcodeCall = 54, kOpcodeICmp = 51, kPredicateEQ = 32, kPredicateNE = 33 };
 static void *typeOf(void *value) { return *(void **)value; }
-static void *firstUse(void *value) { return *(void **)((char *)value + 8); }
-static void *nextUse(void *use) { return *(void **)((char *)use + 8); }
+enum { kValueUseList = 8, kUseNext = 8, kUsePrev = 16 };
+static void *firstUse(void *value) { return *(void **)((char *)value + kValueUseList); }
+static void *nextUse(void *use) { return *(void **)((char *)use + kUseNext); }
 static unsigned char subclassID(void *value) { return *(unsigned char *)((char *)value + 16); }
 static uint32_t operandBits(void *user) { return *(uint32_t *)((char *)user + 20); }
 static unsigned numOperands(void *user) { return operandBits(user) & 0x0FFFFFFF; }
 static bool hungOffUses(void *user) { return operandBits(user) & (1u << 30); }
 static void *operand(void *user, unsigned i) { return *(void **)((char *)user - (numOperands(user) - i) * kUseSize); }
 static void *returnType(void *functionType) { return (*(void ***)((char *)functionType + 16))[0]; }
+static void *globalValueType(void *global) { return *(void **)((char *)global + 24); }
+static uint16_t subclassData(void *value) { return *(uint16_t *)((char *)value + 0x12); }
+static bool hasLazyArguments(void *function) { return *(unsigned char *)((char *)function + 0x12) & 1; }  // SubclassData bit 0
+// byte 17: HasValueHandle:1, SubclassOptionalData:7, whose bit 0 is NoUnsignedWrap
+static bool hasNoUnsignedWrap(void *value) { return (*(unsigned char *)((char *)value + 17) >> 1) & 1; }
 static const Twine kNoName = {NULL, NULL, kTwineEmpty, kTwineEmpty};
 
 // ---- step 1: AIR -------------------------------------------------------------------------------------------------
@@ -477,7 +429,7 @@ static void lowerFetch(Lowering *L, void *atomic, unsigned op, const char *dim, 
             if (isCall(list[i], atomic, isArray ? 7 : 6)) lowerFetchCall(L, list[i], op, dim, sign, isArray);
         return;
     }
-    void *atomicType = *(void **)((char *)atomic + 24);
+    void *atomicType = globalValueType(atomic);
     for (unsigned i = 0; i < 256 && list[i]; i++) {
         void *call = list[i];
         unsigned n = isArray ? 7 : 6;
@@ -648,17 +600,11 @@ static unsigned lowerTextureAtomics(void *module) {
 }
 
 // ---- step 1b: AIR, texture/sampler loads through escaped pointers --------------------------------------------------
-// MSL texture and sampler array arguments are byval arrays of handles in AIR. libAMDIL902 places them in the
-// argument table (user data API slots 6/7, global memory) and lowers a handle load from a GEP of such an argument to
-// a global load, but a handle load through any other private pointer to a scratch load. When the address of an
-// element is stored to memory and loaded back, the backend loses the connection: ANGLE keeps `thread texture2d *`
-// and `thread sampler *` pairs in an array of structs and indexes it at runtime (WebGL sampler arrays sampled in a
-// loop), so `*env[i].texture` reads scratch at the argument table's global address, gets garbage, and the sample
-// returns 0 or, through a garbage descriptor, hangs the GPU (WebGL conformance glsl/bugs/sampler-array-using-
-// loop-index). Fix: every handle load whose pointer doesn't lead back to an argument or an alloca becomes
-//   v = load p;  v = select(p == &a[k], load &a[k], v)  for each element k of each byval handle array a of that type
-// in the same function, so the element loads take the argument-table path; the original load stays as the fallback
-// for pointers into private memory. AMD_HANDLE_FIX=0 turns it off.
+// libAMDIL902 lowers a texture / sampler handle load from a GEP of a byval handle array argument to an argument-table
+// load, but a load through any other pointer to a scratch load: ANGLE's sampler arrays indexed in loops read garbage,
+// sampled 0 or hung the GPU (a05). Each handle load whose pointer doesn't lead back to an argument or alloca gets
+// `v = select(p == &a[k], load &a[k], v)` for each element k of each byval handle array of that type; the original
+// load stays as the fallback for private pointers.
 // LLVM 5 list layouts in the pinned library (Function::args, BasicBlock::insertInto, Function::eraseFromParent):
 // Module::FunctionList sentinel @0x18; Function: Parent @0x28, list node @0x38, BasicBlocks sentinel @0x48,
 // Arguments @0x58, NumArgs @0x60 (Argument = 40 bytes; lazily built while SubclassData bit 0 @0x12 is set);
@@ -677,8 +623,9 @@ static void *prevNode(void *node) { return *(void **)node; }  // ilist_node_base
 static unsigned typeID(void *type) { return *(unsigned char *)((char *)type + 8); }
 static void *elementType(void *type) { return (*(void ***)((char *)type + 16))[0]; }  // pointee / array element
 static uint64_t arrayLength(void *type) { return *(uint64_t *)((char *)type + 32); }
+static uint32_t typeSubclassData(void *type) { return *(uint32_t *)((char *)type + 8) >> 8; }  // the bits above TypeID
 static bool isInstruction(void *value, unsigned opcode) { return subclassID(value) == kValueInstruction + opcode; }
-static bool isVolatileLoad(void *load) { return *(uint16_t *)((char *)load + 0x12) & 1; }  // LoadInst: SubclassData bit 0
+static bool isVolatileLoad(void *load) { return subclassData(load) & 1; }
 
 // Texture or sampler handle: a pointer to %struct._texture_*, %struct._depth_* or %struct._sampler_t.
 static bool isHandleType(void *type) {
@@ -690,20 +637,25 @@ static bool isHandleType(void *type) {
 }
 
 // Plain store of `value` into the operand slot `i` of a newly created user (the slot's Val is still null):
-// Use::set + Value::addUse (Use: Val @0, Next @8, Prev @16 with 2 tag bits; Value::UseList @8).
+// Use::set + Value::addUse (Prev carries 2 tag bits).
 static void setNewOperand(void *user, unsigned i, void *value) {
     char *use = (char *)user - (numOperands(user) - i) * kUseSize;
-    void **list = (void **)((char *)value + 8);
+    void **list = (void **)((char *)value + kValueUseList);
     *(void **)use = value;
     void *next = *list;
-    *(void **)(use + 8) = next;
+    *(void **)(use + kUseNext) = next;
     if (next) {
-        uintptr_t *prev = (uintptr_t *)((char *)next + 16);
-        *prev = (uintptr_t)(use + 8) | (*prev & 3);
+        uintptr_t *prev = (uintptr_t *)((char *)next + kUsePrev);
+        *prev = (uintptr_t)(use + kUseNext) | (*prev & 3);
     }
-    uintptr_t *prev = (uintptr_t *)(use + 16);
+    uintptr_t *prev = (uintptr_t *)(use + kUsePrev);
     *prev = (uintptr_t)list | (*prev & 3);
     *list = use;
+}
+
+static void setGEPElementTypes(char *gep, void *sourceElementType, void *resultElementType) {
+    *(void **)(gep + 0x38) = sourceElementType;
+    *(void **)(gep + 0x40) = resultElementType;
 }
 
 static void *createInstruction(void *type, unsigned opcode, void **operands, unsigned count, size_t size) {
@@ -735,7 +687,7 @@ static bool knownBase(void *pointer, int depth) {
 typedef struct { void *argument, *arrayType, *handleType; unsigned length; } HandleArray;
 
 static unsigned fixFunctionHandleLoads(void *function, void *i64) {
-    if (*(unsigned char *)((char *)function + 0x12) & 1) api.buildLazyArguments(function);
+    if (hasLazyArguments(function)) api.buildLazyArguments(function);
     char *args = *(char **)((char *)function + kFunctionArgs);
     size_t numArgs = *(size_t *)((char *)function + kFunctionNumArgs);
     HandleArray arrays[kMaxHandleArrays];
@@ -788,8 +740,7 @@ static unsigned fixFunctionHandleLoads(void *function, void *i64) {
             for (unsigned k = 0; k < arrays[a].length; k++) {
                 void *gepOperands[3] = {arrays[a].argument, zero, api.constantIntGet(i64, k, false)};
                 char *element = createInstruction(pointerType, kOpcodeGEP, gepOperands, 3, 128);
-                *(void **)(element + 0x38) = arrays[a].arrayType;  // SourceElementType
-                *(void **)(element + 0x40) = handle;               // ResultElementType
+                setGEPElementTypes(element, arrays[a].arrayType, handle);
                 api.insertAfter(element, position);
                 void *same = api.cmpCreate(kOpcodeICmp, kPredicateEQ, pointer, element, &kNoName, NULL);
                 api.insertAfter(same, element);
@@ -809,8 +760,7 @@ static unsigned fixFunctionHandleLoads(void *function, void *i64) {
 }
 
 static unsigned fixEscapedHandleLoads(void *module) {
-    const char *setting = getenv("AMD_HANDLE_FIX");
-    if ((setting && !strcmp(setting, "0")) || !api.hasByValAttr || !api.structName || !api.buildLazyArguments) return 0;
+    if (disabled("AMD_HANDLE_FIX") || !api.hasByValAttr || !api.structName || !api.buildLazyArguments) return 0;
     char *functions = (char *)module + kModuleFunctions;
     void *i64 = NULL;
     unsigned fixed = 0;
@@ -827,15 +777,11 @@ static unsigned fixEscapedHandleLoads(void *module) {
     return fixed;
 }
 
-// Metal compiles with fast math by default, which marks every function "no-nans-fp-math"="true". LLVM 5's instruction
-// selection takes that as NoNaNsFPMath and treats compares as NaN-free, e.g. it branches on `x <= t` for `if (x > t)`,
-// so a NaN takes the other branch. Apple's current compilers keep compares false for NaN, and shaders rely on that:
-// Blender EEVEE's safe_normalize() of 0/0 returned NaN instead of its fallback, which made the world sun's direction
-// NaN and dropped all volume lighting. Setting the attribute to "false" keeps compares IEEE; the other fast-math
-// options stay. AMD_NAN_FIX=0 turns this off.
+// Metal's fast math marks functions "no-nans-fp-math"="true", and LLVM 5's instruction selection then treats compares
+// as NaN-free (`x <= t` for `if (x > t)`), but Apple's current compilers keep compares false for NaN and shaders rely
+// on it (Blender EEVEE's volume lighting; a06). The attribute is set to "false"; the other fast-math options stay.
 static unsigned keepCompareNaNs(void *module) {
-    const char *setting = getenv("AMD_NAN_FIX");
-    if ((setting && !strcmp(setting, "0")) || !api.addFnAttr) return 0;
+    if (disabled("AMD_NAN_FIX") || !api.addFnAttr) return 0;
     static const char kKind[] = "no-nans-fp-math", kValue[] = "false";
     char *functions = (char *)module + kModuleFunctions;
     unsigned changed = 0;
@@ -850,15 +796,11 @@ static unsigned keepCompareNaNs(void *module) {
     return changed;
 }
 
-// ldexp on half is broken in libAMDIL902 at every width (WebGPU CTS builtin,ldexp:f16). half, half2 and half4 reach a
-// runtime.amdil.builtin routine that returns wrong values (0, inf). half3 crashes MTLCompilerService: PrepareIR renames
-// air.ldexp.* to air.fast_ldexp.*, then IntrinsicsActionWidenVec3 looks up the vec4 form by name, and its table has no
-// air.fast_ldexp.v4f16, so lookupName returns 0 and getDeclaration reads out of bounds. The float forms work, and every
-// half is exact as a float, so compute there. The half declarations have to go too: a vec3 one is widened even with no
-// calls left. AMD_LDEXP_FIX=0 turns this off.
+// libAMDIL902's ldexp on half returns wrong values (0, inf), and half3 crashes MTLCompilerService (its vec3 widening
+// table has no air.fast_ldexp.v4f16) (a07). Every half is exact as a float, so it's computed as float; the half
+// declarations go too, because a vec3 one is widened even with no calls left.
 static unsigned ldexpHalfAsFloat(void *module) {
-    const char *setting = getenv("AMD_LDEXP_FIX");
-    if ((setting && !strcmp(setting, "0")) || !api.eraseFunction || !api.getFloatTy) return 0;
+    if (disabled("AMD_LDEXP_FIX") || !api.eraseFunction || !api.getFloatTy) return 0;
     static const struct { const char *half, *wide; unsigned width; } kForms[] = {
         {"air.ldexp.f16", "air.ldexp.f32", 1},
         {"air.ldexp.v2f16", "air.ldexp.v2f32", 2},
@@ -896,15 +838,12 @@ static unsigned ldexpHalfAsFloat(void *module) {
 }
 
 static bool gatherFixEnabled(void) {
-    const char *setting = getenv("AMD_GATHER_FIX");
-    return !(setting && !strcmp(setting, "0"));
+    return !disabled("AMD_GATHER_FIX");
 }
 
-// Gather on integer textures (WebGPU CTS builtin,textureGather) has two problems. libAMDIL902 asks fetch4 for unnormalized
-// coordinates but passes the shader's normalized ones, so every gather returns the texels at the texture's corner;
-// normalizeFetch4 turns that back. And GCN hardware forces nearest filtering on integer formats, which leaves gather half
-// a texel off (AMD's open-source drivers subtract 0.5 / size for the same reason), so do that here. It takes normalized
-// coordinates because unnormalized ones can't wrap. Cube textures aren't covered: their faces need another shift.
+// Gather on integer textures: libAMDIL902 asks fetch4 for unnormalized coordinates but passes normalized ones (every
+// gather returned the corner texels; normalizeFetch4 turns that back), and GCN forces nearest filtering on integer
+// formats, which leaves gather half a texel off (AMD's open drivers subtract 0.5 / size too) (a08). Not cube textures.
 static unsigned shiftIntegerGatherCoords(void *module) {
     if (!gatherFixEnabled() || !api.getFloatTy || !api.binaryCreate || !api.constantFP) return 0;
     static const char *const kDimensions[] = {"2d", "2d_array"}, *const kTypes[] = {"s.v4i32", "u.v4i32", "s.v4i16", "u.v4i16"};
@@ -944,14 +883,11 @@ static unsigned shiftIntegerGatherCoords(void *module) {
     return shifted;
 }
 
-// Gather on integer cube textures: the forced nearest filtering above hits cube textures too (every point but the texel
-// centres reads the footprint one texel over), and no shifted coordinate fixes it, because the footprint of a point near
-// a face edge takes texels from the neighbouring face and integer fetch4 doesn't cross edges. So such a gather becomes 4
-// nearest samples at level 0, at the centres of the footprint's texels, found in face space with Metal's (Vulkan's)
-// face selection: the two coordinates across the face snap to the 2x2 texel centres around the point, and a centre past
-// an edge moves onto the neighbouring face (that coordinate clamped to +-1, the major one scaled by 1 - 1 / size: the
-// centre of the neighbour's edge row; extending the face plane instead would land near texel boundaries on big faces).
-// Corners, where gather is undefined, give one of the three texels. AMD_CUBE_GATHER_FIX=0 turns it off. Test: a17.
+// Gather on integer cube textures: the forced nearest filtering shifts the footprint too, and no shifted coordinate
+// fixes it near face edges, where integer fetch4 doesn't cross to the neighbouring face (a17). Such a gather becomes 4
+// nearest samples at level 0 at the footprint's texel centres, found in face space with Metal's face selection: a
+// centre past an edge moves onto the neighbouring face's edge row. Corners, where gather is undefined, give one of the
+// three texels.
 enum { kOpcodeFAdd = 12, kCubeFMul = 16, kOpcodeAndBits = 26, kOpcodeOrBits = 27, kOpcodeFCmp = 52, kOpcodeExtractValue = 62,
        kPredicateOGT = 2, kPredicateOGE = 3, kPredicateOLT = 4 };
 
@@ -979,8 +915,7 @@ static void *cgSet(CubeEmit *e, void *vector, void *value, unsigned index) {
 }
 
 static unsigned cubeIntegerGathers(void *module) {
-    const char *setting = getenv("AMD_CUBE_GATHER_FIX");
-    if (!gatherFixEnabled() || (setting && !strcmp(setting, "0")) || !api.getFloatTy || !api.binaryCreate ||
+    if (!gatherFixEnabled() || disabled("AMD_CUBE_GATHER_FIX") || !api.getFloatTy || !api.binaryCreate ||
         !api.constantFP || !api.selectInit || !api.extractValueCreate || !api.getInt1Ty)
         return 0;
     static const char *const kTypes[] = {"s.v4i32", "u.v4i32", "s.v4i16", "u.v4i16"};
@@ -1086,17 +1021,12 @@ static unsigned cubeIntegerGathers(void *module) {
     return rewritten;
 }
 
-// Float atomics (MSL 3.0 atomic_float in device memory: fetch_add, fetch_sub, exchange, compare_exchange) are a Mac2
-// feature this GPU claims, but libAMDIL902 has no float forms and stops with an internal error (wgpu float32_atomic).
-// Exchange and compare-exchange are the same on the bits, so they become the 32-bit integer calls through bitcasts. GCN1
-// has no float atomic add, so fetch_add / fetch_sub become a compare-exchange loop: the current value (a plain load
-// first, then what each failed compare-exchange read, which comes from L2, not a stale L1) plus the operand, swapped in
-// if the value hasn't changed meanwhile; the result is the value it was added to. AMD_FLOAT_ATOMIC_FIX=0 turns this off.
-// Test: a19.
+// Float atomics (MSL 3.0 atomic_float) are a Mac2 feature this GPU claims, but libAMDIL902 has no float forms and stops
+// with an internal error (a19). Exchange and compare-exchange become the integer calls through bitcasts; fetch_add and
+// fetch_sub (GCN1 has no float atomic add) a compare-exchange loop, whose retries read the current value from L2.
 static void *firstInstruction(void *block) { return (char *)nextNode((char *)block + kBlockInstructions) - kInstructionNode; }
 static unsigned floatAtomicsAsInteger(void *module) {
-    const char *setting = getenv("AMD_FLOAT_ATOMIC_FIX");
-    if ((setting && !strcmp(setting, "0")) || !api.splitBasicBlock || !api.branchInit || !api.condBranchInit || !api.allocaInit ||
+    if (disabled("AMD_FLOAT_ATOMIC_FIX") || !api.splitBasicBlock || !api.branchInit || !api.condBranchInit || !api.allocaInit ||
         !api.binaryCreate || !api.castCreate || !api.getFloatTy || !api.getInt1Ty)
         return 0;
     static const char *const kSpaces[] = {"global", "local"};
@@ -1175,13 +1105,10 @@ static unsigned floatAtomicsAsInteger(void *module) {
     return rewritten;
 }
 
-// A cube array index below 0 reads the wrong face: the hardware clamps the slice, 8 * index + face, so -1 reads the first
-// face of the first cube whatever the direction. (2D arrays and indices past the end come out right.) WebKit passes WGSL's
-// array index on as it is, and WebGPU asks for the nearest layer (CTS builtin,textureSample and the others, every cube array
-// case with a negative index), so raise the index to 0 first.
+// A cube array index below 0 reads the wrong face: the hardware clamps the slice, 8 * index + face, so -1 reads the
+// first face of the first cube. WebGPU asks for the nearest layer, so the index is raised to 0 first (a09).
 static unsigned clampCubeArrayIndices(void *module) {
-    const char *setting = getenv("AMD_CUBE_ARRAY_FIX");
-    if (setting && !strcmp(setting, "0")) return 0;
+    if (disabled("AMD_CUBE_ARRAY_FIX")) return 0;
     static const struct { const char *name; unsigned index; } kForms[] = {
         {"air.sample_texture_cube_array", 3},
         {"air.sample_texture_cube_array_grad", 3},
@@ -1224,16 +1151,11 @@ static unsigned clampCubeArrayIndices(void *module) {
     return clamped;
 }
 
-// LLVM shrinks a threadgroup variable that only ever holds two values to an i1 global, and libAMDIL902 then miscompiles zext
-// of its load: `iand load, r` with r holding whatever 0 it last materialized, so the variable always reads as false (WebGPU CTS
-// builtin,workgroupUniformLoad:types, type="bool", in Safari). Its stores write the byte as 0 or 0xFF, so load the byte and
-// compare it with 0. libAMDIL902 runs the same shrinking itself, after this, on a variable the front end left a byte (a
-// threadgroup bool set and read between barriers, found by differential fuzzing): every load of a scalar threadgroup
-// variable is made volatile, which stops LLVM's global optimizer from touching the variable. AMD_LDS_BOOL_FIX=0 turns
-// this off.
+// LLVM shrinks a two-valued threadgroup variable to an i1 global, and libAMDIL902 miscompiles zext of its load, so it
+// always reads false (a10). Its stores write 0 / 0xFF, so the byte is loaded and compared with 0; and every load of a
+// scalar threadgroup variable is made volatile, which keeps libAMDIL902's own later shrinking off it.
 static unsigned loadThreadgroupBoolsAsBytes(void *module) {
-    const char *setting = getenv("AMD_LDS_BOOL_FIX");
-    if ((setting && !strcmp(setting, "0")) || !api.getInt1Ty || !api.getInt8Ty) return 0;
+    if (disabled("AMD_LDS_BOOL_FIX") || !api.getInt1Ty || !api.getInt8Ty) return 0;
     enum { kAddressSpaceThreadgroup = 3, kMaxLoads = 256 };
     void *loads[kMaxLoads];
     unsigned numLoads = 0;
@@ -1285,16 +1207,12 @@ static unsigned loadThreadgroupBoolsAsBytes(void *module) {
     return numLoads;
 }
 
-// libAMDIL902's air.unpack.snorm2x16 / unorm2x16 come out up to 6 / 2 ulp off in every shader stage (all 65536 values on
-// the R9 M370X); GLSL ES 3.0 (and dEQP shaderpackingfunction, in WebGL 2) allows 1, and the Iris Pro stays within it.
-// Each call becomes the arithmetic the specification describes: each half sign- or zero-extended, converted to float and
-// multiplied by the float 1 / 32767 (1 / 65535), the signed one clamped to -1 by raising -32768 to -32767 first. That's
-// within 1 ulp of the exact quotient for every value. The 4x8 forms are already within 1 ulp and stay as they are.
-// AMD_UNPACK_FIX=0 turns this off.
+// libAMDIL902's air.unpack.snorm2x16 / unorm2x16 are up to 6 / 2 ulp off; GLSL ES 3.0 allows 1 (a12). Each call
+// becomes the specification's arithmetic: each half extended, converted and multiplied by 1 / 32767 (1 / 65535), the
+// signed one clamped by raising -32768 to -32767 first. The 4x8 forms are within 1 ulp already.
 enum { kOpcodeFMul = 16, kOpcodeShl = 23, kOpcodeLShr = 24, kOpcodeAShr = 25, kOpcodeAnd = 26, kOpcodeSIToFP = 42 };
 static unsigned exactUnpackNorm(void *module) {
-    const char *setting = getenv("AMD_UNPACK_FIX");
-    if ((setting && !strcmp(setting, "0")) || !api.getFloatTy || !api.binaryCreate || !api.constantFP) return 0;
+    if (disabled("AMD_UNPACK_FIX") || !api.getFloatTy || !api.binaryCreate || !api.constantFP) return 0;
     static const struct { const char *name; unsigned fields, bits; bool isSigned; } kForms[] = {
         {"air.unpack.snorm2x16.v2f32", 2, 16, true},
         {"air.unpack.unorm2x16.v2f32", 2, 16, false},
@@ -1344,20 +1262,11 @@ static unsigned exactUnpackNorm(void *module) {
     return rewritten;
 }
 
-// SC (ATIRadeonX4000SCLib) keeps small private arrays in VGPRs: constant indexes become plain register writes, variable
-// ones M0-relative writes (v_movreld in a loop over the lanes' distinct indexes). Its handling of those writes loses
-// updates, found by differential fuzzing against a CPU reference (the IL is right, SC's output isn't):
-//   - `if (c) p[2] = a; else p[i] = b; p[j] = 1;` leaves p[2] as it was: SC drops the whole first branch;
-//   - `for (...) { p[i] += 1; p[j] = 1; }` loses the first write from the second iteration on.
-// A select between two element pointers counts as a variable index. Arrays of up to 32 scalars or vectors get each
-// variable-index store rewritten as one conditional store per element, `p[k] = i == k ? v : p[k]`, so SC only sees
-// constant-index writes, and each variable-index load of the same arrays as a chain of selects, `v = i == k ? p[k] : v`:
-// with the loads left indexed, SC merges them across the constant-index stores between them once a loop is unrolled
-// (`for (...) { p[k & 7] = a; s ^= p[i]; }` with k known: four of five loads read one value). Arrays only read at
-// variable indexes (lookup tables) stay as they are. MSL's metal::array, which Chromium's ANGLE writes for every GLSL
-// array, is a struct around the array (its element pointers have one index more): handled the same way, it lost updates
-// the same way before (ANGLE-style fuzzing: `for (...) { inout(p[i]); p[1] = g; }` applied the update twice, not 3 times).
-// AMD_PRIVATE_STORE_FIX=0 turns this off.
+// SC keeps small private arrays in VGPRs and loses updates in the M0-relative writes it uses for variable indexes,
+// across branches and loop iterations (a13; the IL is right). In arrays of up to 32 scalars or vectors (metal::array's
+// too, as ANGLE writes them) each variable-index store becomes one conditional store per element,
+// `p[k] = i == k ? v : p[k]`, and each variable-index load a chain of selects (left indexed, SC merged them across the
+// constant-index stores). A select between element pointers counts as a variable index. Read-only arrays stay.
 enum { kOpcodeStore = 31, kMaxArrayLength = 32, kMaxIndexed = 64, kAllocaAllocatedType = 0x38, kGEPSourceType = 0x38 };
 typedef struct { void *access, *array; } IndexedAccess;
 
@@ -1428,8 +1337,7 @@ static void *storedArrayElement(void *pointer, void *i64, void **index, int *con
 }
 
 static unsigned privateArrayIndexedStores(void *module) {
-    const char *setting = getenv("AMD_PRIVATE_STORE_FIX");
-    if ((setting && !strcmp(setting, "0")) || !api.gepCreate || !api.selectInit) return 0;
+    if (disabled("AMD_PRIVATE_STORE_FIX") || !api.gepCreate || !api.selectInit) return 0;
     unsigned rewritten = 0;
     char *functions = (char *)module + kModuleFunctions;
     for (char *fn = nextNode(functions); fn != functions; fn = nextNode(fn)) {
@@ -1520,16 +1428,12 @@ static unsigned privateArrayIndexedStores(void *module) {
     return rewritten;
 }
 
-// SC lowers the AMD IL's usub_sat / uadd_sat right only while the second operand isn't known to be 0: `usub_sat x, 0`
-// (and uadd_sat) becomes `v_max_f32 x, x clamp`, a float clamp to [0, 1], so subsat(x, z) with z = 0 in the shader gives
-// 0 for x >= 0x80000000 and 0x3f800000 for other large x (found by differential fuzzing; the signed forms and madsat are
-// right). Every air.add_sat.u / air.sub_sat.u call becomes the arithmetic, with nothing left for SC to fold:
+// SC lowers usub_sat / uadd_sat whose second operand it knows is 0 to a float clamp, `v_max_f32 x, x clamp` (a14).
+// Every air.add_sat.u / sub_sat.u call becomes arithmetic with nothing for SC to fold:
 //   add_sat(a, b) = a + b < a ? ~0 : a + b        sub_sat(a, b) = a < b ? 0 : a - b
-// Scalars and vectors of 8 to 64 bits. AMD_SATURATE_FIX=0 turns this off.
 enum { kOpcodeAdd = 11, kOpcodeSub = 13, kPredicateULT = 36, kTypeInteger = 11, kTypeVector = 16 };
 static unsigned plainSaturatingAddSub(void *module) {
-    const char *setting = getenv("AMD_SATURATE_FIX");
-    if ((setting && !strcmp(setting, "0")) || !api.binaryCreate || !api.selectInit || !api.splat) return 0;
+    if (disabled("AMD_SATURATE_FIX") || !api.binaryCreate || !api.selectInit || !api.splat) return 0;
     static const char *const kOps[] = {"add", "sub"}, *const kTypes[] = {"i8", "i16", "i32", "i64"}, *const kWidths[] = {"", "v2", "v3", "v4"};
     unsigned rewritten = 0;
     for (int o = 0; o < 2; o++)
@@ -1563,20 +1467,14 @@ static unsigned plainSaturatingAddSub(void *module) {
     return rewritten;
 }
 
-// libAMDIL902 lowers air.rotate to the IL's bitalign (a rotate right by width - n), which is right; but when SC knows both
-// operands it folds bitalign by a multiple of 8 the other way: rotate(37u, 24u) is 0x2500 and rotate(37u, 8u) 0x25000000
-// (found by differential fuzzing; other amounts, and either operand at run time, are right). Every air.rotate call
-// becomes (x << m) | (x >> ((width - m) & (width - 1))) with m = n & (width - 1): LLVM folds that itself when it can,
-// and otherwise the back end still selects a rotate. Scalars and vectors of 8 to 64 bits. Rotates that can't meet the
-// bug stay calls: of 0 or all ones, or by a constant that isn't a nonzero multiple of 8. Made shifts, those folded to
-// constants that libAMDIL902's own optimizer went on with: `x % (ulong(rotate(~0u, 1u << 31)) << 32 | 1)` became a
-// compare of x with 0xffffffff00000000, an i64 setcc that no select pattern takes (seed 5463; stock files compile it).
-// AMD_ROTATE_FIX=0 turns this off.
+// SC folds bitalign by a multiple of 8 the wrong way when it knows both operands: rotate(37u, 24u) came out 0x2500
+// (a14). air.rotate becomes (x << m) | (x >> ((width - m) & (width - 1))), m = n & (width - 1). Rotates that can't meet
+// the bug stay calls (of 0 or ~0, or by a constant that isn't a nonzero multiple of 8): as shifts folded to constants
+// they could leave an i64 setcc that no select pattern takes.
 enum { kOpcodeOr = 27 };
 static bool constantIntValue(void *v, uint64_t *value);
 static unsigned rotatesAsShifts(void *module) {
-    const char *setting = getenv("AMD_ROTATE_FIX");
-    if ((setting && !strcmp(setting, "0")) || !api.binaryCreate || !api.splat) return 0;
+    if (disabled("AMD_ROTATE_FIX") || !api.binaryCreate || !api.splat) return 0;
     static const char *const kTypes[] = {"i8", "i16", "i32", "i64"}, *const kWidths[] = {"", "v2", "v3", "v4"};
     static const unsigned kBits[] = {8, 16, 32, 64};
     unsigned rewritten = 0;
@@ -1615,29 +1513,12 @@ static unsigned rotatesAsShifts(void *module) {
     return rewritten;
 }
 
-// `(x & 2^k) != 0` / `== 0` (32-bit) as `extract_bits(x, k, 1) != 0` / `== 0`: libAMDIL902 treats booleans as 0 / 1
-// when it simplifies (it turns `(x & 1) != 0` into `x & 1`, then drops the `& 1` where only bit 0 is said to matter, as
-// in an or with another boolean), but its branches test the whole register: `odd(x) || c` branches on `x | c`, so code
-// guarded by "x even and not c" runs only for x == 0 (found by differential fuzzing, in loops and branches; 9 of the 16
-// random kernels the AMD compiler still got wrong). Its optimizer turns a shift back into the and, but doesn't look into
-// air.extract_bits (the IL's ubit_extract), so the comparison stays a comparison. In `((x & 1) & y) != 0` with y not a
-// constant (the front end's form of `((x * x) << s) & 3`), the x & 1 goes through extract_bits instead (a loop exit came
-// out wrong for x = 2 mod 4). A mask built from a loop counter becomes a single bit only when libAMDIL902 unrolls the loop
-// (`for (i < 3) { while (...) { v ^= ...; if ((i & v & 3) == 0) break; } }` never left the inner loop for i = 1), so
-// such ands, `== 0` / `!= 0`, go through extract_bits as two 16-bit halves. The front end also tests a phi of such ands
-// when it moves a test out of an if (`phi [x & 1], [y & 1] != 0`); once the other tests of x & 1 are extracts, the phi is
-// the and's only user and libAMDIL902 drops the `& 1` inside it (found by fuzzing, seed 2245: right with stock files and
-// with this job off), so the phi's ands go through extract_bits too. 8- and 16-bit single-bit ands (the front end makes
-// `(x ^ y) & 1` of shorts, from `(short2 ...) & 3` with bit 1 known zero) meet the same bug: the loop exit tested `(x ^ y)
-// & 0xffff` (seed 1932, stock files too), so they go through extract_bits of the zero-extended value, truncated back.
-// The constant mask may be either operand: constantMinMax folds `min(1u, c) & y` to `1 & y` in place (seed 2286).
-// A switch on low bits, `switch (x & 3)` (or on the zext of an 8- or 16-bit one), meets it in the lowering's bit tests
-// once a loop is unrolled and one bit is all that varies: `for (i < 3) switch ((i & 2) | (y & 1))` took the wrong case
-// (seed 4273, stock files too), so such switch values are extract_bits(x, 0, w) instead. A single bit compared with
-// another 0 / 1 value meets it too: `(uint(bool(1u & v)) % (select(i, 65536u, (i & 2) != 0) | 1u)) == uint(!(a > b))`
-// in an unrolled loop is `(v & 1) == bool` in its last pass, and the `& 1` was dropped (seed 3010, stock files too),
-// so in `x == b` / `x != b` with b a bool, the `y & 1` in x (directly or under an unsigned division, remainder or
-// right shift) goes through extract_bits(y, 0, 1). AMD_BIT_TEST_FIX=0 turns this off. Tests a15, a25, a31.
+// libAMDIL902 treats booleans as 0 / 1 when it simplifies (`(x & 1) != 0` becomes `x & 1`, whose `& 1` it then drops
+// where only bit 0 is said to matter), but its branches test the whole register: `odd(x) || c` branched on `x | c`
+// (a15, a25, a31). Its optimizer doesn't look into air.extract_bits, so single-bit tests go through it: `(x & 2^k)`
+// against 0; `((x & 1) & y) != 0`; masks from a loop counter, which become one bit once a loop is unrolled (as two
+// 16-bit halves); phis of such ands; 8- and 16-bit single-bit ands (zero-extended); switches on low bits
+// (`extract_bits(x, 0, w)`); and a single bit compared with a bool. The constant mask may be either operand.
 enum { kValueConstantInt = 18, kOpcodeICmpPredicateMask = 0x3f };
 static bool containsCounter(void *v, int depth);  // below, with the opcodes it needs
 static bool singleBitPhi(void *v, void *i32, unsigned *bit);
@@ -1645,10 +1526,14 @@ static void *narrowSingleBit(void *masked, void *i32, void *extract, void *extra
 static bool maskedSwitch(void *term, void *i32, void **x, unsigned *bits);
 static bool bitAgainstBool(void *cmp, void *i32, void **user, void **bitAnd);
 static void *anyOperand(void *user, unsigned i);
+// ConstantInt's APInt: BitWidth @0x20, the value @0x18 (inline up to 64 bits)
+static unsigned apIntBitWidth(void *constantInt) { return *(uint32_t *)((char *)constantInt + 0x20); }
+static uint64_t apIntInlineValue(void *constantInt) { return *(uint64_t *)((char *)constantInt + 0x18); }
+static unsigned icmpPredicate(void *icmp) { return subclassData(icmp) & kOpcodeICmpPredicateMask; }
 static bool constantIntValue(void *v, uint64_t *value) {
     if (subclassID(v) != kValueConstantInt || typeID(typeOf(v)) != kTypeInteger) return false;
-    if (*(uint32_t *)((char *)v + 0x20) > 64) return false;  // APInt BitWidth @0x20, VAL @0x18 (inline up to 64 bits)
-    *value = *(uint64_t *)((char *)v + 0x18);
+    if (apIntBitWidth(v) > 64) return false;
+    *value = apIntInlineValue(v);
     return true;
 }
 static unsigned singleBitTestsAsExtracts(void *module, void *function, void *i32) {
@@ -1660,7 +1545,7 @@ static unsigned singleBitTestsAsExtracts(void *module, void *function, void *i32
         for (char *in = nextNode(insts); in != insts; in = nextNode(in)) {
             char *inst = in - kInstructionNode;
             if (!isInstruction(inst, kOpcodeICmp) || hungOffUses(inst) || numOperands(inst) != 2) continue;
-            unsigned predicate = *(uint16_t *)(inst + 0x12) & kOpcodeICmpPredicateMask;
+            unsigned predicate = icmpPredicate(inst);
             uint64_t zero, mask;
             void *masked = operand(inst, 0);
             unsigned bit;
@@ -1785,21 +1670,13 @@ static unsigned singleBitTestsAsExtracts(void *module, void *function, void *i32
     return rewritten;
 }
 
-// A vector reinterpreted with narrower lanes (`as_type<uchar4>(ushort2 v)`, or the bitcast the front end itself makes
-// when only the low bytes of a ushort2's lanes are used, as in `uchar(vf(a & b))`) comes out with the other byte of lane 1
-// still in the register of its narrow lanes 2 and 3: libAMDIL902 doesn't shift and mask them into place. Stored into a
-// uchar array the compiler keeps in registers (4 elements packed into one), those bits land in the neighbouring elements
-// (found by differential fuzzing with narrow vectors; the bytes of lane 0 come out right). So each such bitcast of an
-// integer vector to one with narrower integer lanes becomes a vector built lane by lane: the wide lane extracted,
-// shifted and truncated, which store right (the shifts then go through narrowUnsignedConstants).
-// libAMDIL902's DAG combiner makes the same bitcast out of a plain `trunc (extractelement v, k)` with k >= 1 (a single-use
-// lane of a ushort2 from a call such as max, cut to a byte): once type legalization has changed anything in the block (a
-// uchar2 comparison there is enough), it folds the pair into `extractelement (bitcast v to <4 x i8>), 2k`, whose byte comes
-// out of the wrong bits of lane k (bits 16-23 for byte 2), so a stored byte reads 0 (found by differential fuzzing with
-// narrow vectors, seed 1868). So lanes of wide lane 1 and up, here and in such truncations, go through air.extract_bits,
-// which the combiner doesn't look into. AMD_BITCAST_LANE_FIX=0 turns this off. Tests: a18, a29.
+// libAMDIL902 doesn't shift and mask the lanes of a vector bitcast to narrower integer lanes (`as_type<uchar4>(ushort2)`)
+// into place, so lane 1's other byte leaked into neighbouring elements (a18); such bitcasts are built lane by lane. Its
+// DAG combiner also makes that bitcast out of `trunc (extractelement v, k)` with k >= 1 and reads the wrong bits (a29),
+// so lanes of wide lane 1 and up go through air.extract_bits, which the combiner doesn't look into.
 enum { kOpcodeExtractElement = 59, kLaneOpTrunc = 36 };
-static unsigned intBits(void *type) { return *(uint32_t *)((char *)type + 8) >> 8; }  // IntegerType width: Type SubclassData
+static unsigned intBits(void *type) { return typeSubclassData(type); }
+static unsigned pointerAddressSpace(void *pointerType) { return typeSubclassData(pointerType); }
 // `trunc (extractelement v, k)` to a narrower integer (not a bool), k a constant >= 1, v a vector of integers up to 32 bits.
 static bool laneTrunc(void *cut) {
     void *lane = operand(cut, 0), *narrow = typeOf(cut);
@@ -1817,8 +1694,7 @@ static void *laneBits(void *extract, void *extractType, void *lane, unsigned off
     return createCall(extract, extractType, args, 3, before);
 }
 static unsigned bitcastLaneExtracts(void *module) {
-    const char *setting = getenv("AMD_BITCAST_LANE_FIX");
-    if ((setting && !strcmp(setting, "0")) || !api.binaryCreate || !api.castCreate || !api.undefGet) return 0;
+    if (disabled("AMD_BITCAST_LANE_FIX") || !api.binaryCreate || !api.castCreate || !api.undefGet) return 0;
     enum { kMax = 512 };
     void *found[kMax], *truncs[kMax];
     unsigned count = 0, numTruncs = 0, rewritten = 0;
@@ -1886,26 +1762,17 @@ static unsigned bitcastLaneExtracts(void *module) {
     return rewritten;
 }
 
-// The front end narrows 32-bit integer code to i8 / i16 when the values fit (`136u / (c[1] | 1u)` with c a uchar array
-// becomes `udiv i8 -120, %c`). libAMDIL902 keeps such values in 32-bit registers without clearing or extending their
-// upper bits: it widens a narrow constant by sign extension (the IL divides 0xFFFFFF88 by the zero-extended divisor),
-// and a narrow value computed by 32-bit operations and truncated (`uchar(~x)`, kept in a register once job 11 has made
-// a uchar array registers) goes into the division as it is. Operations whose result depends on those upper bits come
-// out wrong (found by differential fuzzing; a uchar4 lane holding uchar(~x) divides wrong too). Each udiv / urem / sdiv
-// / srem / lshr / ashr and each comparison on i8 / i16 scalars and 2- to 4-element vectors is done in i32 instead:
-// scalar constants zero- or sign-extended as the operation needs, other operands through air.extract_bits (zero-
-// extending, or sign-extending for the signed operations; the optimizer can't see through it and narrow back), the
-// result truncated. AMD_NARROW_CONSTANT_FIX=0 turns this off.
+// The front end narrows 32-bit integer code to i8 / i16, and libAMDIL902 keeps such values in 32-bit registers without
+// clearing or extending their upper bits (it sign-extends narrow constants), so divisions, shifts and comparisons that
+// depend on them came out wrong (a16). Each udiv / urem / sdiv / srem / lshr / ashr and comparison on i8 / i16 scalars
+// and 2- to 4-lane vectors is done in i32: constants extended, other operands through air.extract_bits (which the
+// optimizer can't narrow back), the result truncated.
 enum { kOpcodeUDiv = 17, kOpcodeSDiv = 18, kOpcodeURem = 20, kOpcodeSRem = 21, kOpcodeTrunc = 36, kPredicateUGT = 34,
        kPredicateULE = 37, kPredicateSGT = 38, kPredicateSLE = 41 };
-// A narrow (i8 / i16) value the back end holds exactly, nothing above its width: constants below the top bit (the back
-// end sign-extends immediates: uchar 136 becomes -120), arguments, loads from memory (not private arrays, which live
-// in registers with whatever a truncation left there), lanes of
-// such vectors, zext, add / mul / shl that can't wrap (nuw), lshr / udiv / urem of an exact value, and / or / xor of
-// exact values (and: either), phis and selects of exact values. What remains (trunc, sub, add without nuw, not, ...)
-// can carry the garbage this job is for. Exact operands compare and divide right natively: rewriting them anyway keeps
-// loop counters from being seen (the opaque extract_bits hides trip counts), and Apple's MPS kernels in Geekbench came
-// out wrong and many times slower that way (ushort counters with `i == 4` exits, ushort2 thread positions).
+// A narrow (i8 / i16) value the back end holds exactly, nothing above its width: constants below the top bit,
+// arguments, loads (not from private arrays), lanes of such vectors, zext, nuw add / mul / shl, lshr / udiv / urem of
+// an exact value, and / or / xor of exact values (and: either), phis and selects of exact values. Those compare and
+// divide right natively; rewriting them anyway hid loop trip counts (Apple's MPS kernels came out wrong and slower).
 enum { kOpcodeExtractElementValue = 59, kOpcodePHI = 53, kOpcodeOr2 = 27, kOpcodeXor2 = 28, kOpcodeMul2 = 15 };
 static void *anyOperand(void *user, unsigned i) {  // fixed or hung-off (phi) operands
     if (!hungOffUses(user)) return operand(user, i);
@@ -1962,7 +1829,7 @@ static bool singleBitPhi(void *v, void *i32, unsigned *bit) {  // singleBitTests
         for (void *use = firstUse(v); use; use = nextUse(use)) {
             void *user = api.getUser(use);
             uint64_t zero;
-            unsigned predicate = isInstruction(user, kOpcodeICmp) ? *(uint16_t *)((char *)user + 0x12) & kOpcodeICmpPredicateMask : 0;
+            unsigned predicate = isInstruction(user, kOpcodeICmp) ? icmpPredicate(user) : 0;
             if ((predicate != kPredicateEQ && predicate != kPredicateNE) || operand(user, 0) != v ||
                 !constantIntValue(operand(user, 1), &zero) || zero)
                 return false;
@@ -1978,11 +1845,11 @@ static bool exactNarrow(void *v, void **stack, int depth) {
     if (id == kValueArgument) return true;
     if (isInstruction(v, kOpcodeZExt)) return true;
     if (isInstruction(v, kOpcodeLoad))  // memory loads zero-extend; private arrays live in registers, garbage included
-        return (*(uint32_t *)((char *)typeOf(operand(v, 0)) + 8) >> 8) != 0;  // PointerType address space: SubclassData
+        return pointerAddressSpace(typeOf(operand(v, 0))) != 0;
     for (int d = 0; d < depth; d++) if (stack[d] == v) return true;  // a cycle through phis: the other inputs decide
     stack[depth] = v;
     unsigned n = numOperands(v);
-    bool nuw = (*(unsigned char *)((char *)v + 17) >> 1) & 1;  // byte 17: HasValueHandle:1, SubclassOptionalData:7 (bit 0 there: NoUnsignedWrap)
+    bool nuw = hasNoUnsignedWrap(v);
     if (isInstruction(v, kOpcodeExtractElementValue)) return exactNarrow(operand(v, 0), stack, depth + 1);
     if ((isInstruction(v, kOpcodeAdd) || isInstruction(v, kOpcodeMul2) || isInstruction(v, kOpcodeShl)) && nuw)
         return exactNarrow(operand(v, 0), stack, depth + 1) && exactNarrow(operand(v, 1), stack, depth + 1);
@@ -2000,14 +1867,9 @@ static bool exactNarrow(void *v, void **stack, int depth) {
     return false;
 }
 
-static bool disabledSetting(const char *name) {
-    const char *setting = getenv(name);
-    return setting && !strcmp(setting, "0");
-}
 
 static unsigned narrowUnsignedConstants(void *module) {
-    const char *setting = getenv("AMD_NARROW_CONSTANT_FIX");
-    if ((setting && !strcmp(setting, "0")) || !api.binaryCreate || !api.castCreate || !api.functionTypeGet || !api.getOrInsertFunction ||
+    if (disabled("AMD_NARROW_CONSTANT_FIX") || !api.binaryCreate || !api.castCreate || !api.functionTypeGet || !api.getOrInsertFunction ||
         !api.vectorTypeGet)
         return 0;
     enum { kMax = 512 };
@@ -2036,11 +1898,11 @@ static unsigned narrowUnsignedConstants(void *module) {
                     element = elementType(type);
                 }
                 if (typeID(element) != kTypeInteger) continue;
-                unsigned width = *(uint32_t *)((char *)element + 8) >> 8;  // IntegerType bit width: Type SubclassData
+                unsigned width = intBits(element);
                 if (width != 8 && width != 16) continue;
                 bool isSignedOp = isInstruction(inst, kOpcodeSDiv) || isInstruction(inst, kOpcodeSRem) || isInstruction(inst, kOpcodeAShr);
                 if (isInstruction(inst, kOpcodeICmp)) {
-                    unsigned p = *(uint16_t *)(inst + 0x12) & kOpcodeICmpPredicateMask;
+                    unsigned p = icmpPredicate(inst);
                     isSignedOp = p >= kPredicateSGT && p <= kPredicateSLE;
                 }
                 void *stack[12];
@@ -2057,10 +1919,10 @@ static unsigned narrowUnsignedConstants(void *module) {
             element = elementType(type);
         }
         void *wideType = lanes > 1 ? api.vectorTypeGet(i32, lanes) : i32;
-        unsigned width = *(uint32_t *)((char *)element + 8) >> 8, predicate = 0, opcode = 0;
+        unsigned width = intBits(element), predicate = 0, opcode = 0;
         bool compare = isInstruction(inst, kOpcodeICmp), isSigned;
         if (compare) {
-            predicate = *(uint16_t *)((char *)inst + 0x12) & kOpcodeICmpPredicateMask;
+            predicate = icmpPredicate(inst);
             isSigned = predicate >= kPredicateSGT && predicate <= kPredicateSLE;
         } else {
             for (size_t k = 0; k < sizeof kBinary / sizeof *kBinary; k++)
@@ -2079,13 +1941,10 @@ static unsigned narrowUnsignedConstants(void *module) {
             }
             unsigned packedBits = lanes * width;
             if (lanes == 3 && isInstruction(v, kOpcodeLoad) && api.extractElement && api.insertElement && api.undefGet && api.userNew &&
-                !disabledSetting("AMD_NARROW_LOAD3_FIX")) {
-                // A loaded 3-lane vector (MPS's image kernels compare their thread position with a short3 size in their
-                // parameters): zero-extended whole, libAMDIL902 folds the extension into the load as a <3 x i32> one
-                // and fetches lane 2 at byte 8 instead of 4, past a short3 into the padding MPS leaves uncleared, so
-                // the bounds check of MPSImageAdd / MPSImageMultiply read a leftover pointer's bits as the depth and
-                // the kernel wrote nothing about half the time. Each lane is extracted, extended and cut on its own
-                // (AMD_NARROW_LOAD3_FIX=0 leaves the whole-vector extension, for r02).
+                !disabled("AMD_NARROW_LOAD3_FIX")) {
+                // A loaded 3-lane vector zero-extended whole: libAMDIL902 folds the extension into a <3 x i32> load and fetches
+                // lane 2 at byte 8, past a short3 (MPS's image kernels read leftover padding as their depth: r02). Each lane is
+                // extended on its own (AMD_NARROW_LOAD3_FIX=0 leaves the whole-vector extension).
                 int s1 = extendSigned ? 1 : 0;
                 if (!extract[s1][1]) {
                     if (!extractType[1]) {
@@ -2112,10 +1971,9 @@ static unsigned narrowUnsignedConstants(void *module) {
             }
             if (lanes > 1 && isInstruction(v, kOpcodeLoad) && nextUse(firstUse(v)) && (packedBits == 16 || packedBits == 32) &&
                 api.insertElement && api.undefGet && api.userNew && api.getInt16Ty) {
-                // A loaded narrow vector with other users (`v == uchar4(..)` beside `as_type<uint>(v)`): zero-extended,
-                // libAMDIL902's combiner made the load an extending <4 x i32> load and left the other user's bitcast
-                // on that, "Cannot select: i32 = bitcast" (seed 675). So the lanes come out of the vector's bits as an
-                // integer instead, one extract_bits each, and no extension of the load is left to fold.
+                // A loaded narrow vector with other users: zero-extended, libAMDIL902's combiner made an extending load and left
+                // the other user's bitcast on it ("Cannot select: i32 = bitcast"), so each lane is an extract_bits of the
+                // vector's bits instead.
                 int s1 = extendSigned ? 1 : 0;
                 if (!extract[s1][1]) {
                     if (!extractType[1]) {
@@ -2163,15 +2021,11 @@ static unsigned narrowUnsignedConstants(void *module) {
     return rewritten;
 }
 
-// A 64-bit comparison whose result is sign-extended or branched on (`x -= (uint)(bool)(w & m)` with w a ulong, or `if`
-// on one) stops libAMDIL902 with "Cannot select": its setcc on i64 operands has an i64 result, which no select or brcond
-// pattern takes (found by fuzzing with 64-bit integers). So every i64 comparison is done on the 32-bit halves:
-// equality as (lo ^ lo') | (hi ^ hi') against 0, an ordered comparison as the high halves compared (signed or unsigned
-// as asked), or equal high halves and the low halves compared unsigned. AMD_WIDE_COMPARE_FIX=0 turns this off. Test a20.
+// libAMDIL902's setcc on i64 operands has an i64 result, which no select or brcond pattern takes ("Cannot select")
+// when the result is sign-extended or branched on (a20). Every i64 comparison is done on the 32-bit halves.
 enum { kWideXor = 28, kPredicateUGE = 35, kPredicateSGE = 39, kPredicateSLT = 40 };
 static unsigned wideCompares(void *module) {
-    const char *setting = getenv("AMD_WIDE_COMPARE_FIX");
-    if ((setting && !strcmp(setting, "0")) || !api.binaryCreate || !api.castCreate || !api.getInt64Ty) return 0;
+    if (disabled("AMD_WIDE_COMPARE_FIX") || !api.binaryCreate || !api.castCreate || !api.getInt64Ty) return 0;
     enum { kMax = 512 };
     void *found[kMax];
     unsigned count = 0, rewritten = 0;
@@ -2193,7 +2047,7 @@ static unsigned wideCompares(void *module) {
     }
     for (unsigned c = 0; c < count; c++) {
         void *inst = found[c], *i64 = typeOf(operand(inst, 0)), *i32 = api.getInt32Ty(api.getContext(inst));
-        unsigned predicate = *(unsigned short *)((char *)inst + 0x12) & kOpcodeICmpPredicateMask;  // CmpInst predicate: SubclassData
+        unsigned predicate = icmpPredicate(inst);
         void *lo[2], *hi[2];
         for (unsigned k = 0; k < 2; k++) {
             void *v = operand(inst, k);
@@ -2222,18 +2076,10 @@ static unsigned wideCompares(void *module) {
     return rewritten;
 }
 
-// A branch on one bit of a 64-bit value (`(x >> 16) & 1 ? a : b` with x a ulong, or a switch on `uint(x >> 16) & 3`,
-// which the switch lowering splits on bit 0) stops compilation with "LLVM ERROR: Cannot select: brcond (i64 setcc ...)":
-// libAMDIL902's DAG combiner turns `brcond (trunc (srl (and x, 2^k), k))` into a compare of the 64-bit `and` with 0,
-// whose result type is i64 on this target, and its brcond patterns only take a 32-bit condition (found by fuzzing
-// with 64-bit integers; wideCompares splits the i64 comparisons in the IR, these the combiner makes itself). The DAG
-// is built per block, so conditions worked out from a 64-bit instruction or argument need it, in the branch's own block
-// or in one before it: a bool from wideCompares' 32-bit halves of `x != 0`, sign-extended after a loop, came back in the
-// later block as an i64 compare of x (which arrives there with its top half known zero) and stopped the compile (seed
-// 3227). A conditional branch's condition is tested through `extract_bits(zext c, 0, 1) != 0`, and a 32-bit switch
-// value goes through extract_bits (`extract_bits(x, 0, w)` for `x & (2^w - 1)`, else as two 16-bit halves), which the
-// combiner doesn't look into. Code without 64-bit integers is left alone. AMD_WIDE_BRANCH_FIX=0 turns this off.
-// Test a21.
+// libAMDIL902's DAG combiner turns a branch on one bit of a 64-bit value into a compare of the 64-bit `and` with 0,
+// whose i64 result no brcond pattern takes ("Cannot select: brcond (i64 setcc ...)") (a21). The DAG is built per
+// block, so in code with 64-bit integers every conditional branch tests `extract_bits(zext c, 0, 1) != 0` and 32-bit
+// switch values go through extract_bits, which the combiner doesn't look into.
 enum { kOpcodeBr = 2, kOpcodeSwitch = 3, kOpcodeSExtWide = 38, kOpcodeInsertElement = 60 };
 static bool maskedSwitch(void *term, void *i32, void **x, unsigned *bits) {  // singleBitTests: switch (x & (2^w - 1))
     if (!isInstruction(term, kOpcodeSwitch) || !hungOffUses(term)) return false;
@@ -2269,8 +2115,7 @@ static bool wideCondition(void *cond, void *block) {  // worked out from a 64-bi
     return fromWide(cond, block, 0) || (home != block && fromWide(cond, home, 0));
 }
 static unsigned wideBitBranches(void *module) {
-    const char *setting = getenv("AMD_WIDE_BRANCH_FIX");
-    if ((setting && !strcmp(setting, "0")) || !api.binaryCreate || !api.castCreate || !api.cmpCreate || !api.functionTypeGet ||
+    if (disabled("AMD_WIDE_BRANCH_FIX") || !api.binaryCreate || !api.castCreate || !api.cmpCreate || !api.functionTypeGet ||
         !api.getOrInsertFunction || !api.replaceUsesOfWith)
         return 0;
     enum { kMax = 512 };
@@ -2339,20 +2184,11 @@ static unsigned wideBitBranches(void *module) {
     return rewritten;
 }
 
-// A signed division or remainder whose dividend is 32 bits cut from the middle of a 64-bit value, `(int)uint(x >> k) / c`
-// with 0 < k < 32, comes out as the unsigned one (`(int)uint(x >> 31) / 65535` gives uint(x >> 31) / 65535 for
-// negative dividends, and / -3 is as wrong): found by fuzzing with 64-bit integers. Built from the halves,
-// `(uint(x) >> k) | (uint(x >> 32) << (32 - k))`, the same value divides right (anything between the cut and the
-// division, an xor or a select, does too). So such dividends are built that way, also when a 64-bit select picks
-// between such cuts (`(int)uint(c ? x >> 7 : y >> 11) / 111`, each arm cut on its own then). Other 64-bit values cut and
-// divided go wrong the same way when their top bits are known zeros (`(int)uint(x % y) / c` with y < 2^63:
-// libAMDIL902 seems to take the known-zero top bits of the 64-bit value for bit 31 of the cut); their low half goes
-// through two 16-bit extract_bits. The cut can reach the division through an unsigned division, remainder or right
-// shift, which keep its top bit known as they found it: `(int)(uint(x >> 14) / d) / 225` was the unsigned division for
-// negative quotients in 157 of 256 threads (seed 4769, stock files too), so cuts up to two such steps back are built
-// the same way, where those steps take them. A cut of a 64-bit product goes through the extracts instead of the
-// halves: built from the halves, the product's high half came out wrong (seed 763). AMD_SHIFTED_DIVIDEND_FIX=0 turns
-// this off. Test a22.
+// A signed division whose dividend is 32 bits cut from the middle of a 64-bit value (`(int)uint(x >> k) / c`) came
+// out unsigned, as did cuts of 64-bit values whose top bits are known zeros (a22, a27): libAMDIL902 seems to take those
+// for bit 31 of the cut. Such dividends are built from the halves, `(uint(x) >> k) | (uint(x >> 32) << (32 - k))`,
+// also through 64-bit selects of cuts and up to two unsigned division / remainder / shift steps; the others, and cuts
+// of 64-bit products, through two 16-bit extract_bits.
 static bool cutShift(void *v, uint64_t *k) {  // lshr/ashr i64 by a constant 1..31
     return (isInstruction(v, kOpcodeLShr) || isInstruction(v, kOpcodeAShr)) && !hungOffUses(v) && numOperands(v) == 2 &&
            intBits(typeOf(v)) == 64 && constantIntValue(operand(v, 1), k) && *k > 0 && *k < 32;
@@ -2382,9 +2218,9 @@ static bool dividendCut(void *cut) {  // a 32-bit cut of a 64-bit value that div
                  !isInstruction(src, kOpcodeSExtWide) && api.functionTypeGet && api.getOrInsertFunction;
     return cutShift(src, &k) || select || other;
 }
-// A loop variable that starts as such a cut and is divided in the loop (`uint v = uint(x >> 10); for (...) v ^= p[v % 257];`)
-// reaches the division through a phi here; libAMDIL902 unrolls the loop and the first division is wrong (found by
-// fuzzing, seed 1663). So the cuts coming into such phis are built the same way, right where they are cut. Test a27.
+// A loop variable that starts as such a cut and is divided in the loop reaches the division through a phi, and the
+// first division of the unrolled loop came out wrong (a27): cuts coming into such phis are built the same way, right
+// where they are cut.
 static void addPhiCuts(void *phi, void **users, void **cuts, unsigned *count, unsigned max, int depth) {
     for (unsigned i = 0; i < numOperands(phi) && *count < max; i++) {
         void *v = anyOperand(phi, i);
@@ -2397,8 +2233,7 @@ static void addPhiCuts(void *phi, void **users, void **cuts, unsigned *count, un
     }
 }
 static unsigned shiftedDividends(void *module) {
-    const char *setting = getenv("AMD_SHIFTED_DIVIDEND_FIX");
-    if ((setting && !strcmp(setting, "0")) || !api.binaryCreate || !api.castCreate || !api.replaceUsesOfWith) return 0;
+    if (disabled("AMD_SHIFTED_DIVIDEND_FIX") || !api.binaryCreate || !api.castCreate || !api.replaceUsesOfWith) return 0;
     enum { kMax = 512 };
     void *found[kMax], *cuts[kMax];  // the division (or phi) and the cut it takes
     unsigned count = 0, rewritten = 0;
@@ -2439,8 +2274,8 @@ static unsigned shiftedDividends(void *module) {
         void *inst = isInstruction(user, kOpcodePHI) ? cut : user;  // the insertion point
         uint64_t k;
         bool selectOfCuts = isInstruction(src, kOpcodeSelect) && (cutShift(operand(src, 1), &k) || cutShift(operand(src, 2), &k));
-        // a cut of a 64-bit product: built from its halves, libAMDIL902 took the product's high half wrong (seed 763,
-        // `(int)uint((x << 32) * y >> 24) / 51`), so that cut goes through the extracts instead, which divide right too
+        // a cut of a 64-bit product goes through the extracts: built from its halves, libAMDIL902 took the product's
+        // high half wrong
         bool ofProduct = cutShift(src, &k) && isInstruction(operand(src, 0), kOpcodeMul2);
         if ((!cutShift(src, &k) && !selectOfCuts) || ofProduct) {  // the low half through two 16-bit extract_bits, which the DAG can't see into
             if (!extract) {
@@ -2471,23 +2306,11 @@ static unsigned shiftedDividends(void *module) {
     return rewritten;
 }
 
-// `x & min(1u, 145u)` tested as a bool and added (`z + uint(bool(x & min(1u, 145u)))`) comes out as z minus the bool:
-// air.min / air.max / air.clamp with constant arguments stay calls through libAMDIL902's IR optimizer and only fold in
-// its DAG, where the and with the now constant 1 is taken for a 0 / -1 boolean (as singleBitTests describes), and the
-// combiner's add -> sub fold for such booleans applies. With a plain `& 1u` the IR optimizer simplifies it first and
-// the result is right (found by fuzzing). So these calls are folded here: integer min, max and clamp, signed or not,
-// whose arguments are all constants, become the constant, unsigned min(x, 0) and max(x, 0) become 0 and x, and
-// `min(x, 1u) | odd` becomes the odd constant (`y % (min(x, 1u) | 1u)` crashed the compile). abs, abs_diff, min3,
-// mul_hi, rotate, sub_sat, clz, extract_bits and reverse_bits fold early enough already. A loop counter makes such
-// constant calls only when libAMDIL902 unrolls the loop (`for (i < 3) a += uint(bool(x & min(i, 145u)))` came out as a
-// minus the bools), so 32-bit calls whose arguments are all constants or loop values (phis, and arithmetic on them and
-// constants) become a compare and a select, which its IR optimizer folds after unrolling (the same loop with
-// `i < 145u ? i : 145u` is right). clamp(x, c, c) becomes c, whatever x is (its DAG folded `clamp(y | 1u, 1u, 1u)`
-// through the known bits of y | 1). `min(b, y) | odd` with b a bool (zero-extended i1, or `x & 1`) crashed the same
-// bit-field-extract combine as `min(x, 1u) | 1u` did (`z % (min(uint(bool(w & 86u)), mulhi(a, c)) | 1u)`, seed 4629,
-// stock files too): min is 0 or 1 there as well, so that or is folded to the odd constant too, and an and of such a min
-// with an even constant (the front end makes `(min | 1) & 0x7fffffff` into `(min & 0x7ffffffe) | 1`) to 0.
-// AMD_CONSTANT_MINMAX_FIX=0 turns this off. Tests a23, a28, a30.
+// air.min / max / clamp with constant arguments only fold in libAMDIL902's DAG, where an and with the folded 1 is taken
+// for a 0 / -1 boolean: `z + uint(bool(x & min(1u, 145u)))` came out as z minus the bool (a23). So they are folded
+// here: all-constant calls to the constant, unsigned min(x, 0) / max(x, 0) to 0 / x, `min(x, 1u) | odd` and
+// `min(bool, y) | odd` to the odd constant (both crashed its bit-field-extract combine). 32-bit calls of constants and
+// loop values become a compare and a select, which fold after unrolling (a28); clamp(x, c, c) becomes c (a30).
 static bool unrollsToConstant(void *v, int depth) {  // a constant, or what can become one when a loop is unrolled
     uint64_t c;
     if (constantIntValue(v, &c) || isInstruction(v, kOpcodePHI)) return true;
@@ -2542,17 +2365,11 @@ static bool containsCounter(void *v, int depth) {  // a loop counter somewhere i
     }
     return false;
 }
-// An inner loop whose lanes leave it at different times, inside an outer loop that libAMDIL902 unrolls fully: the lanes
-// that had left the inner loop still took the values of its later passes. `for (i0 < 4) { n = 0; while (n < 8) { n++;
-// v = (i0 & 1) ? extract_bits(x, (y * v) & 15, w) : z; if ((int(i0) / d & 3) == 0) break; } }` gave a wrong v in every
-// lane of a wave that held one lane with d = 1 (found by fuzzing with loop counters in expressions, seed 2398, stock
-// files too); with the outer loop left rolled (#pragma nounroll) the same code is right. So an outer loop with a fixed
-// trip count (the kind libAMDIL902 unrolls fully) that holds a loop with an exit that isn't a fixed trip count (a break,
-// or a latch test on anything but a counter and a constant) and depends on the outer loop's counter gets
-// llvm.loop.unroll.disable on its back edge. Without the last two conditions it kept loops rolled in half of Apple's MPS
-// kernels (inner loops up to a loaded bound), and Geekbench 7's Background Blur, Face Tracking and Super Resolution
-// failed their validation. Loops are found by back edges in block order, which the front end keeps for structured code.
-// AMD_DIVERGENT_LOOP_FIX=0 turns this off. Test a33.
+// In an outer loop that libAMDIL902 unrolls fully, lanes that had left a divergent inner loop still took the values of
+// its later passes (a33; right with the outer loop rolled). An outer loop with a fixed trip count holding a loop whose
+// exit isn't a fixed trip count and depends on the outer counter gets llvm.loop.unroll.disable (looser conditions kept
+// half of Apple's MPS kernels rolled, and Geekbench 7 failed its validation). Loops are found by back edges in block
+// order, which the front end keeps for structured code.
 static bool counterCompare(void *condition) {  // `counter (or counter op constant) <cmp> constant`: a fixed trip count
     if (!isInstruction(condition, kOpcodeICmp) || hungOffUses(condition) || numOperands(condition) != 2) return false;
     uint64_t c;
@@ -2583,8 +2400,7 @@ static bool usesValue(void *v, void *target, int depth) {  // target somewhere i
     return false;
 }
 static unsigned rolledOuterLoops(void *module) {
-    const char *setting = getenv("AMD_DIVERGENT_LOOP_FIX");
-    if ((setting && !strcmp(setting, "0")) || !api.mdStringGet || !api.mdTupleGet || !api.mdTupleGetDistinct ||
+    if (disabled("AMD_DIVERGENT_LOOP_FIX") || !api.mdStringGet || !api.mdTupleGet || !api.mdTupleGetDistinct ||
         !api.mdReplaceOperandWith || !api.setMetadataNamed || !api.getContext)
         return 0;
     unsigned marked = 0;
@@ -2681,8 +2497,8 @@ static bool zeroOrOne(void *v, int depth) {  // constantMinMax: a zero-extended 
     if (isInstruction(v, kOpcodeAnd))
         return (constantIntValue(operand(v, 1), &c) && c == 1) || (constantIntValue(operand(v, 0), &c) && c == 1) ||
                zeroOrOne(operand(v, 0), depth + 1) || zeroOrOne(operand(v, 1), depth + 1);
-    // an unsigned division, remainder or right shift of a 0 / 1 value is 0 or 1 too (`uint(int(bool(..)) / int(d | 1))`,
-    // which the front end makes a udiv: seed 3734)
+    // an unsigned division, remainder or right shift of a 0 / 1 value is 0 or 1 too (the front end makes
+    // `uint(int(bool(..)) / int(d | 1))` a udiv)
     if (isInstruction(v, kOpcodeUDiv) || isInstruction(v, kOpcodeURem) || isInstruction(v, kOpcodeLShr))
         return zeroOrOne(operand(v, 0), depth + 1);
     return false;
@@ -2704,8 +2520,7 @@ static unsigned foldMinOrOdd(void *call) {  // `min(..) | odd` -> odd and `min(.
     return n;
 }
 static unsigned constantMinMax(void *module) {
-    const char *setting = getenv("AMD_CONSTANT_MINMAX_FIX");
-    if ((setting && !strcmp(setting, "0")) || !api.getFunction) return 0;
+    if (disabled("AMD_CONSTANT_MINMAX_FIX") || !api.getFunction) return 0;
     static const char *const kOps[] = {"min", "max", "clamp"};
     static const unsigned kBits[] = {8, 16, 32, 64};
     unsigned folded = 0;
@@ -2731,10 +2546,8 @@ static unsigned constantMinMax(void *module) {
                         sv[a] = bits == 64 ? (int64_t)v[a] : (int64_t)(v[a] << (64 - bits)) >> (64 - bits);  // sign-extended
                     }
                     if (!constant) {
-                        // One constant: unsigned min(x, 1) is the bool x != 0, min(x, 0) is 0, max(x, 0) is x. As the
-                        // bool, libAMDIL902's IR optimizer folds what follows (`y % (min(x, 1u) | 1u)` is y % 1); left as
-                        // the call, its DAG finds the divisor a power of two late and its bit-field-extract combine
-                        // (AnalyzeBFECombine) reads a null operand: "Compiler encountered an internal error".
+                        // One constant: unsigned min(x, 1) is the bool x != 0, min(x, 0) is 0, max(x, 0) is x. Left as the call,
+                        // `y % (min(x, 1u) | 1u)` crashed libAMDIL902's bit-field-extract combine (AnalyzeBFECombine).
                         void *type = typeOf(call), *value = NULL;
                         uint64_t c;
                         if (!sign && o == 0 && (zeroOrOne(operand(call, 0), 0) || zeroOrOne(operand(call, 1), 0)) && foldMinOrOdd(call)) {
@@ -2748,9 +2561,8 @@ static unsigned constantMinMax(void *module) {
                             if (o == 0 && c == 0) value = api.constantIntGet(type, 0, false);
                             else if (o == 1 && c == 0) value = x;
                             else if (o == 0 && c == 1) {
-                                // Only `min(x, 1u) | odd` (the crashing divisor) is folded: that or is the constant. Made
-                                // x != 0 everywhere, min(x, 1) left 0 / 1 values that a15's bug misreads (`((c ? min(1u, x) : y)
-                                // & 3) == 0` never left its loop: seed 518); the call itself compiles right.
+                                // Only `min(x, 1u) | odd` (the crashing divisor) is folded: that or is the constant.
+                                // As x != 0 everywhere, min(x, 1)'s 0 / 1 values met a15's bug; the call compiles right.
                                 if (foldMinOrOdd(call)) folded++;
                                 continue;
                             }
@@ -2798,16 +2610,11 @@ static unsigned constantMinMax(void *module) {
     return folded;
 }
 
-// A 32-bit value zero-extended and shifted left into both halves, `ulong(y) << k` with 0 < k < 32, can lose the bits
-// that move into the high half: with y = rhadd(b, a) or hadd(b, a), `(ulong(min(c, a)) << 32 | rhadd(b, a))`
-// multiplied by a constant and shifted (the front end makes that `(ulong(min) << 45 | ulong(rhadd) << 13) * ...`)
-// comes out with a high half of min << 13 alone, without rhadd >> 19 (found by fuzzing with 64-bit integers; plain
-// values and max() come out right, so libAMDIL902 seems to take the top bits of those results as known zeros). Built
-// from the halves, `ulong(y << k) | ulong(y >> (32 - k)) << 32`, which is what the hardware runs anyway, the value is
-// right. So every such shift is built that way. AMD_ZEXT_SHIFT_FIX=0 turns this off. Test a24.
+// `ulong(y) << k` (0 < k < 32) lost the bits moving into the high half when y is an hadd / rhadd (a24; libAMDIL902
+// seems to take their top bits as known zeros). Every such shift is built from the halves,
+// `ulong(y << k) | ulong(y >> (32 - k)) << 32`, which is what the hardware runs anyway.
 static unsigned zextShiftHalves(void *module) {
-    const char *setting = getenv("AMD_ZEXT_SHIFT_FIX");
-    if ((setting && !strcmp(setting, "0")) || !api.binaryCreate || !api.castCreate) return 0;
+    if (disabled("AMD_ZEXT_SHIFT_FIX") || !api.binaryCreate || !api.castCreate) return 0;
     enum { kMax = 1024 };
     void *found[kMax];
     unsigned count = 0, rewritten = 0;
@@ -2845,16 +2652,11 @@ static unsigned zextShiftHalves(void *module) {
     return rewritten;
 }
 
-// `uint(bool(~b & uint(bool(a)))) | (a & 0xffff)` stops the compile ("Compiler encountered an internal error", a null
-// pointer read in libAMDIL902's ILTargetLowering::AnalyzeBFICombine): the IR is or (and (zext (a != 0)), ~b),
-// (and a, 0xffff), and the bit-field-insert combine reads the operands of an operand that has none (found by fuzzing
-// with narrow vectors; it needs the ~ and a on both sides). As `select (a != 0), (~b & 1), 0`, which is one v_cndmask,
-// the or compiles. So an and of a zero-extended bool with a ~ that an or uses is built as that select.
-// AMD_BOOL_AND_NOT_FIX=0 turns this off. Test a26.
+// An or using `zext(a != 0) & ~b` crashed libAMDIL902's bit-field-insert combine (AnalyzeBFICombine reads operands of
+// an operand that has none) (a26). Such an and is built as `select (a != 0), (~b & 1), 0`, one v_cndmask.
 enum { kOpcodeXorNot = 28 };
 static unsigned boolAndNotSelects(void *module) {
-    const char *setting = getenv("AMD_BOOL_AND_NOT_FIX");
-    if ((setting && !strcmp(setting, "0")) || !api.binaryCreate || !api.userNew || !api.selectInit) return 0;
+    if (disabled("AMD_BOOL_AND_NOT_FIX") || !api.binaryCreate || !api.userNew || !api.selectInit) return 0;
     enum { kMax = 256 };
     void *found[kMax];
     unsigned count = 0, rewritten = 0;
@@ -2900,8 +2702,7 @@ static unsigned boolAndNotSelects(void *module) {
 }
 
 static unsigned singleBitTests(void *module) {
-    const char *setting = getenv("AMD_BIT_TEST_FIX");
-    if ((setting && !strcmp(setting, "0")) || !api.functionTypeGet || !api.getOrInsertFunction) return 0;
+    if (disabled("AMD_BIT_TEST_FIX") || !api.functionTypeGet || !api.getOrInsertFunction) return 0;
     unsigned rewritten = 0;
     char *functions = (char *)module + kModuleFunctions;
     for (char *fn = nextNode(functions); fn != functions; fn = nextNode(fn)) {
@@ -2913,20 +2714,16 @@ static unsigned singleBitTests(void *module) {
     return rewritten;
 }
 
-// The front end in Xcode 26 writes a constexpr sampler (!air.sampler_states) as a [2 x i64] constant: the sampler word with
-// bit 63 clear, then 0. Older front ends, including the runtime compiler that libAMDIL902 was built with, write one i64:
-// the same word with bit 63 set. ILSetupConstantSampler turns the global's initializer into an integer-to-pointer
-// constant, which only works with the one-word form, so such a sampler reads as 0 (i05: a clamp-to-edge read returns 0).
-// Each such global gets the one-word initializer. The global keeps its declared type: ILSetupConstantSampler only reads
-// the initializer and then erases the global. AMD_SAMPLER_STATE_FIX=0 turns this off.
+// Xcode 26's front end writes a constexpr sampler (!air.sampler_states) as a [2 x i64] constant (the word with bit 63
+// clear, then 0); libAMDIL902's ILSetupConstantSampler only reads the older one-word form (bit 63 set), so the sampler
+// read as 0 (i05). Each such global gets the one-word initializer and keeps its declared type (it's read, then erased).
 // Metadata (LLVM 5): kind u8 @0; MDNode: NumOperands u32 @8, operands (Metadata *) right before the node;
 // ConstantAsMetadata (kind 1): Value * @0x80, after Metadata (8 bytes) and its ReplaceableMetadataImpl base (Context,
 // NextIndex, a SmallDenseMap with 4 inline buckets: 120 bytes). The global found there must name this module as its
 // parent. ConstantDataSequential: DataElements @24.
 enum { kMDNodeNumOperands = 8, kConstantAsMetadataKind = 1, kValueAsMetadataValue = 0x80, kConstantDataElements = 24 };
 static unsigned twoWordSamplerStates(void *module) {
-    const char *setting = getenv("AMD_SAMPLER_STATE_FIX");
-    if ((setting && !strcmp(setting, "0")) || !api.getNamedMetadata || !api.namedMDNumOperands || !api.namedMDGetOperand ||
+    if (disabled("AMD_SAMPLER_STATE_FIX") || !api.getNamedMetadata || !api.namedMDNumOperands || !api.namedMDGetOperand ||
         !api.setInitializer)
         return 0;
     Twine name = {"air.sampler_states", NULL, kTwineCString, kTwineEmpty};
@@ -2954,17 +2751,11 @@ static unsigned twoWordSamplerStates(void *module) {
     return fixed;
 }
 
-// The high half of a 64-bit product whose operand has an unsigned average in its low half comes out too low:
-// `mulhi((ulong(a + b) << 32) | rhadd(a, b), (ulong(popcount(86u)) << 32) | k)` was 2 short for most inputs (found by
-// fuzzing with 64-bit integers, seed 1488, stock files too; there a switch selector built from it took the wrong case).
-// The operands are right, and a literal 4 for popcount(86u) hides it, so it shows when the other factor folds to a
-// constant late; libAMDIL902 seems to drop carries out of the average, as with a24's top bits of hadd / rhadd. Unsigned
-// 32-bit hadd / rhadd that are zero-extended to 64 bits are built from bitwise arithmetic instead, which can't
-// overflow: hadd(a, b) = (a & b) + ((a ^ b) >> 1), rhadd(a, b) = (a | b) - ((a ^ b) >> 1). Signed, vector and plain
-// 32-bit averages are left alone. AMD_AVERAGE_FIX=0 turns this off. Test a32.
+// The high half of a 64-bit product whose operand has an unsigned average (hadd / rhadd) in its low half came out too
+// low (a32; libAMDIL902 seems to drop the average's carries). Unsigned 32-bit hadd / rhadd zero-extended to 64 bits are
+// built from bitwise arithmetic: hadd = (a & b) + ((a ^ b) >> 1), rhadd = (a | b) - ((a ^ b) >> 1).
 static unsigned plainUnsignedAverages(void *module) {
-    const char *setting = getenv("AMD_AVERAGE_FIX");
-    if ((setting && !strcmp(setting, "0")) || !api.binaryCreate) return 0;
+    if (disabled("AMD_AVERAGE_FIX") || !api.binaryCreate) return 0;
     unsigned rewritten = 0;
     for (unsigned rounded = 0; rounded < 2; rounded++) {
         const char *name = rounded ? "air.rhadd.u.i32" : "air.hadd.u.i32";
@@ -2995,17 +2786,11 @@ static unsigned plainUnsignedAverages(void *module) {
     return rewritten;
 }
 
-// The high 32 bits of a 64-bit mul_hi come out without the high half of one factor when the other's high half is a
-// large power of two: `uint(mulhi(ulong(x >> 16) << 32 | y, ulong(0x80000000u) << 32 | z) >> 32)` gave the value of
-// mulhi(ulong(y), ...), with stock files too, and 2^30 or a high half from `x >> 1` likewise (found by fuzzing with loop
-// counters in expressions, seed 5225); a32's average was most likely the same bug, its other factor's high half a 4.
-// Written out of 32-bit pieces in the shader the product is right; built from 64-bit multiplies here it isn't (the
-// faulty lowering is libAMDIL902's 64-bit multiply), so every scalar unsigned 64-bit mul_hi is built from the four
-// 32 x 32 bit products of the halves, each a 32-bit mul and mul_hi, summed with the middle terms' carries in 64 bits.
-// AMD_WIDE_MULHI_FIX=0 turns this off. Test a34.
+// libAMDIL902's 64-bit multiply drops the high half of one factor from mul_hi when the other's high half is a large
+// power of two (a34). Every scalar unsigned 64-bit mul_hi is built from the four 32 x 32-bit products of the halves,
+// summed with the middle terms' carries in 64 bits.
 static unsigned wideMulHi(void *module) {
-    const char *setting = getenv("AMD_WIDE_MULHI_FIX");
-    if ((setting && !strcmp(setting, "0")) || !api.binaryCreate || !api.castCreate || !api.getFunction || !api.functionTypeGet ||
+    if (disabled("AMD_WIDE_MULHI_FIX") || !api.binaryCreate || !api.castCreate || !api.getFunction || !api.functionTypeGet ||
         !api.getOrInsertFunction)
         return 0;
     void *function = api.getFunction(module, "air.mul_hi.u.i64", strlen("air.mul_hi.u.i64"));
@@ -3067,71 +2852,71 @@ static void dumpModuleToFile(void *module, const char *tag, int serial) {
     close(saved);
 }
 
+typedef struct {
+    unsigned (*apply)(void *module);
+    const char *logFormat;  // with %u for the count; NULL: the fix logs for itself
+} ModuleFix;
+static const ModuleFix kModuleFixes[] = {
+    {fixEscapedHandleLoads, NULL},
+    {keepCompareNaNs, "%u function(s) compiled with NaN-safe compares"},
+    {ldexpHalfAsFloat, "%u half ldexp call(s) computed as float"},
+    {shiftIntegerGatherCoords, "%u integer gather(s): coordinates shifted half a texel"},
+    {cubeIntegerGathers, "%u integer cube gather(s): 4 samples each"},
+    {clampCubeArrayIndices, "%u cube array index(es) clamped"},
+    {loadThreadgroupBoolsAsBytes, "%u threadgroup bool load(s) done as bytes"},
+    {twoWordSamplerStates, "%u constexpr sampler(s) rewritten in the one-word form"},
+    {exactUnpackNorm, "%u unpack call(s) computed exactly"},
+    {floatAtomicsAsInteger, "%u float atomic(s) done on the integer bits"},
+    {boolAndNotSelects, "%u and(s) of a bool with a not built as selects"},
+    {rolledOuterLoops, "%u outer loop(s) around divergent loops kept rolled"},
+    {plainUnsignedAverages, "%u unsigned average(s) built with bitwise arithmetic"},
+    {wideMulHi, "%u 64-bit mul_hi call(s) built from 32-bit halves"},
+    {zextShiftHalves, "%u zext shift(s) built from halves"},
+    {constantMinMax, "%u min/max/clamp call(s) with constant arguments folded"},
+    {wideCompares, "%u 64-bit comparison(s) done on the 32-bit halves"},
+    {wideBitBranches, "%u branch(es) on bits of a 64-bit value tested through extract_bits"},
+    {shiftedDividends, "%u signed division(s) of a cut 64-bit value: dividend built from the halves"},
+    {bitcastLaneExtracts, "%u vector bitcast(s) to narrower lanes built lane by lane"},
+    {narrowUnsignedConstants, "%u narrow division(s), shift(s) or comparison(s) done in 32 bits"},
+    {singleBitTests, "%u single-bit test(s) done as bit-field extracts"},
+    {plainSaturatingAddSub, "%u unsigned saturating add/sub call(s) done as arithmetic"},
+    {rotatesAsShifts, "%u rotate call(s) done as shifts"},
+    {privateArrayIndexedStores, "%u variable-index private array store(s) done per element"},
+};
+
+// One line per fix that changed something: "[texatomic] <format with the count>".
+static void logCount(const char *format, unsigned count) {
+    char message[512];
+    snprintf(message, sizeof message, format, count);
+    fprintf(stderr, "[texatomic] %s\n", message);
+}
+static void applyModuleFixes(void *module) {
+    for (size_t i = 0; i < sizeof kModuleFixes / sizeof *kModuleFixes; i++) {
+        unsigned changes = kModuleFixes[i].apply(module);
+        if (changes && logging() && kModuleFixes[i].logFormat) logCount(kModuleFixes[i].logFormat, changes);
+    }
+}
+// TEXATOMIC_LLVM_ARGS="-print-after-all ...": libAMDIL902's LLVM options, for diagnostics
+static void parseLLVMOptionsOnce(void) {
+    static bool optionsParsed;
+    const char *llvmArgs = getenv("TEXATOMIC_LLVM_ARGS");
+    if (!llvmArgs || !api.parseOptions || optionsParsed) return;
+    optionsParsed = true;
+    const char *argv[16] = {"libAMDIL902"};
+    int argc = 1;
+    char *copy = strdup(llvmArgs);
+    for (char *save, *t = strtok_r(copy, " ", &save); t && argc < 16; t = strtok_r(NULL, " ", &save)) argv[argc++] = t;
+    api.parseOptions(argc, argv, "");
+}
+
 static bool hookedCompileShader(void *module, void *il, void *a, void *b, void *c, void *d, void *e) {
     static int dumpSerial;
     int serial = dumpSerial++;
     if (module && resolveAPI()) dumpModuleToFile(module, "in", serial);
     if (module && resolveAPI()) {
-        static bool optionsParsed;  // TEXATOMIC_LLVM_ARGS="-print-after-all ...": libAMDIL902's LLVM options (diagnostics)
-        const char *llvmArgs = getenv("TEXATOMIC_LLVM_ARGS");
-        if (llvmArgs && api.parseOptions && !optionsParsed) {
-            optionsParsed = true;
-            const char *argv[16] = {"libAMDIL902"};
-            int argc = 1;
-            char *copy = strdup(llvmArgs);
-            for (char *save, *t = strtok_r(copy, " ", &save); t && argc < 16; t = strtok_r(NULL, " ", &save)) argv[argc++] = t;
-            api.parseOptions(argc, argv, "");
-        }
+        parseLLVMOptionsOnce();
         if (getenv("TEXATOMIC_DUMP_MODULE") && api.moduleDump) api.moduleDump(module);  // the AIR libAMDIL902 receives
-        fixEscapedHandleLoads(module);
-        unsigned nanSafe = keepCompareNaNs(module);
-        if (nanSafe && logging()) fprintf(stderr, "[texatomic] %u function(s) compiled with NaN-safe compares\n", nanSafe);
-        unsigned ldexps = ldexpHalfAsFloat(module);
-        if (ldexps && logging()) fprintf(stderr, "[texatomic] %u half ldexp call(s) computed as float\n", ldexps);
-        unsigned gathers = shiftIntegerGatherCoords(module);
-        if (gathers && logging()) fprintf(stderr, "[texatomic] %u integer gather(s): coordinates shifted half a texel\n", gathers);
-        unsigned cubeGathers = cubeIntegerGathers(module);
-        if (cubeGathers && logging()) fprintf(stderr, "[texatomic] %u integer cube gather(s): 4 samples each\n", cubeGathers);
-        unsigned cubeArrays = clampCubeArrayIndices(module);
-        if (cubeArrays && logging()) fprintf(stderr, "[texatomic] %u cube array index(es) clamped\n", cubeArrays);
-        unsigned bools = loadThreadgroupBoolsAsBytes(module);
-        if (bools && logging()) fprintf(stderr, "[texatomic] %u threadgroup bool load(s) done as bytes\n", bools);
-        unsigned samplers = twoWordSamplerStates(module);
-        if (samplers && logging()) fprintf(stderr, "[texatomic] %u constexpr sampler(s) rewritten in the one-word form\n", samplers);
-        unsigned unpacks = exactUnpackNorm(module);
-        if (unpacks && logging()) fprintf(stderr, "[texatomic] %u unpack call(s) computed exactly\n", unpacks);
-        unsigned floats = floatAtomicsAsInteger(module);
-        if (floats && logging()) fprintf(stderr, "[texatomic] %u float atomic(s) done on the integer bits\n", floats);
-        unsigned andNots = boolAndNotSelects(module);
-        if (andNots && logging()) fprintf(stderr, "[texatomic] %u and(s) of a bool with a not built as selects\n", andNots);
-        unsigned rolled = rolledOuterLoops(module);
-        if (rolled && logging()) fprintf(stderr, "[texatomic] %u outer loop(s) around divergent loops kept rolled\n", rolled);
-        unsigned averages = plainUnsignedAverages(module);
-        if (averages && logging()) fprintf(stderr, "[texatomic] %u unsigned average(s) built with bitwise arithmetic\n", averages);
-        unsigned mulHis = wideMulHi(module);
-        if (mulHis && logging()) fprintf(stderr, "[texatomic] %u 64-bit mul_hi call(s) built from 32-bit halves\n", mulHis);
-        unsigned zextShifts = zextShiftHalves(module);
-        if (zextShifts && logging()) fprintf(stderr, "[texatomic] %u zext shift(s) built from halves\n", zextShifts);
-        unsigned constants = constantMinMax(module);
-        if (constants && logging()) fprintf(stderr, "[texatomic] %u min/max/clamp call(s) with constant arguments folded\n", constants);
-        unsigned wide = wideCompares(module);
-        if (wide && logging()) fprintf(stderr, "[texatomic] %u 64-bit comparison(s) done on the 32-bit halves\n", wide);
-        unsigned wideBranches = wideBitBranches(module);
-        if (wideBranches && logging()) fprintf(stderr, "[texatomic] %u branch(es) on bits of a 64-bit value tested through extract_bits\n", wideBranches);
-        unsigned dividends = shiftedDividends(module);
-        if (dividends && logging()) fprintf(stderr, "[texatomic] %u signed division(s) of a cut 64-bit value: dividend built from the halves\n", dividends);
-        unsigned lanes = bitcastLaneExtracts(module);
-        if (lanes && logging()) fprintf(stderr, "[texatomic] %u vector bitcast(s) to narrower lanes built lane by lane\n", lanes);
-        unsigned narrow = narrowUnsignedConstants(module);
-        if (narrow && logging()) fprintf(stderr, "[texatomic] %u narrow division(s), shift(s) or comparison(s) done in 32 bits\n", narrow);
-        unsigned bitTests = singleBitTests(module);
-        if (bitTests && logging()) fprintf(stderr, "[texatomic] %u single-bit test(s) done as bit-field extracts\n", bitTests);
-        unsigned saturating = plainSaturatingAddSub(module);
-        if (saturating && logging()) fprintf(stderr, "[texatomic] %u unsigned saturating add/sub call(s) done as arithmetic\n", saturating);
-        unsigned rotates = rotatesAsShifts(module);
-        if (rotates && logging()) fprintf(stderr, "[texatomic] %u rotate call(s) done as shifts\n", rotates);
-        unsigned arrayStores = privateArrayIndexedStores(module);
-        if (arrayStores && logging()) fprintf(stderr, "[texatomic] %u variable-index private array store(s) done per element\n", arrayStores);
+        applyModuleFixes(module);
         unsigned n = lowerTextureAtomics(module);
         if (logging()) fprintf(stderr, "[texatomic] compileShader: %u texture atomic call(s) lowered\n", n);
         dumpModuleToFile(module, "out", serial);
@@ -3335,14 +3120,12 @@ enum { kHwIsa = 0x1710, kHwIsaSize = 0x171c, kHwRelocCount = 0x1854, kFamilySI =
 
 static void fixSIHazards(void *out, void **pair) {
     if (scFamily != kFamilySI || !pair || !pair[0] || pair[0] != *(void **)((char *)out + kHwIsa)) return;
-    const char *setting = getenv("AMD_SI_HAZARD_FIX");
-    if (setting && !strcmp(setting, "0")) return;
+    if (disabled("AMD_SI_HAZARD_FIX")) return;
     uint32_t bytes = *(uint32_t *)&pair[1], newBytes = 0, relocCount = *(uint32_t *)((char *)out + kHwRelocCount);
     unsigned inserted = 0;
     const char *unsupported = relocCount ? "relocations" : NULL, *l1Unsupported = NULL;
     // In place (no size change): loads from memory this shader also writes bypass the vector L1 (stale reads).
-    const char *l1Setting = getenv("AMD_SI_L1_FIX");
-    unsigned glc = relocCount || (l1Setting && !strcmp(l1Setting, "0")) ? 0 : siBypassL1ForWrittenResources(pair[0], bytes, &l1Unsupported);
+    unsigned glc = relocCount || disabled("AMD_SI_L1_FIX") ? 0 : siBypassL1ForWrittenResources(pair[0], bytes, &l1Unsupported);
     if (logging() && (glc || l1Unsupported)) fprintf(stderr, "[texatomic] SI: %u load(s) bypass L1%s%s\n", glc,
                                                      l1Unsupported ? ", L1 pass skipped: " : "", l1Unsupported ? l1Unsupported : "");
     uint32_t *fixed = relocCount ? NULL : siFixBufferLoadHazards(pair[0], bytes, &newBytes, &inserted, &unsupported);
@@ -3359,17 +3142,11 @@ static void fixSIHazards(void *out, void **pair) {
     if (logging()) fprintf(stderr, "[texatomic] SI: %u s_nop inserted (%u -> %u bytes)\n", inserted, bytes, newBytes);
 }
 
-// User data API slot 8 is the shader's constant data segment (program-scope `constant` variables: Tint/Dawn's
-// `volatile constexpr constant uint tint_volatile_zero`, read by Chrome's Skia Graphite shaders). libAMDIL902 also
-// adds it, wrongly, when it materializes the address of a threadgroup variable as a value (e.g. stored in thread
-// memory: Blender's `threadgroup float (&array)[N]` class members): `i64add rX, <slot 8>, <LDS offset>`, while direct
-// accesses use the bare offset. Loads through such a pointer miss the variable (out-of-range LDS reads return 0;
-// Blender EEVEE's depth of field lost its slight-focus layer). Fix: in compute shaders that declare LDS, drop the base
-// from exactly those adds (`mov rX, <LDS offset>`). The read itself and its other uses stay: constant-data loads build
-// their buffer descriptor from the unchanged base and add their offset to the load address.
-// (Earlier versions zeroed the slot-8 read itself: everywhere, which broke Chrome's text, tabs and icons, and then in
-// LDS compute shaders, which still broke the constant reads of such shaders.) Not handled: a pointer to a
-// program-scope constant formed in an LDS compute shader (its base + offset add looks the same). Returns the count.
+// User data API slot 8 is the constant data segment, but libAMDIL902 also adds it to the address of a threadgroup
+// variable materialized as a value (`i64add rX, <slot 8>, <LDS offset>`), so loads through such a pointer missed the
+// variable (Blender EEVEE's depth of field; a04). In compute shaders that declare LDS those adds become
+// `mov rX, <LDS offset>`; the slot-8 read stays for the constant-data loads. Not handled: a pointer to a program-scope
+// constant formed in such a shader (its add looks the same). Returns the count.
 static const char kThreadgroupBaseSlot[] = "dcl_user_data_api_slot(8) r8197.xy__\n";
 
 // The register an IL line writes, if it writes one ("mov r12.xy__, ..." -> 12); -1 for lines without a destination
@@ -3432,10 +3209,11 @@ static int normalizeFetch4(char *il) {
     return n;
 }
 
-// The eighth job's driver check: the 12.5-24 copy of AMDMTLBronzeDriver, which OCLP installs on Sequoia (Darwin 24)
-// and which links OCLP's impostor.dylib. Tahoe's 12.5-25 and 12.5-GCN-SKL-25 copies link impostor.dylib too, but set
-// the FMASK table themselves: there the identity map reads the wrong samples (a11, and s25's shader resolve: wrong
-// colours in Chrome and Electron), so the check also needs Darwin 24.
+// The 12.5-24 Bronze driver that OCLP installs on Sequoia (Darwin 24, with impostor.dylib) leaves the FMASK descriptor
+// table (API slot 13) unset for render stages: a fragment shader's texture2d_ms read loaded its FMASK descriptor from
+// address 0 and reset the GPU, compute reads got a stale table (a11). Both encoders expand compressed MSAA textures
+// when bound, so the identity sample map is right. Tahoe's copies set the table themselves (the identity map reads the
+// wrong samples there: a11, s25), hence the Darwin 24 check. AMD_FMASK_FIX=1 turns it on with any driver.
 static bool fmaskFixEnabled(void) {
     const char *setting = getenv("AMD_FMASK_FIX");
     if (setting) return strcmp(setting, "0") != 0;
@@ -3473,22 +3251,11 @@ static int identityFmaskLookups(const char *in, Text *out) {
     return n;
 }
 
-// SC's code for a loop that ends in
-//     if_logicalnz c            ; or if_logicalz
-//         ...  break_logicalz a  continue
-//     else
-//         ...  break_logicalz b  continue
-//     endif
-//   endloop
-// (what libAMDIL902 makes of `while (n < 8) { n++; ...; if (odd && x) break; }`) is wrong once the threads diverge: when
-// some threads leave through the first branch's break, SC sets exec to the threads still in the loop and then falls into
-// the else branch's mask computation, which takes those as the first branch's threads, so the else branch runs for none
-// of them that iteration; they skip its exit check and run the loop once more (found by differential fuzzing; a barrier
-// before the loop is enough to get this layout). The continues are redundant there (endloop follows), so each branch
-// sets a flag instead and one break follows the endif:
+// SC's code for a loop ending in an if/else whose branches both end in break_logicalz + continue is wrong once threads
+// diverge: the else branch's mask is computed from the threads still in the loop, so the else branch runs for none of
+// them that iteration (a15). Each branch sets a flag instead and one break follows the endif:
 //     if_logicalnz c  ...  mov f, a  else  ...  mov f, b  endif  break_logicalz f  endloop
-// A branch without a break sets the flag to "stay". Both branches' breaks must test the same way. AMD_LOOP_EXIT_FIX=0
-// turns this off.
+// A branch without a break sets the flag to "stay". Both branches' breaks must test the same way.
 static int ilIndent(const char *line) { return (int)strspn(line, " "); }
 static bool ilIs(const char *line, const char *word) {
     const char *t = line + ilIndent(line);
@@ -3496,8 +3263,7 @@ static bool ilIs(const char *line, const char *word) {
     return !strncmp(t, word, n) && (t[n] == 0 || t[n] == ' ');
 }
 static int singleLoopExits(const char *in, Text *out) {
-    const char *setting = getenv("AMD_LOOP_EXIT_FIX");
-    if ((setting && !strcmp(setting, "0")) || !strstr(in, "continue")) return 0;
+    if (disabled("AMD_LOOP_EXIT_FIX") || !strstr(in, "continue")) return 0;
     char *copy = strdup(in);
     size_t count = 0, cap = 1024;
     char **lines = malloc(cap * sizeof *lines);
@@ -3614,10 +3380,9 @@ static int hookedSCCompileShader(void *sc, void *src, void *out) {
         free(il.buf);
         il = identity;
     }
-    const char *ldsSetting = getenv("AMD_LDS_BASE_FIX");
     bool atomics = il.buf && (strstr(il.buf, "0x7A70") || strstr(il.buf, "0x7A71"));
     bool ldsBase = scFamily == kFamilySI && il.buf && !strncmp(il.buf, "il_cs", 5) && strstr(il.buf, "dcl_lds_id(") &&
-                   strstr(il.buf, kThreadgroupBaseSlot) && !(ldsSetting && !strcmp(ldsSetting, "0"));
+                   strstr(il.buf, kThreadgroupBaseSlot) && !disabled("AMD_LDS_BASE_FIX");
     int gathers = il.buf && gatherFixEnabled() ? normalizeFetch4(il.buf) : 0;
     Text exits = {0};
     int loops = il.buf ? singleLoopExits(il.buf, &exits) : 0;
