@@ -33,6 +33,7 @@ extern "C" int passManagerRun(void *self, LLVMModuleRef module) asm("__ZN4llvm6l
 static const char *const kPluginSuffix = "/GeForceAIRPlugin";
 static bool logging() { return getenv("NVAIR_LOG") != nullptr; }
 static bool disabled(const char *name) { const char *v = getenv(name); return v && !strcmp(v, "0"); }
+static bool startsWith(const char *s, const char *prefix) { return !strncmp(s, prefix, strlen(prefix)); }
 
 // ---- bodies for AIR intrinsics the plugin lacks ---------------------------------------------------------------------
 // AIR intrinsics newer than the plugin stay bare declarations that instruction selection rejects ("Unhandled
@@ -486,57 +487,10 @@ static unsigned widenThreadgroupBools(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
-// ---- cube array indices below 0 (AMDAdapter's clampCubeArrayIndices) ------------------------------------------------
-// A cube-array sample, gather or compare at an index below 0 read another cube than the first: the index is raised to 0
-// with a compare and select (an air.max declaration would have no body). NVAIR_CUBE_ARRAY_FIX. (a09)
-static unsigned clampCubeArrayIndices(LLVMModuleRef module, Gen &g) {
-    static const struct { const char *prefix; unsigned index; } kForms[] = {
-        {"air.sample_texture_cube_array.", 3}, {"air.sample_texture_cube_array_grad.", 3}, {"air.gather_texture_cube_array.", 3},
-        {"air.sample_depth_cube_array.", 4}, {"air.sample_compare_depth_cube_array.", 4}, {"air.gather_depth_cube_array.", 4},
-        {"air.gather_compare_depth_cube_array.", 4},
-    };
-    unsigned clamped = 0;
-    LLVMBuilderRef b = nullptr;
-    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
-        const char *name = LLVMGetValueName(f);
-        int form = -1;
-        for (unsigned i = 0; i < sizeof kForms / sizeof *kForms && form < 0; i++)
-            if (!strncmp(name, kForms[i].prefix, strlen(kForms[i].prefix))) form = (int)i;
-        if (form < 0) continue;
-        unsigned index = kForms[form].index;
-        std::vector<LLVMValueRef> calls;
-        for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u)) {
-            LLVMValueRef call = LLVMIsACallInst(LLVMGetUser(u));
-            if (call && LLVMGetNumOperands(call) > (int)index + 1 && LLVMGetOperand(call, LLVMGetNumOperands(call) - 1) == f &&
-                isInt(LLVMTypeOf(LLVMGetOperand(call, index)), 32))
-                calls.push_back(call);
-        }
-        for (LLVMValueRef call : calls) {
-            LLVMValueRef value = LLVMGetOperand(call, index);
-            if (LLVMIsAConstantInt(value) && (long long)LLVMConstIntGetZExtValue(value) >= 0 && LLVMConstIntGetZExtValue(value) < 0x80000000ull) continue;
-            if (LLVMIsASelectInst(value) && LLVMGetOperand(value, 1) == g.c32(0)) continue;  // clamped in an earlier run
-            if (!b) b = LLVMCreateBuilderInContext(g.context);
-            LLVMPositionBuilderBefore(b, call);
-            LLVMValueRef zero = g.c32(0);
-            LLVMSetOperand(call, index, LLVMBuildSelect(b, LLVMBuildICmp(b, LLVMIntSLT, value, zero, ""), zero, value, ""));
-            clamped++;
-        }
-    }
-    if (b) LLVMDisposeBuilder(b);
-    return clamped;
-}
-
-// ---- cube reads at a level ------------------------------------------------------------------------------------------
-// read() of a cube (array) at a level above 0 read level 0: the plugin's body samples along the texel's direction from
-// level 0's size with a built-in sampler without mip filter and with LOD clamp 0. Each such body gets the level's size
-// and a nearest-mip sampler with the largest LOD clamp (bodies fixed in an earlier run are skipped).
-// NVAIR_CUBE_READ_LEVEL. (n14)
-enum { kOpIntToPtr = 40 };  // LLVM-C's LLVMIntToPtr
-static bool startsWith(const char *s, const char *prefix);
-
-// Kepler takes an array sample's or gather's i32 layer as unsigned, so a negative layer read the last one where WebGPU
-// clamps to 0 (Safari passes WGSL's layer unclamped): the layer argument of llvm.nvvm.{sample,gather}*.array* becomes
-// select(layer < 0, 0, layer). NVAIR_ARRAY_LAYER_CLAMP. (n52)
+// ---- texture-array layers below 0 -----------------------------------------------------------------------------------
+// Kepler takes an array sample's or gather's i32 layer as unsigned, so a negative layer read the last layer or cube,
+// where WebGPU clamps to 0 (Safari passes WGSL's layer unclamped): the layer argument of
+// llvm.nvvm.{sample,gather}*.array* becomes select(layer < 0, 0, layer). NVAIR_ARRAY_LAYER_CLAMP. (n52, a09)
 static unsigned clampArrayLayers(LLVMModuleRef module, Gen &g) {
     unsigned fixed = 0;
     LLVMBuilderRef b = nullptr;
@@ -567,6 +521,12 @@ static unsigned clampArrayLayers(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
+// ---- cube reads at a level ------------------------------------------------------------------------------------------
+// read() of a cube (array) at a level above 0 read level 0: the plugin's body samples along the texel's direction from
+// level 0's size with a built-in sampler without mip filter and with LOD clamp 0. Each such body gets the level's size
+// and a nearest-mip sampler with the largest LOD clamp (bodies fixed in an earlier run are skipped).
+// NVAIR_CUBE_READ_LEVEL. (n14)
+enum { kOpIntToPtr = 40 };  // LLVM-C's LLVMIntToPtr
 static unsigned fixCubeReadLevels(LLVMModuleRef module, Gen &g) {
     static const struct { const char *prefix; unsigned level; } kForms[] = {  // the level's parameter
         {"air.read_texture_cube.", 3}, {"air.read_texture_cube_array.", 4}, {"air.read_depth_cube.", 4}, {"air.read_depth_cube_array.", 5},
@@ -1244,7 +1204,6 @@ static unsigned guardFragmentLoads(LLVMModuleRef module, Gen &g) {
 // The plugin ends a discarded lane, so its quad's later derivatives are 0, where Metal 2.3 and WGSL keep it as a
 // helper: a discard sets a flag, the lane runs on with its stores skipped, and is discarded on return.
 // NVAIR_DEMOTE_DISCARD. (n10)
-static bool startsWith(const char *s, const char *prefix) { return !strncmp(s, prefix, strlen(prefix)); }
 static LLVMValueRef calledFunction(LLVMValueRef call) {
     LLVMValueRef callee = LLVMGetCalledValue(call);
     return callee && LLVMIsAConstant(callee) && LLVMGetValueName(callee) ? callee : nullptr;
@@ -2707,7 +2666,6 @@ static const ModuleFix kModuleFixes[] = {
     {"NVAIR_I64_FIX", fixWideInstructions, "[nvair] %u 64-bit instruction(s) rewritten\n", true},
     {"NVAIR_SAMPLER_STATE_FIX", fixSamplerStateWords, "[nvair] %u constexpr sampler(s) in the [2 x i64] form rewritten as i64\n", false},
     {"NVAIR_THREADGROUP_BOOL_FIX", widenThreadgroupBools, "[nvair] %u threadgroup bool(s) widened to i8\n", false},
-    {"NVAIR_CUBE_ARRAY_FIX", clampCubeArrayIndices, "[nvair] %u cube array index(es) raised to 0\n", false},
     {nullptr, fixGradientSamples, "[nvair] %u 3D / cube gradient sample(s) done at their level\n", false},  // NVAIR_GRADIENT_FIX, NVAIR_CUBE_GRADIENT_FIX
     {"NVAIR_NARROW_MULTIPLY_FIX", hideNarrowProducts, "[nvair] %u product(s) of 16-bit factors given an opaque factor\n", false},
     {"NVAIR_FRAGMENT_LOAD_GUARD", guardFragmentLoads, "[nvair] %u fragment device load(s) kept from a negative index\n", false},
