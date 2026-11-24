@@ -486,24 +486,25 @@ static unsigned widenThreadgroupBools(LLVMModuleRef module, Gen &g) {
 // where WebGPU clamps to 0 (Safari passes WGSL's layer unclamped): the layer argument of
 // llvm.nvvm.{sample,gather}*.array* becomes select(layer < 0, 0, layer). NVAIR_ARRAY_LAYER_CLAMP. (n52, a09)
 static unsigned clampArrayLayers(LLVMModuleRef module, Gen &g) {
+    enum { kLayerArg = 3 };  // (texture, sampler, coordinate, layer, ...)
     unsigned fixed = 0;
     LLVMBuilderRef b = nullptr;
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
         const char *name = LLVMGetValueName(f);
         if (!(startsWith(name, "llvm.nvvm.sample.") || startsWith(name, "llvm.nvvm.gather.")) || !strstr(name, ".array")) continue;
         for (LLVMValueRef call : callsTo(f)) {
-            if (LLVMGetNumArgOperands(call) <= 3) continue;
-            LLVMValueRef layer = LLVMGetOperand(call, 3);
+            if (LLVMGetNumArgOperands(call) <= kLayerArg) continue;
+            LLVMValueRef layer = LLVMGetOperand(call, kLayerArg);
             if (!isInt(LLVMTypeOf(layer), 32)) continue;
             if (LLVMIsAConstantInt(layer)) {
-                if ((int)LLVMConstIntGetZExtValue(layer) < 0) { LLVMSetOperand(call, 3, g.c32(0)); fixed++; }
+                if ((int)LLVMConstIntGetZExtValue(layer) < 0) { LLVMSetOperand(call, kLayerArg, g.c32(0)); fixed++; }
                 continue;
             }
             if (LLVMIsAInstruction(layer) && startsWith(LLVMGetValueName(layer), "nvair.layer")) continue;  // an earlier run's
             if (!b) b = LLVMCreateBuilderInContext(g.context);
             LLVMPositionBuilderBefore(b, call);
             LLVMValueRef negative = LLVMBuildICmp(b, LLVMIntSLT, layer, g.c32(0), "");
-            LLVMSetOperand(call, 3, LLVMBuildSelect(b, negative, g.c32(0), layer, "nvair.layer"));
+            LLVMSetOperand(call, kLayerArg, LLVMBuildSelect(b, negative, g.c32(0), layer, "nvair.layer"));
             fixed++;
         }
     }
