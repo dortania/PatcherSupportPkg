@@ -22,14 +22,12 @@ int main(int argc, char **argv) { @autoreleasepool {
     id<MTLDevice> dev = reproDevice(argc, argv, "NVIDIA");
     if (!dev) return SKIP(bug, "no such GPU");
     const char *name = dev.name.UTF8String;
-    NSError *err = nil;
     for (int fast = 0; fast < 2; fast++) {
         MTLCompileOptions *options = [MTLCompileOptions new];
         options.fastMathEnabled = fast;
-        id<MTLLibrary> lib = [dev newLibraryWithSource:[reproUniqueComment() stringByAppendingString:src] options:options error:&err];
-        if (!lib) return FAIL(bug, "compile: %s", err.localizedDescription.UTF8String);
-        id<MTLComputePipelineState> ps = [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"k"] error:&err];
-        if (!ps) return FAIL(bug, "%s: pipeline: %s", name, err.localizedDescription.UTF8String);
+        NSString *why = nil;
+        id<MTLComputePipelineState> ps = reproComputePipeline(dev, src, options, &why);
+        if (!ps) return FAIL(bug, "%s", why.UTF8String);
         enum { T = 256 };
         id<MTLBuffer> in = [dev newBufferWithLength:T * 16 options:MTLResourceStorageModeShared];
         id<MTLBuffer> out = [dev newBufferWithLength:T * 3 * 16 options:MTLResourceStorageModeShared];
