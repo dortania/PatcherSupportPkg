@@ -35,6 +35,14 @@ static const char *const kPluginSuffix = "/GeForceAIRPlugin";
 static bool logging() { return getenv("NVAIR_LOG") != nullptr; }
 static bool disabled(const char *name) { const char *v = getenv(name); return v && !strcmp(v, "0"); }
 static bool startsWith(const char *s, const char *prefix) { return !strncmp(s, prefix, strlen(prefix)); }
+// The calls whose callee is f (with exactly argCount arguments, unless -1), in use-list order.
+static std::vector<LLVMValueRef> callsTo(LLVMValueRef f, int argCount = -1) {
+    std::vector<LLVMValueRef> calls;
+    for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u))
+        if (LLVMValueRef call = LLVMIsACallInst(LLVMGetUser(u)))
+            if (LLVMGetCalledValue(call) == f && (argCount < 0 || LLVMGetNumOperands(call) == argCount + 1)) calls.push_back(call);
+    return calls;
+}
 
 // ---- bodies for AIR intrinsics the plugin lacks ---------------------------------------------------------------------
 // AIR intrinsics newer than the plugin stay bare declarations that instruction selection rejects ("Unhandled
@@ -483,12 +491,8 @@ static unsigned clampArrayLayers(LLVMModuleRef module, Gen &g) {
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
         const char *name = LLVMGetValueName(f);
         if (!(startsWith(name, "llvm.nvvm.sample.") || startsWith(name, "llvm.nvvm.gather.")) || !strstr(name, ".array")) continue;
-        std::vector<LLVMValueRef> calls;
-        for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u)) {
-            LLVMValueRef user = LLVMGetUser(u);
-            if (LLVMIsACallInst(user) && LLVMGetCalledValue(user) == f && LLVMGetNumArgOperands(user) > 3) calls.push_back(user);
-        }
-        for (LLVMValueRef call : calls) {
+        for (LLVMValueRef call : callsTo(f)) {
+            if (LLVMGetNumArgOperands(call) <= 3) continue;
             LLVMValueRef layer = LLVMGetOperand(call, 3);
             if (!isInt(LLVMTypeOf(layer), 32)) continue;
             if (LLVMIsAConstantInt(layer)) {
@@ -787,10 +791,7 @@ static unsigned fixGradientSamples(LLVMModuleRef module, Gen &g) {
         LLVMTypeRef lodType = LLVMFunctionType(LLVMGetReturnType(type), params, count - 1, 0);
         if (!lodForm) lodForm = LLVMAddFunction(module, name.c_str(), lodType);
         else if (LLVMGetElementType(LLVMTypeOf(lodForm)) != lodType) continue;
-        std::vector<LLVMValueRef> calls;
-        for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u))
-            if (LLVMValueRef call = LLVMIsACallInst(LLVMGetUser(u)))
-                if (LLVMGetNumOperands(call) == (int)count + 1 && LLVMGetOperand(call, count) == f) calls.push_back(call);
+        std::vector<LLVMValueRef> calls = callsTo(f, (int)count);
         if (!b) b = LLVMCreateBuilderInContext(g.context);
         for (LLVMValueRef call : calls) {
             LLVMPositionBuilderBefore(b, call);
@@ -854,10 +855,7 @@ static unsigned fixDepthCompareLevels(LLVMModuleRef module, Gen &g) {
             if (!implicit) implicit = LLVMAddFunction(module, name.c_str(), implicitType);
             else if (LLVMGetElementType(LLVMTypeOf(implicit)) != implicitType) continue;
         }
-        std::vector<LLVMValueRef> calls;
-        for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u))
-            if (LLVMValueRef call = LLVMIsACallInst(LLVMGetUser(u)))
-                if (LLVMGetNumOperands(call) == (int)count + 1 && LLVMGetOperand(call, count) == f) calls.push_back(call);
+        std::vector<LLVMValueRef> calls = callsTo(f, (int)count);
         for (LLVMValueRef call : calls) {
             LLVMValueRef level = LLVMGetOperand(call, count - 1);
             if (level == zero) continue;  // compares already
@@ -922,10 +920,7 @@ static unsigned fixGradientCompares(LLVMModuleRef module, Gen &g) {
         if (pair && (LLVMCountStructElementTypes(result) < 1 || LLVMStructGetTypeAtIndex(result, 0) != f32)) continue;
         unsigned samplerSpace = LLVMGetPointerAddressSpace(params[1]);
         LLVMTypeRef texturePointer = LLVMPointerType(i8, 1), samplerPointer = LLVMPointerType(i8, samplerSpace);
-        std::vector<LLVMValueRef> calls;
-        for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u))
-            if (LLVMValueRef call = LLVMIsACallInst(LLVMGetUser(u)))
-                if (LLVMGetCalledValue(call) == f) calls.push_back(call);
+        std::vector<LLVMValueRef> calls = callsTo(f);
         for (LLVMValueRef call : calls) {
             bool offset = false;
             if (hasOffset >= 0) {
@@ -1541,10 +1536,7 @@ static std::vector<TexAtomicCall> textureAtomicCalls(LLVMModuleRef module) {
                      s & 1 ? 's' : 'u');
             LLVMValueRef f = LLVMGetNamedFunction(module, name);
             if (!f) continue;
-            for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u)) {
-                LLVMValueRef c = LLVMGetUser(u);
-                if (LLVMIsACallInst(c) && LLVMGetCalledValue(c) == f) calls.push_back({c, op, (s & 1) != 0});
-            }
+            for (LLVMValueRef c : callsTo(f)) calls.push_back({c, op, (s & 1) != 0});
         }
     return calls;
 }
@@ -2042,10 +2034,7 @@ static unsigned fixOverflowIntrinsics(LLVMModuleRef module, Gen &g) {
         int op = !strncmp(n + 1, "add.", 4) ? 0 : !strncmp(n + 1, "sub.", 4) ? 1 : !strncmp(n + 1, "mul.", 4) ? 2 : -1;
         unsigned w = (unsigned)atoi(strstr(n, ".with.overflow.i") + 16);
         if ((n[0] != 'u' && n[0] != 's') || op < 0 || (w != 8 && w != 16 && w != 32 && w != 64)) continue;
-        std::vector<LLVMValueRef> calls;
-        for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u))
-            if (LLVMValueRef call = LLVMIsACallInst(LLVMGetUser(u)))
-                if (LLVMGetNumOperands(call) == 3 && LLVMGetOperand(call, 2) == f) calls.push_back(call);
+        std::vector<LLVMValueRef> calls = callsTo(f, 2);
         for (LLVMValueRef call : calls) {
             LLVMValueRef x = LLVMGetOperand(call, 0), y = LLVMGetOperand(call, 1), r, ov;
             LLVMTypeRef t = LLVMTypeOf(x);
@@ -2121,10 +2110,7 @@ static unsigned lowerMadSat(LLVMModuleRef module, Gen &g) {
         if ((n[0] != 'u' && n[0] != 's') || strncmp(n + 1, ".i", 2)) continue;  // scalar forms
         unsigned w = (unsigned)atoi(n + 3);
         if (w != 8 && w != 16 && w != 32) continue;
-        std::vector<LLVMValueRef> calls;
-        for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u))
-            if (LLVMValueRef call = LLVMIsACallInst(LLVMGetUser(u)))
-                if (LLVMGetNumOperands(call) == 4 && LLVMGetOperand(call, 3) == f) calls.push_back(call);
+        std::vector<LLVMValueRef> calls = callsTo(f, 3);
         for (LLVMValueRef call : calls) {
             LLVMValueRef x = LLVMGetOperand(call, 0), y = LLVMGetOperand(call, 1), z = LLVMGetOperand(call, 2);
             LLVMTypeRef t = LLVMTypeOf(x);
