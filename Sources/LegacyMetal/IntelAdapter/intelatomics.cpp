@@ -32,7 +32,7 @@
 #include <algorithm>
 #include <atomic>
 #include "gen7eu.h"
-#include "LLVMC.h"
+#include "LLVM38.h"
 
 extern "C" int passManagerRun(void *self, LLVMModuleRef module) asm("__ZN4llvm6legacy11PassManager3runERNS_6ModuleE");
 
@@ -147,16 +147,6 @@ static LLVMValueRef packCoords(LLVMBuilderRef b, LLVMTypeRef i32, LLVMValueRef c
 //  - the coordinates' unused w lane: the IGIL printer can't show such an image operand, so the IGIL text fix finds
 //    the texture through coords.w, writes the uN declared for that binding and clears w.
 static const unsigned kImageTag = 0x7A100000, kImageTagMask = 0xFFF00000, kBindingMask = 0xFFFFF;
-static std::vector<LLVMValueRef> metadataOperands(LLVMValueRef node) {
-    std::vector<LLVMValueRef> out(LLVMIsAMDNode(node) ? LLVMGetMDNodeNumOperands(node) : 0);
-    if (!out.empty()) LLVMGetMDNodeOperands(node, out.data());
-    return out;
-}
-static bool isString(LLVMValueRef value, const char *text) {
-    unsigned length = 0;
-    const char *s = value && LLVMIsAMDString(value) ? LLVMGetMDString(value, &length) : nullptr;
-    return s && length == strlen(text) && !memcmp(s, text, length);
-}
 static long metadataInt(LLVMValueRef value) {
     return value && LLVMIsAConstantInt(value) ? (long)LLVMConstIntGetZExtValue(value) : -1;
 }
@@ -174,42 +164,6 @@ static long indexOfKeyWithValue(const std::vector<LLVMValueRef> &fields, const c
 }
 
 extern "C" void mdNodeReplaceOperand(void *node, unsigned index, void *replacement) asm("__ZN4llvm6MDNode18replaceOperandWithEjPNS_8MetadataE");
-// ---- LLVM 3.8 object layouts -----------------------------------------------------------------------------------------
-// Fields read where the C API has no accessor, laid out as in the LLVM that Apple's Intel plugin links (libLLVM3802).
-namespace llvm38 {
-enum ValueId : unsigned char {
-    kFunctionValue = 5, kFirstInstruction = 0x18, kLoadInstruction = 0x36, kStoreInstruction = 0x37,
-    kGEPInstruction = 0x38, kCallInstruction = 0x4e
-};
-inline unsigned char valueId(const void *value) { return ((const unsigned char *)value)[0x18]; }
-inline const char *firstUse(const char *value) { return *(const char *const *)(value + 0x10); }
-inline const char *nextUse(const char *use) { return *(const char *const *)(use + 8); }
-const size_t kUseSize = 24;  // a User's operands (Uses) lie just before it
-inline unsigned operandCount(const char *user) { return *(const uint32_t *)(user + 0x1c) & 0xfffffff; }
-inline const char *operand(const char *user, unsigned i) {
-    return *(const char *const *)(user - kUseSize * (size_t)(operandCount(user) - i));
-}
-inline const char *lastOperand(const char *user) { return *(const char *const *)(user - kUseSize); }
-inline void *wrappedMetadata(LLVMValueRef metadataAsValue) { return *(void **)((char *)metadataAsValue + 0x20); }
-inline unsigned mdNodeOperandCount(void *node) { return *(unsigned *)((char *)node + 8); }
-// SelectionDAG nodes; operands are 0x28-byte SDUses, each starting with its SDValue
-struct SDValue { char *node; unsigned resno; };
-struct EVT { unsigned char simple; void *type; };
-const size_t kSDUseSize = 0x28;
-inline unsigned short sdOpcode(const char *node) { return *(unsigned short *)(node + 0x18); }
-inline char *sdOperandList(const char *node) { return *(char **)(node + 0x20); }
-inline SDValue sdOperandAt(const char *operandList, unsigned k) { return *(SDValue *)(operandList + k * kSDUseSize); }
-inline unsigned short sdOperandCount(const char *node) { return *(unsigned short *)(node + 0x38); }
-inline unsigned sdIROrder(const char *node) { return *(unsigned *)(node + 0x3c); }
-inline EVT sdValueType(SDValue value) { return ((EVT *)*(char **)(value.node + 0x28))[value.resno]; }
-}  // namespace llvm38
-
-// The MDNode a metadata value wraps, checked against its operand count.
-static void *metadataOf(LLVMValueRef value) {
-    if (!value || !LLVMIsAMDNode(value)) return nullptr;
-    void *md = llvm38::wrappedMetadata(value);
-    return md && llvm38::mdNodeOperandCount(md) == LLVMGetMDNodeNumOperands(value) ? md : nullptr;
-}
 static bool replaceOperandWithNode(LLVMContextRef context, LLVMValueRef node, unsigned index, std::vector<LLVMValueRef> &operands) {
     void *target = metadataOf(node);
     void *replacement = metadataOf(LLVMMDNodeInContext(context, operands.data(), (unsigned)operands.size()));
@@ -1394,25 +1348,6 @@ static bool hookIGILEntry(unsigned char *entry) {
     return true;
 }
 
-// Redirect the plugin's imported pointer to PassManager::run (found by value in its data segments).
-static unsigned redirectPassManager(const mach_header_64 *header, intptr_t slide) {
-    unsigned patched = 0;
-    const char *p = (const char *)(header + 1);
-    for (uint32_t i = 0; i < header->ncmds; i++, p += ((const load_command *)p)->cmdsize) {
-        const segment_command_64 *seg = (const segment_command_64 *)p;
-        if (seg->cmd != LC_SEGMENT_64 || strncmp(seg->segname, "__DATA", 6)) continue;
-        void **start = (void **)(seg->vmaddr + slide), **end = (void **)(seg->vmaddr + slide + seg->vmsize);
-        for (void **slot = start; slot < end; slot++) {
-            if (*slot != (void *)passManagerRun) continue;
-            vm_protect(mach_task_self(), (vm_address_t)slot & ~(vm_address_t)(vm_page_size - 1), vm_page_size, false,
-                       VM_PROT_READ | VM_PROT_WRITE);
-            *slot = (void *)hookedRun;
-            patched++;
-        }
-    }
-    return patched;
-}
-
 // Installs into the loaded plugin once: import redirect (unless interposed already) and the IGIL entry hooks.
 static pthread_mutex_t installLock = PTHREAD_MUTEX_INITIALIZER;
 static bool textFixInstalled;
@@ -1429,7 +1364,7 @@ static void installIntoPlugin(bool redirectImport) {
         // Told apart by its own entry point, not only by the bundle in its path: test runs load the plugin by leaf name
         // from a temporary folder.
         ivyBridgePlugin = strstr(name, "AppleIntelHD4000GraphicsMTLDriver") || (h && dlsym(h, kIGILEntryPointsIVB[1]));
-        unsigned imports = redirectImport ? redirectPassManager((const mach_header_64 *)_dyld_get_image_header(i), _dyld_get_image_vmaddr_slide(i)) : 0;
+        unsigned imports = redirectImport ? redirectImportedPointer((const mach_header_64 *)_dyld_get_image_header(i), _dyld_get_image_vmaddr_slide(i), (void *)passManagerRun, (void *)hookedRun) : 0;
         const char *const *symbols = ivyBridgePlugin ? kIGILEntryPointsIVB : kIGILEntryPoints;
         size_t count = ivyBridgePlugin ? sizeof kIGILEntryPointsIVB / sizeof *kIGILEntryPointsIVB : sizeof kIGILEntryPoints / sizeof *kIGILEntryPoints;
         if (ivyBridgePlugin && disabled("INTEL_IVB_TEXT_FIX")) count = 0;
@@ -5547,17 +5482,7 @@ static unsigned expandConstantCopies(LLVMModuleRef module) {
 // and dereferences null for inline asm, crashing the compiler service (i81; Electron windows with Skia's blur shadows
 // stayed blank). Metal has no inline asm to run, and the front end's loop passes are done by now: the call is dropped.
 static unsigned dropInlineAsm(LLVMModuleRef module) {
-    if (disabled("INTEL_INLINE_ASM_FIX")) return 0;
-    unsigned dropped = 0;
-    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
-        for (LLVMBasicBlockRef block = LLVMGetFirstBasicBlock(f); block; block = LLVMGetNextBasicBlock(block))
-            for (LLVMValueRef inst = LLVMGetFirstInstruction(block), next; inst; inst = next) {
-                next = LLVMGetNextInstruction(inst);
-                if (!LLVMIsACallInst(inst) || !LLVMIsAInlineAsm(LLVMGetCalledValue(inst)) || LLVMGetFirstUse(inst)) continue;
-                LLVMInstructionEraseFromParent(inst);
-                dropped++;
-            }
-    return dropped;
+    return disabled("INTEL_INLINE_ASM_FIX") ? 0 : dropUnusedInlineAsmCalls(module);
 }
 
 enum PluginScope { kEveryPlugin, kIvyBridgeOnly, kHaswellOnly };
