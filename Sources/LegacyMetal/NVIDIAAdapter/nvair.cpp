@@ -94,6 +94,9 @@
 // Texture atomics on read_write texture2d<uint/int> (no body in the plugin: the compiler crashed) made global atomics on
 // the linear buffer MetalOldCompat item 58 gives such textures, bound at a hidden buffer index. NVAIR_TEXTURE_ATOMICS=0.
 //
+// Negative array layers of samples and gathers clamped to layer 0 (the hardware took them as unsigned, so -1 sampled
+// the last layer; WebGPU clamps, and Safari's WebGPU leaves it to the GPU). NVAIR_ARRAY_LAYER_CLAMP=0.
+//
 // Installed (planned): GeForceAIRPlugin.bundle/Contents/MacOS/GeForceAIRCompat.dylib, a weak dependency of
 // GeForceAIRPlugin. Test use: DYLD_INSERT_LIBRARIES=Tests/tools/localcc.dylib:build/GeForceAIRCompat-test.dylib
 //   NVAIR_LOG=1             log what is rewritten (NVAIR_LOG=/path: append to that file)
@@ -797,6 +800,44 @@ LLVMValueRef LLVMGetCalledValue(LLVMValueRef);
 }
 enum { kOpIntToPtr = 40 };  // LLVM-C's LLVMIntToPtr
 static bool startsWith(const char *s, const char *prefix);
+
+// Array layers of samples and gathers. The plugin passes the layer of a texture-array sample or gather, an i32, straight
+// to llvm.nvvm.{sample,gather}[.compare].tex.{1d,2d,cube}.array*, and the hardware takes it as unsigned: layers past
+// the end are clamped to the last one, and so is a negative layer, which the sampler should clamp to 0 (layer -1 of an
+// 8-layer 2D array sampled layer 7). WebGPU clamps the layer to [0, layers - 1], and Safari's WebGPU passes WGSL's i32
+// layer to Metal unclamped (CTS textureSampleLevel/textureSample/textureSampleBias sampled_array_2d_coords, arrayIndex
+// -1, in WebKit); Metal's own GPUs clamp it that way. Every such intrinsic has the layer at argument 3; it is made
+// select(layer < 0, 0, layer) (a constant one folded), once (the select is named nvair.layer: the plugin runs its pass
+// managers twice). Test n52. NVAIR_ARRAY_LAYER_CLAMP=0 turns it off.
+static unsigned clampArrayLayers(LLVMModuleRef module, Gen &g) {
+    unsigned fixed = 0;
+    LLVMBuilderRef b = nullptr;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
+        const char *name = LLVMGetValueName(f);
+        if (!(startsWith(name, "llvm.nvvm.sample.") || startsWith(name, "llvm.nvvm.gather.")) || !strstr(name, ".array")) continue;
+        std::vector<LLVMValueRef> calls;
+        for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u)) {
+            LLVMValueRef user = LLVMGetUser(u);
+            if (LLVMIsACallInst(user) && LLVMGetCalledValue(user) == f && LLVMGetNumArgOperands(user) > 3) calls.push_back(user);
+        }
+        for (LLVMValueRef call : calls) {
+            LLVMValueRef layer = LLVMGetOperand(call, 3);
+            if (!isInt(LLVMTypeOf(layer), 32)) continue;
+            if (LLVMIsAConstantInt(layer)) {
+                if ((int)LLVMConstIntGetZExtValue(layer) < 0) { LLVMSetOperand(call, 3, g.c32(0)); fixed++; }
+                continue;
+            }
+            if (LLVMIsAInstruction(layer) && startsWith(LLVMGetValueName(layer), "nvair.layer")) continue;  // an earlier run's
+            if (!b) b = LLVMCreateBuilderInContext(g.context);
+            LLVMPositionBuilderBefore(b, call);
+            LLVMValueRef negative = LLVMBuildICmp(b, LLVMIntSLT, layer, g.c32(0), "");
+            LLVMSetOperand(call, 3, LLVMBuildSelect(b, negative, g.c32(0), layer, "nvair.layer"));
+            fixed++;
+        }
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
 
 static unsigned fixCubeReadLevels(LLVMModuleRef module, Gen &g) {
     static const struct { const char *prefix; unsigned level; } kForms[] = {  // the level's parameter
@@ -3197,6 +3238,8 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         unsigned depthChannels = disabled("NVAIR_DEPTH_CHANNELS") ? 0 : fixDepthChannels(module, g);
         (void)depthChannels;
         unsigned cubeReads = disabled("NVAIR_CUBE_READ_LEVEL") ? 0 : fixCubeReadLevels(module, g);
+        unsigned layers = disabled("NVAIR_ARRAY_LAYER_CLAMP") ? 0 : clampArrayLayers(module, g);
+        if (layers && logging()) fprintf(stderr, "[nvair] %u texture-array layer(s) clamped at 0\n", layers);
         unsigned exchanges = disabled("NVAIR_LOCAL_CMPXCHG") ? 0 : fixLocalCompareExchange(module, g);
         unsigned signedBools = disabled("NVAIR_SIGNED_BOOL_FIX") ? 0 : fixSignedBoolConversions(module, g);
         unsigned joinAtomics = disabled("NVAIR_ATOMIC_JOIN_FIX") ? 0 : fixAtomicJoinOperands(module, g);
