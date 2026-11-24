@@ -1,36 +1,16 @@
-// IntelTextureAtomics.dylib: MSL texture atomics (Metal 3.1) for OCLP's 3802 Intel Metal compiler
-// (libMTLIntelCompilerPlugin + libIGIL-Metal, Haswell / Ivy Bridge GPUs on macOS 14+).
+// IntelTextureAtomics.dylib: fixes for OCLP's 3802 Intel Metal compiler (libMTLIntelCompilerPlugin + libIGIL-Metal) on
+// Haswell and Ivy Bridge, fed by the macOS 14 front end. Each fix rewrites the module before the back end runs, hooks a
+// back-end function, or corrects the IGIL text the back end produces. FIXES.md section 4 lists them, each with the switch
+// that turns it off and its test.
 //
-// The plugin's built-in function library (runtime.igil64.bc) has no air.atomic_*_explicit_texture_* functions, so
-// such shaders fail to compile, but the IGIL back end has image atomics (llvm.igil.atom.<op>i32.image) and USC
-// compiles them. The back end's own handling of them only works for a texture used in the entry block of a compute
-// function and names the wrong UAV, so three steps:
-//   1. Before each llvm::legacy::PassManager::run on a module (imported from the 3802 libLLVM; LLVM-C API used for
-//      the rewrite): air.atomic_<op>_explicit_texture_<dim>(texture, coords, [layer,] value, order, scope) ->
-//      llvm.igil.atom.<op>i32.image(ptrtoint texture, tag, value, <coords, tag>, 0), tag = the texture's binding.
-//   2. IGILTargetLowering::LowerImageAtomic (inline hook): image operand = the tag, value back in its place.
-//   3. Before each MTLIntelCompiler::compile*FunctionIGILtoBinary: IMM_ATOMIC_* image operand -> the u<N> declared
-//      for the binding found through coords.w, which is cleared.
-// Installed: AppleIntelHD5000GraphicsMTLDriver.bundle/Contents/MacOS/IntelTextureAtomics.dylib (Haswell, 12.5 payload) and
-// AppleIntelHD4000GraphicsMTLDriver.bundle/Contents/MacOS/IntelTextureAtomics.dylib (Ivy Bridge, 11.7.10 payloads), a weak
-// dependency of each bundle's libMTLIntelCompilerPlugin.dylib. Ivy Bridge's plugin is an older build: its IGIL entry
-// points have their own names, its argument buffers need the hidden bindings below, and the narrow-private-array rewrite
-// and the SIMD16 check stay off there. Test use: DYLD_INSERT_LIBRARIES=Tests/tools/localcc.dylib:build/intelatomics-test.dylib
-//   INTELTEX_LOG=1        log what is rewritten (INTELTEX_LOG=/path: append the log to that file, e.g. from
-//                         MTLCompilerService through __XPC_INTELTEX_LOG)
-//   INTELTEX_DUMP=<dir>   write each lowered module and the IGIL text before the fix
-//   INTELTEX_DUMP_INPUT=<dir>  write every module as it reaches the pass manager
-// Also (compiler compatibility, not texture atomics): air.max_work_group_size dropped (the back end aborts on it),
-// air.struct_type_info dropped from array-of-struct buffer arguments (the argument-buffer emulation asserts on them),
-// signed i8/i16 conversions in vertex functions done with shifts of the 32-bit word (the back end can read the top lane
-// from the wrong word), the LOD bias dropped from depth comparisons (the back end can't compile them), texel offsets
-// of integer texture samples moved into the coordinates (the back end ignores them), constexpr samplers from newer
-// front ends ([2 x i64]) rewritten in the i64 form the back end reads (it crashes on the array), and explicit levels in
-// compute kernels remapped so the sampler's narrow mip blend there comes out linear, threadgroup bools widened to i8
-// (the back end can't select i1 loads and stores there), aligned subword accesses to private memory done on their word,
-// float3 vertex inputs read through fmax (a bare copy to an output reads an unset register), and variable-index accesses to
-// small private arrays done at constant indices (the back end addresses such arrays two incompatible ways), and loads
-// and stores through a select of private pointers split per pointer (the back end forwards stale loads of such arrays).
+// Loaded as a weak dependency of libMTLIntelCompilerPlugin.dylib from AppleIntelHD5000GraphicsMTLDriver.bundle (Haswell,
+// 12.5 payload) and AppleIntelHD4000GraphicsMTLDriver.bundle (Ivy Bridge, 11.7.10 payloads: an older plugin build whose
+// entry points have other names). Tests load it from build/ (Tests/verify.sh, Tests/fuzz/gpu.sh BUILD=1).
+//   INTELTEX_LOG=1 | <file>        log each rewrite (to a file, e.g. from MTLCompilerService through __XPC_INTELTEX_LOG)
+//   INTELTEX_DUMP=<dir>            the lowered modules, and the IGIL text before and after its fixes
+//   INTELTEX_DUMP_INPUT=<dir>      every module as it reaches the pass manager
+//   INTELTEX_DUMP_REWRITTEN=<dir>  every module after the rewrites
+//   INTELTEX_DUMP_KERNELS=<dir>    each pixel shader's SIMD8 and SIMD16 kernels
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
@@ -52,91 +32,40 @@
 #include <algorithm>
 #include <atomic>
 #include "gen7eu.h"
+#include "LLVMC.h"
 
-extern "C" {
-typedef struct LLVMOpaqueModule *LLVMModuleRef;
-typedef struct LLVMOpaqueValue *LLVMValueRef;
-typedef struct LLVMOpaqueType *LLVMTypeRef;
-typedef struct LLVMOpaqueBuilder *LLVMBuilderRef;
-typedef struct LLVMOpaqueContext *LLVMContextRef;
-typedef struct LLVMOpaqueUse *LLVMUseRef;
-LLVMValueRef LLVMGetNamedFunction(LLVMModuleRef, const char *);
-LLVMContextRef LLVMGetModuleContext(LLVMModuleRef);
-LLVMBuilderRef LLVMCreateBuilderInContext(LLVMContextRef);
-void LLVMPositionBuilderBefore(LLVMBuilderRef, LLVMValueRef);
-void LLVMDisposeBuilder(LLVMBuilderRef);
-LLVMTypeRef LLVMInt32TypeInContext(LLVMContextRef);
-LLVMTypeRef LLVMVectorType(LLVMTypeRef, unsigned);
-LLVMTypeRef LLVMTypeOf(LLVMValueRef);
-int LLVMGetTypeKind(LLVMTypeRef);
-unsigned LLVMGetVectorSize(LLVMTypeRef);
-LLVMValueRef LLVMConstInt(LLVMTypeRef, unsigned long long, int);
-LLVMValueRef LLVMConstNull(LLVMTypeRef);
-LLVMValueRef LLVMGetUndef(LLVMTypeRef);
-LLVMValueRef LLVMBuildInsertElement(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildExtractElement(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildNeg(LLVMBuilderRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildPtrToInt(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
-LLVMValueRef LLVMBuildCall(LLVMBuilderRef, LLVMValueRef, LLVMValueRef *, unsigned, const char *);
-LLVMValueRef LLVMBuildLoad(LLVMBuilderRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildStore(LLVMBuilderRef, LLVMValueRef, LLVMValueRef);
-LLVMValueRef LLVMBuildICmp(LLVMBuilderRef, int, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildZExt(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
-void LLVMReplaceAllUsesWith(LLVMValueRef, LLVMValueRef);
-void LLVMInstructionEraseFromParent(LLVMValueRef);
-LLVMUseRef LLVMGetFirstUse(LLVMValueRef);
-LLVMUseRef LLVMGetNextUse(LLVMUseRef);
-LLVMValueRef LLVMGetUser(LLVMUseRef);
-int LLVMGetNumOperands(LLVMValueRef);
-LLVMValueRef LLVMGetOperand(LLVMValueRef, unsigned);
-LLVMValueRef LLVMIsAArgument(LLVMValueRef);
-LLVMValueRef LLVMGetParamParent(LLVMValueRef);
-unsigned LLVMCountParams(LLVMValueRef);
-LLVMValueRef LLVMGetParam(LLVMValueRef, unsigned);
-LLVMTypeRef LLVMTypeOf(LLVMValueRef);
-LLVMTypeRef LLVMGetElementType(LLVMTypeRef);
-int LLVMGetTypeKind(LLVMTypeRef);
-unsigned LLVMGetNamedMetadataNumOperands(LLVMModuleRef, const char *);
-void LLVMGetNamedMetadataOperands(LLVMModuleRef, const char *, LLVMValueRef *);
-unsigned LLVMGetMDNodeNumOperands(LLVMValueRef);
-void LLVMGetMDNodeOperands(LLVMValueRef, LLVMValueRef *);
-const char *LLVMGetMDString(LLVMValueRef, unsigned *);
-LLVMValueRef LLVMIsAMDNode(LLVMValueRef);
-LLVMValueRef LLVMIsAMDString(LLVMValueRef);
-LLVMValueRef LLVMIsAConstantInt(LLVMValueRef);
-LLVMValueRef LLVMMDNodeInContext(LLVMContextRef, LLVMValueRef *, unsigned);
-unsigned long long LLVMConstIntGetZExtValue(LLVMValueRef);
-char *LLVMPrintModuleToString(LLVMModuleRef);
-LLVMValueRef LLVMGetFirstFunction(LLVMModuleRef);
-LLVMValueRef LLVMGetNextFunction(LLVMValueRef);
-const char *LLVMGetValueName(LLVMValueRef);
-char *LLVMPrintTypeToString(LLVMTypeRef);
-void LLVMDisposeMessage(char *);
-// Texture/sampler loads through escaped pointers (fixEscapedHandleLoads)
-typedef struct LLVMOpaqueBasicBlock *LLVMBasicBlockRef;
-LLVMBasicBlockRef LLVMGetFirstBasicBlock(LLVMValueRef);
-LLVMBasicBlockRef LLVMGetNextBasicBlock(LLVMBasicBlockRef);
-LLVMValueRef LLVMGetFirstInstruction(LLVMBasicBlockRef);
-LLVMValueRef LLVMGetNextInstruction(LLVMValueRef);
-LLVMValueRef LLVMIsALoadInst(LLVMValueRef);
-LLVMValueRef LLVMIsAAllocaInst(LLVMValueRef);
-LLVMValueRef LLVMBuildAlloca(LLVMBuilderRef, LLVMTypeRef, const char *);
-LLVMTypeRef LLVMArrayType(LLVMTypeRef, unsigned);
-LLVMTypeRef LLVMGetAllocatedType(LLVMValueRef);
-LLVMValueRef LLVMIsAGetElementPtrInst(LLVMValueRef);
-LLVMValueRef LLVMIsABitCastInst(LLVMValueRef);
-LLVMValueRef LLVMIsAConstant(LLVMValueRef);
-int LLVMIsDeclaration(LLVMValueRef);
-int LLVMGetAttribute(LLVMValueRef);  // LLVMAttribute bits of an argument; LLVMByValAttribute = 1 << 7
-unsigned LLVMGetArrayLength(LLVMTypeRef);
-const char *LLVMGetStructName(LLVMTypeRef);
-LLVMTypeRef LLVMInt64TypeInContext(LLVMContextRef);
-LLVMValueRef LLVMBuildInBoundsGEP(LLVMBuilderRef, LLVMValueRef, LLVMValueRef *, unsigned, const char *);
-LLVMValueRef LLVMBuildSelect(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, LLVMValueRef, const char *);
-}
 extern "C" int passManagerRun(void *self, LLVMModuleRef module) asm("__ZN4llvm6legacy11PassManager3runERNS_6ModuleE");
 
 static bool logging() { return getenv("INTELTEX_LOG") != nullptr; }
+// One line per fix that changed something: "[inteltex] <format with the count>".
+static void logCount(const char *format, unsigned count) {
+    char message[512];
+    snprintf(message, sizeof message, format, count);
+    fprintf(stderr, "[inteltex] %s\n", message);
+}
+// A fix is on unless its switch is set to 0.
+static bool disabled(const char *setting) {
+    const char *value = getenv(setting);
+    return value && !strcmp(value, "0");
+}
+// Debugging: writes `text` to <the directory $setting names>/<name>-[<pid>-]<serial><extension>, numbered per name.
+static std::map<std::string, int> *dumpSerials;  // per dump name; allocated once, never destroyed
+static void dumpText(const char *setting, const char *name, bool withProcessId, const char *extension, const std::string &text) {
+    const char *directory = getenv(setting);
+    if (!directory) return;
+    if (!dumpSerials) dumpSerials = new std::map<std::string, int>;
+    int serial = (*dumpSerials)[name]++;
+    char path[1024];
+    if (withProcessId) snprintf(path, sizeof path, "%s/%s-%d-%d%s", directory, name, getpid(), serial, extension);
+    else snprintf(path, sizeof path, "%s/%s-%d%s", directory, name, serial, extension);
+    if (FILE *f = fopen(path, "w")) { fwrite(text.data(), 1, text.size(), f); fclose(f); }
+}
+static void dumpModule(const char *setting, const char *name, bool withProcessId, LLVMModuleRef module) {
+    if (!getenv(setting)) return;
+    char *text = LLVMPrintModuleToString(module);
+    dumpText(setting, name, withProcessId, ".ll", text);
+    LLVMDisposeMessage(text);
+}
 
 // ---- IGIL intrinsic table (libIGIL-Metal, exported): name -> ID -> correctly typed declaration -------------------
 static const char *const kIGILPath = "/System/Library/Extensions/AppleIntelGraphicsShared.bundle/Contents/MacOS/libIGIL-Metal.dylib";
@@ -174,6 +103,11 @@ static LLVMValueRef igilIntrinsic(LLVMModuleRef module, const char *op) {
 }
 
 // ---- step 1: AIR ---------------------------------------------------------------------------------------------------
+// MSL texture atomics (Metal 3.1): the plugin's built-in library has no air.atomic_*_explicit_texture_* functions, but the
+// back end has image atomics. Three steps turn one into the other:
+//   1. here: air.atomic_<op>_explicit_texture_<dim> becomes llvm.igil.atom.<op>i32.image, tagged with the texture's binding;
+//   2. hookedLowerImageAtomic puts the tag where the image operand goes (the back end finds that only in the entry block);
+//   3. the IGIL text fix replaces the tag with the u<N> declared for that binding.
 enum Kind { kFetch, kLoad, kStore, kCompareExchange };
 static const struct { const char *air; const char *igilU, *igilS; bool negate; Kind kind; } kOps[] = {
     {"fetch_add", "addi32", "addi32", false, kFetch}, {"fetch_sub", "addi32", "addi32", true, kFetch},
@@ -223,28 +157,116 @@ static bool isString(LLVMValueRef value, const char *text) {
     const char *s = value && LLVMIsAMDString(value) ? LLVMGetMDString(value, &length) : nullptr;
     return s && length == strlen(text) && !memcmp(s, text, length);
 }
+static long metadataInt(LLVMValueRef value) {
+    return value && LLVMIsAConstantInt(value) ? (long)LLVMConstIntGetZExtValue(value) : -1;
+}
+// The integer `skip` operands after the first `key` among a node's operands, or -1.
+static long fieldAfter(const std::vector<LLVMValueRef> &fields, const char *key, unsigned skip = 1) {
+    for (size_t k = 0; k + skip < fields.size(); k++)
+        if (isString(fields[k], key)) return metadataInt(fields[k + skip]);
+    return -1;
+}
+// The position of the first `key` among a node's operands that has an operand after it, or -1.
+static long indexOfKeyWithValue(const std::vector<LLVMValueRef> &fields, const char *key) {
+    for (size_t k = 0; k + 1 < fields.size(); k++)
+        if (isString(fields[k], key)) return (long)k;
+    return -1;
+}
+
+extern "C" void mdNodeReplaceOperand(void *node, unsigned index, void *replacement) asm("__ZN4llvm6MDNode18replaceOperandWithEjPNS_8MetadataE");
+// ---- LLVM 3.8 object layouts -----------------------------------------------------------------------------------------
+// Fields read where the C API has no accessor, laid out as in the LLVM that Apple's Intel plugin links (libLLVM3802).
+namespace llvm38 {
+enum ValueId : unsigned char {
+    kFunctionValue = 5, kFirstInstruction = 0x18, kLoadInstruction = 0x36, kStoreInstruction = 0x37,
+    kGEPInstruction = 0x38, kCallInstruction = 0x4e
+};
+inline unsigned char valueId(const void *value) { return ((const unsigned char *)value)[0x18]; }
+inline const char *firstUse(const char *value) { return *(const char *const *)(value + 0x10); }
+inline const char *nextUse(const char *use) { return *(const char *const *)(use + 8); }
+const size_t kUseSize = 24;  // a User's operands (Uses) lie just before it
+inline unsigned operandCount(const char *user) { return *(const uint32_t *)(user + 0x1c) & 0xfffffff; }
+inline const char *operand(const char *user, unsigned i) {
+    return *(const char *const *)(user - kUseSize * (size_t)(operandCount(user) - i));
+}
+inline const char *lastOperand(const char *user) { return *(const char *const *)(user - kUseSize); }
+inline void *wrappedMetadata(LLVMValueRef metadataAsValue) { return *(void **)((char *)metadataAsValue + 0x20); }
+inline unsigned mdNodeOperandCount(void *node) { return *(unsigned *)((char *)node + 8); }
+// SelectionDAG nodes; operands are 0x28-byte SDUses, each starting with its SDValue
+struct SDValue { char *node; unsigned resno; };
+struct EVT { unsigned char simple; void *type; };
+const size_t kSDUseSize = 0x28;
+inline unsigned short sdOpcode(const char *node) { return *(unsigned short *)(node + 0x18); }
+inline char *sdOperandList(const char *node) { return *(char **)(node + 0x20); }
+inline SDValue sdOperandAt(const char *operandList, unsigned k) { return *(SDValue *)(operandList + k * kSDUseSize); }
+inline unsigned short sdOperandCount(const char *node) { return *(unsigned short *)(node + 0x38); }
+inline unsigned sdIROrder(const char *node) { return *(unsigned *)(node + 0x3c); }
+inline EVT sdValueType(SDValue value) { return ((EVT *)*(char **)(value.node + 0x28))[value.resno]; }
+}  // namespace llvm38
+
+// The MDNode a metadata value wraps, checked against its operand count.
+static void *metadataOf(LLVMValueRef value) {
+    if (!value || !LLVMIsAMDNode(value)) return nullptr;
+    void *md = llvm38::wrappedMetadata(value);
+    return md && llvm38::mdNodeOperandCount(md) == LLVMGetMDNodeNumOperands(value) ? md : nullptr;
+}
+static bool replaceOperandWithNode(LLVMContextRef context, LLVMValueRef node, unsigned index, std::vector<LLVMValueRef> &operands) {
+    void *target = metadataOf(node);
+    void *replacement = metadataOf(LLVMMDNodeInContext(context, operands.data(), (unsigned)operands.size()));
+    if (!target || !replacement) return false;
+    mdNodeReplaceOperand(target, index, replacement);
+    return true;
+}
+
+// An entry point's node in the module's !air.kernel, !air.fragment or !air.vertex list: !{function, !outputs, !inputs, ...}.
+struct EntryPoint {
+    const char *list;
+    LLVMValueRef node;
+    std::vector<LLVMValueRef> operands;
+    LLVMValueRef function() const { return operands.empty() ? nullptr : operands[0]; }
+};
+// Visits every entry point. Each node is read just before its visit, so a visit may rewrite the nodes it has seen.
+template <typename Visit> static void forEachEntryPoint(LLVMModuleRef module, Visit visit) {
+    for (const char *list : {"air.kernel", "air.fragment", "air.vertex"}) {
+        std::vector<LLVMValueRef> nodes(LLVMGetNamedMetadataNumOperands(module, list));
+        if (nodes.empty()) continue;
+        LLVMGetNamedMetadataOperands(module, list, nodes.data());
+        for (LLVMValueRef node : nodes) visit(EntryPoint{list, node, metadataOperands(node)});
+    }
+}
+// Replaces each argument description of every entry point (in its output and input lists) that `rewrite` returns
+// operands for. Returns how many it replaced.
+template <typename Rewrite> static unsigned rewriteEachArgument(LLVMModuleRef module, Rewrite rewrite) {
+    unsigned replaced = 0;
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    forEachEntryPoint(module, [&](const EntryPoint &entry) {
+        for (unsigned list = 1; list < entry.operands.size(); list++) {
+            std::vector<LLVMValueRef> descriptions = metadataOperands(entry.operands[list]);
+            for (unsigned d = 0; d < descriptions.size(); d++) {
+                std::vector<LLVMValueRef> replacement = rewrite(entry.function(), metadataOperands(descriptions[d]));
+                if (!replacement.empty() && replaceOperandWithNode(context, entry.operands[list], d, replacement)) replaced++;
+            }
+        }
+    });
+    return replaced;
+}
 // The binding of texture parameter `param` of `function`, from !air.kernel / !air.fragment / !air.vertex:
 // !{fn, !outputs, !{..., !{i32 param, !"air.texture", !"air.location_index", i32 binding, i32 count, ...}, ...}}
 static int textureBinding(LLVMModuleRef module, LLVMValueRef function, unsigned param) {
-    for (const char *list : {"air.kernel", "air.fragment", "air.vertex"}) {
-        std::vector<LLVMValueRef> entries(LLVMGetNamedMetadataNumOperands(module, list));
-        if (entries.empty()) continue;
-        LLVMGetNamedMetadataOperands(module, list, entries.data());
-        for (LLVMValueRef entry : entries) {
-            std::vector<LLVMValueRef> parts = metadataOperands(entry);
-            if (parts.size() < 3 || parts[0] != function) continue;
-            for (LLVMValueRef argument : metadataOperands(parts[2])) {
-                std::vector<LLVMValueRef> fields = metadataOperands(argument);
-                if (fields.size() < 5 || !LLVMIsAConstantInt(fields[0]) || LLVMConstIntGetZExtValue(fields[0]) != param ||
-                    !isString(fields[1], "air.texture"))
-                    continue;
-                for (size_t k = 2; k + 1 < fields.size(); k++)
-                    if (isString(fields[k], "air.location_index") && LLVMIsAConstantInt(fields[k + 1]))
-                        return (int)LLVMConstIntGetZExtValue(fields[k + 1]);
-            }
+    int binding = -1;
+    forEachEntryPoint(module, [&](const EntryPoint &entry) {
+        if (binding >= 0 || entry.operands.size() < 3 || entry.function() != function) return;
+        for (LLVMValueRef description : metadataOperands(entry.operands[2])) {
+            std::vector<LLVMValueRef> fields = metadataOperands(description);
+            if (fields.size() < 5 || metadataInt(fields[0]) != (long)param || !isString(fields[1], "air.texture")) continue;
+            for (size_t k = 2; k + 1 < fields.size(); k++)
+                if (isString(fields[k], "air.location_index") && LLVMIsAConstantInt(fields[k + 1])) {
+                    binding = (int)LLVMConstIntGetZExtValue(fields[k + 1]);
+                    return;
+                }
         }
-    }
-    return -1;
+    });
+    return binding;
 }
 static LLVMValueRef imageTag(LLVMModuleRef module, LLVMTypeRef i32, LLVMValueRef texture) {
     if (!LLVMIsAArgument(texture)) return nullptr;
@@ -322,10 +344,30 @@ static unsigned lowerTextureAtomics(LLVMModuleRef module) {
 }
 
 // ---- step 2: IGIL --------------------------------------------------------------------------------------------------
-// IMM_ATOMIC_<OP> dst, rI, rC, ...  where rC = MOV_SWZ rC, x, y, z, rT.c and MOV rT.c, <kImageTag | binding>
-//   ->  MOV rC.w, 0;  IMM_ATOMIC_<OP> dst, uM, rC, ...   (uM: the DCL_UAVTYPED with LOCATION_INDEX binding, 0)
-// An atomic whose texture can't be found gets "unresolved_image", which fails the compile rather than address the
-// wrong texture.
+// Text helpers for the IGIL fixes.
+static std::vector<std::string> splitLines(const std::string &text) {
+    std::vector<std::string> lines;
+    for (size_t pos = 0; pos <= text.size();) {
+        size_t eol = text.find('\n', pos);
+        if (eol == std::string::npos) eol = text.size();
+        lines.push_back(text.substr(pos, eol - pos));
+        pos = eol + 1;
+    }
+    return lines;
+}
+static std::string joinLines(const std::vector<std::string> &lines) {
+    std::string text;
+    for (size_t i = 0; i < lines.size(); i++) {
+        text += lines[i];
+        if (i + 1 < lines.size()) text += '\n';
+    }
+    return text;
+}
+// Sets the highest temporary register the IGIL text declares: DCL_TEMPS r0..r<last>.
+static void declareTemporariesUpTo(std::string &text, unsigned long last) {
+    size_t numberAt = text.find("\tDCL_TEMPS r0..r") + 16, numberEnd = text.find_first_not_of("0123456789", numberAt);
+    text.replace(numberAt, numberEnd - numberAt, std::to_string(last));
+}
 static std::string operandRegister(const std::string &token) {  // " r12.x" -> "r12"
     size_t a = token.find_first_not_of(' ');
     if (a == std::string::npos || token[a] != 'r') return "";
@@ -358,15 +400,9 @@ static long definition(const std::vector<std::string> &lines, size_t before, con
 }
 
 // ---- immediates assembled into vectors with per-pixel values ---------------------------------------------------------
-// In a long fragment function, a MOV_SWZ that puts an immediate and per-pixel values in one vector (the IGIL for
-// `FragColor = vec4(1.0, a, b, 1.0)`) gets the immediate's lanes right in only one pixel of eight; the others read 0.
-// Whether the immediate comes from a register set once (MOV r1219.x, 0x3F800000, what the back end writes) or is the
-// operand itself makes no difference; a lane computed per pixel is right. dEQP's uniform-block shaders with 51
-// comparisons end that way (uniformbuffers *_instance_array_*: red and alpha 0 in 7 of 8 pixels; 36 comparisons were
-// fine). Such lanes are computed per pixel: FMAX(FMIN(p, -inf), c), with p one of the instruction's per-pixel sources, is
-// c for any p (NaN too) and exact for a normal float or zero c. Other bit patterns (NaN or denormal as floats, as small
-// integers are) are left as they are. Haswell only (the IGIL hooks don't match Ivy Bridge's plugin).
-// INTEL_SWIZZLE_IMMEDIATE_FIX=0 turns it off.
+// In a long fragment function iCBE gets the immediate lanes of a MOV_SWZ that mixes immediates and per-pixel values
+// right in only one pixel of eight (i11). FMAX(FMIN(p, -inf), c) is c for any per-pixel p, so those lanes are computed
+// per pixel; exact for normal floats and zero, other bit patterns are left alone.
 static bool exactThroughFmax(const std::string &immediate) {  // "0x3F800000": a normal float or a zero
     if (immediate.compare(0, 2, "0x") || immediate.size() < 3 || immediate.size() > 10 ||
         immediate.find_first_not_of("0123456789abcdefABCDEF", 2) != std::string::npos)
@@ -375,18 +411,11 @@ static bool exactThroughFmax(const std::string &immediate) {  // "0x3F800000": a
     return (bits & 0x7fffffff) == 0 || (exponent != 0 && exponent != 0xff);
 }
 static unsigned perPixelSwizzleImmediates(std::string &s) {
-    const char *setting = getenv("INTEL_SWIZZLE_IMMEDIATE_FIX");
-    if ((setting && !strcmp(setting, "0")) || s.find("MOV_SWZ") == std::string::npos) return 0;
+    if (disabled("INTEL_SWIZZLE_IMMEDIATE_FIX") || s.find("MOV_SWZ") == std::string::npos) return 0;
     size_t temps = s.find("DCL_TEMPS r0..r");
     if (temps == std::string::npos) return 0;
     unsigned long next = strtoul(s.c_str() + temps + 15, nullptr, 10) + 1;
-    std::vector<std::string> lines;
-    for (size_t pos = 0; pos <= s.size();) {
-        size_t eol = s.find('\n', pos);
-        if (eol == std::string::npos) eol = s.size();
-        lines.push_back(s.substr(pos, eol - pos));
-        pos = eol + 1;
-    }
+    std::vector<std::string> lines = splitLines(s);
     auto trim = [](const std::string &t) {
         size_t a = t.find_first_not_of(' '), b = t.find_last_not_of(' ');
         return a == std::string::npos ? std::string() : t.substr(a, b - a + 1);
@@ -440,8 +469,7 @@ static unsigned perPixelSwizzleImmediates(std::string &s) {
         fixed++;
     }
     if (!fixed) return 0;
-    std::string result;
-    for (size_t i = 0; i < out.size(); i++) result += out[i] + (i + 1 < out.size() ? "\n" : "");
+    std::string result = joinLines(out);
     size_t t = result.find("DCL_TEMPS r0..r");
     result.replace(t, result.find(';', t) - t, "DCL_TEMPS r0..r" + std::to_string(next - 1));
     s = result;
@@ -449,14 +477,9 @@ static unsigned perPixelSwizzleImmediates(std::string &s) {
 }
 
 // ---- vertex IDs in indirect draws ---------------------------------------------------------------------------------
-// In drawIndexedPrimitives:...indirectBuffer: the vertex ID ([[vertex_id]], IGIL's VERTEXID input) leaves out the base
-// vertex, unless the vertex function also reads [[base_vertex]]: then its system-value constants (DCL_CONSTANTREGISTER
-// c0) list BASE_VERTEX_ID and the driver sets the draw up so VERTEXID includes it (direct draws are right either way).
-// WebGPU's drawIndexedIndirect with a base vertex drew from the wrong vertices wherever Dawn's shaders use the vertex
-// index (CTS draw:arguments, robust_access_vertex). Vertex shaders that read VERTEXID get BASE_VERTEX_ID in a free slot
-// of c0 (or a c0 of their own). Haswell and Ivy Bridge (the IGIL hooks; on Ivy Bridge, direct draws after an indirect
-// draw also need MetalOldCompat item 48). INTEL_BASE_VERTEX_FIX=0 turns it off.
-static bool disabled(const char *setting);
+// In indexed indirect draws VERTEXID leaves out the base vertex unless the shader's system-value constants (c0) also
+// list BASE_VERTEX_ID, so vertex shaders that read VERTEXID get it declared (i13). On Ivy Bridge, direct draws after an
+// indirect one also need MetalOldCompat item 48.
 static bool declareBaseVertex(std::string &s) {
     if (s.find("VERTEXSHADER") == std::string::npos || s.find(", VERTEXID;") == std::string::npos ||
         s.find("BASE_VERTEX_ID") != std::string::npos || disabled("INTEL_BASE_VERTEX_FIX"))
@@ -475,11 +498,8 @@ static bool declareBaseVertex(std::string &s) {
 }
 
 // ---- fine derivatives -------------------------------------------------------------------------------------------------
-// MSL has one dfdx / dfdy (fine on Apple GPUs: each row of a 2x2 quad gets its own difference), and WGSL's dpdxFine,
-// dpdyFine and fwidthFine compile to it. The IGIL back end writes them as GRADIENT_X / GRADIENT_Y, which iCBE evaluates
-// coarse (one difference per quad), so fine derivatives were wrong wherever the rows differ (WebGPU CTS dpdxFine,
-// dpdyFine, fwidthFine: 8 of 8 cases each; the coarse ones pass either way). iCBE also reads GRADIENT_X_FINE /
-// GRADIENT_Y_FINE, which these become. INTEL_FINE_DERIVATIVES_FIX=0 turns it off.
+// MSL's dfdx / dfdy are fine, but iCBE evaluates the IGIL writer's GRADIENT_X / GRADIENT_Y coarse, one difference per
+// 2x2 quad. They become GRADIENT_X_FINE / GRADIENT_Y_FINE (i15).
 static unsigned fineGradients(std::string &s) {
     if (disabled("INTEL_FINE_DERIVATIVES_FIX")) return 0;
     unsigned n = 0;
@@ -493,18 +513,9 @@ static unsigned fineGradients(std::string &s) {
 }
 
 // ---- explicit-LOD sample coordinates ---------------------------------------------------------------------------------
-// For a sample with an explicit LOD in a compute kernel the IGIL writer builds the message in the destination register
-// (rD.xyz = the coordinates, rD.w = the LOD) and then names the coordinate register itself as the operand:
-//     MOV r58.xyz, r56.xyzx;  MOV r58.w, r57.xxxx;  SAMPLE_LC r58, r56(0, 0, 0), t0, s0, r38.x, 2D;
-// iCBE takes the LOD from the operand's w, which nothing wrote when the coordinates came from a select of 2-component
-// values (Dawn loads them from a uniform array): whatever the register last held became the LOD, so the level, and with
-// a linear mip filter the blend, changed from run to run (WebGPU CTS textureSampleCompareLevel in compute: 160 cases,
-// with wrong results in different places on every run). The operand becomes the destination register, which holds
-// the coordinates and the LOD. 2D, 2D-array and cube comparisons at a level are built the same way (the array index in
-// z): on the HD 4000 they compared against the wrong level whenever the level wasn't 0, with the stock compiler too, and
-// the CTS's cases had passed only because the stale w happened to hold the right value there (i78). Not cube arrays:
-// their coordinate operand carries the array index in w, and the back end finds the LOD elsewhere (a09 relies on it).
-// INTEL_SAMPLE_LOD_OPERAND_FIX=0 turns it off.
+// For SAMPLE_LC the IGIL writer builds coordinates and LOD in the destination register but names the coordinate register
+// as the operand, whose w iCBE reads as the LOD and nothing wrote (i24, i78). The operand becomes the destination
+// register. Not cube arrays: their w is the array index and the back end finds the LOD elsewhere (a09).
 static unsigned sampleLodOperands(std::string &s) {
     if (disabled("INTEL_SAMPLE_LOD_OPERAND_FIX") || s.find("\tSAMPLE_L") == std::string::npos) return 0;
     unsigned n = 0;
@@ -544,15 +555,9 @@ static unsigned sampleLodOperands(std::string &s) {
 }
 
 // ---- cube-array comparisons at a level ----------------------------------------------------------------------------------
-// A cube array's IGIL comparison at an explicit level, SAMPLE_LC rD, rC(...), ..., ref, CUBEARRAY, has its coordinates in
-// rC.xyz and the array index in rC.w, and iCBE takes the LOD from rC.w too: a compute kernel compared layer n at level n
-// whatever level it asked for (the stock compiler too, Ivy Bridge and Haswell; the IGIL writer puts the LOD in rD.w,
-// which iCBE doesn't read). iCBE's projective form, SAMPLE_PLC rD, rC(...), ..., lod, ref, CUBEARRAY, takes the LOD as an
-// operand and the array index from rC.w, but divides the coordinates and the reference by rC.w. So the coordinates and
-// the reference are multiplied by w' = max(index, 2^-8) first, which the division undoes and the sampler still rounds to
-// the same index. For layer 0 (w' = 2^-8) and layers that are powers of two the values come back exactly; for the others
-// the reference can come back one ulp off (FIXES.md, known limitations), where the level was wrong before. Two registers
-// past DCL_TEMPS hold the products. INTEL_CUBE_ARRAY_LEVEL_FIX=0 turns it off.
+// iCBE takes a cube array's SAMPLE_LC level from rC.w, the array index, so layer n compared at level n (i79). The
+// projective SAMPLE_PLC takes the level as an operand but divides coordinates and reference by rC.w, so they are first
+// multiplied by max(index, 2^-8); the reference can come back one ulp off (FIXES.md, known limitations).
 static unsigned cubeArrayCompareLevels(std::string &s) {
     if (disabled("INTEL_CUBE_ARRAY_LEVEL_FIX") || s.find(", CUBEARRAY;") == std::string::npos) return 0;
     size_t decl = s.find("\tDCL_TEMPS r0..r");
@@ -599,12 +604,8 @@ static unsigned cubeArrayCompareLevels(std::string &s) {
 }
 
 // ---- a narrow mask after a narrower one --------------------------------------------------------------------------------
-// The IGIL writer re-truncates a 16-bit value after an operation (AND rC, rB, 0xFFFF), also right after an AND that
-// already left it narrower (AND rB, rA, 255 for a uchar lane). iCBE takes AND 0xFFFF for a zero-extension from 16 bits,
-// reads the word of rA instead of rB and drops the 255: in ushort2(...) & ushort2((uchar)x, ...) the uchar lane kept
-// bits 8-15 of x (seen in the disassembly as and g93, g67<16,8,2>UW, 0xffff9a4b, folding 255, 0xFFFF and 0x9a4b into
-// one mask; the MacBookPro11,5 session's narrow-vector fuzzing, seed 53). Such a second AND changes nothing, so it
-// becomes a MOV. INTEL_NARROW_MASK_FIX=0 turns it off.
+// iCBE takes AND rC, rB, 0xFFFF after AND rB, rA, 255 for a 16-bit zero-extension of rA and drops the 255 (i29). The
+// second AND changes nothing, so it becomes a MOV.
 static unsigned redundantNarrowMasks(std::string &s) {
     if (disabled("INTEL_NARROW_MASK_FIX")) return 0;
     unsigned n = 0;
@@ -635,23 +636,14 @@ static unsigned redundantNarrowMasks(std::string &s) {
 }
 
 // ---- sign extensions, in the IGIL text --------------------------------------------------------------------------------
-// iCBE keeps the result of STOI / BTOI (a short / char sign-extended to 32 bits) in a 16- / 8-bit register and extends it
-// where it is read, and a merge loses that: uint(short2(...).y) XORed into a vector lane, which a store at a variable
-// index then merged (MOV_CND) with a 32-bit value, read back zero-extended, 0x0000fe13 for 0xfffffe13 (mslfuzz2 VEC=1
-// seed 1865, i45). They become SHL 16 / SAR 16 (24 for bytes), which iCBE computes on 32 bits. INTEL_SIGN_EXTEND_FIX=0
-// turns it off.
+// iCBE keeps STOI / BTOI results in 16- / 8-bit registers and extends them where they are read; merged (MOV_CND) with a
+// 32-bit value they were read back zero-extended (i45, i57). They become SHL / SAR pairs, which iCBE computes on 32 bits.
 static unsigned signExtensions(std::string &s) {
     if (disabled("INTEL_SIGN_EXTEND_FIX") || (s.find("\tSTOI ") == std::string::npos && s.find("\tBTOI ") == std::string::npos)) return 0;
     size_t temps = s.find("\tDCL_TEMPS r0..r");
     if (temps == std::string::npos) return 0;
     unsigned last = (unsigned)strtoul(s.c_str() + temps + 16, nullptr, 10);
-    std::vector<std::string> lines;
-    for (size_t pos = 0; pos <= s.size();) {
-        size_t eol = s.find('\n', pos);
-        if (eol == std::string::npos) eol = s.size();
-        lines.push_back(s.substr(pos, eol - pos));
-        pos = eol + 1;
-    }
+    std::vector<std::string> lines = splitLines(s);
     unsigned n = 0;
     for (std::string &l : lines) {
         unsigned d, src;
@@ -672,37 +664,22 @@ static unsigned signExtensions(std::string &s) {
         n++;
     }
     if (!n) return 0;
-    std::string out;
-    for (size_t i = 0; i < lines.size(); i++) { out += lines[i]; if (i + 1 < lines.size()) out += '\n'; }
-    size_t numberAt = out.find("\tDCL_TEMPS r0..r") + 16, numberEnd = out.find_first_not_of("0123456789", numberAt);
-    out.replace(numberAt, numberEnd - numberAt, std::to_string(last));
+    std::string out = joinLines(lines);
+    declareTemporariesUpTo(out, last);
     s = out;
     return n;
 }
 
 // ---- signed compares of a sum with zero, in the IGIL text ---------------------------------------------------------
-// In pixel and vertex shaders iCBE folds the constant of an add into a signed compare of the sum with zero, as if the add
-// couldn't overflow: (x + C) < 0 became x < -C (cmp g20, -902107310 in the EU code), and likewise (x + C) > 0. MSL's
-// unsigned add wraps, so where x + C wrapped past the sign bit the compare went the wrong way: in
-// `if (c) v += (int)(x + 902107310u) < 0 ? y % 1000 : 777u` the 14 pixels whose x was in [2^31 - C, 2^31) got 777
-// (fragment fuzzing on the Iris Pro, VEC=1 seed 445; also with a negative constant; compute functions, >= 0, <= -7,
-// other constants and unsigned compares were right). ICMP.lt / ge / gt / le of an IADD result and a zero register, either
-// way round, become tests of the sum's sign bit (SHR 31) and, for > 0 and <= 0, of the sum being 0 (ICMP.eq, which is
-// exact either way).
-// INTEL_SUM_SIGN_TEST_FIX=0 turns it off. Test: i65.
+// In pixel and vertex shaders iCBE folds (x + C) < 0 into x < -C as if the add couldn't wrap, likewise > 0 (i65). Such
+// compares become tests of the sum's sign bit and, for > 0 and <= 0, of the sum being 0.
 static unsigned signTestsOfSums(std::string &s) {
     if (disabled("INTEL_SUM_SIGN_TEST_FIX") || (s.find("\tPIXELSHADER") == std::string::npos && s.find("\tVERTEXSHADER") == std::string::npos))
         return 0;
     size_t temps = s.find("\tDCL_TEMPS r0..r");
     if (temps == std::string::npos) return 0;
     unsigned last = (unsigned)strtoul(s.c_str() + temps + 16, nullptr, 10);
-    std::vector<std::string> lines;
-    for (size_t pos = 0; pos <= s.size();) {
-        size_t eol = s.find('\n', pos);
-        if (eol == std::string::npos) eol = s.size();
-        lines.push_back(s.substr(pos, eol - pos));
-        pos = eol + 1;
-    }
+    std::vector<std::string> lines = splitLines(s);
     std::set<unsigned> zeros, sums;  // registers last set by MOV r.x, 0 / by an IADD
     unsigned n = 0;
     for (std::string &l : lines) {
@@ -738,37 +715,22 @@ static unsigned signTestsOfSums(std::string &s) {
         }
     }
     if (!n) return 0;
-    std::string out;
-    for (size_t i = 0; i < lines.size(); i++) { out += lines[i]; if (i + 1 < lines.size()) out += '\n'; }
-    size_t numberAt = out.find("\tDCL_TEMPS r0..r") + 16, numberEnd = out.find_first_not_of("0123456789", numberAt);
-    out.replace(numberAt, numberEnd - numberAt, std::to_string(last));
+    std::string out = joinLines(lines);
+    declareTemporariesUpTo(out, last);
     s = out;
     return n;
 }
 
 // ---- negations feeding a signed divide, in the IGIL text ------------------------------------------------------------
-// i26's bug again, from a negation the IR doesn't show: the front end wrote (short)(-(int)v) % d as (v * -65536) >> 16,
-// and the back end, knowing v was 0 or 1, made that IADD r, 0, -v; iCBE folds that into the IDIV as a source modifier
-// and drops it, so the remainder came out as v % d in every thread (mslfuzz2 VEC=1 seed 917). Such an IADD rA, rZero, -rX
-// becomes XOR rT, rX, -1 and IADD rA, rT, 1, which iCBE leaves alone. The negation also reaches the divide through
-// copies, merges included (v2 = -(int)x in one case of a switch, the loop that divides it made a subroutine reading a
-// copy of a copy: mslfuzz2 LONG=1 seed 2592, i60), and through operations iCBE folds into copies: v0 = -(int)(x &
-// 0x7fffffff); v0 -= min(mulhi(..., 0u), 0u) reached the back end as IADD r80, r78, -r79 with r79 = UMIN r19, r19 of
-// zeros, and (int)v0 / d dropped the sign (mslfuzz2 plain seed 7727, i61; the stock compiler is wrong in all three). So
-// every such negation in a shader with an IDIV is rewritten, whatever leads it to the divide. INTEL_SIGNED_DIV_NEG_FIX=0
-// turns it off with i26.
+// iCBE folds a negation (IADD r, 0, -x) into the IDIV that reads it as a source modifier and drops it (i26), also when it
+// reaches the divide through copies, merges or folded operations (i60, i61). So in a shader with an IDIV every such
+// negation becomes XOR -1 and IADD 1.
 static unsigned negatedDivideOperands(std::string &s) {
     if (disabled("INTEL_SIGNED_DIV_NEG_FIX") || s.find("\tIDIV ") == std::string::npos) return 0;
     size_t temps = s.find("\tDCL_TEMPS r0..r");
     if (temps == std::string::npos) return 0;
     unsigned last = (unsigned)strtoul(s.c_str() + temps + 16, nullptr, 10);
-    std::vector<std::string> lines;
-    for (size_t pos = 0; pos <= s.size();) {
-        size_t eol = s.find('\n', pos);
-        if (eol == std::string::npos) eol = s.size();
-        lines.push_back(s.substr(pos, eol - pos));
-        pos = eol + 1;
-    }
+    std::vector<std::string> lines = splitLines(s);
     std::map<unsigned, int> definitions;
     std::set<unsigned> zeros;  // registers whose only definition is MOV rN.x, 0
     for (const std::string &l : lines) {
@@ -791,31 +753,19 @@ static unsigned negatedDivideOperands(std::string &s) {
         n++;
     }
     if (!n) return 0;
-    std::string out;
-    for (size_t i = 0; i < lines.size(); i++) { out += lines[i]; if (i + 1 < lines.size()) out += '\n'; }
-    size_t numberAt = out.find("\tDCL_TEMPS r0..r") + 16, numberEnd = out.find_first_not_of("0123456789", numberAt);
-    out.replace(numberAt, numberEnd - numberAt, std::to_string(last));
+    std::string out = joinLines(lines);
+    declareTemporariesUpTo(out, last);
     s = out;
     return n;
 }
 
 // ---- loop-carried copies before a loop's exit ------------------------------------------------------------------------
-// The back end ends a loop body with the copies that carry values into the next iteration (MOV rNext, value) and then
-// BREAK_CND. A register that took the previous value at the top of the body (MOV rOld, rNext) and is read after the
-// loop then gets the new value from iCBE, as if the copy had been propagated past the redefinition: with i07's private
-// array rewrite, `p[...] = pc[addsat(0x7fffffff, v4 ^ t) & 7]; v4 = 0;` in a loop that the store is sunk out of read
-// with v4 = 0 also in threads that left in the first iteration (mslfuzz2 plain seed 565). Copying with IADD or OR
-// instead of MOV changed nothing. Copies whose register isn't read outside the loop move after the BREAK_CND, where
-// they do the same for the next iteration and nothing on the way out. INTEL_LOOP_EXIT_COPY_FIX=0 turns it off.
+// iCBE propagates a copy taken at the top of a loop body (MOV rOld, rNext) past the next iteration's MOV rNext before
+// BREAK_CND, so after the loop rOld held the value of an iteration that never ran (i41). Copies whose register isn't
+// read outside the loop move after the BREAK_CND.
 static unsigned loopExitCopies(std::string &s) {
     if (disabled("INTEL_LOOP_EXIT_COPY_FIX") || s.find("\tBREAK_CND") == std::string::npos) return 0;
-    std::vector<std::string> lines;
-    for (size_t pos = 0; pos <= s.size();) {
-        size_t eol = s.find('\n', pos);
-        if (eol == std::string::npos) eol = s.size();
-        lines.push_back(s.substr(pos, eol - pos));
-        pos = eol + 1;
-    }
+    std::vector<std::string> lines = splitLines(s);
     // registers each line mentions, and the register a line only sets (MOV rN.x, <operand>)
     std::vector<std::set<unsigned>> mentions(lines.size());
     std::vector<int> moveTarget(lines.size(), -1);
@@ -889,19 +839,10 @@ static unsigned loopExitCopies(std::string &s) {
 }
 
 // ---- right shifts of narrow values ----------------------------------------------------------------------------------
-// iCBE gives SHR / SAR of a value it knows is narrow, a constant below 65536 or an AND with such a mask (a uchar or
-// ushort cast), a result register as narrow as that value: a byte for 1 or x & 255, a word for 300 or x & 65535. It can
-// then merge that register with another copy of the same variable and drop its high bits: v0 = (uint)(x / y), replaced
-// by (uchar)1 >> s in a loop, came out as the quotient's low byte in all 256 threads, also where the loop never ran
-// (mslfuzz2 LONG=1 seed 6; the 64-bit division's loops only set up the merge), and a vector lane lost its high bits
-// the same way (VEC=1 seed 526). Constants from 65536 up, SHL, and AND / UMIN with a constant in a register were right.
-// Such a shift is done on the value with bit 31 set, and the shifted bit 31 is XORed away, so every register involved is
-// 32 bits wide (the shift count is masked to 5 bits on both). An AND with an immediate mask below 65536 is narrow too:
-// (ushort)(x >> s), merged with a 64-bit quotient in the other arm of a select, kept the quotient's low 16 bits (LONG=1
-// seed 314). Where such an AND's result is copied into a register that two or more MOVs set (the back end's phi
-// copies), or read by a min / max or a signed operation (IMAX / IMIN / UMAX / UMIN / ICMP / IDIV; IMAX took it as a
-// signed narrow value, i46) or a 32-bit saturating add / subtract (UADD_sat read other SIMD lanes' bytes, i48), it
-// becomes (x | bit 31) & (mask | bit 31), XOR bit 31. INTEL_NARROW_SHIFT_FIX=0 turns both off.
+// iCBE gives SHR / SAR of a value it knows is narrow (a constant below 65536, an AND with such a mask) a narrow result
+// register, and merging it with a wider copy of the variable dropped the high bits (i40, i54). Such shifts run with
+// bit 31 set and XOR it away after, so every register is 32 bits wide; narrow ANDs read through phi copies, min / max,
+// signed operations or a 32-bit saturating add are widened the same way (i46, i48, i52, i55).
 static unsigned narrowShifts(std::string &s) {
     if (disabled("INTEL_NARROW_SHIFT_FIX") ||
         (s.find("\tSHR ") == std::string::npos && s.find("\tSAR ") == std::string::npos && s.find("\tAND ") == std::string::npos))
@@ -909,13 +850,7 @@ static unsigned narrowShifts(std::string &s) {
     size_t temps = s.find("\tDCL_TEMPS r0..r");
     if (temps == std::string::npos) return 0;
     unsigned last = (unsigned)strtoul(s.c_str() + temps + 16, nullptr, 10);
-    std::vector<std::string> lines;
-    for (size_t pos = 0; pos <= s.size();) {
-        size_t eol = s.find('\n', pos);
-        if (eol == std::string::npos) eol = s.size();
-        lines.push_back(s.substr(pos, eol - pos));
-        pos = eol + 1;
-    }
+    std::vector<std::string> lines = splitLines(s);
     // registers with a single definition, which is MOV rN.x, <immediate> or AND rN.x, <source>, <immediate>
     auto immediate = [](const char *text, long &value) {
         char *end;
@@ -955,18 +890,13 @@ static unsigned narrowShifts(std::string &s) {
     }
     std::set<unsigned> intoMerge;
     for (auto &c : copies) if (moves[c.first] >= 2) intoMerge.insert(c.second);
-    // registers read by a min / max or a signed operation, which takes a narrow source as a signed narrow value:
-    // IMAX r, 0, (x AND 255) returned 0 for x & 255 >= 128 (mslfuzz2 VEC=1 seed 1889, i46); and by a 32-bit saturating
-    // add / subtract: UADD_sat of two such registers came out as other SIMD lanes' bytes (VEC=1 seed 1568, i48; the
-    // narrow saturating forms are their own opcodes, UBADD / USADD / BADD / SADD, and are left alone)
+    // registers read by an operation that takes a narrow source as signed (i46) or by a 32-bit saturating add (i48); the
+    // narrow saturating opcodes (UBADD / USADD / BADD / SADD) are left alone
     auto saturating = [](const std::string &l) {
         return (!l.compare(0, 6, "\tUADD ") || !l.compare(0, 6, "\tIADD ") || !l.compare(0, 6, "\tUSUB ") || !l.compare(0, 6, "\tISUB ")) &&
                l.find("_sat.") != std::string::npos;
     };
-    // Such a register can also reach the operation through copies, the AND's lane moved into a vector and back out:
-    // AND r56.x, r54.x, 255; MOV_SWZ r96, r89.x, r56.x, ...; MOV r97.x, r96.y; IDIV ..., r97.x, ... divided a negative
-    // byte for bytes 128-255 (VEC=1 seed 2387, i52). Single-definition MOV and MOV_SWZ copies are followed, lane by lane,
-    // to the register that computed the value.
+    // single-definition MOV / MOV_SWZ copies are followed lane by lane to the register that computed the value (i52)
     std::map<unsigned, const std::string *> definition;  // registers defined once
     for (const std::string &l : lines) {
         unsigned d;
@@ -1048,21 +978,15 @@ static unsigned narrowShifts(std::string &s) {
         n++;
     }
     if (!n) return 0;
-    std::string out;
-    for (size_t i = 0; i < lines.size(); i++) { out += lines[i]; if (i + 1 < lines.size()) out += '\n'; }
-    size_t numberAt = out.find("\tDCL_TEMPS r0..r") + 16, numberEnd = out.find_first_not_of("0123456789", numberAt);
-    out.replace(numberAt, numberEnd - numberAt, std::to_string(last));
+    std::string out = joinLines(lines);
+    declareTemporariesUpTo(out, last);
     s = out;
     return n;
 }
 
 // ---- narrow negations ----------------------------------------------------------------------------------------------
-// The back end writes the negation of a char lane as BADD rD, rZ, -rX with rZ = MOV 0, and the sign extension that
-// follows as BTOI rD. iCBE folds the two into the negation of the sign-extended lane, -(sext x) instead of
-// sext(-x), which differs for x = 0x80 only: -(char)-128 came out +128 instead of -128 (the MacBookPro11,5 session's
-// narrow-vector fuzzing, seeds 70 and 110). Scalar chars and zero extensions were right. Swapping the operands doesn't help, and
-// a 32-bit IADD loses the sign extension (iCBE then takes BTOI for a no-op), so the negation becomes XOR 0xFF (0xFFFF
-// for SADD) and an add of 1 of the same width, in two new registers. INTEL_NARROW_NEGATE_FIX=0 turns it off.
+// iCBE folds BADD rD, 0, -rX and the BTOI after it into -(sext x) instead of sext(-x), wrong for x = 0x80 (i37). The
+// negation becomes XOR 0xFF (0xFFFF for SADD) and an add of 1 of the same width; a 32-bit IADD would lose the BTOI.
 static unsigned narrowNegations(std::string &s) {
     if (disabled("INTEL_NARROW_NEGATE_FIX") || (s.find("\tBADD ") == std::string::npos && s.find("\tSADD ") == std::string::npos)) return 0;
     size_t temps = s.find("\tDCL_TEMPS r0..r");
@@ -1096,19 +1020,14 @@ static unsigned narrowNegations(std::string &s) {
         pos = eol + 1;
     }
     if (!n) return 0;
-    size_t numberAt = out.find("\tDCL_TEMPS r0..r") + 16, numberEnd = out.find_first_not_of("0123456789", numberAt);
-    out.replace(numberAt, numberEnd - numberAt, std::to_string(last));
+    declareTemporariesUpTo(out, last);
     s = out;
     return n;
 }
 
 // ---- narrow unsigned divides ---------------------------------------------------------------------------------------
-// The back end writes division of 8- and 16-bit unsigned lanes as UBDIV / USDIV. iCBE drops the AND 0xFF / 0xFFFF that
-// zero-extends such an operand (it takes the divide to read only the low byte or word) while the divide uses the whole
-// register: a uchar lane built from a select of 32-bit values was divided with its upper bits still in place (the
-// MacBookPro11,5 session's narrow-vector fuzzing, seed 31), and narrow constants arrive sign-extended (MOV r, -30467
-// for 35069). Each becomes a 32-bit UDIV of copies masked to the lane's width, in two new registers per divide.
-// INTEL_NARROW_UDIV_FIX=0 turns it off.
+// iCBE drops the AND 0xFF / 0xFFFF that zero-extends a UBDIV / USDIV operand but divides the whole register, so upper
+// bits left in a lane were divided too (i30). Each becomes a 32-bit UDIV of copies masked to the lane's width.
 static unsigned narrowUnsignedDivides(std::string &s) {
     if (disabled("INTEL_NARROW_UDIV_FIX") || (s.find("\tUBDIV ") == std::string::npos && s.find("\tUSDIV ") == std::string::npos)) return 0;
     size_t temps = s.find("\tDCL_TEMPS r0..r");
@@ -1140,39 +1059,22 @@ static unsigned narrowUnsignedDivides(std::string &s) {
         pos = eol + 1;
     }
     if (!n) return 0;
-    size_t numberAt = out.find("\tDCL_TEMPS r0..r") + 16, numberEnd = out.find_first_not_of("0123456789", numberAt);
-    out.replace(numberAt, numberEnd - numberAt, std::to_string(last));
+    declareTemporariesUpTo(out, last);
     s = out;
     return n;
 }
 
 // ---- a narrow mask reached through copies ----------------------------------------------------------------------------
-// The same iCBE fold as above, when the narrower AND reaches the 16-bit one through MOVs, including the copy into a
-// shared case of a switch (AND r45, r388, 255; MOV r420, r45; CALL 9 ... MOV r46, r420; AND r389, r46, 65535): a uchar
-// read from a private array came out with bits 8-15 (mslfuzz2 seed 330). There the register is also set from a 32-bit
-// value on another path, so the AND can't go. It used to become SHL 16 / SHR 16 into a new register, but where the
-// source is itself a narrow AND (AND 0xFF over x & 3), iCBE keeps that source in a byte register and the SHL 24 lost it,
-// so the result was always 0 (VEC=1 seed 1111). It becomes i40's 32-bit form instead: (x | bit 31) & (mask | bit 31),
-// then bit 31 XORed away. INTEL_NARROW_MASK_FIX=0 turns it off with the above.
-// iCBE also gets there through an OR whose other operand it folds to 0 itself: in a ushort2 compare with halfwords put
-// together from bytes, c2 | (uchar)min3(x, 0u, 145u) << 8, the y lane reached the back end as AND 65535 of
-// (c2 AND 255) | UMIN(UMIN(x, 0), 145) << 8, iCBE dropped the UMINs, the shift and the OR, and the compare read 16 bits
-// of c2's source (mslfuzz2 VEC seed 468 on an HD 4000, through i75's first version; the Iris Pro gets the hand-packed
-// form wrong too). So the search also follows both operands of OR, XOR and IADD, which iCBE can reduce to one.
-// INTEL_MASK_OR_FIX=0 leaves it at copies only.
+// redundantNarrowMasks' iCBE fold, with the narrower AND reaching the 16-bit one through MOVs (i32) or through an OR,
+// XOR or IADD whose other operand iCBE folds to 0 (i76). The register is set from a wider value on another path, so
+// the AND stays and is done on 32 bits instead, as in narrowShifts: (x | bit 31) & (mask | bit 31), XOR bit 31 (i43).
 static unsigned narrowMasksThroughCopies(std::string &s) {
     if (disabled("INTEL_NARROW_MASK_FIX")) return 0;
     const bool throughOr = !disabled("INTEL_MASK_OR_FIX");
     size_t temps = s.find("\tDCL_TEMPS r0..r");
     if (temps == std::string::npos) return 0;
     unsigned last = (unsigned)strtoul(s.c_str() + temps + 16, nullptr, 10);
-    std::vector<std::string> lines;
-    for (size_t pos = 0; pos <= s.size();) {
-        size_t eol = s.find('\n', pos);
-        if (eol == std::string::npos) eol = s.size();
-        lines.push_back(s.substr(pos, eol - pos));
-        pos = eol + 1;
-    }
+    std::vector<std::string> lines = splitLines(s);
     // every definition of rN.x: a MOV from rM.x (source M), an AND with an immediate (mask), or anything else; an OR /
     // XOR / IADD of registers counts as a copy of each register operand
     struct Def { int source; unsigned long mask; };
@@ -1202,7 +1104,6 @@ static unsigned narrowMasksThroughCopies(std::string &s) {
         return false;
     };
     unsigned n = 0;
-    std::string out;
     for (size_t i = 0; i < lines.size(); i++) {
         unsigned c, b;
         char imm[32];
@@ -1220,25 +1121,16 @@ static unsigned narrowMasksThroughCopies(std::string &s) {
         }
     }
     if (!n) return 0;
-    for (size_t i = 0; i < lines.size(); i++) { out += lines[i]; if (i + 1 < lines.size()) out += '\n'; }
-    size_t numberAt = out.find("\tDCL_TEMPS r0..r") + 16, numberEnd = out.find_first_not_of("0123456789", numberAt);
-    out.replace(numberAt, numberEnd - numberAt, std::to_string(last));
+    std::string out = joinLines(lines);
+    declareTemporariesUpTo(out, last);
     s = out;
     return n;
 }
 
 // ---- integer divides in a branch of a pixel shader: SIMD8 only -------------------------------------------------------
-// In a SIMD16 pixel kernel with an integer divide inside a branch, values that the compiler moves into that branch can be
-// read stale: in a loop that stores into a uint4 w at one run-time lane and adds w[popcount(x) & 3] ^ (w.y << 1) ^ w.w to
-// v0, the compiler moved that last add into a switch case that divides v0 by 65535, and in 11-17 of 256 pixels it saw w
-// as it was before the store (mslfuzz2 FRAG seed 613, on the HD 4000 and the Iris Pro alike; the R9 M370X and an M3 Pro
-// are right). The IR and the IGIL text are right, and the SIMD8 kernel is right on both. Gen7 divides integers eight
-// channels at a time, so the SIMD16 kernel splits each divide in two; without the divide, or with the read at a constant
-// lane, it was right. Rewriting the IR (the store and the read as selects) didn't help: iCBE still moved the read. So a
-// pixel shader whose IGIL has an integer divide (UDIV, IDIV, UBDIV, USDIV) inside an IF or a LOOP, or anywhere when it has
-// subroutines (CALL), which can be reached from a branch, is compiled SIMD8 only, as INTEL_SIMD8_PIXEL=1 does for all of
-// them. The IGIL text arrives here just before iCBE compiles it on the same thread. INTEL_PIXEL_DIVIDE_SIMD8_FIX=0 turns
-// it off. Test: i77.
+// In a SIMD16 pixel kernel iCBE can read stale values it moved into a branch with an integer divide (i77; the IR, the
+// IGIL text and the SIMD8 kernel are right; Gen7 splits each divide in two there). Pixel shaders with a divide in an IF,
+// a LOOP or anywhere with subroutines are compiled SIMD8 only, as INTEL_SIMD8_PIXEL=1 does for all.
 static thread_local bool pixelDivideInBranch;
 static bool divideInBranch(const std::string &s) {
     if (s.find("PIXELSHADER") == std::string::npos || disabled("INTEL_PIXEL_DIVIDE_SIMD8_FIX")) return false;
@@ -1259,54 +1151,12 @@ static bool divideInBranch(const std::string &s) {
 }
 
 static thread_local std::string lastIGILForDump;  // INTELTEX_DUMP_KERNELS: the IGIL text iCBE compiles next on this thread
-extern "C" void intelatomicsFixIGIL(std::string *text) {
-    if (getenv("INTELTEX_DUMP_KERNELS")) lastIGILForDump = *text;
-    std::string &s = *text;
-    if (getenv("INTELTEX_DUMP")) {  // debugging: the IGIL text as the back end produced it
-        static int serial;
-        char path[1024];
-        snprintf(path, sizeof path, "%s/igil-%d.txt", getenv("INTELTEX_DUMP"), serial++);
-        if (FILE *f = fopen(path, "w")) { fwrite(s.data(), 1, s.size(), f); fclose(f); }
-    }
-    if (s.find("PIXELSHADER") != std::string::npos) {
-        unsigned n = perPixelSwizzleImmediates(s);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u MOV_SWZ with immediate and per-pixel lanes: immediate lanes computed per pixel\n", n);
-        if (n && getenv("INTELTEX_DUMP")) {
-            static int serial;
-            char path[1024];
-            snprintf(path, sizeof path, "%s/igil-fixed-%d.txt", getenv("INTELTEX_DUMP"), serial++);
-            if (FILE *f = fopen(path, "w")) { fwrite(s.data(), 1, s.size(), f); fclose(f); }
-        }
-    }
-    if (declareBaseVertex(s) && logging()) fprintf(stderr, "[inteltex] vertex shader reads VERTEXID: BASE_VERTEX_ID declared\n");
-    if (unsigned n = fineGradients(s); n && logging()) fprintf(stderr, "[inteltex] %u derivative(s) made fine\n", n);
-    if (unsigned n = narrowMasksThroughCopies(s); n && logging()) fprintf(stderr, "[inteltex] %u AND 0xFFFF / 0xFF over a narrower AND done on 32 bits\n", n);
-    if (unsigned n = narrowUnsignedDivides(s); n && logging()) fprintf(stderr, "[inteltex] %u UBDIV / USDIV done as UDIV of masked copies\n", n);
-    if (unsigned n = redundantNarrowMasks(s); n && logging()) fprintf(stderr, "[inteltex] %u AND 0xFFFF after a narrower AND made a MOV\n", n);
-    if (unsigned n = narrowNegations(s); n && logging()) fprintf(stderr, "[inteltex] %u BADD / SADD negation(s) done as XOR and add\n", n);
-    if (unsigned n = narrowShifts(s); n && logging()) fprintf(stderr, "[inteltex] %u SHR / SAR of a narrow value done on 32 bits\n", n);
-    if (unsigned n = loopExitCopies(s); n && logging()) fprintf(stderr, "[inteltex] %u loop-carried copies moved after the loop's BREAK_CND\n", n);
-    if (unsigned n = negatedDivideOperands(s); n && logging()) fprintf(stderr, "[inteltex] %u negation(s) in a shader with an IDIV done as XOR and add\n", n);
-    if (unsigned n = signTestsOfSums(s); n && logging()) fprintf(stderr, "[inteltex] %u signed compare(s) of a sum with zero done on its sign bit\n", n);
-    if (unsigned n = signExtensions(s); n && logging()) fprintf(stderr, "[inteltex] %u STOI / BTOI done as shift pairs\n", n);
-    if (unsigned n = sampleLodOperands(s); n && logging()) fprintf(stderr, "[inteltex] %u explicit-LOD sample(s) given the register holding the LOD\n", n);
-    if (unsigned n = cubeArrayCompareLevels(s); n && logging()) fprintf(stderr, "[inteltex] %u cube-array comparison(s) at a level made projective\n", n);
-    pixelDivideInBranch = divideInBranch(s);
-    if (pixelDivideInBranch && logging()) fprintf(stderr, "[inteltex] pixel shader with an integer divide in a branch: SIMD8 only\n");
-    if (getenv("INTELTEX_DUMP")) {  // debugging: the IGIL text after the fixes above
-        static int serial;
-        char path[1024];
-        snprintf(path, sizeof path, "%s/igil-after-%d.txt", getenv("INTELTEX_DUMP"), serial++);
-        if (FILE *f = fopen(path, "w")) { fwrite(s.data(), 1, s.size(), f); fclose(f); }
-    }
-    if (s.find("IMM_ATOMIC_") == std::string::npos) return;
-    std::vector<std::string> lines;
-    for (size_t pos = 0; pos <= s.size();) {
-        size_t eol = s.find('\n', pos);
-        if (eol == std::string::npos) eol = s.size();
-        lines.push_back(s.substr(pos, eol - pos));
-        pos = eol + 1;
-    }
+// ---- image atomics -------------------------------------------------------------------------------------------------
+// IMM_ATOMIC_<OP> dst, rI, rC, ...  where rC = MOV_SWZ rC, x, y, z, rT.c and MOV rT.c, <kImageTag | binding>
+//   ->  MOV rC.w, 0;  IMM_ATOMIC_<OP> dst, uM, rC, ...   (uM: the DCL_UAVTYPED with LOCATION_INDEX binding, 0)
+// An atomic whose texture can't be found gets "unresolved_image", which fails the compile rather than address the
+// wrong texture.
+static std::vector<int> uavOfEachBinding(const std::vector<std::string> &lines) {
     std::vector<int> uavOfBinding;  // DCL_UAVTYPED uM = { ... LOCATION_INDEX, binding, element ... }
     for (size_t i = 0; i < lines.size(); i++) {
         unsigned u, binding, element;
@@ -1320,25 +1170,37 @@ extern "C" void intelatomicsFixIGIL(std::string *text) {
                 break;
             }
     }
+    return uavOfBinding;
+}
+// The UAV of the texture step 1 tagged into the w lane of the atomic's coordinates, or -1.
+static int taggedImageUAV(const std::vector<std::string> &lines, size_t atomicLine, const std::string &coordinates,
+                          const std::vector<int> &uavOfBinding) {
+    std::string swizzleOpcode, tagOpcode;
+    std::vector<std::string> swizzle, tag;
+    if (coordinates.empty() || definition(lines, atomicLine, coordinates, swizzleOpcode, swizzle) < 0 ||
+        swizzleOpcode != "MOV_SWZ" || swizzle.size() != 5) return -1;
+    std::string tagRegister = operandRegister(swizzle[4]);
+    if (tagRegister.empty() || definition(lines, atomicLine, tagRegister, tagOpcode, tag) < 0 || tagOpcode != "MOV" ||
+        tag.size() != 2) return -1;
+    unsigned long long value = strtoull(tag[1].c_str(), nullptr, 0);
+    if ((value & kImageTagMask) != kImageTag || (value & kBindingMask) >= uavOfBinding.size()) return -1;
+    return uavOfBinding[value & kBindingMask];
+}
+static void bindImageAtomics(std::string &s) {
+    if (s.find("IMM_ATOMIC_") == std::string::npos) return;
+    std::vector<std::string> lines = splitLines(s);
+    std::vector<int> uavOfBinding = uavOfEachBinding(lines);
     unsigned fixed = 0, failed = 0;
     std::vector<std::string> out;
     for (size_t i = 0; i < lines.size(); i++) {
-        std::string opcode, defOpcode;
-        std::vector<std::string> ops = instructionOperands(lines[i], &opcode), def;
+        std::string opcode;
+        std::vector<std::string> ops = instructionOperands(lines[i], &opcode);
         if (opcode.compare(0, 11, "IMM_ATOMIC_") || ops.size() < 4) {
             out.push_back(lines[i]);
             continue;
         }
         std::string coords = operandRegister(ops[2]);
-        int u = -1;
-        if (!coords.empty() && definition(lines, i, coords, defOpcode, def) >= 0 && defOpcode == "MOV_SWZ" && def.size() == 5) {
-            std::string lane = operandRegister(def[4]), movOpcode;
-            std::vector<std::string> mov;
-            if (!lane.empty() && definition(lines, i, lane, movOpcode, mov) >= 0 && movOpcode == "MOV" && mov.size() == 2) {
-                unsigned long long value = strtoull(mov[1].c_str(), nullptr, 0);
-                if ((value & kImageTagMask) == kImageTag && (value & kBindingMask) < uavOfBinding.size()) u = uavOfBinding[value & kBindingMask];
-            }
-        }
+        int u = taggedImageUAV(lines, i, coords, uavOfBinding);
         if (u < 0 && ops[1].find("unresolved_image") == std::string::npos) {  // not one of ours
             out.push_back(lines[i]);
             continue;
@@ -1356,11 +1218,45 @@ extern "C" void intelatomicsFixIGIL(std::string *text) {
         for (size_t k = 0; k < ops.size(); k++) line += (k ? "," : "") + ops[k];
         out.push_back(line + ";");
     }
-    std::string joined;
-    joined.reserve(s.size() + 64 * fixed);
-    for (size_t i = 0; i < out.size(); i++) joined += out[i] + (i + 1 < out.size() ? "\n" : "");
-    s.swap(joined);
+    s = joinLines(out);
     if (logging() || failed) fprintf(stderr, "[inteltex] IGIL: %u image atomic operand(s) resolved, %u unresolved\n", fixed, failed);
+}
+
+struct IGILTextFix {
+    unsigned (*apply)(std::string &igil);
+    const char *logFormat;  // with %u for the count
+};
+static const IGILTextFix kIGILTextFixes[] = {
+    {fineGradients, "%u derivative(s) made fine"},
+    {narrowMasksThroughCopies, "%u AND 0xFFFF / 0xFF over a narrower AND done on 32 bits"},
+    {narrowUnsignedDivides, "%u UBDIV / USDIV done as UDIV of masked copies"},
+    {redundantNarrowMasks, "%u AND 0xFFFF after a narrower AND made a MOV"},
+    {narrowNegations, "%u BADD / SADD negation(s) done as XOR and add"},
+    {narrowShifts, "%u SHR / SAR of a narrow value done on 32 bits"},
+    {loopExitCopies, "%u loop-carried copies moved after the loop's BREAK_CND"},
+    {negatedDivideOperands, "%u negation(s) in a shader with an IDIV done as XOR and add"},
+    {signTestsOfSums, "%u signed compare(s) of a sum with zero done on its sign bit"},
+    {signExtensions, "%u STOI / BTOI done as shift pairs"},
+    {sampleLodOperands, "%u explicit-LOD sample(s) given the register holding the LOD"},
+    {cubeArrayCompareLevels, "%u cube-array comparison(s) at a level made projective"},
+};
+
+extern "C" void intelatomicsFixIGIL(std::string *text) {
+    if (getenv("INTELTEX_DUMP_KERNELS")) lastIGILForDump = *text;
+    std::string &s = *text;
+    dumpText("INTELTEX_DUMP", "igil", false, ".txt", s);
+    if (s.find("PIXELSHADER") != std::string::npos) {
+        unsigned n = perPixelSwizzleImmediates(s);
+        if (n && logging()) fprintf(stderr, "[inteltex] %u MOV_SWZ with immediate and per-pixel lanes: immediate lanes computed per pixel\n", n);
+        if (n) dumpText("INTELTEX_DUMP", "igil-fixed", false, ".txt", s);
+    }
+    if (declareBaseVertex(s) && logging()) fprintf(stderr, "[inteltex] vertex shader reads VERTEXID: BASE_VERTEX_ID declared\n");
+    for (const IGILTextFix &fix : kIGILTextFixes)
+        if (unsigned n = fix.apply(s); n && logging()) logCount(fix.logFormat, n);
+    pixelDivideInBranch = divideInBranch(s);
+    if (pixelDivideInBranch && logging()) fprintf(stderr, "[inteltex] pixel shader with an integer divide in a branch: SIMD8 only\n");
+    dumpText("INTELTEX_DUMP", "igil-after", false, ".txt", s);
+    bindImageAtomics(s);
 }
 
 // ---- installation --------------------------------------------------------------------------------------------------
@@ -1395,37 +1291,38 @@ static unsigned char *emitMovRax(unsigned char *p, const void *value) {
 }
 
 // ---- LowerImageAtomic (libIGIL-Metal) ------------------------------------------------------------------------------
-struct SDValue { char *node; unsigned resno; };
+using llvm38::SDValue;
 static SDValue (*originalLowerImageAtomic)(const void *self, unsigned id, SDValue op, void *dag);
 static uint64_t (*constantValue)(const void *self, const SDValue &value, void *dag, bool &flag);
 static const unsigned short kISDConstant = 0xa;
-struct EVT { unsigned char simple; void *type; };
+using llvm38::EVT;
 struct SDLoc { void *debugLoc; unsigned order; };
 extern "C" SDValue dagGetConstant(void *dag, uint64_t value, const SDLoc &dl, EVT vt, bool isTarget, bool isOpaque)
     asm("__ZN4llvm12SelectionDAG11getConstantEyRKNS_5SDLocENS_3EVTEbb");
 extern "C" char *dagUpdateNodeOperands(void *dag, char *node, const SDValue *ops, size_t count)
     asm("__ZN4llvm12SelectionDAG18UpdateNodeOperandsEPNS_6SDNodeENS_8ArrayRefINS_7SDValueEEE");
 
-// SDNode (3802 LLVM): +0x18 opcode, +0x20 operand list (0x28-byte SDUse, SDValue first). Operand 2 is the image.
+// Operand 2 of an image atomic's node is the image, operand 3 the tag (a spare operand).
 static bool isTag(const void *self, SDValue value, void *dag) {
     bool flag = true;
-    return *(unsigned short *)(value.node + 0x18) == kISDConstant && (constantValue(self, value, dag, flag) & kImageTagMask) == kImageTag;
+    return llvm38::sdOpcode(value.node) == kISDConstant && (constantValue(self, value, dag, flag) & kImageTagMask) == kImageTag;
 }
 static SDValue hookedLowerImageAtomic(const void *self, unsigned id, SDValue op, void *dag) {
-    char *operands = *(char **)(op.node + 0x20);
-    unsigned count = *(unsigned short *)(op.node + 0x38);
-    SDValue image = *(SDValue *)(operands + 2 * 0x28), tag = *(SDValue *)(operands + 3 * 0x28);
+    using namespace llvm38;
+    char *operands = sdOperandList(op.node);
+    unsigned count = sdOperandCount(op.node);
+    SDValue image = sdOperandAt(operands, 2), tag = sdOperandAt(operands, 3);
     if (count > 16) return originalLowerImageAtomic(self, id, op, dag);
     if (isTag(self, image, dag)) return op;  // done already (the legalizer revisits updated nodes)
     if (!isTag(self, tag, dag)) return originalLowerImageAtomic(self, id, op, dag);
     // The image operand becomes the tag constant (valid in every block); the IGIL text fix puts the UAV in its place.
-    SDLoc dl = {nullptr, *(unsigned *)(op.node + 0x3c)};
-    EVT vt = ((EVT *)*(char **)(tag.node + 0x28))[tag.resno];
+    SDLoc dl = {nullptr, sdIROrder(op.node)};
+    EVT vt = sdValueType(tag);
     SDValue ops[16];
-    for (unsigned k = 0; k < count; k++) ops[k] = *(SDValue *)(operands + k * 0x28);
+    for (unsigned k = 0; k < count; k++) ops[k] = sdOperandAt(operands, k);
     ops[2] = tag;
     ops[3] = ops[4] = dagGetConstant(dag, 0, dl, vt, false, false);
-    ops[count - 1] = *(SDValue *)(operands + 4 * 0x28);  // the value, back from the second spare operand
+    ops[count - 1] = sdOperandAt(operands, 4);  // the value, back from the second spare operand
     return {dagUpdateNodeOperands(dag, op.node, ops, count), op.resno};
 }
 
@@ -1547,37 +1444,25 @@ static void installIntoPlugin(bool redirectImport) {
 }
 
 // ---- IGILUniformAnalysis::getDependency (libIGIL-Metal) ---------------------------------------------------------------
-// The uniformity analysis keeps a value -> dependency map (0 uniform ... 4 varying) that it fills in layout order and
-// then by a worklist. Its getDependency(V) returns the entry, 0 for constants and arguments, and for an instruction
-// with no entry yet reads past the end of the map's buckets: garbage, or a crash when the map ends at a page. That
-// happens: calculate_dep(BinaryOperator) matches ashr (add (shl x, c), y), c and asks for y's dependency, two levels
-// below the instruction whose operands it checked, and a recomputed instruction asks for its operands' without
-// checking them. In mslfuzz2 LONG=1 seed 741, ashr (add %v3, %t), 31 (from select (icmp slt ..., 0), 15, 0) came
-// before %t, a truncated 64-bit product, had an entry, and the compiler service crashed (the stock compiler too).
-// An instruction with no entry yet counts as varying (4); the worklist recomputes its users once it gets one.
-// INTEL_UNIFORM_DEPENDENCY_FIX=0 turns it off.
+// getDependency(V) reads past the end of the uniformity map's buckets for an instruction with no entry yet (calculate_dep
+// asks two levels down, for ashr (add (shl x, c), y), c): garbage, or a compiler-service crash when the map ends at a
+// page (i49; the stock compiler too). Such an instruction counts as varying (4); the worklist recomputes its users once
+// it gets an entry.
 static const unsigned char kGetDependencyPrologue[13] = {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x53, 0x48, 0x83, 0xec, 0x18};
 static unsigned (*originalGetDependency)(void *self, const void *value);
 static bool (*uniformHasDependency)(void *self, const void *value);
 static std::atomic<unsigned> uniformMisses;
 static unsigned hookedGetDependency(void *self, const void *value) {
-    if (((const unsigned char *)value)[0x18] >= 0x18 && !uniformHasDependency(self, value)) return uniformMisses++, 4;  // an instruction
+    if (llvm38::valueId(value) >= llvm38::kFirstInstruction && !uniformHasDependency(self, value)) return uniformMisses++, 4;
     return originalGetDependency(self, value);
 }
 
 // ---- IGILHelperFunctions::isValueUsed (Ivy Bridge libIGIL-Metal) ------------------------------------------------------
-// IGILair_ldst_handling asks, for every load and store, which argument (or global) its address comes from:
-// trackArgIndexOfMemInst walks every global and then every pointer argument with isValueUsed(visited, target, root,
-// uses), a depth-first walk over the root's users that marks each user it reaches in a std::set and recurses through
-// GEPs (where the walked value is the base), loads' and stores' neighbours excepted, every other instruction and calls
-// to intrinsics other than llvm.igil.ld/st. Each step calls Use::getUser (which walks to the end of the user's operand
-// list) five times and allocates a set node, so on Core Animation's specialised uber shader (fixed_frag_lpf_cpf, which
-// WindowServer, Terminal and Safari build after each install) the pass took most of a 26 s compile, and at the first
-// boot after an install WindowServer waited on it for up to a minute (its renderer timed out on fences; the Dock never
-// appeared). The stock compiler is as slow. This is the same walk in the same order with the same answers: one
-// getUser per use, a flat pointer set, an explicit stack. Hooked only on the Ivy Bridge build of the function (checked
-// byte for byte by its hash) and only for an empty set, which is all its callers pass (the set is destroyed unread).
-// INTEL_VALUE_USED_FIX=0 turns it off; INTEL_VALUE_USED_CHECK=1 runs the original too and reports any difference. (i74)
+// IGILair_ldst_handling's isValueUsed walk calls Use::getUser five times per step and allocates a std::set node per user:
+// Core Animation's uber shader took 26 s to compile, and WindowServer waited on it for up to a minute at the first boot
+// after an install (i74; the stock compiler too). This is the same walk with the same answers: one getUser per use, a
+// flat pointer set, an explicit stack. Only the Ivy Bridge build (checked by hash), only for an empty set, which is all
+// its callers pass. INTEL_VALUE_USED_CHECK=1 runs the original too and reports any difference.
 static const uint64_t kIsValueUsedHashIVB = 0xe6c9c39bb2e6d97dULL;
 static const size_t kIsValueUsedSizeIVB = 594;
 static bool (*originalIsValueUsed)(void *visited, const char *target, const char *root, const char *begin, const char *end);
@@ -1586,13 +1471,7 @@ struct NameRef { const char *data; size_t length; };
 extern "C" NameRef valueGetName(const char *value) asm("__ZNK4llvm5Value7getNameEv");
 static std::atomic<unsigned long> valueUsedMismatches, valueUsedCalls, valueUsedSteps, valueUsedRootKinds[256];
 namespace valueused {
-enum : unsigned char { kFunction = 5, kLoad = 0x36, kStore = 0x37, kGEP = 0x38, kCall = 0x4e };
-static unsigned char id(const char *v) { return (unsigned char)v[0x18]; }
-static const char *useList(const char *v) { return *(const char *const *)(v + 0x10); }
-static const char *nextUse(const char *use) { return *(const char *const *)(use + 8); }
-static unsigned operandCount(const char *user) { return *(const uint32_t *)(user + 0x1c) & 0xfffffff; }
-static const char *operand(const char *user, unsigned i) { return *(const char *const *)(user - 24 * (size_t)(operandCount(user) - i)); }
-static const char *lastOperand(const char *user) { return *(const char *const *)(user - 24); }
+using namespace llvm38;
 // Open addressing on pointers; returns false if already present. Kept per thread and emptied after each walk by
 // clearing only the slots it filled (a compile calls the walk thousands of times).
 struct PointerSet {
@@ -1637,22 +1516,22 @@ static bool walk(const char *target, const char *root, const char *begin, const 
         const char *user = useGetUser(use);
         if (!visited.insert((uintptr_t)user)) continue;
         if (logging()) valueUsedSteps++;
-        unsigned char kind = id(user);
+        unsigned char kind = valueId(user);
         if (user == target) {
-            if (kind == kLoad || kind == kStore) { if (lastOperand(user) == value) return true; continue; }
+            if (kind == kLoadInstruction || kind == kStoreInstruction) { if (lastOperand(user) == value) return true; continue; }
             return true;
         }
-        if (kind == kGEP) {
-            if (operand(user, 0) == value) stack.push_back({user, useList(user), nullptr});
+        if (kind == kGEPInstruction) {
+            if (operand(user, 0) == value) stack.push_back({user, firstUse(user), nullptr});
             continue;
         }
-        if (kind == kLoad || kind == kStore) continue;
-        if (kind == kCall) {
+        if (kind == kLoadInstruction || kind == kStoreInstruction) continue;
+        if (kind == kCallInstruction) {
             const char *callee = lastOperand(user);
-            if (!callee || id(callee) != kFunction || !namePrefix(callee, "llvm.", 5)) continue;  // Function::isIntrinsic
+            if (!callee || valueId(callee) != kFunctionValue || !namePrefix(callee, "llvm.", 5)) continue;  // Function::isIntrinsic
             if (namePrefix(callee, "llvm.igil.ld", 12) || namePrefix(callee, "llvm.igil.st", 12)) continue;
         }
-        stack.push_back({user, useList(user), nullptr});
+        stack.push_back({user, firstUse(user), nullptr});
     }
     return false;
 }
@@ -1669,7 +1548,7 @@ static bool hookedIsValueUsed(void *visited, const char *target, const char *roo
         static std::once_flag once;
         std::call_once(once, [] { atexit(reportValueUsed); });
         valueUsedCalls++;
-        valueUsedRootKinds[valueused::id(root)]++;
+        valueUsedRootKinds[llvm38::valueId(root)]++;
     }
     static const bool check = getenv("INTEL_VALUE_USED_CHECK") && !disabled("INTEL_VALUE_USED_CHECK");
     if (check && result != originalIsValueUsed(visited, target, root, begin, end)) {
@@ -1709,44 +1588,31 @@ static bool installIntoBackEnd(void *igil) {
 }
 
 // ---- kernel attributes the IGIL back end rejects ---------------------------------------------------------------------
-// [[max_total_threads_per_threadgroup(N)]] puts !{!"air.max_work_group_size", i32 N} into the kernel's !air.kernel
-// node; IGILParseMetadata aborts the compiler service on it ("Encountered unsupported air.max_work_group_size"), so
-// e.g. every Firefox WebGPU device on the Intel GPU is lost. The value is only a hint (the pipeline still reports the
-// device limit), and the parser skips empty attribute nodes: replace it with !{}.
-extern "C" void mdNodeReplaceOperand(void *node, unsigned index, void *replacement) asm("__ZN4llvm6MDNode18replaceOperandWithEjPNS_8MetadataE");
-static void *metadataOf(LLVMValueRef value) {  // MetadataAsValue::MD: +0x20 in this LLVM, as LLVMGetMDNodeNumOperands reads it
-    if (!value || !LLVMIsAMDNode(value)) return nullptr;
-    void *md = *(void **)((char *)value + 0x20);
-    return md && *(unsigned *)((char *)md + 8) == LLVMGetMDNodeNumOperands(value) ? md : nullptr;
-}
+// IGILParseMetadata aborts the compiler service on the air.max_work_group_size that
+// [[max_total_threads_per_threadgroup(N)]] adds (every Firefox WebGPU device on the Intel GPU was lost). The value is
+// only a hint and the parser skips empty attribute nodes, so it becomes !{}.
 static unsigned dropMaxWorkGroupSize(LLVMModuleRef module) {
     unsigned dropped = 0;
-    std::vector<LLVMValueRef> kernels(LLVMGetNamedMetadataNumOperands(module, "air.kernel"));
-    if (kernels.empty()) return 0;
-    LLVMGetNamedMetadataOperands(module, "air.kernel", kernels.data());
     void *empty = nullptr;
-    for (LLVMValueRef kernel : kernels) {
-        std::vector<LLVMValueRef> parts = metadataOperands(kernel);
-        for (unsigned i = 1; i < parts.size(); i++) {
-            std::vector<LLVMValueRef> attribute = metadataOperands(parts[i]);
+    forEachEntryPoint(module, [&](const EntryPoint &entry) {
+        if (strcmp(entry.list, "air.kernel")) return;
+        for (unsigned i = 1; i < entry.operands.size(); i++) {
+            std::vector<LLVMValueRef> attribute = metadataOperands(entry.operands[i]);
             if (attribute.empty() || !isString(attribute[0], "air.max_work_group_size")) continue;
-            void *node = metadataOf(kernel);
+            void *node = metadataOf(entry.node);
             if (!empty) empty = metadataOf(LLVMMDNodeInContext(LLVMGetModuleContext(module), nullptr, 0));
             if (!node || !empty) continue;
             mdNodeReplaceOperand(node, i, empty);
             dropped++;
         }
-    }
+    });
     return dropped;
 }
 
-// Newer front ends describe a `device T (&)[N]` buffer argument (naga/wgpu writes them) as a pointer to an array of
-// structs with the struct's air.struct_type_info. The plugin's argument-buffer emulation (MetadataParser::parseArgument)
-// asserts that an argument with struct info points to a struct ("isa<StructType>(elementType)"), which aborts
-// MTLCompilerService. For plain-data structs (nested plain structs included: wgpu's timestamp normalization) the info is
-// reflection only, so drop it from such arguments.
-// Struct info that describes plain data only: members are scalars/vectors, or structs (!"air.struct_type_info", !{...})
-// that are plain data themselves. Any other air.* marker (indirect arguments: buffers, textures, samplers) is not.
+// The plugin's MetadataParser::parseArgument asserts that an argument with air.struct_type_info points to a struct,
+// which aborts MTLCompilerService for `device T (&)[N]` arguments (naga writes them; i01). For plain-data structs the
+// info is reflection only, so it is dropped from such arguments.
+// Struct info that describes plain data only: scalar, vector or plain-struct members; no buffers, textures or samplers.
 static bool plainStructInfo(LLVMValueRef info, int depth) {
     if (!info || depth > 8) return false;
     std::vector<LLVMValueRef> members = metadataOperands(info);
@@ -1763,145 +1629,54 @@ static bool plainStructInfo(LLVMValueRef info, int depth) {
     return true;
 }
 
-static unsigned dropArrayStructInfo(LLVMModuleRef module) {
+static bool isPointerToArray(LLVMValueRef value) {
     enum { kPointerKind = 12, kArrayKind = 11 };  // LLVMTypeKind
-    unsigned dropped = 0;
-    LLVMContextRef context = LLVMGetModuleContext(module);
-    for (const char *list : {"air.kernel", "air.fragment", "air.vertex"}) {
-        std::vector<LLVMValueRef> entries(LLVMGetNamedMetadataNumOperands(module, list));
-        if (entries.empty()) continue;
-        LLVMGetNamedMetadataOperands(module, list, entries.data());
-        for (LLVMValueRef entry : entries) {
-            std::vector<LLVMValueRef> parts = metadataOperands(entry);
-            if (parts.empty() || !parts[0]) continue;
-            LLVMValueRef function = parts[0];
-            unsigned params = LLVMCountParams(function);
-            for (unsigned i = 1; i < parts.size(); i++) {
-                std::vector<LLVMValueRef> args = metadataOperands(parts[i]);
-                for (unsigned a = 0; a < args.size(); a++) {
-                    std::vector<LLVMValueRef> arg = metadataOperands(args[a]);
-                    if (arg.empty() || !LLVMIsAConstantInt(arg[0])) continue;
-                    unsigned param = (unsigned)LLVMConstIntGetZExtValue(arg[0]);
-                    unsigned k = 0;
-                    while (k + 1 < arg.size() && !isString(arg[k], "air.struct_type_info")) k++;
-                    if (k + 1 >= arg.size() || param >= params) continue;
-                    LLVMTypeRef type = LLVMTypeOf(LLVMGetParam(function, param));
-                    if (LLVMGetTypeKind(type) != kPointerKind || LLVMGetTypeKind(LLVMGetElementType(type)) != kArrayKind) continue;
-                    if (!plainStructInfo(arg[k + 1], 0)) continue;  // resources inside (indirect arguments): leave it alone
-                    std::vector<LLVMValueRef> kept;
-                    for (unsigned j = 0; j < arg.size(); j++)
-                        if (j != k && j != k + 1) kept.push_back(arg[j]);
-                    void *list_node = metadataOf(parts[i]);
-                    void *replacement = metadataOf(LLVMMDNodeInContext(context, kept.data(), (unsigned)kept.size()));
-                    if (!list_node || !replacement) continue;
-                    mdNodeReplaceOperand(list_node, a, replacement);
-                    dropped++;
-                }
-            }
-        }
-    }
-    return dropped;
+    LLVMTypeRef type = LLVMTypeOf(value);
+    return LLVMGetTypeKind(type) == kPointerKind && LLVMGetTypeKind(LLVMGetElementType(type)) == kArrayKind;
+}
+static unsigned dropArrayStructInfo(LLVMModuleRef module) {
+    return rewriteEachArgument(module, [](LLVMValueRef function, const std::vector<LLVMValueRef> &description) {
+        std::vector<LLVMValueRef> withoutStructInfo;
+        long param = description.empty() ? -1 : metadataInt(description[0]);
+        long info = indexOfKeyWithValue(description, "air.struct_type_info");
+        if (!function || param < 0 || info < 0 || (unsigned long)param >= LLVMCountParams(function)) return withoutStructInfo;
+        if (!isPointerToArray(LLVMGetParam(function, (unsigned)param))) return withoutStructInfo;
+        if (!plainStructInfo(description[info + 1], 0)) return withoutStructInfo;  // resources inside (indirect arguments)
+        for (long j = 0; j < (long)description.size(); j++)
+            if (j != info && j != info + 1) withoutStructInfo.push_back(description[j]);
+        return withoutStructInfo;
+    });
 }
 
 // ---- argument-buffer references in the 12.x plugin's emulation --------------------------------------------------------
-// The 12.x plugin emulates argument buffers (AirEmulateArgumentBuffers): each buffer an argument buffer points to becomes
-// a hidden kernel argument, numbered in order (air.location_index), that its driver binds at the dispatch. It builds the
-// hidden argument's metadata from the member's and writes that number at a fixed operand, the one after
-// "air.location_index" in {argno, "air.buffer", "air.location_index", N, ...}. The macOS 14 front end gives a reference
-// member (`device array<float4, 1> &out [[id(k)]]`, `device T &x`; a pointer member has no size) an "air.buffer_size"
-// first, so the number went into the size and the location kept the member's id: unless the two were the same, the
-// kernel used a hidden buffer the driver hadn't bound, and its reads and writes went nowhere. WebKit's WebGPU declares
-// every buffer of a bind group that way, next to textures and samplers: Safari's compute passes on Haswell wrote nothing.
-// The number is moved to the location and the size dropped, which is the form a pointer member gets.
-// INTEL_EMULATED_REFERENCE_FIX=0 turns it off. (i83, s86)
-static unsigned fixEmulatedReferenceSlots(LLVMModuleRef module) {
+// The 12.x plugin's argument-buffer emulation writes each hidden buffer's number into the operand after
+// "air.location_index". For a reference member the macOS 14 front end puts "air.buffer_size" there first, so the number
+// lands in the size and the kernel uses a buffer the driver never binds (Safari's WebGPU compute on Haswell). (i83, s86)
+enum EmulatedReferenceOperand { kArgNo, kKind, kSizeKey, kSlot, kLocationKey, kMemberId, kFirstOtherOperand };
+static bool hasEmulationSlotInSizeField(const std::vector<LLVMValueRef> &description) {
+    return description.size() >= kFirstOtherOperand && isString(description[kKind], "air.buffer") &&
+           isString(description[kSizeKey], "air.buffer_size") && metadataInt(description[kSlot]) >= 0 &&
+           isString(description[kLocationKey], "air.location_index") && metadataInt(description[kMemberId]) >= 0 &&
+           isString(description.back(), "air.emulation_argument");
+}
+static unsigned moveEmulatedReferenceSlotsToLocation(LLVMModuleRef module) {
     if (disabled("INTEL_EMULATED_REFERENCE_FIX")) return 0;
-    unsigned fixed = 0;
-    LLVMContextRef context = LLVMGetModuleContext(module);
-    for (const char *list : {"air.kernel", "air.fragment", "air.vertex"}) {
-        std::vector<LLVMValueRef> entries(LLVMGetNamedMetadataNumOperands(module, list));
-        if (entries.empty()) continue;
-        LLVMGetNamedMetadataOperands(module, list, entries.data());
-        for (LLVMValueRef entry : entries) {
-            std::vector<LLVMValueRef> parts = metadataOperands(entry);
-            for (unsigned i = 1; i < parts.size(); i++) {
-                std::vector<LLVMValueRef> args = metadataOperands(parts[i]);
-                for (unsigned a = 0; a < args.size(); a++) {
-                    std::vector<LLVMValueRef> arg = metadataOperands(args[a]);
-                    if (arg.size() < 6 || !isString(arg[1], "air.buffer") || !isString(arg[2], "air.buffer_size") ||
-                        !arg[3] || !LLVMIsAConstantInt(arg[3]) || !isString(arg[4], "air.location_index") || !arg[5] ||
-                        !LLVMIsAConstantInt(arg[5]) || !isString(arg.back(), "air.emulation_argument"))
-                        continue;
-                    std::vector<LLVMValueRef> kept = {arg[0], arg[1], arg[4], arg[3]};
-                    kept.insert(kept.end(), arg.begin() + 6, arg.end());
-                    void *listNode = metadataOf(parts[i]);
-                    void *replacement = metadataOf(LLVMMDNodeInContext(context, kept.data(), (unsigned)kept.size()));
-                    if (!listNode || !replacement) continue;
-                    mdNodeReplaceOperand(listNode, a, replacement);
-                    fixed++;
-                }
-            }
-        }
-    }
-    return fixed;
+    return rewriteEachArgument(module, [](LLVMValueRef, const std::vector<LLVMValueRef> &description) {
+        std::vector<LLVMValueRef> pointerMemberForm;
+        if (!hasEmulationSlotInSizeField(description)) return pointerMemberForm;
+        pointerMemberForm = {description[kArgNo], description[kKind], description[kLocationKey], description[kSlot]};
+        pointerMemberForm.insert(pointerMemberForm.end(), description.begin() + kFirstOtherOperand, description.end());
+        return pointerMemberForm;
+    });
 }
 
 // ---- argument buffers on Ivy Bridge ---------------------------------------------------------------------------------
-// OCLP's 11.7.10 Ivy Bridge plugin doesn't emulate argument buffers (the 12.x plugin makes each buffer an argument
-// buffer points to a hidden constant buffer, EMULATION_ARGUMENT TRUE, that its driver binds at the draw), and its driver
-// has no argument-buffer runtime. It reads a pointer member as an offset into the argument buffer's own surface: a
-// kernel read the argument buffer instead of the buffer it pointed to, and a vertex or fragment function that
-// dereferenced one didn't build at all ("Compilation failed", or the compiler service crashed). WebKit's ANGLE puts every
-// WebGL 2 uniform block in an argument buffer. Here each pointer member of an argument buffer (an air.indirect_buffer
-// argument's struct_type_info members of kind air.buffer, arrays of them too) becomes a hidden buffer parameter named
-// __ivbab_<argument buffer index>_<id>, at a buffer index the function doesn't use, counted down from 30 over every
-// pointer member in order of argument buffer index and id (vertex functions keep 0-16 for vertex buffers), and its
-// loads read that parameter. MetalOldCompat item 47 encodes the argument buffer and binds each buffer it points to at
-// that index before the draw or dispatch. Constants stay in the argument buffer, which this back end reads right.
-// Textures and samplers (members of kind air.texture / air.sampler, a metal::texture2d or metal::sampler struct around
-// the handle; a copy into a local, `texture2d<float> t = ab.t;`, loads that struct as an i64 and casts it back with
-// inttoptr, which is followed too) are a load from memory the back end can't do at all: WebKit's WebGPU puts every bind group's textures and
-// samplers in an argument buffer, and a fragment function sampling one crashed the compiler service
-// (IGILair_ldst_handling looked up a load intrinsic for an image type and got a null name). Each becomes a hidden texture
-// or sampler parameter the same way, named likewise, at a texture index counted down from 30 / a sampler index counted
-// down from 15 over the ones the function doesn't use (MetalOldCompat item 79 binds them; arrays of them are left
-// alone). INTEL_IVB_ARGUMENT_BUFFER_TEXTURES=0 turns that part off.
-// Ivy Bridge only. INTEL_IVB_ARGUMENT_BUFFER_FIX=0 turns it off.
-extern "C" {
-int LLVMIsFunctionVarArg(LLVMTypeRef);
-unsigned LLVMCountParamTypes(LLVMTypeRef);
-void LLVMGetParamTypes(LLVMTypeRef, LLVMTypeRef *);
-LLVMTypeRef LLVMGetReturnType(LLVMTypeRef);
-LLVMTypeRef LLVMFunctionType(LLVMTypeRef, LLVMTypeRef *, unsigned, int);
-LLVMValueRef LLVMAddFunction(LLVMModuleRef, const char *, LLVMTypeRef);
-void LLVMRemoveBasicBlockFromParent(LLVMBasicBlockRef);
-void LLVMDeleteFunction(LLVMValueRef);
-unsigned LLVMCountStructElementTypes(LLVMTypeRef);
-LLVMTypeRef LLVMStructGetTypeAtIndex(LLVMTypeRef, unsigned);
-LLVMValueRef LLVMMDStringInContext(LLVMContextRef, const char *, unsigned);
-void LLVMSetValueName(LLVMValueRef, const char *);
-int LLVMGetLinkage(LLVMValueRef);
-void LLVMSetLinkage(LLVMValueRef, int);
-typedef struct LLVMOpaqueAttributeRef *LLVMAttributeRef;
-typedef struct LLVMOpaquePassManager *LLVMPassManagerRef;
-LLVMAttributeRef LLVMCreateEnumAttribute(LLVMContextRef, unsigned, uint64_t);
-void LLVMAddAttributeAtIndex(LLVMValueRef, unsigned, LLVMAttributeRef);
-void LLVMRemoveEnumAttributeAtIndex(LLVMValueRef, unsigned, unsigned);
-unsigned LLVMGetEnumAttributeKindForName(const char *, size_t);
-LLVMPassManagerRef LLVMCreatePassManager(void);
-void LLVMAddAlwaysInlinerPass(LLVMPassManagerRef);
-int LLVMRunPassManager(LLVMPassManagerRef, LLVMModuleRef);
-void LLVMDisposePassManager(LLVMPassManagerRef);
-LLVMValueRef LLVMGetCalledValue(LLVMValueRef);
-LLVMValueRef LLVMIsACallInst(LLVMValueRef);
-LLVMValueRef LLVMIsAFunction(LLVMValueRef);
-typedef struct LLVMOpaqueTargetData *LLVMTargetDataRef;
-LLVMTargetDataRef LLVMCreateTargetData(const char *);
-void LLVMDisposeTargetData(LLVMTargetDataRef);
-unsigned long long LLVMOffsetOfElement(LLVMTargetDataRef, LLVMTypeRef, unsigned);
-unsigned LLVMGetIntTypeWidth(LLVMTypeRef);
-const char *LLVMGetDataLayoutStr(LLVMModuleRef);
-}
+// OCLP's 11.7.10 Ivy Bridge plugin doesn't emulate argument buffers and its driver has no argument-buffer runtime: a
+// pointer member was read as an offset into the argument buffer itself, and vertex and fragment functions failed to
+// build (i85, s61; WebKit's ANGLE puts every WebGL 2 uniform block in one). Each pointer member becomes a hidden buffer
+// parameter __ivbab_<argument buffer index>_<id> at a free buffer index counted down from 30, which MetalOldCompat item
+// 47 binds; texture and sampler members, which crashed the compiler service, likewise become hidden texture and sampler
+// parameters counted down from 30 and 15 (s86, MetalOldCompat item 79). Constants stay in the argument buffer.
 // (LLVMGetAttributeCountAtIndex dereferences an empty attribute set in this LLVM, so the attributes go over whole)
 extern "C" void functionCopyAttributesFrom(void *function, const void *source) asm("__ZN4llvm8Function18copyAttributesFromEPKNS_11GlobalValueE");
 extern "C" void basicBlockInsertInto(void *block, void *function, void *before) asm("__ZN4llvm10BasicBlock10insertIntoEPNS_8FunctionEPS0_");
@@ -1918,14 +1693,6 @@ struct ArgumentBufferSlot {  // one pointer or handle of an argument buffer, rea
     LLVMTypeRef type = nullptr;  // the pointer or handle type at the path: the hidden parameter's type
 };
 
-static long metadataInt(LLVMValueRef value) {
-    return value && LLVMIsAConstantInt(value) ? (long)LLVMConstIntGetZExtValue(value) : -1;
-}
-static long fieldAfter(const std::vector<LLVMValueRef> &fields, const char *key, unsigned skip = 1) {
-    for (size_t k = 0; k + skip < fields.size(); k++)
-        if (isString(fields[k], key)) return metadataInt(fields[k + skip]);
-    return -1;
-}
 
 // The members of a struct_type_info node: [!"air.struct_type_info", !nested,] offset, size, count, type name, name,
 // !"air.indirect_argument", !kind-or-i32 each. The i32 of a nested member (a metal::array) is its first id.
@@ -1975,13 +1742,10 @@ static bool bytePadding(LLVMTypeRef type) {
            LLVMGetIntTypeWidth(LLVMGetElementType(type)) == 8;
 }
 
-// The pointer slots of one argument buffer: pointer members (path {e}) and metal::array members of pointers
-// ({e, 0, j}: a struct holding [n x pointer], described by a nested __elems member with count n), e being the member's
-// element of the struct type. Usually member m is element m. A struct with a reference member (WebKit's WebGPU writes
-// `device array<T, 1> &x [[id(0)]]; uint length [[id(1)]];` for every storage buffer) is a packed struct with explicit
-// padding elements instead, <{ %"struct.metal::array" addrspace(1)*, i32, [4 x i8] }>: its members are matched to
-// elements by byte offset, padding skipped (td: the module's data layout; INTEL_IVB_PADDED_ARGUMENT_BUFFER_FIX=0 turns
-// that off). False if the layout is one this pass doesn't follow; constants, textures and samplers are left alone.
+// The pointer slots of one argument buffer: pointer members (path {e}) and metal::array members of pointers ({e, 0, j}),
+// e being the member's element of the struct type. A struct with a reference member (WebKit's WebGPU writes
+// `device array<T, 1> &x [[id(0)]]; uint length [[id(1)]];`) is a packed struct with explicit padding instead, whose
+// members are matched to elements by byte offset (i82). False for a layout this pass doesn't follow.
 static bool argumentBufferSlots(LLVMValueRef info, LLVMTypeRef structType, unsigned bufferIndex, std::vector<ArgumentBufferSlot> &out,
                                 LLVMTargetDataRef td) {
     std::vector<StructInfoMember> members;
@@ -2063,12 +1827,7 @@ static ArgumentBufferSlot *slotOf(LLVMValueRef gep, LLVMValueRef param, unsigned
         if (s.bufferIndex == bufferIndex && s.kind != kSlotBuffer && s.path == path) return *wrapper = true, &s;
     return nullptr;
 }
-extern "C" int LLVMGetInstructionOpcode(LLVMValueRef);
-extern "C" LLVMValueRef LLVMBuildBitCast(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
 enum { kOpIntToPtr = 40 };  // LLVMOpcode
-extern "C" LLVMTypeRef LLVMInt8TypeInContext(LLVMContextRef);
-extern "C" LLVMTypeRef LLVMPointerType(LLVMTypeRef, unsigned);
-extern "C" unsigned LLVMGetPointerAddressSpace(LLVMTypeRef);
 // A load the rewrite can replace: of the pointer itself, or of a 64-bit integer through a bitcast.
 static bool slotLoad(LLVMValueRef load, LLVMValueRef from) {
     if (!LLVMIsALoadInst(load) || LLVMGetOperand(load, 0) != from) return false;
@@ -2077,30 +1836,10 @@ static bool slotLoad(LLVMValueRef load, LLVMValueRef from) {
 }
 
 // ---- program-scope constants in vertex and fragment functions on Ivy Bridge -----------------------------------------
-// The 11.7.10 plugin puts a vertex or fragment function's program-scope constant data (MSL `constant` variables) in an
-// inline constant buffer, and the driver doesn't bind that buffer: the loads read whatever the app has bound at buffer 0
-// of that stage, or 0 (a `volatile constexpr constant uint` read 0x2 where the app had bound a buffer holding 2 at
-// index 0; Tint declares such constants, tint_volatile_zero). Compute kernels get it right. So in vertex and fragment
-// modules, loads at a constant address in such a variable (a scalar, a vector, an element) read the initializer's value
-// instead, volatile ones too (the variable is constant: its value can't change), and loads of a small array (64 scalar
-// or vector elements at most) at a run-time index a select over its elements. Bigger tables are left as they are.
-// Ivy Bridge only. INTEL_IVB_INLINE_CONSTANT_FIX=0 turns it off.
-extern "C" {
-LLVMValueRef LLVMGetFirstGlobal(LLVMModuleRef);
-LLVMValueRef LLVMGetNextGlobal(LLVMValueRef);
-LLVMValueRef LLVMGetInitializer(LLVMValueRef);
-unsigned LLVMGetPointerAddressSpace(LLVMTypeRef);
-LLVMValueRef LLVMIsAGlobalVariable(LLVMValueRef);
-LLVMValueRef LLVMIsAConstantDataSequential(LLVMValueRef);
-LLVMValueRef LLVMIsAConstantAggregateZero(LLVMValueRef);
-LLVMValueRef LLVMIsAConstantArray(LLVMValueRef);
-LLVMValueRef LLVMIsAConstantStruct(LLVMValueRef);
-LLVMValueRef LLVMIsAConstantVector(LLVMValueRef);
-LLVMValueRef LLVMIsAConstantExpr(LLVMValueRef);
-int LLVMGetConstOpcode(LLVMValueRef);
-LLVMValueRef LLVMGetElementAsConstant(LLVMValueRef, unsigned);
-LLVMValueRef LLVMBuildSelect(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, LLVMValueRef, const char *);
-}
+// The 11.7.10 plugin puts a vertex or fragment function's program-scope constants in an inline constant buffer that its
+// driver doesn't bind, so their loads read the app's buffer 0, or 0 (i73; compute kernels are right). Loads at a
+// constant address read the initializer instead, and loads of a small array at a run-time index a select over its
+// elements.
 // Element `index` of a constant aggregate, or null.
 static LLVMValueRef constantElement(LLVMValueRef c, unsigned index) {
     LLVMTypeRef type = LLVMTypeOf(c);
@@ -2120,6 +1859,7 @@ static bool scalarOrVector(LLVMTypeRef type) {
 }
 
 static unsigned ivbInlineConstants(LLVMModuleRef module) {
+    if (disabled("INTEL_IVB_INLINE_CONSTANT_FIX")) return 0;
     if (!LLVMGetNamedMetadataNumOperands(module, "air.vertex") && !LLVMGetNamedMetadataNumOperands(module, "air.fragment")) return 0;
     enum { kGEP = 29 };  // LLVMOpcode
     unsigned replaced = 0;
@@ -2192,27 +1932,24 @@ static unsigned ivbInlineConstants(LLVMModuleRef module) {
 // ANGLE's entry functions hand the argument buffer to the translated main (an internal function), so the pointer loads
 // are in a callee when the module gets here: every function such an entry calls, transitively, is inlined first
 // (alwaysinline and LLVM's always-inliner), which the back end would have done anyway.
+static bool passesArgumentBufferToCall(LLVMValueRef function, LLVMValueRef inputs) {
+    for (LLVMValueRef description : metadataOperands(inputs)) {
+        std::vector<LLVMValueRef> fields = metadataOperands(description);
+        long param = fields.size() > 1 && isString(fields[1], "air.indirect_buffer") ? metadataInt(fields[0]) : -1;
+        if (param < 0 || (unsigned)param >= LLVMCountParams(function)) continue;
+        for (LLVMUseRef use = LLVMGetFirstUse(LLVMGetParam(function, (unsigned)param)); use; use = LLVMGetNextUse(use))
+            if (LLVMIsACallInst(LLVMGetUser(use))) return true;
+    }
+    return false;
+}
 static bool inlineArgumentBufferCallees(LLVMModuleRef module) {
     LLVMContextRef context = LLVMGetModuleContext(module);
     std::vector<LLVMValueRef> work;
-    for (const char *list : {"air.kernel", "air.fragment", "air.vertex"}) {
-        std::vector<LLVMValueRef> entries(LLVMGetNamedMetadataNumOperands(module, list));
-        if (entries.empty()) continue;
-        LLVMGetNamedMetadataOperands(module, list, entries.data());
-        for (LLVMValueRef entry : entries) {
-            std::vector<LLVMValueRef> parts = metadataOperands(entry);
-            if (parts.size() < 3 || !parts[0] || !LLVMIsAFunction(parts[0]) || LLVMIsDeclaration(parts[0])) continue;
-            bool passed = false;
-            for (LLVMValueRef arg : metadataOperands(parts[2])) {
-                std::vector<LLVMValueRef> f = metadataOperands(arg);
-                long param = f.size() > 1 && isString(f[1], "air.indirect_buffer") ? metadataInt(f[0]) : -1;
-                if (param < 0 || (unsigned)param >= LLVMCountParams(parts[0])) continue;
-                for (LLVMUseRef u = LLVMGetFirstUse(LLVMGetParam(parts[0], (unsigned)param)); u; u = LLVMGetNextUse(u))
-                    if (LLVMIsACallInst(LLVMGetUser(u))) passed = true;
-            }
-            if (passed) work.push_back(parts[0]);
-        }
-    }
+    forEachEntryPoint(module, [&](const EntryPoint &entry) {
+        LLVMValueRef function = entry.function();
+        if (entry.operands.size() < 3 || !function || !LLVMIsAFunction(function) || LLVMIsDeclaration(function)) return;
+        if (passesArgumentBufferToCall(function, entry.operands[2])) work.push_back(function);
+    });
     std::set<LLVMValueRef> marked;
     unsigned alwaysInline = LLVMGetEnumAttributeKindForName("alwaysinline", 12);
     unsigned noInline = LLVMGetEnumAttributeKindForName("noinline", 8);
@@ -2239,6 +1976,7 @@ static bool inlineArgumentBufferCallees(LLVMModuleRef module) {
 }
 
 static unsigned ivbArgumentBuffers(LLVMModuleRef module) {
+    if (disabled("INTEL_IVB_ARGUMENT_BUFFER_FIX")) return 0;
     inlineArgumentBufferCallees(module);
     unsigned rewritten = 0;
     const char *dataLayout = LLVMGetDataLayoutStr(module);
@@ -2246,193 +1984,185 @@ static unsigned ivbArgumentBuffers(LLVMModuleRef module) {
     struct DisposeLayout { LLVMTargetDataRef t; ~DisposeLayout() { if (t) LLVMDisposeTargetData(t); } } disposeLayout{layout};
     LLVMContextRef context = LLVMGetModuleContext(module);
     LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
-    for (const char *list : {"air.kernel", "air.fragment", "air.vertex"}) {
-        std::vector<LLVMValueRef> entries(LLVMGetNamedMetadataNumOperands(module, list));
-        if (entries.empty()) continue;
-        LLVMGetNamedMetadataOperands(module, list, entries.data());
-        for (LLVMValueRef entry : entries) {
-            std::vector<LLVMValueRef> parts = metadataOperands(entry);
-            if (parts.size() < 3 || !parts[0] || LLVMIsDeclaration(parts[0])) continue;
-            LLVMValueRef function = parts[0];
-            unsigned params = LLVMCountParams(function);
-            std::vector<LLVMValueRef> args = metadataOperands(parts[2]);
-            // buffer, texture and sampler indices the function already uses, and its argument buffers in index order
-            std::set<unsigned> used[kSlotKinds];
-            std::map<unsigned, std::pair<unsigned, LLVMValueRef>> buffers;  // index -> (param, struct_type_info)
-            bool ok = true;
-            for (LLVMValueRef arg : args) {
-                std::vector<LLVMValueRef> f = metadataOperands(arg);
-                if (f.size() < 2) continue;
-                bool plain = isString(f[1], "air.buffer"), indirect = isString(f[1], "air.indirect_buffer");
-                int handle = isString(f[1], "air.texture") ? kSlotTexture : isString(f[1], "air.sampler") ? kSlotSampler : -1;
-                if (!plain && !indirect && handle < 0) continue;
-                long index = fieldAfter(f, "air.location_index"), count = fieldAfter(f, "air.location_index", 2), param = metadataInt(f[0]);
-                if (index < 0 || param < 0 || (unsigned)param >= params) { ok = false; break; }
-                for (long k = 0; k < (count > 0 ? count : 1); k++) used[handle < 0 ? kSlotBuffer : handle].insert((unsigned)(index + k));
-                if (handle >= 0) continue;
-                if (!indirect) continue;
-                long info = -1;
-                for (size_t k = 0; k + 1 < f.size(); k++)
-                    if (isString(f[k], "air.struct_type_info")) info = (long)k + 1;
-                if (info < 0) { ok = false; break; }
-                buffers[(unsigned)index] = {(unsigned)param, f[info]};
-            }
-            if (!ok || buffers.empty()) continue;
-            std::vector<ArgumentBufferSlot> slots;
-            for (auto &b : buffers) {
-                LLVMTypeRef type = LLVMTypeOf(LLVMGetParam(function, b.second.first));
-                if (LLVMGetTypeKind(type) != kAbPointerKind ||
-                    !argumentBufferSlots(b.second.second, LLVMGetElementType(type), b.first, slots, layout)) { ok = false; break; }
-            }
-            if (!ok || slots.empty()) continue;
-            std::sort(slots.begin(), slots.end(), [](const ArgumentBufferSlot &a, const ArgumentBufferSlot &b) {
-                return a.bufferIndex != b.bufferIndex ? a.bufferIndex < b.bufferIndex : a.id < b.id;
-            });
-            // counted down per kind, in order of argument buffer index and id (as MetalOldCompat does)
-            int next[kSlotKinds] = {30, 30, 15};
-            int lowest[kSlotKinds] = {!strcmp(list, "air.vertex") ? 17 : 0, 0, 0};
-            for (ArgumentBufferSlot &s : slots) {
-                int &n = next[s.kind];
-                while (n >= lowest[s.kind] && used[s.kind].count((unsigned)n)) n--;
-                if (n < lowest[s.kind]) { ok = false; break; }
-                s.hidden = (unsigned)n--;
-            }
-            if (!ok) {
-                if (logging()) fprintf(stderr, "[inteltex] %s: %zu argument-buffer pointers/handles, not enough free indices\n",
-                                       LLVMGetValueName(function), slots.size());
-                continue;
-            }
-            // the pointer loads: load(GEP(argument buffer, 0, member[, element])), or through a bitcast of it
-            struct SlotLoad { LLVMValueRef first, cast; ArgumentBufferSlot *second; };
-            std::vector<SlotLoad> loads;
-            for (auto &b : buffers) {
-                LLVMValueRef param = LLVMGetParam(function, b.second.first);
-                for (LLVMUseRef u = LLVMGetFirstUse(param); u; u = LLVMGetNextUse(u)) {
-                    LLVMValueRef gep = LLVMGetUser(u);
-                    bool wrapper = false;
-                    ArgumentBufferSlot *slot = slotOf(gep, param, b.first, slots, &wrapper);
-                    if (!slot && LLVMIsABitCastInst(gep) && LLVMGetOperand(gep, 0) == param) {
-                        // the first member, at offset 0, read through a cast of the argument buffer itself (WebKit's
-                        // `i8 constant *` for a bind group with dynamic offsets): element 0, or the handle in its wrapper
-                        for (ArgumentBufferSlot &s : slots)
-                            if (s.bufferIndex == b.first && (s.path == std::vector<unsigned>{0} ||
-                                                             (s.kind != kSlotBuffer && s.path == std::vector<unsigned>{0, 0})))
-                                slot = &s;
-                        if (slot)
-                            for (LLVMUseRef w = LLVMGetFirstUse(gep); w; w = LLVMGetNextUse(w))
-                                if (slotLoad(LLVMGetUser(w), gep)) loads.push_back({LLVMGetUser(w), gep, slot});
-                        continue;
-                    }
-                    if (!slot) continue;
-                    for (LLVMUseRef v = LLVMGetFirstUse(gep); v; v = LLVMGetNextUse(v)) {
-                        LLVMValueRef user = LLVMGetUser(v);
-                        if (!wrapper && slotLoad(user, gep)) loads.push_back({user, nullptr, slot});
-                        else if (LLVMIsABitCastInst(user) && LLVMGetOperand(user, 0) == gep)
-                            for (LLVMUseRef w = LLVMGetFirstUse(user); w; w = LLVMGetNextUse(w))
-                                if (slotLoad(LLVMGetUser(w), user)) loads.push_back({LLVMGetUser(w), user, slot});
-                    }
+    forEachEntryPoint(module, [&](const EntryPoint &entry) {
+        const std::vector<LLVMValueRef> &parts = entry.operands;
+        const char *list = entry.list;
+        if (parts.size() < 3 || !parts[0] || LLVMIsDeclaration(parts[0])) return;
+        LLVMValueRef function = parts[0];
+        unsigned params = LLVMCountParams(function);
+        std::vector<LLVMValueRef> args = metadataOperands(parts[2]);
+        // buffer, texture and sampler indices the function already uses, and its argument buffers in index order
+        std::set<unsigned> used[kSlotKinds];
+        std::map<unsigned, std::pair<unsigned, LLVMValueRef>> buffers;  // index -> (param, struct_type_info)
+        bool ok = true;
+        for (LLVMValueRef arg : args) {
+            std::vector<LLVMValueRef> f = metadataOperands(arg);
+            if (f.size() < 2) continue;
+            bool plain = isString(f[1], "air.buffer"), indirect = isString(f[1], "air.indirect_buffer");
+            int handle = isString(f[1], "air.texture") ? kSlotTexture : isString(f[1], "air.sampler") ? kSlotSampler : -1;
+            if (!plain && !indirect && handle < 0) continue;
+            long index = fieldAfter(f, "air.location_index"), count = fieldAfter(f, "air.location_index", 2), param = metadataInt(f[0]);
+            if (index < 0 || param < 0 || (unsigned)param >= params) { ok = false; break; }
+            for (long k = 0; k < (count > 0 ? count : 1); k++) used[handle < 0 ? kSlotBuffer : handle].insert((unsigned)(index + k));
+            if (handle >= 0) continue;
+            if (!indirect) continue;
+            long info = -1;
+            for (size_t k = 0; k + 1 < f.size(); k++)
+                if (isString(f[k], "air.struct_type_info")) info = (long)k + 1;
+            if (info < 0) { ok = false; break; }
+            buffers[(unsigned)index] = {(unsigned)param, f[info]};
+        }
+        if (!ok || buffers.empty()) return;
+        std::vector<ArgumentBufferSlot> slots;
+        for (auto &b : buffers) {
+            LLVMTypeRef type = LLVMTypeOf(LLVMGetParam(function, b.second.first));
+            if (LLVMGetTypeKind(type) != kAbPointerKind ||
+                !argumentBufferSlots(b.second.second, LLVMGetElementType(type), b.first, slots, layout)) { ok = false; break; }
+        }
+        if (!ok || slots.empty()) return;
+        std::sort(slots.begin(), slots.end(), [](const ArgumentBufferSlot &a, const ArgumentBufferSlot &b) {
+            return a.bufferIndex != b.bufferIndex ? a.bufferIndex < b.bufferIndex : a.id < b.id;
+        });
+        // counted down per kind, in order of argument buffer index and id (as MetalOldCompat does)
+        int next[kSlotKinds] = {30, 30, 15};
+        int lowest[kSlotKinds] = {!strcmp(list, "air.vertex") ? 17 : 0, 0, 0};
+        for (ArgumentBufferSlot &s : slots) {
+            int &n = next[s.kind];
+            while (n >= lowest[s.kind] && used[s.kind].count((unsigned)n)) n--;
+            if (n < lowest[s.kind]) { ok = false; break; }
+            s.hidden = (unsigned)n--;
+        }
+        if (!ok) {
+            if (logging()) fprintf(stderr, "[inteltex] %s: %zu argument-buffer pointers/handles, not enough free indices\n",
+                                   LLVMGetValueName(function), slots.size());
+            return;
+        }
+        // the pointer loads: load(GEP(argument buffer, 0, member[, element])), or through a bitcast of it
+        struct SlotLoad { LLVMValueRef first, cast; ArgumentBufferSlot *second; };
+        std::vector<SlotLoad> loads;
+        for (auto &b : buffers) {
+            LLVMValueRef param = LLVMGetParam(function, b.second.first);
+            for (LLVMUseRef u = LLVMGetFirstUse(param); u; u = LLVMGetNextUse(u)) {
+                LLVMValueRef gep = LLVMGetUser(u);
+                bool wrapper = false;
+                ArgumentBufferSlot *slot = slotOf(gep, param, b.first, slots, &wrapper);
+                if (!slot && LLVMIsABitCastInst(gep) && LLVMGetOperand(gep, 0) == param) {
+                    // the first member, at offset 0, read through a cast of the argument buffer itself (WebKit's
+                    // `i8 constant *` for a bind group with dynamic offsets): element 0, or the handle in its wrapper
+                    for (ArgumentBufferSlot &s : slots)
+                        if (s.bufferIndex == b.first && (s.path == std::vector<unsigned>{0} ||
+                                                         (s.kind != kSlotBuffer && s.path == std::vector<unsigned>{0, 0})))
+                            slot = &s;
+                    if (slot)
+                        for (LLVMUseRef w = LLVMGetFirstUse(gep); w; w = LLVMGetNextUse(w))
+                            if (slotLoad(LLVMGetUser(w), gep)) loads.push_back({LLVMGetUser(w), gep, slot});
+                    continue;
                 }
-            }
-            if (loads.empty()) continue;
-            std::vector<ArgumentBufferSlot *> hidden;  // slots that get a parameter, in parameter order
-            for (auto &l : loads)
-                if (std::find(hidden.begin(), hidden.end(), l.second) == hidden.end()) hidden.push_back(l.second);
-            // the new function: the old parameters, then one per loaded slot; the body moves over
-            LLVMTypeRef type = LLVMGetElementType(LLVMTypeOf(function));
-            std::vector<LLVMTypeRef> types(LLVMCountParamTypes(type));
-            LLVMGetParamTypes(type, types.data());
-            for (ArgumentBufferSlot *s : hidden)
-                for (auto &l : loads)
-                    if (l.second == s) { types.push_back(s->type ? s->type : LLVMTypeOf(l.first)); break; }
-            std::string name = LLVMGetValueName(function);
-            LLVMSetValueName(function, (name + ".ivbab").c_str());
-            LLVMValueRef rewrittenFn = LLVMAddFunction(module, name.c_str(),
-                LLVMFunctionType(LLVMGetReturnType(type), types.data(), (unsigned)types.size(), LLVMIsFunctionVarArg(type)));
-            LLVMSetLinkage(rewrittenFn, LLVMGetLinkage(function));
-            functionCopyAttributesFrom(rewrittenFn, function);  // the attribute set by position: the old parameters keep theirs
-            for (unsigned p = 0; p < params; p++) {
-                LLVMSetValueName(LLVMGetParam(rewrittenFn, p), LLVMGetValueName(LLVMGetParam(function, p)));
-                LLVMReplaceAllUsesWith(LLVMGetParam(function, p), LLVMGetParam(rewrittenFn, p));
-            }
-            while (LLVMBasicBlockRef block = LLVMGetFirstBasicBlock(function)) {
-                LLVMRemoveBasicBlockFromParent(block);
-                basicBlockInsertInto(block, rewrittenFn, nullptr);
-            }
-            std::vector<LLVMValueRef> newArgs = args;
-            for (size_t h = 0; h < hidden.size(); h++) {
-                ArgumentBufferSlot *s = hidden[h];
-                s->param = LLVMGetParam(rewrittenFn, params + (unsigned)h);
-                char hiddenName[48];
-                snprintf(hiddenName, sizeof hiddenName, "__ivbab_%u_%u", s->bufferIndex, s->id);
-                LLVMSetValueName(s->param, hiddenName);
-                std::vector<LLVMValueRef> f = metadataOperands(s->kindNode);
-                f[0] = LLVMConstInt(i32, params + h, 0);
-                for (size_t k = 0; k + 1 < f.size(); k++) {
-                    if (isString(f[k], "air.location_index") && k + 2 < f.size()) {
-                        f[k + 1] = LLVMConstInt(i32, s->hidden, 0);
-                        f[k + 2] = LLVMConstInt(i32, 1, 0);
-                    }
-                    if (isString(f[k], "air.arg_name")) f[k + 1] = LLVMMDStringInContext(context, hiddenName, (unsigned)strlen(hiddenName));
+                if (!slot) continue;
+                for (LLVMUseRef v = LLVMGetFirstUse(gep); v; v = LLVMGetNextUse(v)) {
+                    LLVMValueRef user = LLVMGetUser(v);
+                    if (!wrapper && slotLoad(user, gep)) loads.push_back({user, nullptr, slot});
+                    else if (LLVMIsABitCastInst(user) && LLVMGetOperand(user, 0) == gep)
+                        for (LLVMUseRef w = LLVMGetFirstUse(user); w; w = LLVMGetNextUse(w))
+                            if (slotLoad(LLVMGetUser(w), user)) loads.push_back({LLVMGetUser(w), user, slot});
                 }
-                newArgs.push_back(LLVMMDNodeInContext(context, f.data(), (unsigned)f.size()));
-            }
-            LLVMBuilderRef builder = LLVMCreateBuilderInContext(context);
-            for (auto &l : loads) {
-                LLVMValueRef gep = l.cast ? LLVMGetOperand(l.cast, 0) : LLVMGetOperand(l.first, 0), param = l.second->param;
-                LLVMTypeRef loaded = LLVMTypeOf(l.first);
-                if (loaded == LLVMTypeOf(param)) {
-                    LLVMReplaceAllUsesWith(l.first, param);
-                } else if (LLVMGetTypeKind(loaded) == kAbIntegerKind) {  // an i64 copy: its inttoptr to the handle type is the parameter
-                    std::vector<LLVMValueRef> handles;
-                    for (LLVMUseRef w = LLVMGetFirstUse(l.first); w; w = LLVMGetNextUse(w))
-                        if (LLVMGetInstructionOpcode(LLVMGetUser(w)) == kOpIntToPtr && LLVMTypeOf(LLVMGetUser(w)) == LLVMTypeOf(param))
-                            handles.push_back(LLVMGetUser(w));
-                    for (LLVMValueRef h : handles) {
-                        LLVMReplaceAllUsesWith(h, param);
-                        LLVMInstructionEraseFromParent(h);
-                    }
-                    if (LLVMGetFirstUse(l.first)) {
-                        LLVMPositionBuilderBefore(builder, l.first);
-                        LLVMReplaceAllUsesWith(l.first, LLVMBuildPtrToInt(builder, param, loaded, ""));
-                    }
-                } else {
-                    LLVMPositionBuilderBefore(builder, l.first);
-                    LLVMReplaceAllUsesWith(l.first, LLVMBuildBitCast(builder, param, loaded, ""));
-                }
-                LLVMInstructionEraseFromParent(l.first);
-                if (l.cast && !LLVMGetFirstUse(l.cast)) LLVMInstructionEraseFromParent(l.cast);
-                if (LLVMIsAGetElementPtrInst(gep) && !LLVMGetFirstUse(gep)) LLVMInstructionEraseFromParent(gep);  // not the argument buffer itself
-            }
-            LLVMDisposeBuilder(builder);
-            void *node = metadataOf(entry), *argList = metadataOf(LLVMMDNodeInContext(context, newArgs.data(), (unsigned)newArgs.size()));
-            if (node && argList) {
-                mdNodeReplaceOperand(node, 0, valueAsMetadataGet(rewrittenFn));
-                mdNodeReplaceOperand(node, 2, argList);
-            }
-            if (!LLVMGetFirstUse(function)) LLVMDeleteFunction(function);
-            rewritten++;
-            if (logging()) {
-                fprintf(stderr, "[inteltex] %s: %zu argument-buffer pointer/handle load(s) read hidden argument(s)", name.c_str(), loads.size());
-                for (ArgumentBufferSlot *s : hidden) fprintf(stderr, " %u.%u->%c%u", s->bufferIndex, s->id, "bts"[s->kind], s->hidden);
-                fprintf(stderr, "\n");
             }
         }
-    }
+        if (loads.empty()) return;
+        std::vector<ArgumentBufferSlot *> hidden;  // slots that get a parameter, in parameter order
+        for (auto &l : loads)
+            if (std::find(hidden.begin(), hidden.end(), l.second) == hidden.end()) hidden.push_back(l.second);
+        // the new function: the old parameters, then one per loaded slot; the body moves over
+        LLVMTypeRef type = LLVMGetElementType(LLVMTypeOf(function));
+        std::vector<LLVMTypeRef> types(LLVMCountParamTypes(type));
+        LLVMGetParamTypes(type, types.data());
+        for (ArgumentBufferSlot *s : hidden)
+            for (auto &l : loads)
+                if (l.second == s) { types.push_back(s->type ? s->type : LLVMTypeOf(l.first)); break; }
+        std::string name = LLVMGetValueName(function);
+        LLVMSetValueName(function, (name + ".ivbab").c_str());
+        LLVMValueRef rewrittenFn = LLVMAddFunction(module, name.c_str(),
+            LLVMFunctionType(LLVMGetReturnType(type), types.data(), (unsigned)types.size(), LLVMIsFunctionVarArg(type)));
+        LLVMSetLinkage(rewrittenFn, LLVMGetLinkage(function));
+        functionCopyAttributesFrom(rewrittenFn, function);  // the attribute set by position: the old parameters keep theirs
+        for (unsigned p = 0; p < params; p++) {
+            LLVMSetValueName(LLVMGetParam(rewrittenFn, p), LLVMGetValueName(LLVMGetParam(function, p)));
+            LLVMReplaceAllUsesWith(LLVMGetParam(function, p), LLVMGetParam(rewrittenFn, p));
+        }
+        while (LLVMBasicBlockRef block = LLVMGetFirstBasicBlock(function)) {
+            LLVMRemoveBasicBlockFromParent(block);
+            basicBlockInsertInto(block, rewrittenFn, nullptr);
+        }
+        std::vector<LLVMValueRef> newArgs = args;
+        for (size_t h = 0; h < hidden.size(); h++) {
+            ArgumentBufferSlot *s = hidden[h];
+            s->param = LLVMGetParam(rewrittenFn, params + (unsigned)h);
+            char hiddenName[48];
+            snprintf(hiddenName, sizeof hiddenName, "__ivbab_%u_%u", s->bufferIndex, s->id);
+            LLVMSetValueName(s->param, hiddenName);
+            std::vector<LLVMValueRef> f = metadataOperands(s->kindNode);
+            f[0] = LLVMConstInt(i32, params + h, 0);
+            for (size_t k = 0; k + 1 < f.size(); k++) {
+                if (isString(f[k], "air.location_index") && k + 2 < f.size()) {
+                    f[k + 1] = LLVMConstInt(i32, s->hidden, 0);
+                    f[k + 2] = LLVMConstInt(i32, 1, 0);
+                }
+                if (isString(f[k], "air.arg_name")) f[k + 1] = LLVMMDStringInContext(context, hiddenName, (unsigned)strlen(hiddenName));
+            }
+            newArgs.push_back(LLVMMDNodeInContext(context, f.data(), (unsigned)f.size()));
+        }
+        LLVMBuilderRef builder = LLVMCreateBuilderInContext(context);
+        for (auto &l : loads) {
+            LLVMValueRef gep = l.cast ? LLVMGetOperand(l.cast, 0) : LLVMGetOperand(l.first, 0), param = l.second->param;
+            LLVMTypeRef loaded = LLVMTypeOf(l.first);
+            if (loaded == LLVMTypeOf(param)) {
+                LLVMReplaceAllUsesWith(l.first, param);
+            } else if (LLVMGetTypeKind(loaded) == kAbIntegerKind) {  // an i64 copy: its inttoptr to the handle type is the parameter
+                std::vector<LLVMValueRef> handles;
+                for (LLVMUseRef w = LLVMGetFirstUse(l.first); w; w = LLVMGetNextUse(w))
+                    if (LLVMGetInstructionOpcode(LLVMGetUser(w)) == kOpIntToPtr && LLVMTypeOf(LLVMGetUser(w)) == LLVMTypeOf(param))
+                        handles.push_back(LLVMGetUser(w));
+                for (LLVMValueRef h : handles) {
+                    LLVMReplaceAllUsesWith(h, param);
+                    LLVMInstructionEraseFromParent(h);
+                }
+                if (LLVMGetFirstUse(l.first)) {
+                    LLVMPositionBuilderBefore(builder, l.first);
+                    LLVMReplaceAllUsesWith(l.first, LLVMBuildPtrToInt(builder, param, loaded, ""));
+                }
+            } else {
+                LLVMPositionBuilderBefore(builder, l.first);
+                LLVMReplaceAllUsesWith(l.first, LLVMBuildBitCast(builder, param, loaded, ""));
+            }
+            LLVMInstructionEraseFromParent(l.first);
+            if (l.cast && !LLVMGetFirstUse(l.cast)) LLVMInstructionEraseFromParent(l.cast);
+            if (LLVMIsAGetElementPtrInst(gep) && !LLVMGetFirstUse(gep)) LLVMInstructionEraseFromParent(gep);  // not the argument buffer itself
+        }
+        LLVMDisposeBuilder(builder);
+        void *node = metadataOf(entry.node), *argList = metadataOf(LLVMMDNodeInContext(context, newArgs.data(), (unsigned)newArgs.size()));
+        if (node && argList) {
+            mdNodeReplaceOperand(node, 0, valueAsMetadataGet(rewrittenFn));
+            mdNodeReplaceOperand(node, 2, argList);
+        }
+        if (!LLVMGetFirstUse(function)) LLVMDeleteFunction(function);
+        rewritten++;
+        if (logging()) {
+            fprintf(stderr, "[inteltex] %s: %zu argument-buffer pointer/handle load(s) read hidden argument(s)", name.c_str(), loads.size());
+            for (ArgumentBufferSlot *s : hidden) fprintf(stderr, " %u.%u->%c%u", s->bufferIndex, s->id, "bts"[s->kind], s->hidden);
+            fprintf(stderr, "\n");
+        }
+    });
     return rewritten;
 }
 
 
 // ---- argument-buffer member offsets in vertex and fragment functions on Ivy Bridge ----------------------------------
-// In vertex and fragment functions the 11.7.10 back end lays an argument buffer's struct out with 4-byte pointers, where
-// the C layout (the one compute kernels read, and MetalOldCompat item 47's encoder writes) has 8: every member after a
-// buffer, texture or sampler was read 4 bytes early per pointer before it. WebKit's WebGPU writes each storage buffer's
-// length right after its reference, so a fragment function read the high half of the buffer's token (the shim's id
-// for it) as the length: once that id was 4 or more, its bounds clamp sent every write to element 0 (CTS
-// rendering,draw:vertex_attributes,basic failed after the first three pipelines of a page). Here each member access of
-// an argument buffer in a vertex or fragment function, GEP(argument buffer, 0, element, ...), addresses the member at its
-// byte offset in the module's data layout instead (an i8 GEP, cast to the member's type), which the back end doesn't
-// lay out again. INTEL_IVB_ARGUMENT_BUFFER_OFFSETS=0 turns it off.
+// In vertex and fragment functions the 11.7.10 back end lays argument buffers out with 4-byte pointers where the C
+// layout (compute kernels, MetalOldCompat item 47's encoder) has 8, so members after a pointer were read early (i84).
+// Each member access addresses the member at its byte offset in the data layout instead (an i8 GEP), which the back
+// end doesn't lay out again.
 static unsigned ivbArgumentBufferOffsets(LLVMModuleRef module) {
+    if (disabled("INTEL_IVB_ARGUMENT_BUFFER_OFFSETS")) return 0;
     const char *dataLayout = LLVMGetDataLayoutStr(module);
     LLVMTargetDataRef layout = dataLayout ? LLVMCreateTargetData(dataLayout) : nullptr;
     if (!layout) return 0;
@@ -2493,16 +2223,10 @@ static unsigned ivbArgumentBufferOffsets(LLVMModuleRef module) {
 }
 
 // ---- texture/sampler loads through escaped pointers -----------------------------------------------------------------
-// MSL texture/sampler array arguments are byval arrays of handles in AIR. IGILTextureTypeEncode follows each such
-// argument's binding forward through its uses (GEPs with constant indices, loads, stores into allocas at constant
-// paths) and gives every texture call the binding of its texture operand. A handle loaded through a pointer that was
-// stored to memory and loaded back with a runtime index (ANGLE's `thread texture2d *` / `thread sampler *` pairs for a
-// WebGL sampler array indexed in a loop) defeats that: the pass dereferences a missing GEP-tree node and the compiler
-// service crashes (null + 0x20 in runOnFunction), so the pipeline fails. A runtime index straight into the argument
-// (`t[i].sample(s[i], ..)`) works. So: every handle load `load p` whose pointer was itself loaded from memory, in a
-// function with exactly one byval array `a` of that handle type, becomes `load &a[idx]` with
-// idx = select(p == &a[1], 1, select(p == &a[2], 2, ... 0)): only integers are selected, never a handle (the pass
-// gives each value one binding). INTEL_HANDLE_FIX=0 turns it off.
+// IGILTextureTypeEncode follows a texture or sampler array argument's binding through constant-index GEPs, loads and
+// stores; a handle loaded through a pointer that was stored to memory and loaded back at a run-time index (ANGLE's
+// sampler arrays in loops) crashed the compiler service (a05). Such a load becomes `load &a[idx]`, idx a select over the
+// candidate addresses: only integers are selected, never a handle (the pass gives each value one binding).
 enum { kTypeKindStruct = 10, kTypeKindArray = 11, kTypeKindPointer = 12, kByValAttribute = 1 << 7, kICmpEQ = 32 };
 
 static bool isHandleType(LLVMTypeRef type) {
@@ -2528,8 +2252,7 @@ static bool loadedPointer(LLVMValueRef pointer) {
 }
 
 static unsigned fixEscapedHandleLoads(LLVMModuleRef module) {
-    const char *setting = getenv("INTEL_HANDLE_FIX");
-    if (setting && !strcmp(setting, "0")) return 0;
+    if (disabled("INTEL_HANDLE_FIX")) return 0;
     LLVMContextRef context = LLVMGetModuleContext(module);
     LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
     unsigned fixed = 0;
@@ -2586,65 +2309,20 @@ static unsigned fixEscapedHandleLoads(LLVMModuleRef module) {
 }
 
 // ---- signed bytes and halfwords in vertex functions -----------------------------------------------------------------
-// In vertex functions (SIMD4x2 "vec4" mode on these GPUs; fragment and compute functions are right), the back end gets
-// the sign-extended top lane of a word read from a constant buffer wrong when the word isn't the first in its 16 bytes:
-// char4(x).w, short2(x).y, unpack_snorm4x8_to_float(x).w and unpack_snorm2x16_to_float(x).y come from the first word of
-// those 16 bytes instead. Other lanes, zero extension and 32-bit shifts are right. ANGLE's vertex shaders unpack their
-// Y flip, at byte 12 of their uniform block, with unpack_snorm4x8_to_float(...).w, so on these GPUs every WebGL draw got
-// the flip of another field and collapsed (nothing drawn). In vertex functions, sext / sitofp / air.convert.*.s.i8|i16
-// of a packed vector of i8 or i16 (32 or 16 bits), or of a lane extracted from one, become shl + ashr on the packed
-// word, and air.unpack.snorm4x8 / snorm2x16 become the same, then air.convert to float, / 127 or / 32767 and max(-1)
-// (the MSL definition). Test: i02.
-// INTEL_SIGNED_SUBWORD_FIX=0 turns it off.
-extern "C" {
-LLVMValueRef LLVMBuildShl(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildAShr(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildSExt(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
-LLVMValueRef LLVMBuildTrunc(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
-LLVMValueRef LLVMBuildSIToFP(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
-LLVMValueRef LLVMBuildFDiv(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildFCmp(LLVMBuilderRef, int, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildShuffleVector(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMConstReal(LLVMTypeRef, double);
-LLVMValueRef LLVMConstVector(LLVMValueRef *, unsigned);
-LLVMTypeRef LLVMFloatTypeInContext(LLVMContextRef);
-LLVMTypeRef LLVMHalfTypeInContext(LLVMContextRef);
-LLVMTypeRef LLVMFunctionType(LLVMTypeRef, LLVMTypeRef *, unsigned, int);
-LLVMValueRef LLVMAddFunction(LLVMModuleRef, const char *, LLVMTypeRef);
-LLVMValueRef LLVMGetCalledValue(LLVMValueRef);
-LLVMValueRef LLVMIsACallInst(LLVMValueRef);
-int LLVMGetInstructionOpcode(LLVMValueRef);
-unsigned LLVMGetIntTypeWidth(LLVMTypeRef);
-LLVMValueRef LLVMBuildBitCast(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
-LLVMTypeRef LLVMIntTypeInContext(LLVMContextRef, unsigned);
-LLVMContextRef LLVMGetTypeContext(LLVMTypeRef);
-LLVMValueRef LLVMIsAExtractElementInst(LLVMValueRef);
-}
+// In vertex functions (SIMD4x2) the back end reads the sign-extended top lane of a constant-buffer word that isn't the
+// first in its 16 bytes from the first word instead: char4(x).w, short2(x).y, unpack_snorm*(x).w / .y (i02). ANGLE's
+// vertex shaders unpack their Y flip that way, so every WebGL draw collapsed. Such extensions and unpacks become
+// shl + ashr on the packed word (the unpacks then convert, scale and clamp as MSL defines them).
 enum { kTypeKindHalf = 1, kTypeKindFloat = 2, kTypeKindInteger = 8, kTypeKindVector = 13, kOpcodeSExt = 32,
        kOpcodeSIToFP = 36, kRealOLT = 4 };
 
 static unsigned lanes(LLVMTypeRef type) { return LLVMGetTypeKind(type) == kTypeKindVector ? LLVMGetVectorSize(type) : 0; }
 
-extern "C" {
-LLVMValueRef LLVMIsAInsertElementInst(LLVMValueRef);
-LLVMValueRef LLVMConstZExt(LLVMValueRef, LLVMTypeRef);
-LLVMValueRef LLVMConstSExt(LLVMValueRef, LLVMTypeRef);
-}
 
-// Extends a narrow integer (vector) value to i32 lanes for the widening rewrites below. A vector put together from a
-// constant with insertelement is extended lane by lane, the constant folded here: the back end sign-extends the constant
-// lanes of a zext <N x i8> of such a vector (zext (insertelement <undef, i8 -100, 0, 0>, x, 0) gave lane 1 0xffffff9c,
-// not 156), so min(uchar4(x, 157, ...), uchar4(y, 156, ...)) still kept 157 after i22's widening (i35).
-// The same through bitwise operations with a constant operand, which commute with either extension: the constant
-// uchar2(199, 32) ORed into a vector reached the back end as MOV r, -57 and came out of max(uchar2, uchar2) as
-// 0xffffffc7, so the max always picked it over bytes 200-255 (mslfuzz2 VEC=1 seed 2464, i51).
+// Extends a narrow integer (vector) value to i32 lanes for the widening rewrites below. A vector put together from
+// constants with insertelement, or through bitwise operations with a constant operand, is extended lane by lane with
+// the constants folded here: the back end sign-extends such constant lanes even in a zext (i35, i51).
 // INTEL_NARROW_CONSTANT_LANES_FIX=0 extends the whole vector instead.
-extern "C" {
-LLVMValueRef LLVMIsABinaryOperator(LLVMValueRef);
-LLVMValueRef LLVMBuildAnd(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildOr(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildXor(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-}
 static LLVMValueRef extendLanes(LLVMBuilderRef b, LLVMValueRef v, LLVMTypeRef wide, bool sign) {
     static const bool off = disabled("INTEL_NARROW_CONSTANT_LANES_FIX");
     if (off) return sign ? LLVMBuildSExt(b, v, wide, "") : LLVMBuildZExt(b, v, wide, "");
@@ -2738,8 +2416,7 @@ static bool signedSubwordConvert(LLVMValueRef call, const char *name) {
 }
 
 static unsigned fixVertexSignedSubwords(LLVMModuleRef module) {
-    const char *setting = getenv("INTEL_SIGNED_SUBWORD_FIX");
-    if ((setting && !strcmp(setting, "0")) || !LLVMGetNamedMetadataNumOperands(module, "air.vertex")) return 0;
+    if (disabled("INTEL_SIGNED_SUBWORD_FIX") || !LLVMGetNamedMetadataNumOperands(module, "air.vertex")) return 0;
     LLVMContextRef context = LLVMGetModuleContext(module);
     LLVMTypeRef i32 = LLVMInt32TypeInContext(context), f32 = LLVMFloatTypeInContext(context);
     std::vector<LLVMValueRef> found;
@@ -2817,21 +2494,12 @@ static unsigned fixVertexSignedSubwords(LLVMModuleRef module) {
 }
 
 // ---- sample_compare with a bias ------------------------------------------------------------------------------------
-// The back end can't select a depth comparison with an LOD bias (sample_compare(s, coord, ref, bias(b)), from GLSL's
-// texture(sampler2DShadow, coord, bias)): "Cannot select" aborts MTLCompilerService, which takes the page's WebGL
-// context and, in Chrome, the GPU process with it. Nor can it compute an LOD (calculate_clamped_lod), so the bias can't
-// be turned into an explicit level. The bias is dropped instead: air.sample_compare_depth_* calls whose level flag (the
-// i1 before the float) is false get 0 for that float. Shadow maps with one level, the usual kind, are unaffected.
-// INTEL_COMPARE_BIAS_FIX=0 turns it off.
-extern "C" {
-void LLVMSetOperand(LLVMValueRef, unsigned, LLVMValueRef);
-LLVMValueRef LLVMIsAConstantFP(LLVMValueRef);
-double LLVMConstRealGetDouble(LLVMValueRef, int *);
-}
+// The back end can't select a depth comparison with an LOD bias ("Cannot select" aborts MTLCompilerService, taking the
+// page's WebGL context) and can't compute an LOD to make it explicit (i03). The bias is dropped: shadow maps with one
+// level, the usual kind, are unaffected.
 
 static unsigned dropSampleCompareBias(LLVMModuleRef module) {
-    const char *setting = getenv("INTEL_COMPARE_BIAS_FIX");
-    if (setting && !strcmp(setting, "0")) return 0;
+    if (disabled("INTEL_COMPARE_BIAS_FIX")) return 0;
     LLVMTypeRef f32 = LLVMFloatTypeInContext(LLVMGetModuleContext(module));
     unsigned fixed = 0;
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
@@ -2854,44 +2522,16 @@ static unsigned dropSampleCompareBias(LLVMModuleRef module) {
 }
 
 // ---- integer textures: gradient samples and texel offsets -----------------------------------------------------------
-// Two rewrites of samples from integer textures (air.sample_texture_*.{s,u}.v4i32 and air.gather_texture_*), which are
-// only ever sampled with nearest filtering, where the LOD does nothing but pick the level:
-// - A gradient sample in a compute kernel (texture2d<int>::sample(s, coord, gradient2d(dx, dy))) crashes the back end
-//   (null dereference in IGILTargetLowering::LowerReadImage_Int), offset or not; vertex and fragment functions are right.
-//   Such calls become explicit-level samples (lowerIntegerGradients). INTEL_KERNEL_GRADIENT_FIX=0 turns that off.
-// - The back end ignores the texel offset of a sample or gather (GLSL textureOffset, textureLodOffset, textureGradOffset
-//   and textureProj*Offset on isampler2D, usampler2D and the like; a08's offset case): the texel at the coordinate comes
-//   back. Float textures are right. The offset goes into the coordinates instead, in texels of the level the sample
-//   reads: coord + offset / size, the size from air.get_{width,height,depth}_texture_* (foldIntegerSampleOffsets).
-//   Where the GPU would pick the level (gradients; implicit LODs in fragment functions, from the coordinate's
-//   derivatives, plus the bias: the compiler can't compute an LOD, calculate_clamped_lod aborts it), the level is
-//   computed in the shader and the sample made explicit at it, so the offset and the texels come from the same level.
-//   Gathers and implicit LODs in other functions read level 0. INTEL_INTEGER_OFFSET_FIX=0 turns it off.
-// - In compute kernels the back end adds a gather's texel offset to the normalized coordinate as is (FADD coord, 1.0
-//   for an offset of 1), so offsets come out a whole texture size per texel, on any texture format (WebGPU CTS
-//   textureGather sampled_*_coords with offsets in compute, 639 cases; depth_*_coords, 45); vertex and fragment functions
-//   are right; textureGatherCompare, 120). Those gathers (color, depth and compare) get the same rewrite at level 0.
-//   INTEL_KERNEL_GATHER_OFFSET_FIX=0 turns that off.
-// The level computed for gradients is log2 of the longer gradient in texels of level 0 (+ the bias), rounded and clamped
-// to the texture's levels: a nearest mip filter's. A sampler that doesn't mipmap reads level 0 regardless (a mipmapped
-// integer texture with such a sampler, sampled minified: the offset is then in the wrong level's texels).
-extern "C" {
-LLVMValueRef LLVMBuildFAdd(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildFPToSI(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
-LLVMValueRef LLVMBuildUIToFP(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
-LLVMValueRef LLVMIsAConstantAggregateZero(LLVMValueRef);
-LLVMTypeRef LLVMInt1TypeInContext(LLVMContextRef);
-LLVMBasicBlockRef LLVMGetInstructionParent(LLVMValueRef);
-LLVMValueRef LLVMGetBasicBlockParent(LLVMBasicBlockRef);
-LLVMValueRef LLVMBuildFMul(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildSub(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-}
+// Integer textures are only sampled with nearest filtering, where the LOD only picks the level. Three back-end bugs:
+// - a gradient sample in a compute kernel crashes it (LowerReadImage_Int): it becomes an explicit-level sample (i08);
+// - it ignores the texel offset of integer samples and gathers (a08, i04): the offset goes into the coordinates, in
+//   texels of the level read, the level computed in the shader where the GPU would pick it;
+// - in compute kernels it adds a gather's offset to the normalized coordinate as is, on any format (i19): those gathers
+//   get the same rewrite at level 0.
+// The computed level is a nearest mip filter's: log2 of the longer gradient in level-0 texels (+ bias), rounded and
+// clamped. A sampler that doesn't mipmap reads level 0 regardless (then the offset is in the wrong level's texels).
 
 static bool runtimeNamesBound(LLVMModuleRef module);
-static bool disabled(const char *setting) {
-    const char *value = getenv(setting);
-    return value && !strcmp(value, "0");
-}
 static LLVMValueRef declared(LLVMModuleRef module, const char *name, LLVMTypeRef result, LLVMTypeRef param) {
     LLVMValueRef f = LLVMGetNamedFunction(module, name);
     return f ? f : LLVMAddFunction(module, name, LLVMFunctionType(result, &param, 1, 0));
@@ -3037,20 +2677,10 @@ static unsigned lowerIntegerGradients(LLVMModuleRef module) {
 }
 
 // ---- green gathers from R32G32 textures ---------------------------------------------------------------------------
-// Haswell's and Ivy Bridge's gather4 return red for the green component of R32G32 formats (rg32float, rg32uint, rg32sint): a hardware
-// erratum that Mesa works around with a separate surface state for gathers, which this driver doesn't have, and the
-// shader can't tell an R32G32 texture from any other (WebGPU CTS textureGather rg32float: 252 cases, 216 of them 2D and
-// 2D array). A green gather from a 2D texture or 2D array is also done as a red one, and where the two agree in all four
-// texels (the erratum, or a texture whose red equals its green there) the green values come from four level-0 samples
-// at the footprint's texel centers instead, through the same sampler (its address modes; at a texel center a linear
-// filter returns that texel), in gather order: (u0, v1), (u1, v1), (u1, v0), (u0, v0), u0 = floor(u * width - 0.5) plus
-// the offset. Cube gathers keep the erratum. INTEL_GATHER_GREEN_FIX=0 turns it off.
-extern "C" {
-LLVMValueRef LLVMBuildFSub(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildAnd(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildAdd(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildZExt(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
-}
+// Haswell's and Ivy Bridge's gather4 return red for the green component of R32G32 formats, a hardware erratum (Mesa uses
+// a separate surface state for gathers; this driver has none), and the shader can't tell R32G32 from other formats
+// (i50, i72). A 2D green gather is also done as a red one, and where the two agree in all four texels the green values
+// come from four level-0 samples at the footprint's texel centers, in gather order. Cube gathers keep the erratum.
 static unsigned greenGathers(LLVMModuleRef module) {
     if (disabled("INTEL_GATHER_GREEN_FIX") || runtimeNamesBound(module)) return 0;
     enum { kIntEQ = 32, kRealOGT = 2 };
@@ -3216,27 +2846,11 @@ static unsigned foldIntegerSampleOffsets(LLVMModuleRef module) {
 }
 
 // ---- saturating multiply-add ----------------------------------------------------------------------------------------
-// The back end's lowering of madsat (air.mad_sat.{u,s}.*) is wrong: it multiplies into a 64-bit pair, adds c to one half
-// and checks a bit-masked half against 0, missing the carry out of the addition, so madsat(a, 3u, b) returned the wrapped
-// a * 3 + b instead of 0xffffffff for most inputs (differential fuzzing, mslfuzz2: 162 of 195 disagreements; a unit
-// kernel: 180 of 256 threads). It's done with 32-bit operations instead, per lane: lo = a * b, hi = mulhi(a, b),
-// sum = lo + c with its carry; unsigned: saturate to 0xffffffff when hi != 0 or the sum carries; signed: the 64-bit sum's
-// high word hi + (c >> 31) + carry must equal sum >> 31, else saturate to INT_MIN / INT_MAX by its sign. 32-bit elements
-// only. mulhi (air.mul_hi) and madhi (air.mad_hi) are wrong too, with a constant operand or signed (mulhi(a, 3u)
-// returned 0): those take the same high word, buildMulHi below. INTEL_MAD_SAT_FIX=0 turns it off.
-extern "C" {
-LLVMValueRef LLVMBuildMul(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildAdd(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildOr(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildAShr(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildZExt(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
-LLVMValueRef LLVMBuildLShr(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildAnd(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildSub(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-}
+// The back end's madsat (air.mad_sat) misses the carry out of the add (madsat(a, 3u, b) wrapped), and its mul_hi /
+// mad_hi are wrong with a constant operand or signed (i21). Both are built from 32-bit operations instead; signed madsat
+// saturates by sign when the 64-bit sum's high word disagrees with the low word's sign. 32-bit elements only.
 // The high word of a 32 x 32-bit product from 16-bit halves (every partial product fits in 32 bits): unsigned, then
-// corrected for signed operands (hi_s = hi_u - (a < 0 ? b : 0) - (b < 0 ? a : 0)). The back end's own mul_hi is wrong
-// with a constant operand (mulhi(a, 3u) returned 0) and for signed operands (177 of 256 threads wrong).
+// corrected for signed operands (hi_s = hi_u - (a < 0 ? b : 0) - (b < 0 ? a : 0)).
 static LLVMValueRef buildMulHi(LLVMBuilderRef b, LLVMTypeRef i32, LLVMValueRef x, LLVMValueRef y, bool sign) {
     LLVMValueRef sixteen = LLVMConstInt(i32, 16, false), mask = LLVMConstInt(i32, 0xffff, false);
     LLVMValueRef xl = LLVMBuildAnd(b, x, mask, ""), xh = LLVMBuildLShr(b, x, sixteen, "");
@@ -3319,31 +2933,16 @@ static unsigned exactMadSat(LLVMModuleRef module) {
 }
 
 // ---- narrow integer division -----------------------------------------------------------------------------------------
-// Division and remainder of 8- and 16-bit integers become the back end's narrow divides (USDIV and the like), which
-// expect operands extended from 16 bits the way the operation's signedness says. Constants and lanes built from them
-// arrive sign-extended instead (a lane of 0xffff is -1 in its 32-bit register): ushort2(35069, 25597) / (ushort2(65535,
-// x) | 1) gave 0x1200 in the first lane, not 0 (the MacBookPro11,5 session's narrow-vector fuzzing, VEC=1 ASTYPE=1,
-// seed 53). udiv / urem / sdiv / srem on i8 and i16, scalar or vector, are done on 32-bit lanes: operands zero- or
-// sign-extended, the i32 operation, the result truncated. INTEL_NARROW_DIV_FIX=0 turns it off.
-// In vertex and fragment functions a vector operand made with as_type went wrong when extended as a whole vector:
-// as_type<uchar4>(x) % uchar4(41, 23, 33, 100) crashed the compiler service and as_type<char4>(x) % char4(41, -23, ...)
-// came out as the unsigned remainder (fragment fuzzing with as_type, seed 55). There vector operands are widened with
-// renderLanes32 instead, and so are those of the 8/16-bit min / max / clamp below (a signed max(char4(...),
-// as_type<char4>(y)) was wrong, seed 245). INTEL_NARROW_VECTOR_OPERAND_FIX=0 turns that part off (both). Test: i70.
-extern "C" {
-LLVMValueRef LLVMBuildUDiv(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildURem(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildSDiv(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildSRem(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-}
+// The back end's narrow divides (USDIV and the like) expect operands extended the way the operation's signedness says,
+// but constants and lanes built from them arrive sign-extended (i31). udiv / urem / sdiv / srem on i8 and i16 are done
+// on 32-bit lanes. In vertex and fragment functions as_type vector operands went wrong when extended as a whole (a
+// crash, or the unsigned remainder): there they and the operands of the narrow min / max / clamp below are widened with
+// renderLanes32 (i70; INTEL_NARROW_VECTOR_OPERAND_FIX=0 turns that part off).
 static LLVMValueRef unsignedValue(LLVMBuilderRef b, LLVMTypeRef i32, LLVMValueRef x);
-extern "C" LLVMValueRef LLVMIsAInstruction(LLVMValueRef);
-// The lanes of an i8 / i16 vector as <N x i32>, zero- or sign-extended, for vertex and fragment functions, where the back
-// end's legalization of a narrow vector depends on how it was made: put together with insertelement or a constant, lane
-// by lane (extendLanes); a 16 / 32-bit vector made otherwise (as_type, a load), from its word with shifts (signedValue,
-// unsignedValue: sext of an as_type<char4> came out wrong and zext of one crashed); a trunc of 32-bit lanes, those lanes
-// masked or sign-extended; anything else (ushort3, ushort4, uchar3), lane by lane: extending the whole vector crashed for
-// as_type<ushort3>(half3) (i69).
+// The lanes of an i8 / i16 vector as <N x i32>, zero- or sign-extended, for vertex and fragment functions, where the
+// back end's legalization of a narrow vector depends on how it was made: insertelement or constant lanes one by one
+// (extendLanes); an as_type or a load from its word with shifts; a trunc from its 32-bit lanes; anything else lane by
+// lane (extending the whole vector crashed for as_type<ushort3>(half3), i69).
 static LLVMValueRef renderLanes32(LLVMBuilderRef b, LLVMTypeRef i32, LLVMValueRef v, bool sign) {
     unsigned n = lanes(LLVMTypeOf(v)), bits = subwordBits(LLVMTypeOf(v));
     LLVMTypeRef wide = LLVMVectorType(i32, n);
@@ -3408,15 +3007,9 @@ static unsigned widenNarrowDivisions(LLVMModuleRef module) {
 }
 
 // ---- signed division by a power of two --------------------------------------------------------------------------------
-// iCBE turns a signed divide by a constant 2^k (or -2^k) into an arithmetic shift, which rounds toward minus infinity:
-// -7 / 4 came out -2, not -1, for every negative dividend that isn't a multiple (int / 2 on negative values; the
-// MacBookPro11,5 session's narrow-vector fuzzing found it through char4(...) / char4(-3, 7, -128, 5)). Remainders are
-// right. Such divides are done as (x + ((x >> (w - 1)) >>> (w - k))) >> k, negated for -2^k, lane by lane for constant
-// vectors (other lanes keep the divide). INTEL_SDIV_POW2_FIX=0 turns it off.
-extern "C" {
-LLVMValueRef LLVMGetElementAsConstant(LLVMValueRef, unsigned);
-LLVMValueRef LLVMIsAConstantDataSequential(LLVMValueRef);
-}
+// iCBE turns a signed divide by a constant +-2^k into an arithmetic shift, which rounds toward minus infinity: -7 / 4
+// came out -2 (i28). Such divides become (x + ((x >> (w - 1)) >>> (w - k))) >> k, negated for -2^k, lane by lane for
+// constant vectors.
 static unsigned signedPowerOfTwoDivisions(LLVMModuleRef module) {
     if (disabled("INTEL_SDIV_POW2_FIX") || runtimeNamesBound(module)) return 0;
     enum { kOpcodeSDiv = 15 };
@@ -3491,18 +3084,10 @@ static unsigned signedPowerOfTwoDivisions(LLVMModuleRef module) {
 }
 
 // ---- 64-bit multiplies ----------------------------------------------------------------------------------------------
-// The back end splits a 64-bit multiply into 32-bit ones, and the high word of a 32-bit product is wrong when one factor
-// is a constant (see buildMulHi): a factor whose low word is a known constant, (x << 32) | 139, came out with a wrong
-// high word for a * b and a wrong mulhi(a, b) (the 11,5 session's 64-bit fuzzing, LONG=1: 3 of 6 random kernels).
-// Multiplies whose factors are both 32-bit values widened (zext / sext, or constants below 2^32) stay as they are: that
-// is a single widening multiply, and every buffer index is one. The others are built from 32-bit limbs: the low 64
-// bits of a * b from one exact 32-bit high word and three 32-bit products; mulhi / madhi of 64-bit integers
-// (air.mul_hi / air.mad_hi .i64) from the four limb products with exact high words, the carries summed in 64 bits, then
-// corrected for signed factors (hi_s = hi_u - (a < 0 ? b : 0) - (b < 0 ? a : 0)). Scalars and vectors (lane by lane).
-// INTEL_MUL64_FIX=0 turns it off.
-extern "C" {
-LLVMValueRef LLVMIsAInstruction(LLVMValueRef);
-}
+// The back end's 64-bit multiply gets the high word of its 32-bit partial products wrong when a factor is constant (see
+// buildMulHi), so a * b and mulhi of 64-bit values came out wrong (i27). Multiplies of two widened 32-bit values (every
+// buffer index) stay; the others are built from 32-bit limbs with exact high words, mulhi / madhi .i64 then corrected
+// for signed factors.
 static bool widened32(LLVMValueRef v) {  // a 64-bit value that is a 32-bit one zero- or sign-extended
     if (LLVMIsAConstantInt(v)) return LLVMConstIntGetZExtValue(v) < (1ull << 32);
     if (!LLVMIsAInstruction(v)) return false;
@@ -3607,16 +3192,10 @@ static unsigned exact64BitMultiplies(LLVMModuleRef module) {
 }
 
 // ---- vector lanes picked by a 64-bit quotient ------------------------------------------------------------------------
-// The back end expands 64-bit division into loops. A vector lane picked with a dynamic index computed from such a
-// quotient, w[q & 3], read the index from a register the loop hadn't written yet: with a constant dividend
-// (0x200000002 / d) the lane picked was the dividend's low word, & 3, whatever q was; q itself, and a select on q & 3,
-// were right (the MacBookPro11,5 session's 64-bit fuzzing, LONG=1 seed 6). An extractelement or insertelement whose
-// index comes (through casts, masks and arithmetic) from a 64-bit div / rem becomes selects on the index. So does one
-// from a 64-bit shift of a constant by a variable, w[(uint)(4151055293ul >> s) & 3]: the stock back end crashes in its
-// DAG legalizer on that index (mslfuzz2 LONG=1 seed 378; a variable shifted, or a select on the index, compiles). It runs
-// again after the integer-function fold, which can make such a shift's base constant: Ivy Bridge's compiler made the
-// insert of w[(uint)((long)(1u | extract_bits(v, 0u, 0u)) >> s) & 3u] = 1u a constant one at lane 1 (i59).
-// INTEL_WIDE_DIV_INDEX_FIX=0 turns it off.
+// A vector lane picked with an index computed from a 64-bit quotient read the index before the expanded division loop
+// wrote it (i33), and an index from a 64-bit shift of a constant crashes the DAG legalizer. Such extractelement /
+// insertelement indices become selects. It runs again after the integer-function fold, which can make such a shift's
+// base constant (i59).
 static bool fromWideDivision(LLVMValueRef v, int depth = 0) {
     if (depth > 6 || !LLVMIsAInstruction(v)) return false;
     int opcode = LLVMGetInstructionOpcode(v);
@@ -3683,11 +3262,8 @@ static unsigned selectWideDivisionLanes(LLVMModuleRef module) {
 }
 
 // ---- narrow integer min / max / clamp ---------------------------------------------------------------------------------
-// min, max and clamp on 8- and 16-bit integers (air.{min,max,clamp}.{u,s}.{i8,i16,vNi8,vNi16}) compare a lane the back end
-// zero-extended against a constant it sign-extended: min(uchar2 a, uchar2(130, 183)) returned a (UBMIN of a & 0xff and
-// -126), and max returned the constant; clamp((uchar)y, 100, 200) returned y (the MacBookPro11,5 session's narrow-vector
-// fuzzing; the 16-bit forms came out right but go the same way). They're done on 32-bit lanes: operands zero- or
-// sign-extended, the i32 function called, the result truncated. INTEL_NARROW_MINMAX_FIX=0 turns it off.
+// min, max and clamp on 8- and 16-bit integers compare a lane the back end zero-extended against a constant it
+// sign-extended: min(uchar2 a, uchar2(130, 183)) returned a (i22). They're done on 32-bit lanes.
 static unsigned widenNarrowMinMax(LLVMModuleRef module) {
     if (disabled("INTEL_NARROW_MINMAX_FIX") || runtimeNamesBound(module)) return 0;
     bool render = (LLVMGetNamedMetadataNumOperands(module, "air.vertex") || LLVMGetNamedMetadataNumOperands(module, "air.fragment")) &&
@@ -3744,16 +3320,9 @@ static unsigned widenNarrowMinMax(LLVMModuleRef module) {
 }
 
 // ---- signed division of a negated value ------------------------------------------------------------------------------
-// iCBE folds a negation (0 - v) into the operand of the integer divide that uses it, as a source modifier, and the
-// divide drops it: (-v) % d came out as v % d, (-v) / d and v / (-d) as v / d (mslfuzz2 seed 223: a remainder of a
-// negated product picked a vector lane, so the loop accumulated the wrong lane; unsigned division is right). A signed
-// divide or remainder of 0 - v is done on v and the result negated, and a divide by 0 - d is done by d and negated:
-// select(v == INT_MIN, r, 0 - r), since 0 - INT_MIN is INT_MIN again. A remainder by 0 - d is a remainder by d.
-// Integers up to 32 bits, scalar or vector. INTEL_SIGNED_DIV_NEG_FIX=0 turns it off.
-extern "C" {
-int LLVMIsNull(LLVMValueRef);
-LLVMValueRef LLVMIsABinaryOperator(LLVMValueRef);
-}
+// iCBE folds a negation (0 - v) into the integer divide that uses it as a source modifier and drops it: (-v) % d came
+// out as v % d (i26). Such a divide is done on v and negated: select(v == INT_MIN, r, 0 - r), since 0 - INT_MIN is
+// INT_MIN again; a remainder by 0 - d is a remainder by d.
 static unsigned signedDivisionNegations(LLVMModuleRef module) {
     if (disabled("INTEL_SIGNED_DIV_NEG_FIX") || runtimeNamesBound(module)) return 0;
     enum { kOpcodeSub = 10, kOpcodeSDiv = 15, kOpcodeSRem = 18, kIntEQ = 32 };
@@ -3813,35 +3382,9 @@ static unsigned signedDivisionNegations(LLVMModuleRef module) {
 }
 
 // ---- integer functions of constants -----------------------------------------------------------------------------------
-// The front end leaves calls like max(0, 0x04030201) or popcount(0xF0u) for the back end, and iCBE folds them itself;
-// what it builds from the folded value can then be wrong: the uchar lanes of as_type<uchar4>(max(0, 0x04030201)) all
-// read as byte 0 when multiplied (uint(v.z) * 7 gave 7, not 21; the MacBookPro11,5 session's narrow-vector fuzzing, VEC
-// seed 213, where it was an index into a private array). Such calls (min, max, clamp, abs, popcount, clz, ctz, and
-// reverse_bits, rotate, extract_bits and insert_bits: (uchar)reverse_bits(60u), 0 in fact, made a later signed divide
-// wrong in 54 of 256 threads, mslfuzz2 plain seed 849) are folded here, and so is every instruction that then has only
-// constant operands, so the back end gets the finished constants. INTEL_CONSTANT_CALL_FIX=0 turns it off.
-extern "C" {
-LLVMValueRef LLVMConstICmp(int, LLVMValueRef, LLVMValueRef);
-LLVMValueRef LLVMConstSelect(LLVMValueRef, LLVMValueRef, LLVMValueRef);
-LLVMValueRef LLVMConstSub(LLVMValueRef, LLVMValueRef);
-LLVMValueRef LLVMConstAdd(LLVMValueRef, LLVMValueRef);
-LLVMValueRef LLVMConstMul(LLVMValueRef, LLVMValueRef);
-LLVMValueRef LLVMConstAnd(LLVMValueRef, LLVMValueRef);
-LLVMValueRef LLVMConstOr(LLVMValueRef, LLVMValueRef);
-LLVMValueRef LLVMConstXor(LLVMValueRef, LLVMValueRef);
-LLVMValueRef LLVMConstShl(LLVMValueRef, LLVMValueRef);
-LLVMValueRef LLVMConstLShr(LLVMValueRef, LLVMValueRef);
-LLVMValueRef LLVMConstAShr(LLVMValueRef, LLVMValueRef);
-LLVMValueRef LLVMConstTrunc(LLVMValueRef, LLVMTypeRef);
-LLVMValueRef LLVMConstBitCast(LLVMValueRef, LLVMTypeRef);
-LLVMValueRef LLVMConstExtractElement(LLVMValueRef, LLVMValueRef);
-LLVMValueRef LLVMConstInsertElement(LLVMValueRef, LLVMValueRef, LLVMValueRef);
-LLVMValueRef LLVMConstVector(LLVMValueRef *, unsigned);
-LLVMValueRef LLVMGetElementAsConstant(LLVMValueRef, unsigned);
-LLVMValueRef LLVMIsAConstantInt(LLVMValueRef);
-unsigned long long LLVMConstIntGetZExtValue(LLVMValueRef);
-int LLVMGetICmpPredicate(LLVMValueRef);
-}
+// iCBE folds integer functions of constants (max(0, 0x04030201), popcount(0xF0u), reverse_bits, extract_bits, ...)
+// itself, and what it builds from the folded value can be wrong (i36, i39, i58). They are folded here, with every
+// instruction left with only constant operands, so the back end gets the finished constants.
 
 // The constant lanes of an integer scalar or vector, or false if they can't all be read. Only a ConstantDataVector can
 // be read lane by lane: a vector argument or instruction, or a constant vector with an undef lane, isn't one (reading it
@@ -3883,10 +3426,8 @@ static LLVMValueRef foldBitCount(LLVMValueRef x, int which) {
     return lanes(LLVMTypeOf(x)) ? LLVMConstVector(out.data(), (unsigned)out.size()) : out[0];
 }
 
-// A shift amount that is in range in every lane (LLVM folds larger ones to undef, the GPU masks them).
-// A bitcast between integer scalars and vectors of constants, folded to its lanes. LLVMConstBitCast leaves an integer
-// cast to a vector as a constant expression (bitcast (<1 x i32> <i32 194> to <2 x i16>)), which can't be read lane by
-// lane, so `as_type<short2>(min(194u, 253u))` stayed unfolded after i36 folded the min. nullptr if a lane isn't a whole
+// A bitcast between integer scalars and vectors of constants, folded to its lanes: LLVMConstBitCast leaves an integer
+// cast to a vector as a constant expression, which can't be read lane by lane (i42). nullptr if a lane isn't a whole
 // number of bytes.
 static LLVMValueRef foldBitCastConstant(LLVMValueRef a, LLVMTypeRef type) {
     std::vector<LLVMValueRef> in;
@@ -3910,6 +3451,7 @@ static LLVMValueRef foldBitCastConstant(LLVMValueRef a, LLVMTypeRef type) {
     return lanes(type) ? LLVMConstVector(out.data(), count) : out[0];
 }
 
+// A shift amount that is in range in every lane (LLVM folds larger ones to undef, the GPU masks them).
 static bool shiftInRange(LLVMValueRef amount) {
     std::vector<LLVMValueRef> in;
     if (!constantLanes(amount, in)) return false;
@@ -3992,7 +3534,6 @@ static LLVMValueRef foldInstruction(LLVMValueRef inst) {
 }
 
 // hadd / rhadd and the saturating add / subtract of scalar constants, exactly (bits <= 32), or nullptr
-extern "C" long long LLVMConstIntGetSExtValue(LLVMValueRef);
 static LLVMValueRef foldHalvingOrSaturating(int op, bool sign, LLVMValueRef x, LLVMValueRef y) {
     LLVMTypeRef type = LLVMTypeOf(x);
     if (lanes(type) || !LLVMIsAConstantInt(x) || !LLVMIsAConstantInt(y)) return nullptr;
@@ -4115,15 +3656,9 @@ static unsigned foldConstantCallsOnce(LLVMModuleRef module) {
 }
 
 // ---- saturating add / subtract of constants --------------------------------------------------------------------------
-// The back end folds addsat with two constant operands as a plain add: addsat(95u, 4294967295u) came out 94 instead of
-// 0xffffffff (mslfuzz2; with a variable operand it's right). Such calls (air.add_sat / air.sub_sat, unsigned or signed,
-// 8 to 32 bits) are folded here, exactly. An add_sat with a zero operand, or a sub_sat of zero, is its other operand,
-// and goes too, for any type: iCBE turns UADD_sat(0, x & 255) into something that reads another byte, so in
-// `v + addsat(0u, (uint)c)` with a uchar c the sum got the wrong byte (110 of 256 threads; mslfuzz2 plain seed 812).
-// INTEL_CONST_SAT_FIX=0 turns it off.
-extern "C" {
-long long LLVMConstIntGetSExtValue(LLVMValueRef);
-}
+// The back end folds addsat / subsat of two constants as a plain add (addsat(95u, 4294967295u) came out 94), and iCBE
+// turns UADD_sat(0, x & 255) into a read of another byte (i38). Such calls are folded here exactly, and an add_sat with
+// a zero operand or a sub_sat of zero becomes its other operand.
 static unsigned foldConstantSaturation(LLVMModuleRef module) {
     if (disabled("INTEL_CONST_SAT_FIX")) return 0;
     unsigned fixed = 0;
@@ -4165,14 +3700,6 @@ static unsigned foldConstantSaturation(LLVMModuleRef module) {
     return fixed;
 }
 
-// The same fold happens when the operands become constant only in the plugin's own passes, after these rewrites: in a
-// loop with a constant trip count, which the plugin unrolls, addsat(i, -i) has two constant operands in every copy of
-// the body. The signed add_sat / sub_sat values then came out as plain sums, and an unsigned add_sat picking a private
-// array element (p[addsat(i, -i) & 7]) made a value read in the same iteration take its next one: with
-// v3 = (v5 ^ t) & 15 before v5 ^= p[...], v3 came from v5 after the update (231 of 256 threads; the as_type fragment
-// fuzzing, VEC=1 seed 108, compute too). The 32-bit add_sat calls (unsigned and signed) and signed sub_sat calls left
-// after the fold above, scalar or vector, are written out as an add or subtract, compares and selects, which LLVM folds
-// exactly; unsigned sub_sat was right and stays. INTEL_LATE_SAT_FIX=0 turns it off. Test: i63.
 static LLVMValueRef splat32(LLVMTypeRef type, uint32_t value) {  // value in an i32 or in every lane of an i32 vector
     LLVMValueRef v = LLVMConstInt(scalarOf(type), value, false);
     unsigned n = lanes(type);
@@ -4180,6 +3707,10 @@ static LLVMValueRef splat32(LLVMTypeRef type, uint32_t value) {  // value in an 
     std::vector<LLVMValueRef> parts(n, v);
     return LLVMConstVector(parts.data(), n);
 }
+// The same fold happens when the operands become constant only in the plugin's own passes (an unrolled loop's
+// addsat(i, -i)): signed results came out as plain sums, and an unsigned one picking a private array element made a
+// value read in the same iteration take its next one (i56, i63). The 32-bit add_sat and signed sub_sat calls left after
+// the fold above are written out as an add or subtract, compares and selects; unsigned sub_sat was right and stays.
 static unsigned expandSaturation(LLVMModuleRef module) {
     if (disabled("INTEL_LATE_SAT_FIX")) return 0;
     enum { kIntULT = 36, kIntSLT = 40 };
@@ -4220,28 +3751,10 @@ static unsigned expandSaturation(LLVMModuleRef module) {
 }
 
 // ---- cube gathers: a sampler that keeps seamless addressing -----------------------------------------------------------
-// MetalOldCompat item 30 gives samplers whose min and mag filters are nearest the programmed (clamped) cube addressing,
-// because integer cube textures with tiny faces sample as 0 with the seamless kind in vertex and fragment functions (and
-// a texel read can't stand in there: in fragment functions read_texture_cube ignores the face). A nearest sample never
-// spans a face edge, but a gather's 2x2 footprint does, so cube gathers through such a sampler came back clamped at face
-// edges (WebGPU CTS textureGather sampled_3d_coords, nearest: 330 cases; also any cube shadow-map PCF done with gathers).
-// A gather doesn't filter, and seamless cube addressing ignores the address modes, so cube gathers, color and depth (not
-// compare gathers, whose sampler carries the compare function; depth_3d_coords: 60 cases),
-// in vertex and fragment functions take a constexpr sampler with linear filtering instead of the app's: item 30 leaves
-// that one seamless. INTEL_CUBE_GATHER_SAMPLER_FIX=0 turns it off.
-extern "C" {
-void LLVMAddNamedMetadataOperand(LLVMModuleRef, const char *, LLVMValueRef);
-LLVMValueRef LLVMMDStringInContext(LLVMContextRef, const char *, unsigned);
-LLVMValueRef LLVMGetNamedGlobal(LLVMModuleRef, const char *);
-void LLVMSetInitializer(LLVMValueRef, LLVMValueRef);
-LLVMValueRef LLVMAddGlobalInAddressSpace(LLVMModuleRef, LLVMTypeRef, const char *, unsigned);
-void LLVMSetGlobalConstant(LLVMValueRef, int);
-void LLVMSetLinkage(LLVMValueRef, int);
-LLVMValueRef LLVMConstBitCast(LLVMValueRef, LLVMTypeRef);
-LLVMValueRef LLVMMDNodeInContext(LLVMContextRef, LLVMValueRef *, unsigned);
-LLVMTypeRef LLVMInt64TypeInContext(LLVMContextRef);
-void LLVMSetAlignment(LLVMValueRef, unsigned);
-}
+// MetalOldCompat item 30 gives nearest-filter samplers clamped cube addressing (integer cube textures with tiny faces
+// sample as 0 with seamless addressing), but a gather's 2x2 footprint spans face edges and came back clamped there
+// (i20). A gather doesn't filter and seamless addressing ignores the address modes, so cube gathers (color and depth,
+// not compare) in vertex and fragment functions take a constexpr linear sampler instead, which item 30 leaves seamless.
 static unsigned linearCubeGathers(LLVMModuleRef module) {
     if (disabled("INTEL_CUBE_GATHER_SAMPLER_FIX") || runtimeNamesBound(module)) return 0;
     static const char kGlobal[] = "__air_sampler_state.cube_gather";
@@ -4281,35 +3794,14 @@ static unsigned linearCubeGathers(LLVMModuleRef module) {
 }
 
 // ---- constexpr samplers from newer front ends ----------------------------------------------------------------------
-// The front end in Xcode 26 (metalfe-32023.850) writes a constexpr sampler as a [2 x i64] constant (!air.sampler_states),
-// the second word 0 and bit 63 of the first clear; the runtime compiler that goes with the 3802 back end writes one i64,
-// the same word with bit 63 set (checked for filters, mip filters, addressing, border colors, anisotropy, compare
-// functions, LOD clamps). IGILInlineSamplerLowering reads the constant as an integer and dereferences null on the array,
-// which kills MTLCompilerService: iMovie 10.4.4's viewer (Flexo's textureSamplingShader) never gets a pipeline and stays
-// black, and so would any app's library built with that compiler that uses constexpr samplers. Such globals become the
-// i64 the runtime compiler writes; their uses and the sampler-state metadata go to it.
-// INTEL_SAMPLER_STATE_FIX=0 turns it off.
-extern "C" {
-LLVMValueRef LLVMGetInitializer(LLVMValueRef);
-void LLVMSetInitializer(LLVMValueRef, LLVMValueRef);
-LLVMValueRef LLVMAddGlobalInAddressSpace(LLVMModuleRef, LLVMTypeRef, const char *, unsigned);
-void LLVMSetGlobalConstant(LLVMValueRef, int);
-int LLVMGetLinkage(LLVMValueRef);
-void LLVMSetLinkage(LLVMValueRef, int);
-void LLVMSetAlignment(LLVMValueRef, unsigned);
-unsigned LLVMGetPointerAddressSpace(LLVMTypeRef);
-LLVMValueRef LLVMIsAGlobalVariable(LLVMValueRef);
-LLVMValueRef LLVMIsAConstantDataArray(LLVMValueRef);
-LLVMValueRef LLVMGetElementAsConstant(LLVMValueRef, unsigned);
-LLVMValueRef LLVMConstBitCast(LLVMValueRef, LLVMTypeRef);
-void LLVMDeleteGlobal(LLVMValueRef);
-void LLVMSetValueName(LLVMValueRef, const char *);
-}
+// Xcode 26's front end (metalfe-32023.850) writes a constexpr sampler as a [2 x i64] constant (the second word 0, bit
+// 63 of the first clear); the runtime compiler that goes with the 3802 back end writes one i64, the same word with bit
+// 63 set. IGILInlineSamplerLowering dereferences null on the array and kills MTLCompilerService (iMovie's viewer stays
+// black; i05). Such globals become that i64; their uses and the sampler-state metadata go to it.
 extern "C" void *valueAsMetadata(LLVMValueRef value) asm("__ZN4llvm15ValueAsMetadata3getEPNS_5ValueE");
 
 static unsigned fixSamplerStateWords(LLVMModuleRef module) {
-    const char *setting = getenv("INTEL_SAMPLER_STATE_FIX");
-    if (setting && !strcmp(setting, "0")) return 0;
+    if (disabled("INTEL_SAMPLER_STATE_FIX")) return 0;
     enum { kArrayKind = 11 };  // LLVMTypeKind
     std::vector<LLVMValueRef> states(LLVMGetNamedMetadataNumOperands(module, "air.sampler_states"));
     if (states.empty()) return 0;
@@ -4346,25 +3838,14 @@ static unsigned fixSamplerStateWords(LLVMModuleRef module) {
 }
 
 // ---- explicit LODs in compute kernels ------------------------------------------------------------------------------
-// Samplers in compute kernels on Haswell and Ivy Bridge blend between mip levels only in the middle quarter of each step: with a linear
-// mip filter, level n + f reads level n for f <= 0.375 and level n + 1 for f >= 0.625, and blends linearly in between
-// (weight (f - 0.375) * 4). Vertex and fragment functions blend over the whole step, and the sampler state's
-// TrilinearFilterQuality (0, full) changes nothing. So in compute kernels an explicit level with a fraction becomes
-// n + 0.375 + f / 4, which gives weight f. A nearest mip filter still picks the same level (f < 0.5 stays below the
-// middle), and whole levels are left alone (whether the min or mag filter applies depends on LOD > 0). Gradients in
-// compute kernels blend the same way and are left as they are: their LOD would have to be computed in the shader.
-// The HD 4000 blends the same way (s19). Modules can reach the pass manager twice, so remapped calls are marked
-// (!intel.level_remapped). INTEL_COMPUTE_TRILINEAR_FIX=0 turns it off.
-extern "C" {
-LLVMValueRef LLVMBuildFSub(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-unsigned LLVMGetMDKindIDInContext(LLVMContextRef, const char *, unsigned);
-LLVMValueRef LLVMGetMetadata(LLVMValueRef, unsigned);
-void LLVMSetMetadata(LLVMValueRef, unsigned, LLVMValueRef);
-}
+// Samplers in compute kernels on Haswell and Ivy Bridge blend between mip levels only in the middle quarter of each
+// step (level n + f reads n for f <= 0.375, n + 1 for f >= 0.625); vertex and fragment functions blend over the whole
+// step (s19). An explicit level with a fraction becomes n + 0.375 + f / 4, which gives weight f; whole levels and
+// gradients are left alone. Modules can reach the pass manager twice, so remapped calls are marked
+// (!intel.level_remapped).
 
 static unsigned remapComputeLevels(LLVMModuleRef module) {
-    const char *setting = getenv("INTEL_COMPUTE_TRILINEAR_FIX");
-    if ((setting && !strcmp(setting, "0")) || !LLVMGetNamedMetadataNumOperands(module, "air.kernel")) return 0;
+    if (disabled("INTEL_COMPUTE_TRILINEAR_FIX") || !LLVMGetNamedMetadataNumOperands(module, "air.kernel")) return 0;
     enum { kRealOEQ = 1, kRealOGT = 2 };  // LLVMRealPredicate
     LLVMContextRef context = LLVMGetModuleContext(module);
     LLVMTypeRef i32 = LLVMInt32TypeInContext(context), f32 = LLVMFloatTypeInContext(context);
@@ -4410,21 +3891,12 @@ static unsigned remapComputeLevels(LLVMModuleRef module) {
 }
 
 // ---- threadgroup bools ---------------------------------------------------------------------------------------------
-// LLVM shrinks a threadgroup bool to an i1 global, and the back end can't select loads and stores of i1 in threadgroup
-// memory ("Cannot select" aborts MTLCompilerService; WebKit's WebGPU workgroupUniformLoad on bool, a10). Such globals
-// become i8: loads compare with 0, stored values are zero-extended, and both are volatile, or the back end's GlobalOpt
-// shrinks the global back to i1 (it only ever holds 0 or 1). INTEL_THREADGROUP_BOOL_FIX=0 turns it off.
-extern "C" {
-LLVMValueRef LLVMGetFirstGlobal(LLVMModuleRef);
-LLVMValueRef LLVMGetNextGlobal(LLVMValueRef);
-LLVMValueRef LLVMIsAStoreInst(LLVMValueRef);
-LLVMTypeRef LLVMInt8TypeInContext(LLVMContextRef);
-void LLVMSetVolatile(LLVMValueRef, int);
-}
+// LLVM shrinks a threadgroup bool to an i1 global, and the back end can't select i1 loads and stores in threadgroup
+// memory ("Cannot select" aborts MTLCompilerService; a10). Such globals become i8, accessed volatile, or the back
+// end's GlobalOpt shrinks them back to i1.
 
 static unsigned widenThreadgroupBools(LLVMModuleRef module) {
-    const char *setting = getenv("INTEL_THREADGROUP_BOOL_FIX");
-    if (setting && !strcmp(setting, "0")) return 0;
+    if (disabled("INTEL_THREADGROUP_BOOL_FIX")) return 0;
     LLVMContextRef context = LLVMGetModuleContext(module);
     LLVMTypeRef i1 = LLVMInt1TypeInContext(context), i8 = LLVMInt8TypeInContext(context);
     std::vector<LLVMValueRef> globals;
@@ -4470,24 +3942,13 @@ static unsigned widenThreadgroupBools(LLVMModuleRef module) {
 }
 
 // ---- over-aligned byte accesses to private memory ------------------------------------------------------------------
-// A byte or halfword load from private (stack) memory with an alignment of 4 or more, as LLVM gives the first small field
-// of a 16-byte-aligned struct in a dynamically indexed private array (`S w[2]; ... w[s].count`, EEVEE's G-buffer writer,
-// c03), has no instruction pattern in the back end ("Cannot select: load ... anyext from i8", align 16), which aborts
-// MTLCompilerService. Lowering the alignment doesn't last (the optimizer infers it again from the alloca), so such an
-// access becomes one of its 32-bit word, which starts at the pointer: a load and a truncation, or a read-modify-write
-// of the word for a store. They are volatile, or instruction selection narrows them back. INTEL_PRIVATE_ALIGN_FIX=0
-// turns it off.
-extern "C" {
-unsigned LLVMGetAlignment(LLVMValueRef);
-LLVMValueRef LLVMBuildBitCast(LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
-LLVMValueRef LLVMBuildOr(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMValueRef LLVMBuildAnd(LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
-LLVMTypeRef LLVMPointerType(LLVMTypeRef, unsigned);
-}
+// A byte or halfword load from private memory aligned to 4 or more (the first small field of a 16-byte-aligned struct
+// in a dynamically indexed private array) has no instruction pattern in the back end and aborts MTLCompilerService
+// (c03). Lowering the alignment doesn't last, so such an access becomes a volatile one of its 32-bit word (instruction
+// selection narrows a plain one back).
 
 static unsigned wordPrivateSubwords(LLVMModuleRef module) {
-    const char *setting = getenv("INTEL_PRIVATE_ALIGN_FIX");
-    if (setting && !strcmp(setting, "0")) return 0;
+    if (disabled("INTEL_PRIVATE_ALIGN_FIX")) return 0;
     enum { kIntegerKind = 8 };  // LLVMTypeKind
     LLVMContextRef context = LLVMGetModuleContext(module);
     LLVMTypeRef i32 = LLVMInt32TypeInContext(context), i32Pointer = LLVMPointerType(i32, 0);
@@ -4532,19 +3993,13 @@ static unsigned wordPrivateSubwords(LLVMModuleRef module) {
 }
 
 // ---- float3 vertex and fragment inputs -------------------------------------------------------------------------------
-// When a vertex function copies a component of a float3 vertex input straight to an output (`out.o = in.a.y`), the back
-// end declares the input (DCL_INPUT i1.xyz) but drops its move into a register and writes the output from one nothing
-// set (MOV o0.x, r1.x): 0 or garbage. Float2 and float4 inputs, and any arithmetic on the input, are right. ANGLE's
-// vertex shaders do that copy for `out0 = in0.x` on a vec3 attribute (dEQP swizzles_vec3 *_vertex,
-// conversions_vector_to_scalar vec3_to_float_vertex). In fragment functions, the z of a float3 input given straight to
-// sample_compare as the reference value compares with the input's x instead; ANGLE passes sampler2DShadow coordinates
-// as a vec3 varying that way (dEQP texture.sampler2dshadow_fragment, textureoffset.sampler2dshadow_fragment and their
-// _bias cases). Each <3 x float> parameter of a vertex or fragment function goes through air.fast_fmax(a, a) first,
-// which is exact (NaN stays NaN) and makes the back end read the input into a register. Only before the plugin binds
-// air.* calls to its runtime library (see runtimeNamesBound). INTEL_VERTEX_FLOAT3_FIX=0 and INTEL_FRAGMENT_FLOAT3_FIX=0
-// turn it off.
+// The back end drops the move of a float3 vertex input into a register when a component is copied straight to an
+// output (`out.o = in.a.y` read 0 or garbage; i06), and in fragment functions a float3 input's z given straight to
+// sample_compare as the reference compares with its x (i09); ANGLE writes both. Each <3 x float> parameter of a vertex
+// or fragment function goes through air.fast_fmax(a, a) first, exact even for NaN, which makes the back end load it.
+// Only before the plugin binds air.* calls to its runtime library (runtimeNamesBound).
 // Whether the plugin has already turned the module's air.* calls into the runtime library's air_* functions (a later
-// pass-manager run on the same module): air.* calls added then are never resolved, and the back end crashes lowering them.
+// pass-manager run on the same module): air.* calls added then are never resolved and crash the back end.
 static bool runtimeNamesBound(LLVMModuleRef module) {
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
         if (!strncmp(LLVMGetValueName(f), "air_", 4)) return true;
@@ -4603,13 +4058,9 @@ static unsigned fixFloat3Inputs(LLVMModuleRef module) {
 }
 
 // ---- get_num_samples ------------------------------------------------------------------------------------------------
-// get_num_samples() (air.get_num_samples) returns 1 in a fragment function that takes a buffer argument, at any sample
-// count; without one it's right. Every ANGLE fragment shader takes buffers, and ANGLE's alpha-to-coverage emulation (on
-// for every non-Apple GPU) picks its dither pattern by sample count: with 1 it fell through to using alpha * 510 itself as
-// the sample mask, so coverage jumped around instead of growing with alpha (dEQP
-// multisample.fbo_*.proportionality_alpha_to_coverage). A render pipeline's sample count is fixed when its functions are
-// compiled, and the module carries it (!air.state !{!"msaaLevel", i32 N}): the calls become that constant.
-// INTEL_NUM_SAMPLES_FIX=0 turns it off.
+// get_num_samples() returns 1 in a fragment function that takes a buffer argument, at any sample count, which broke
+// ANGLE's alpha-to-coverage emulation (i10). A render pipeline's sample count is fixed at compile time and the module
+// carries it (!air.state !{!"msaaLevel", i32 N}): the calls become that constant.
 static unsigned foldNumSamples(LLVMModuleRef module) {
     LLVMValueRef f = LLVMGetNamedFunction(module, "air.get_num_samples.i32");
     if (disabled("INTEL_NUM_SAMPLES_FIX") || !f || !LLVMGetFirstUse(f)) return 0;
@@ -4635,24 +4086,11 @@ static unsigned foldNumSamples(LLVMModuleRef module) {
 }
 
 // ---- dynamically indexed private arrays ----------------------------------------------------------------------------
-// A private array inside a struct (`struct { int v[3]; } a; ... a.v[i]`, the way ANGLE declares every GLSL array, as
-// metal::array) that is indexed with a variable becomes an indexable register array (DCL_INDEXABLETEMP x0[N]) in vertex
-// and fragment functions, and the back end addresses it two ways: stores at constant offsets go to raw scratch with byte
-// addresses (element 2 of an int array lands in x0[0].z) while variable-index accesses use x0[i].x. Elements written one
-// way and read the other come back 0 or stale (WebGL unary-minus-operator-in-dynamic-loop, dEQP shaderstruct
-// array_member_dynamic_index, shaderindexing). Each load or store through a GEP into an alloca with one variable index over
-// an array of at most 16 elements becomes accesses at every constant index plus selects (a load: one load per element and
-// a select chain; a store: for each element, store select(i == k, value, old)), so only constant offsets remain. Out of
-// range indices read the last element and store nothing. Only loads and stores of numbers and vectors of them: arrays of
-// textures or samplers are left alone (the back end can't pick a handle with a select), and so are arrays that something
-// other than loads and stores reaches (onlyDirectAccesses below). An array is rewritten whole or not at all: one
-// variable-index access left as the front end wrote it next to rewritten ones is the mix this works around (mslfuzz2
-// VEC=1 seed 1469, i44). INTEL_PRIVATE_ARRAY_FIX=0 turns it off.
-extern "C" {
-LLVMValueRef LLVMBuildGEP(LLVMBuilderRef, LLVMValueRef, LLVMValueRef *, unsigned, const char *);
-LLVMValueRef LLVMIsAGetElementPtrInst(LLVMValueRef);
-LLVMTypeRef LLVMStructGetTypeAtIndex(LLVMTypeRef, unsigned);
-}
+// In vertex and fragment functions the back end addresses a dynamically indexed private array two ways (constant-offset
+// stores by byte address in raw scratch, variable-index accesses as x0[i].x), so elements written one way and read the
+// other came back 0 or stale (i07, i34). Variable-index loads and stores into an array of at most 16 numbers or vectors
+// become accesses at every constant index plus selects (out of range: the last element read, nothing stored), for the
+// whole array or none of it, since one access left as it was is the mix this works around (i44).
 
 static LLVMValueRef allocaBase(LLVMValueRef pointer) {  // the alloca a pointer is derived from by GEPs and bitcasts, or null
     for (int depth = 0; pointer && depth < 8; depth++) {
@@ -4667,10 +4105,6 @@ static LLVMValueRef allocaBase(LLVMValueRef pointer) {  // the alloca a pointer 
 // lifetime markers, memcpy, memset). Anything else -- a select or phi of pointers into it, a call, the pointer stored or
 // converted -- keeps it in private memory, where the back end forwards a stale load of an element past a store to it
 // (see splitPrivatePointerSelects); the selects below would turn every variable-index store into such loads and stores.
-extern "C" {
-int LLVMGetVolatile(LLVMValueRef);
-LLVMValueRef LLVMIsASelectInst(LLVMValueRef);
-}
 static bool onlyDirectAccesses(LLVMValueRef pointer, int depth = 0) {
     if (depth > 8) return false;
     for (LLVMUseRef u = LLVMGetFirstUse(pointer); u; u = LLVMGetNextUse(u)) {
@@ -4694,13 +4128,10 @@ static bool onlyDirectAccesses(LLVMValueRef pointer, int depth = 0) {
 }
 
 // ---- private arrays of bytes and halfwords done on 32-bit words --------------------------------------------------
-// A private uchar / ushort array (uchar pc[8]) is stored with truncating stores and read with extending loads, and after
-// i07's and i35's rewrites the back end forwarded a stored 32-bit value to such a load without masking it, so a pc[i]
-// read in a narrow min / max or division kept the bits above its byte (mslfuzz2 VEC=1 seed 1497, i47). An array of 8-
-// or 16-bit integers that only GEPs into its elements reach, with only loads and stores of the element type behind
-// them, becomes an array of i32: stores zero-extend, loads truncate. Runs before i07, which then rewrites the 32-bit
-// array. Not with OCLP's 11.7.10 Ivy Bridge plugin: on an HD 4000 its compiler gets i47 right as it is and 161 of 256
-// threads wrong with the words (a test report on a MacBookPro9,2). INTEL_NARROW_PRIVATE_ARRAY_FIX=0 turns it off.
+// After the private-array rewrites the back end forwarded a stored 32-bit value to a narrow load of a uchar / ushort
+// private array without masking it (i47). Arrays of 8- or 16-bit integers reached only through element GEPs, loads and
+// stores become arrays of i32 (stores zero-extend, loads truncate), before i07's rewrite. Not on Ivy Bridge, whose
+// 11.7.10 compiler gets i47 right as it is and wrong with the words.
 static unsigned widenNarrowPrivateArrays(LLVMModuleRef module) {
     if (disabled("INTEL_NARROW_PRIVATE_ARRAY_FIX") || ivyBridgePlugin || runtimeNamesBound(module)) return 0;
     enum { kArrayKind = 11 };
@@ -4766,8 +4197,7 @@ static unsigned widenNarrowPrivateArrays(LLVMModuleRef module) {
 }
 
 static unsigned selectPrivateArrayIndices(LLVMModuleRef module) {
-    const char *setting = getenv("INTEL_PRIVATE_ARRAY_FIX");
-    if (setting && !strcmp(setting, "0")) return 0;
+    if (disabled("INTEL_PRIVATE_ARRAY_FIX")) return 0;
     std::map<LLVMValueRef, bool> direct;  // alloca -> onlyDirectAccesses
     enum { kArrayKind = 11, kStructKind = 10, kPointerKind = 12, kIntEQ = 32, kMaxElements = 16 };
     std::vector<LLVMValueRef> geps;
@@ -4909,14 +4339,10 @@ static unsigned selectPrivateArrayIndices(LLVMModuleRef module) {
 }
 
 // ---- selects of pointers into one buffer -----------------------------------------------------------------------------
-// `c ? in[i] : in[j]` comes out of the front end as a load through select(c, &in[i], &in[j]). The back end can't tell
-// that both pointers name the same buffer, so it loads through a loop over the distinct surfaces in the SIMD group, and
-// that loop takes flag register f0.1 without saving it: when the select sits in the then-branch of an if/else whose
-// else-branch tests a condition the back end kept in f0.1, lanes that took the else came out as if the condition held
-// (a switch whose case 0 broke out ran the default's code whenever a case-1 lane shared its SIMD8 group: differential
-// fuzzing, mslfuzz2). A select whose arms are GEPs of the same pointer with indices of the same types becomes one GEP
-// with the differing indices selected (a pointer itself counts as a GEP by 0): the same address, no surface loop. Device
-// and constant pointers only (private ones are split by splitPrivatePointerSelects). INTEL_BUFFER_SELECT_FIX=0 turns it off.
+// For a load through select(c, &in[i], &in[j]) the back end loops over the distinct surfaces in the SIMD group, and
+// that loop takes flag register f0.1 without saving it, so an enclosing else-branch's condition kept there flipped
+// (i23). A select of two GEPs of the same pointer becomes one GEP with the differing indices selected: the same
+// address, no surface loop. Device and constant pointers only (private ones: splitPrivatePointerSelects).
 static unsigned selectBufferIndices(LLVMModuleRef module) {
     if (disabled("INTEL_BUFFER_SELECT_FIX")) return 0;
     enum { kArrayKind = 11, kStructKind = 10, kPointerKind = 12, kVectorKind = 13 };
@@ -4976,18 +4402,12 @@ static unsigned selectBufferIndices(LLVMModuleRef module) {
 }
 
 // ---- loads and stores through a select of private pointers ----------------------------------------------------------
-// A pointer into a private array picked with a select (`thread uint *q = c ? &p[2] : &p[5]; *q += x;`) keeps the array in
-// private memory, and there the back end forwards a load of an element past a store to that same element: in
-// `p[5] = p[5] + a; p[5] = p[5] * 3u;` the second statement reads the value the first one loaded (stock compiler too).
-// The variable-index rewrite above turns every store into such loads and stores, so with it random integer kernels with
-// a pointer select came out wrong 43% of the time (differential fuzzing, mslfuzz). A load through such a select
-// becomes a select of the two loads, a store two stores (each pointer gets the value or its own old contents), so no
-// pointer into the array is selected any more and the back end keeps it in registers. Only selects whose arms both point
-// into allocas and whose uses are all non-volatile loads and stores of numbers or vectors of them. Runs before the
-// variable-index rewrite, which then also takes the arms. INTEL_PRIVATE_SELECT_FIX=0 turns it off.
+// A pointer into a private array picked with a select keeps the array in private memory, where the back end forwards a
+// load of an element past a store to it (i17; the stock compiler too), and the variable-index rewrite makes many such
+// loads and stores. A load through such a select becomes a select of the two loads, a store two stores (each pointer
+// gets the value or its old contents), so the array can stay in registers. Runs before the variable-index rewrite.
 static unsigned splitPrivatePointerSelects(LLVMModuleRef module) {
-    const char *setting = getenv("INTEL_PRIVATE_SELECT_FIX");
-    if (setting && !strcmp(setting, "0")) return 0;
+    if (disabled("INTEL_PRIVATE_SELECT_FIX")) return 0;
     enum { kPointerKind = 12 };
     std::vector<LLVMValueRef> selects;
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
@@ -5034,41 +4454,12 @@ static unsigned splitPrivatePointerSelects(LLVMModuleRef module) {
 }
 
 // ---- chains of short branches --------------------------------------------------------------------------------------
-// The back end's register allocator (iCBE VirtualRegistersToRegisters -> CStructRegionTree::StructuralAnalysis) takes
-// exponential time on functions made of chains of short conditional branches that all fall through to a shared block,
-// the shape `if (a && b && c && d) ... else ...` compiles to when each test is a few compares: 4 such tests over vec4s
-// take 2 s, 6 more than a minute, 8 more than ten minutes. Chrome's GPU watchdog kills the process meanwhile (WebGPU CTS
-// shader,execution,robust_access_vertex, which validates each of up to 12 vertex attributes this way). Blocks that only
-// compute (no memory access, no calls but pure air functions) are folded into their predecessor, the branch conditions
-// combined with selects (`br a, B, E; B: br b, C, E` becomes `br (a ? b : false), C, E`), and if-then(-else) shapes
-// with such arms become selects, until the chains are single blocks. Only blocks of at most INTEL_BRANCH_CHAIN_MOVE
-// (default 16) instructions move, phis become selects only for numbers and vectors of them (never texture or sampler
-// pointers, a05), and it only runs on functions with at least INTEL_BRANCH_CHAIN_MIN (default 12) conditional branches.
-// INTEL_BRANCH_CHAIN_FIX=0 turns it off.
-extern "C" {
-LLVMValueRef LLVMGetBasicBlockTerminator(LLVMBasicBlockRef);
-unsigned LLVMGetNumSuccessors(LLVMValueRef);
-LLVMBasicBlockRef LLVMGetSuccessor(LLVMValueRef, unsigned);
-int LLVMIsConditional(LLVMValueRef);
-LLVMValueRef LLVMGetCondition(LLVMValueRef);
-LLVMValueRef LLVMIsABranchInst(LLVMValueRef);
-LLVMValueRef LLVMIsAPHINode(LLVMValueRef);
-void LLVMInstructionRemoveFromParent(LLVMValueRef);
-void LLVMInsertIntoBuilder(LLVMBuilderRef, LLVMValueRef);
-LLVMValueRef LLVMBuildCondBr(LLVMBuilderRef, LLVMValueRef, LLVMBasicBlockRef, LLVMBasicBlockRef);
-LLVMValueRef LLVMBuildBr(LLVMBuilderRef, LLVMBasicBlockRef);
-LLVMValueRef LLVMBuildPhi(LLVMBuilderRef, LLVMTypeRef, const char *);
-void LLVMAddIncoming(LLVMValueRef, LLVMValueRef *, LLVMBasicBlockRef *, unsigned);
-unsigned LLVMCountIncoming(LLVMValueRef);
-LLVMValueRef LLVMGetIncomingValue(LLVMValueRef, unsigned);
-LLVMBasicBlockRef LLVMGetIncomingBlock(LLVMValueRef, unsigned);
-void LLVMDeleteBasicBlock(LLVMBasicBlockRef);
-void LLVMPositionBuilderAtEnd(LLVMBuilderRef, LLVMBasicBlockRef);
-typedef struct LLVMOpaqueAttributeRef *LLVMAttributeRef;
-unsigned LLVMGetEnumAttributeKindForName(const char *, size_t);
-LLVMAttributeRef LLVMGetEnumAttributeAtIndex(LLVMValueRef, unsigned, unsigned);
-LLVMAttributeRef LLVMGetCallSiteEnumAttribute(LLVMValueRef, unsigned, unsigned);
-}
+// iCBE's register allocator (CStructRegionTree::StructuralAnalysis) takes exponential time on chains of short
+// conditional branches that fall through to a shared block, as `if (a && b && c && d)` compiles: 8 such tests take over
+// ten minutes, and Chrome's GPU watchdog kills the process (i12). Pure computing blocks are folded into their
+// predecessor with the conditions combined by selects, and if-then(-else) shapes become selects. Tunables:
+// INTEL_BRANCH_CHAIN_MOVE (most instructions a moved block may have, default 16), INTEL_BRANCH_CHAIN_MIN (conditional
+// branches before it runs, default 12). Phis become selects only for numbers and vectors, never handles (a05).
 
 namespace flatten {
 enum { kFunctionIndex = ~0u, kMaxSteps = 4096 };
@@ -5130,10 +4521,8 @@ static void moveBody(LLVMBuilderRef b, LLVMBasicBlockRef from, LLVMValueRef befo
 }
 
 // Rewrites the phis of `bb` that have an entry from `from`: it becomes the entry from `to`, or, where `to` has one too,
-// both become one entry from `to` with the value merge(phi, value from `to`, value from `from`). A switch that goes to
-// `bb` from several cases gives its phis an entry per case, and those stay one per case: `from`'s switch, moved into
-// `to`, still has them (mslfuzz2 VEC=1 seed 2642: switch cases 0 and 1 to the same block, and the merged phi with one
-// entry failed the verifier, which aborted the compiler; i53).
+// both become one entry from `to` with the value merge(phi, value from `to`, value from `from`). A switch from several
+// cases keeps one entry per case: `from`'s switch, moved into `to`, still has them (i53).
 template <typename Merge>
 static void retargetPhis(LLVMBuilderRef b, LLVMBasicBlockRef bb, LLVMBasicBlockRef from, LLVMBasicBlockRef to, Merge merge) {
     std::vector<LLVMValueRef> phis;
@@ -5280,22 +4669,11 @@ static bool step(LLVMBuilderRef b, LLVMValueRef f, LLVMValueRef yes, LLVMValueRe
 }  // namespace flatten
 
 // ---- one buffer viewed as different types --------------------------------------------------------------------------
-// WGSL lets a shader view the same buffer bytes as different types (bufferArrayView); Tint casts one byte pointer to
-// each view's element type. The 3802 back end then reorders or forwards an access of one type past an access of the
-// other to the same address, with or without the front end's alias metadata: in WebGPU CTS bufferArrayView
-// mixed_types_aliasing, "load int, store vec2f there, load int" returned the first value (285 aliased cases, storage
-// and workgroup buffers; every unaliased case passed, and with every access volatile all passed). Loads and stores
-// reached (through GEPs and casts) from a cast of a device or threadgroup pointer whose root (the pointer under its
-// GEPs and casts: views at different byte offsets share it) is cast to two or more element types in the same function
-// are made volatile, which keeps them in order. The same goes for a root that a memcpy or memmove copies (an aggregate
-// copy of the buffer, as Tint writes `output.a = *bufferView<array<i32, 32>>(&A, 0)`) and a cast views: the back end
-// lowers the copy to loads and reuses an earlier load of a word past a store to it (bufferView mixed_types_aliasing
-// with constant offsets: the store through the view never reached the copied-out array, 96 cases); such roots' casts
-// count as punned, and their copies are made volatile too. A cast that only feeds such a copy (its i8 * operand) is
-// no view: a buffer copied whole into a private variable and read from there (WebGPU CTS memory_layout read_layout,
-// function and private address spaces) has no other access to keep in order, and a volatile copy into private memory
-// lost the array's mat2x2<f16> values (the zero-initialization stores came after it). INTEL_TYPE_PUN_FIX=0 turns it
-// off.
+// The 3802 back end reorders or forwards an access of one type past an access of another type to the same address, as
+// WGSL's buffer views (Tint casts one byte pointer to each view's type) and aggregate copies of such a buffer do (i16,
+// i18). Accesses through a device or threadgroup root cast to two or more element types in one function, or both
+// copied and viewed, are made volatile, which keeps them in order. A cast that only feeds a copy into private memory
+// is no view: a volatile copy there lost values.
 static bool sharedPointer(LLVMValueRef v) {
     LLVMTypeRef t = LLVMTypeOf(v);
     if (LLVMGetTypeKind(t) != kTypeKindPointer) return false;
@@ -5389,14 +4767,9 @@ static unsigned flattenBranchChains(LLVMModuleRef module) {
 }
 
 // ---- halfword vectors viewed as bytes in vertex and fragment functions --------------------------------------------
-// as_type<uchar4>(ushort2) and as_type<char4>(short2), a bitcast <2 x i16> -> <4 x i8>, abort the compile of a vertex or
-// fragment function (IGILTargetLowering::ReplaceNodeResults in libIGIL-Metal): the compiler service crashes and the
-// pipeline fails with "Compiler encountered an internal error". The same cast in a compute function is right, and so are
-// the other casts between words and vectors of bytes or halfwords (uint <-> uchar4 / ushort2, uchar4 -> ushort2,
-// ushort <-> uchar2). Found by fuzzing fragment functions. In a module with a vertex or fragment function, each such
-// bitcast becomes its bytes, put together lane by lane: byte 2k is halfword k truncated, byte 2k + 1 the halfword
-// shifted right by 8 (in 32 bits). Runs after the other rewrites, which then see the module as before.
-// INTEL_HALFWORD_BYTES_FIX=0 turns it off. Test: i62.
+// as_type<uchar4>(ushort2) and as_type<char4>(short2) abort the compile of a vertex or fragment function in
+// IGILTargetLowering::ReplaceNodeResults (i62; compute functions are right). In such modules each of these bitcasts
+// becomes its bytes, put together lane by lane from shifted halfwords. Runs after the other rewrites.
 static unsigned splitHalfwordBytes(LLVMModuleRef module) {
     if (disabled("INTEL_HALFWORD_BYTES_FIX")) return 0;
     if (!LLVMGetNamedMetadataNumOperands(module, "air.vertex") && !LLVMGetNamedMetadataNumOperands(module, "air.fragment")) return 0;
@@ -5429,16 +4802,10 @@ static unsigned splitHalfwordBytes(LLVMModuleRef module) {
 }
 
 // ---- byte vectors viewed as halfwords on Ivy Bridge -----------------------------------------------------------------
-// as_type<short2>(uchar4) and as_type<ushort2>(char4), a bitcast <4 x i8> -> <2 x i16>, reach the back end as BPACK of
-// the bytes into a word and SUNPACK of its halves, and Ivy Bridge's iCBE reads a half wrong when a byte lane is a known
-// 0: in vf(as_type<short2>(uchar4(a, b, c, d) & uchar4(e, 0, f, 28))) & 255, the low byte of .y (byte 2) came out as 0
-// in 78 of 256 threads (mslfuzz2 VEC seed 23 on an HD 4000; the stock compiler too). The IR and the IGIL text are right,
-// and so are the same halves put together from the bytes with shifts, and as_type<uint>(uchar4). Each such bitcast
-// becomes its halfwords, put together lane by lane: halfword k = byte 2k | byte 2k + 1 << 8, in 32 bits. Only where a
-// byte lane is a known 0 (a constant lane, an inserted 0, or an AND with either), the shape iCBE gets wrong: elsewhere
-// the back end's own BPACK is right, and the shifts could trip its narrow-shift handling instead (as_type<short2> of a
-// uchar4 shifted by a uchar4, VEC seed 2598: 2 threads wrong with the rewrite, none without it). Runs after the other
-// rewrites, which then see the module as before. Ivy Bridge only. INTEL_BYTE_HALFWORDS_FIX=0 turns it off. Test: i75.
+// Ivy Bridge's iCBE reads a half of as_type<short2>(uchar4) / as_type<ushort2>(char4) (BPACK, then SUNPACK) wrong when
+// a byte lane is a known 0 (i75; the stock compiler too). Such bitcasts become their halfwords put together with
+// shifts, only where a byte lane is a known 0: elsewhere BPACK is right and the shifts could trip the narrow-shift
+// handling instead. Runs after the other rewrites.
 static bool knownZeroByteLane(LLVMValueRef v, int depth = 0) {
     enum { kAnd = 23, kInsertElement = 51 };
     if (depth > 8) return false;
@@ -5495,27 +4862,12 @@ static unsigned packByteHalfwords(LLVMModuleRef module) {
 }
 
 // ---- compares of byte and halfword vectors in vertex and fragment functions ----------------------------------------
-// In vertex and fragment functions the back end's type legalization of a compare between two <N x i8> (or <N x i16>)
-// vectors depends on how each was made: any(uchar4(a, b, c, d) <= as_type<uchar4>(x)) crashed the compiler service
-// (SelectionDAG::getZeroExtendInReg), any(as_type<char4>(x) > as_type<char4>(y)) came out wrong, and so did such compares
-// of the bytes i62 builds (as_type fragment fuzzing seeds 2 and 15, and the shapes in between). The same compare on
-// 32-bit lanes is right, where neither operand is a byte vector built with insertelement: zext of such a vector crashed
-// the same way. Each icmp of an i8 / i16 vector is done on <N x i32>: the operands sign-extended for a signed predicate,
-// zero-extended otherwise, with extendLanes (lane by lane for vectors put together with insertelement), and other
-// operands from their packed word with shifts (signedValue as for i02, unsignedValue): sext of an as_type<char4> gave
-// the wrong compare too, and zext of one crashed once a select used it. The result is the same <N x i1>. A per-lane select of byte vectors by such a compare
-// crashed the same way even then (select(uchar4(...), uchar4(...), as_type<uchar4>(x) <= ...), seed 15): selects of
-// i8 / i16 vectors with a vector condition are done on 32-bit lanes too and truncated back.
-// INTEL_NARROW_VECTOR_COMPARE_FIX=0 turns it off.
-// Test: i64.
-// Arithmetic and bitwise operations on byte vectors crashed in the same legalization (as_type<uchar4>(x) ^
-// as_type<uchar4>(y), as_type<char4>(x) | select(...): as_type fragment fuzzing seed 9), so add, sub, mul, shl, lshr,
-// ashr, and, or and xor of i8 / i16 vectors are done on 32-bit lanes as well. Each such operation and select gets one
-// <N x i32> value whose low bits are its lanes; the operations, selects and compares that use it take that value (masked
-// or sign-extended where the high bits matter: the value lshr / ashr shifts, every shift amount, compares), and a trunc
-// to the narrow vector serves the other uses. Phis
-// of such vectors get a 32-bit phi beside them, so a vector carried around a loop isn't packed and unpacked each time.
-// INTEL_NARROW_VECTOR_ARITH_FIX=0 leaves those operations alone. Test: i66.
+// In vertex and fragment functions the back end's legalization of i8 / i16 vectors depends on how each was made:
+// compares of byte vectors crashed the compiler service (SelectionDAG::getZeroExtendInReg) or came out wrong, and so
+// did per-lane selects by them (i64); arithmetic and bitwise operations crashed the same way (i66). Such compares,
+// selects and operations are done on <N x i32> lanes (extendLanes for vectors put together with insertelement, the
+// packed word with shifts otherwise), and phis of such vectors get a 32-bit phi beside them.
+// INTEL_NARROW_VECTOR_ARITH_FIX=0 leaves the arithmetic alone.
 // The zero-extended lanes of a packed vector of i8 / i16 (16 or 32 bits), from its word: (word >> bits * k) & mask.
 static LLVMValueRef unsignedValue(LLVMBuilderRef b, LLVMTypeRef i32, LLVMValueRef x) {
     unsigned bits = subwordBits(LLVMTypeOf(x)), n = lanes(LLVMTypeOf(x));
@@ -5630,15 +4982,9 @@ static unsigned widenNarrowVectorCompares(LLVMModuleRef module) {
 }
 
 // ---- compares of a 0/1 value with 1 in vertex and fragment functions --------------------------------------------------
-// if (((x & 1u) & y) != 1u) { ... } in a fragment function took the branch by the wrong pixels: the front end makes it
-// icmp eq (and (and x, 1), y), 1 with the targets swapped, and the back end, inverting it, turns the compare of a value
-// that can only be 0 or 1 into the value itself, takes the `& 1` out of it as redundant for a 0/1 test, and then tests
-// the whole register (IGIL: AND r, x, y; IF_CND.z r). Pixels where x & y has bits above bit 0 set went the wrong way.
-// Compares with 0 of the same value are right, and so are selects on it. Found by fuzzing fragment functions (VEC=1
-// seed 1248: x = insert_bits(...) & 1, y = mulhi(...); it began as a char2 & (char2(33, 56) & char2) expression that
-// the front end folded to scalars). In a module with a vertex or fragment function, each icmp eq / ne of a value that
-// can only be 0 or 1 (an and with such an operand, a shift right by all but one bit, zext of a bool, or, xor and select
-// of such values) with 1 becomes icmp ne / eq with 0. INTEL_BIT_TEST_COMPARE_FIX=0 turns it off. Test: i68.
+// Inverting icmp eq (and (and x, 1), y), 1, the back end turns the compare of a 0/1 value into the value itself, drops
+// the `& 1` and tests the whole register, so pixels where x & y had higher bits set took the wrong branch (i68). In
+// such modules each icmp eq / ne of a value that can only be 0 or 1 with 1 becomes icmp ne / eq with 0.
 static bool zeroOrOne(LLVMValueRef v, int depth = 0) {
     if (LLVMIsAConstantInt(v)) return LLVMConstIntGetZExtValue(v) <= 1;
     if (depth > 8 || !LLVMIsAInstruction(v)) return false;
@@ -5683,20 +5029,10 @@ static unsigned bitTestCompares(LLVMModuleRef module) {
 }
 
 // ---- 64-bit division and variable shifts in vertex and fragment functions ---------------------------------------------
-// 64-bit udiv / sdiv / urem / srem, and shifts of an i64 by an amount that isn't a constant, crash the compiler service
-// in a vertex or fragment function (((ulong)x << 32 | y) / (ulong)(x | 1u), (long)a / (long)(int)b, a >> (y & 63u)):
-// the pipeline fails with "Compiler encountered an internal error". The same operations in a compute function are
-// right, and so are 64-bit add, mul (i27), compares and shifts by a constant. Found by fuzzing fragment functions with
-// 64-bit values, where every seed crashed. In a module with a vertex or fragment function, outside functions that only
-// kernels call, each is done on the 32-bit halves of its operands (of each lane, for vectors): a shift by s & 63 as
-// 32-bit shifts and a select on s & 32; a division as 64 shift-and-subtract steps in a loop (the shifted remainder kept
-// in 65 bits, so divisors above 2^63 are right), giving the quotient and the remainder, for sdiv / srem on the
-// magnitudes with the sign put back. Division by zero, undefined in MSL, gives all ones and the dividend.
-// INTEL_RENDER_INT64_FIX=0 turns it off. Test: i67.
-extern "C" {
-LLVMBasicBlockRef LLVMAppendBasicBlockInContext(LLVMContextRef, LLVMValueRef, const char *);
-void LLVMMoveBasicBlockAfter(LLVMBasicBlockRef, LLVMBasicBlockRef);
-}
+// 64-bit division and remainder, and i64 shifts by a non-constant amount, crash the compiler service in vertex and
+// fragment functions (i67; compute functions are right). In such modules, outside functions only kernels call, each is
+// done on 32-bit halves: shifts as 32-bit shifts and a select on s & 32, division as 64 shift-and-subtract steps (a
+// 65-bit remainder, so divisors above 2^63 are right). Division by zero gives all ones and the dividend.
 namespace int64 {
 enum { kUDiv = 14, kSDiv = 15, kURem = 17, kSRem = 18, kShl = 20, kLShr = 21, kAShr = 22,
        kIntEQ = 32, kIntNE = 33, kIntUGT = 34, kIntUGE = 35, kIntULT = 36 };
@@ -5859,22 +5195,14 @@ static unsigned expandRenderInt64(LLVMModuleRef module) {
 }
 
 // ---- SIMD16 pixel kernels with a clobbered value ---------------------------------------------------------------------
-// The plugin has the GL driver's back end, iCBE, turn each fragment function into EU code: a SIMD8 and a SIMD16 kernel,
-// the hardware dispatching SIMD16 for full pixel groups. Under the SIMD16 kernel's higher register pressure, iCBE's
-// register allocator can give a compare whose result is only used through the flag (cmp.nz.f0.0 gN, x, 0 before a
-// predicated sel) a register that still holds a live value; the compare overwrites it and the value's later read gets
-// 0/-1. dEQP's uniformbuffers multi_nested_struct instance_array_mixed (ANGLE): the SIMD16 kernel builds a bool in g6
-// (mov 0; (+f0.0) mov 1), a cmp.nz then takes g6 as its destination, and the last check reads g6: wrong in every SIMD16
-// dispatch (236 of 256 pixels), right in SIMD8 ones; one comparison fewer, and the pressure and the bug were gone.
-// So iCBE's CompilePixelShaderOpenGL is wrapped: after a compile, gen7eu::findCompareClobber looks for that in the SIMD16
-// kernel (a flag-writing instruction overwriting a value nothing has read yet, read again afterwards; optimized code
-// leaves no such dead stores), and if it's there the shader is compiled again with SIMD level 1, SIMD8 only (iCBE's
-// kernel program then builds no SIMD16 kernel). INTEL_SIMD16_CLOBBER_FIX=0 turns it off; INTEL_SIMD8_PIXEL=1 asks for
-// SIMD8 only for every fragment function (testing). The clobber check reads Haswell's iCBE output only; Ivy Bridge's iCBE
-// is wrapped below for the SIMD level alone (i77, and INTEL_SIMD8_PIXEL).
-// The C export: (compiler, platform index, ?, OPTIMIZER_LEVEL, SIMD_LEVEL, input state, ?, AIR::SCompilerOutputPixelShader
-// **, PLATFORM_STR *); it fills the caller's output block, which holds the SIMD8/16/32 kernel pointers at 0x47fb and their
-// sizes (uint32) at 0x4813.
+// Under a SIMD16 pixel kernel's register pressure, iCBE's allocator can give a compare whose result is only used
+// through the flag a register that still holds a live value, which the compare then overwrites (i14; SIMD8 kernels
+// are right). iCBE's CompilePixelShaderOpenGL is wrapped: when gen7eu::findCompareClobber finds that in the SIMD16
+// kernel, the shader is compiled again SIMD8 only. INTEL_SIMD8_PIXEL=1 asks for SIMD8 only for every fragment function
+// (testing). The clobber check reads Haswell's iCBE output only; Ivy Bridge's is wrapped for the SIMD level only (i77).
+// The C export: (compiler, platform index, ?, OPTIMIZER_LEVEL, SIMD_LEVEL, input state, ?,
+// AIR::SCompilerOutputPixelShader **, PLATFORM_STR *); it fills the caller's output block, which holds the SIMD8/16/32
+// kernel pointers at 0x47fb and their sizes (uint32) at 0x4813.
 typedef long (*CompilePixelShaderFn)(void *, int, void *, int, int, void *, void *, void *, void *);
 static CompilePixelShaderFn originalCompilePixelShader;
 static const char *const kICBEPaths[] = {
@@ -5971,17 +5299,9 @@ static void installICBEHook() {
 }
 
 // ---- loops that never exit -------------------------------------------------------------------------------------------
-// A block whose only instruction branches back to itself is a loop that can never exit or do anything; LLVM leaves one
-// where a loop can't advance for the function constants it was specialized with (MPS's reduce_multiple_passes_axes_*
-// kernels, entered when a stride is 0). The IGIL back end compiles most of them, but nested in MPSGraph's outer-axis
-// reductions (reductionMaximum / softMax over axis 0) its compile never finishes (USC::CompileComputeShaderOpenCL_Gen7
-// spins), the stock compiler too, and the app waits forever. A thread that reached such a loop would hang the GPU, so
-// it returns instead: nothing a finishing thread does changes. INTEL_INFINITE_LOOP_FIX=0 leaves them.
-extern "C" {
-LLVMValueRef LLVMBuildRetVoid(LLVMBuilderRef);
-LLVMValueRef LLVMBuildRet(LLVMBuilderRef, LLVMValueRef);
-LLVMTypeRef LLVMGetReturnType(LLVMTypeRef);
-}
+// LLVM leaves a block that only branches back to itself where a specialized loop can't advance (MPS reductions with a
+// zero stride), and nested in MPSGraph's outer-axis reductions the back end's compile of it never finishes (i71; the
+// stock compiler too). A thread reaching such a loop would hang the GPU, so it returns instead.
 enum { kOpcodeBr = 2, kTypeKindVoid = 0 };
 static unsigned returnFromEndlessLoops(LLVMModuleRef module) {
     if (disabled("INTEL_INFINITE_LOOP_FIX")) return 0;
@@ -6010,27 +5330,10 @@ static unsigned returnFromEndlessLoops(LLVMModuleRef module) {
 // ---- Kepler's three: half constants, gradient compares, struct copies ------------------------------------------------
 // Three tests written for the Kepler adapter (n05, n12, n13) fail on Intel too, Ivy Bridge and Haswell alike, with the
 // stock compiler as well; the same three rewrites as GeForceAIRCompat (NVIDIAAdapter/nvair.cpp) fix them here.
-extern "C" {
-LLVMValueRef LLVMConstArray(LLVMTypeRef, LLVMValueRef *, unsigned);
-LLVMValueRef LLVMConstNamedStruct(LLVMTypeRef, LLVMValueRef *, unsigned);
-LLVMValueRef LLVMConstStructInContext(LLVMContextRef, LLVMValueRef *, unsigned, int);
-int LLVMIsPackedStruct(LLVMTypeRef);
-LLVMValueRef LLVMIsAConstantDataVector(LLVMValueRef);
-unsigned LLVMGetNumArgOperands(LLVMValueRef);
-LLVMValueRef LLVMIsAConstantStruct(LLVMValueRef);
-LLVMValueRef LLVMIsAConstantArray(LLVMValueRef);
-const char *LLVMGetStructName(LLVMTypeRef);
-LLVMValueRef LLVMGetFirstGlobal(LLVMModuleRef);
-LLVMValueRef LLVMGetNextGlobal(LLVMValueRef);
-LLVMValueRef LLVMGetInitializer(LLVMValueRef);
-void LLVMSetInitializer(LLVMValueRef, LLVMValueRef);
-}
 
-// Half vectors spelled as bitcasts in constants: a constant array of half2x2 (WGSL `const` f16 matrices: WebGPU CTS
-// shader,execution,expression,constructor) reaches the plugin with each half2 column as a constant expression,
-// bitcast (<1 x i32> <i32 bits> to <2 x half>), and IGILTargetLowering::processGlobalData recursed on it until the compiler
-// crashed ("Compiler encountered an internal error"). In global initializers, each such bitcast becomes the plain half
-// vector it stands for. INTEL_HALF_CONSTANT_FIX=0 turns it off. Test: n13.
+// Half vectors spelled as bitcasts in constants, bitcast (<1 x i32> <i32 bits> to <2 x half>) (WGSL `const` f16
+// matrices), made IGILTargetLowering::processGlobalData recurse until the compiler crashed (n13). In global
+// initializers each such bitcast becomes the plain half vector it stands for.
 static double halfBitsValue(unsigned h) {
     int sign = (h >> 15) & 1, exponent = (h >> 10) & 31;
     unsigned mantissa = h & 1023;
@@ -6097,15 +5400,11 @@ static unsigned foldHalfVectorBitcasts(LLVMModuleRef module) {
     return fixed;
 }
 
-// Depth comparisons with gradients (sample_compare(s, coord, ref, gradient2d(...)) and its 2D-array, cube and cube-array
-// forms): instruction selection gave up on them (SelectionDAGISel::CannotYetSelect: "Compiler encountered an internal
-// error", or a crash in the in-process compiler), in kernels and fragment functions. ANGLE already avoids them on these
-// GPUs (MetalOldCompat item 11, allowSamplerCompareGradient). Each becomes the same comparison in the level form of the same
-// AIR function, which the plugin compiles (i24), at the level the gradients select with a nearest mip filter (Kepler,
-// whose hardware compares at level 0 only, stays there): 2D and 2D-array levels as for integer textures (selectedLevel);
-// cubes from the derivatives of the major axis's face coordinates, (db * ma - b * dma) / (2 * ma^2) for the other two axes
-// b, scaled by the face size, as GeForceAIRCompat's gradient samples. The 3802 runtime compiler's forms only (a float
-// result, no LOD clamp); others are left as they are. INTEL_COMPARE_GRADIENT_FIX=0 turns it off. Tests: n05, i78.
+// Instruction selection gives up on depth comparisons with gradients (sample_compare with gradient2d and its 2D-array,
+// cube and cube-array forms) in kernels and fragment functions (n05, i78; ANGLE avoids them, MetalOldCompat item 11).
+// Each becomes the level form of the same comparison, which the plugin compiles (i24), at the level the gradients
+// select with a nearest mip filter: 2D levels as for integer textures (selectedLevel), cube levels from the derivatives
+// of the major axis's face coordinates, as GeForceAIRCompat's gradient samples. The 3802 runtime compiler's forms only.
 // The level a cube gradient selects (nearest mip filter), an i32: 0.5 * log2(max over dPdx, dPdy of |d(face s, t)|^2 *
 // size^2) + 0.5, clamped; a zero major axis gives NaN, which clampedLevel makes 0.
 static LLVMValueRef cubeSelectedLevel(LLVMBuilderRef b, LLVMModuleRef module, LLVMValueRef texture, const char *type, LLVMValueRef coord,
@@ -6198,18 +5497,11 @@ static unsigned fixGradientCompares(LLVMModuleRef module) {
     return fixed;
 }
 
-// Struct copies (llvm.memcpy of a constant length): the back end let a copy's loads move above an earlier store that may
-// alias its source. In n12, after a swap of a field through pointers (A->x = ..., B->x = ...), the copy output->a = *A read
-// A before the store to A->x, so both outputs came out unswapped (1000 / 1406, want 1406 / 1000), on the Iris Pro and the
-// HD 4000, with the stock compiler too, for 44- and 232-byte structs alike. The IR is right and its alias scopes say the
-// two may alias; dropping !alias.scope / !noalias didn't help, making the copy volatile did, but a volatile copy into
-// private memory lost values before (i16). Each word-aligned copy of a whole number of words, up to 1 KiB, becomes that
-// many 32-bit loads and stores, volatile on the device-memory side: on the Iris Pro the plain words were enough, on the
-// HD 4000 the compiler still read A first until the device accesses were volatile. The HD 4000 did it with threadgroup
-// memory too (WebGPU CTS ptr_aliasing two_pointers, workgroup: A in threadgroup memory, A.x updated through a pointer in a
-// helper, then A copied out came back as copied in), so threadgroup-side accesses are volatile as well (i80).
-// After volatilizePunnedAccesses, which would otherwise take the new i32 views for punning.
-// INTEL_COPY_EXPAND_FIX=0 turns it off. Tests: n12, i80.
+// Struct copies (llvm.memcpy of a constant length): the back end moves a copy's loads above an earlier store that may
+// alias its source, the stock compiler too, although the alias scopes say they may alias (n12). Each word-aligned copy
+// of whole words up to 1 KiB becomes 32-bit loads and stores, volatile on the device and threadgroup side (the HD 4000
+// still reordered plain ones, i80; a volatile copy into private memory loses values, i16). Runs after
+// volatilizePunnedAccesses, which would otherwise take the new i32 views for punning.
 static unsigned expandConstantCopies(LLVMModuleRef module) {
     if (disabled("INTEL_COPY_EXPAND_FIX")) return 0;
     LLVMContextRef context = LLVMGetModuleContext(module);
@@ -6251,13 +5543,9 @@ static unsigned expandConstantCopies(LLVMModuleRef module) {
 }
 
 // ---- inline asm ---------------------------------------------------------------------------------------------------
-// ANGLE (Chromium, Electron) writes __asm__("") into the body of every loop it translates, so that the front end can't
-// take the loop for one that ends. It reaches the back end as `call void asm sideeffect "", ""()`, a call whose callee
-// is not a function: IGILInstructionCleanup asks every call for its called function's name and dereferences null
-// (Value::getName), the compiler service crashes, and MetalOld sends the request again. Skia's blur shaders have such a
-// loop, so an Electron window that draws a shadow stays blank. Metal has no inline asm to run, and by now the front
-// end's loop passes are done: the call is dropped. INTEL_INLINE_ASM_FIX=0 turns it off.
-extern "C" LLVMValueRef LLVMIsAInlineAsm(LLVMValueRef);
+// ANGLE writes __asm__("") into every loop it translates; IGILInstructionCleanup asks every call for its callee's name
+// and dereferences null for inline asm, crashing the compiler service (i81; Electron windows with Skia's blur shadows
+// stayed blank). Metal has no inline asm to run, and the front end's loop passes are done by now: the call is dropped.
 static unsigned dropInlineAsm(LLVMModuleRef module) {
     if (disabled("INTEL_INLINE_ASM_FIX")) return 0;
     unsigned dropped = 0;
@@ -6272,140 +5560,104 @@ static unsigned dropInlineAsm(LLVMModuleRef module) {
     return dropped;
 }
 
-static int hookedRun(void *self, LLVMModuleRef module) {
+enum PluginScope { kEveryPlugin, kIvyBridgeOnly, kHaswellOnly };
+enum Condition { kAlways, kOnlyIfPreviousChanged };
+struct ModuleFix {
+    unsigned (*apply)(LLVMModuleRef module);
+    const char *logFormat;  // with %u for the count
+    PluginScope scope = kEveryPlugin;
+    Condition condition = kAlways;
+};
+// In this order: some rewrites prepare the module for later ones.
+static const ModuleFix kModuleFixes[] = {
+    {ivbInlineConstants, "%u load(s) of program-scope constants read their values", kIvyBridgeOnly},
+    {ivbArgumentBuffers, "%u function(s): argument-buffer pointers made hidden buffers", kIvyBridgeOnly},
+    {ivbArgumentBufferOffsets, "%u argument-buffer member access(es) in vertex/fragment functions done at byte offsets", kIvyBridgeOnly},
+    {dropInlineAsm, "%u inline asm call(s) dropped"},
+    {dropMaxWorkGroupSize, "%u air.max_work_group_size attribute(s) dropped"},
+    {returnFromEndlessLoops, "%u loop(s) that never exit made returns"},
+    {dropArrayStructInfo, "struct info dropped from %u array-of-struct argument(s)"},
+    {moveEmulatedReferenceSlotsToLocation, "%u argument-buffer reference(s) given the hidden buffer the driver binds", kHaswellOnly},
+    {fixEscapedHandleLoads, "%u texture/sampler load(s) through escaped pointers re-indexed into the argument"},
+    {fixVertexSignedSubwords, "%u signed i8/i16 conversion(s) in a vertex function done on the 32-bit word"},
+    {fixGradientCompares, "%u depth comparison(s) with gradients done at level 0"},
+    {foldHalfVectorBitcasts, "%u constant(s) with half vectors spelled as bitcasts rewritten"},
+    {dropSampleCompareBias, "%u depth comparison(s) with an LOD bias: bias dropped"},
+    {lowerIntegerGradients, "%u integer gradient sample(s) done at the level the gradients select"},
+    {widenNarrowDivisions, "%u 8/16-bit division(s) done on 32-bit lanes"},  // before signedDivisionNegations, which then sees the 32-bit divides
+    {signedDivisionNegations, "%u signed division(s) of a negated value done on the value"},
+    {selectWideDivisionLanes, "%u vector lane(s) picked by a 64-bit quotient done with selects"},
+    {signedPowerOfTwoDivisions, "%u signed division(s) by a power of two done with shifts"},  // after the two division rewrites above
+    {foldConstantCalls, "%u integer function call(s) of constants folded"},
+    {selectWideDivisionLanes, "%u vector lane(s) picked by a 64-bit shift of a folded constant done with selects", kEveryPlugin, kOnlyIfPreviousChanged},  // the fold can leave a shift of a constant as an index (i59)
+    {widenNarrowMinMax, "%u 8/16-bit min / max / clamp call(s) done on 32-bit lanes"},
+    {foldConstantSaturation, "%u addsat / subsat of constants folded"},
+    {expandSaturation, "%u 32-bit addsat / signed subsat written out as add, compares and selects"},  // after the fold: what's left may still become constant in the plugin's passes
+    {exactMadSat, "%u madsat / mulhi / madhi call(s) done with 32-bit operations"},
+    {exact64BitMultiplies, "%u 64-bit multiply / mulhi / madhi call(s) built from 32-bit limbs"},
+    {linearCubeGathers, "%u cube gather(s) given a linear constexpr sampler (seamless at face edges)"},
+    {greenGathers, "%u green gather(s) checked against a red one, sampled where the two agree"},  // before foldIntegerSampleOffsets, which then fixes the offsets of both gathers
+    {foldIntegerSampleOffsets, "%u integer texture sample(s): texel offset moved into the coordinates"},
+    {fixSamplerStateWords, "%u constexpr sampler(s) in the [2 x i64] form rewritten as i64"},
+    {remapComputeLevels, "%u explicit level(s) in a compute kernel remapped for the sampler's mip blend"},
+    {widenThreadgroupBools, "%u threadgroup bool(s) widened to i8"},
+    {wordPrivateSubwords, "%u aligned byte/halfword access(es) to private memory done on the 32-bit word"},
+    {fixFloat3Inputs, "%u float3 vertex/fragment input(s) read through fmax"},
+    {foldNumSamples, "%u get_num_samples() call(s) replaced by the pipeline's sample count"},
+    {splitPrivatePointerSelects, "%u load(s)/store(s) through a select of private pointers split per pointer"},
+    {widenNarrowPrivateArrays, "%u private array(s) of bytes / halfwords done on 32-bit words"},  // before selectPrivateArrayIndices, which then rewrites the i32 arrays
+    {selectPrivateArrayIndices, "%u variable-index private array access(es) done at constant indices"},
+    {volatilizePunnedAccesses, "%u access(es) to a buffer viewed as different types made volatile"},
+    {expandConstantCopies, "%u constant-length copie(s) done as 32-bit loads and stores"},  // after volatilizePunnedAccesses (see there)
+    {flattenBranchChains, "%u short branch(es) folded into selects"},
+    {selectBufferIndices, "%u select(s) of pointers into one buffer turned into a selected index"},  // after flattenBranchChains, whose selects can pick pointers
+    {bitTestCompares, "%u compare(s) of a 0/1 value with 1 in a vertex/fragment module done as a compare with 0"},
+    {expandRenderInt64, "%u 64-bit division(s) / variable shift(s) in a vertex/fragment function done on 32-bit halves"},
+    {widenNarrowVectorCompares, "%u compare(s), select(s) and operation(s) on byte / halfword vectors in a vertex/fragment module done on 32-bit lanes"},
+    {splitHalfwordBytes, "%u bitcast(s) of halfwords to bytes in a vertex/fragment module done lane by lane"},  // after the rewrites above, which see the module as before
+    {packByteHalfwords, "%u bitcast(s) of bytes to halfwords put together lane by lane (Ivy Bridge)"},
+};
+
+static bool appliesToThisPlugin(PluginScope scope) {
+    return scope == kEveryPlugin || (scope == kIvyBridgeOnly) == ivyBridgePlugin;
+}
+static void applyModuleFixes(LLVMModuleRef module) {
+    unsigned previousChanges = 0;
+    for (const ModuleFix &fix : kModuleFixes) {
+        bool runs = appliesToThisPlugin(fix.scope) && (fix.condition == kAlways || previousChanges);
+        unsigned changes = runs ? fix.apply(module) : 0;
+        if (changes && logging()) logCount(fix.logFormat, changes);
+        previousChanges = changes;
+    }
+}
+static void lowerTextureAtomicCalls(LLVMModuleRef module) {
+    unsigned n = lowerTextureAtomics(module);
+    if (n && logging()) fprintf(stderr, "[inteltex] %u texture atomic call(s) lowered\n", n);
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
+        const char *name = LLVMGetValueName(f);
+        if (!strstr(name, "air.atomic_") || !strstr(name, "_texture_") || !LLVMGetFirstUse(f)) continue;
+        char *type = LLVMPrintTypeToString(LLVMTypeOf(f));
+        fprintf(stderr, "[inteltex] not lowered: %s %s\n", name, type);  // the compile fails
+        LLVMDisposeMessage(type);
+    }
+    if (n) dumpModule("INTELTEX_DUMP", "lowered", false, module);
+}
+static bool installHooksOnce() {  // true once texture atomics can be lowered
     pthread_mutex_lock(&installLock);
     installIntoPlugin(false);  // test process: the plugin was dlopened after we were inserted
     installICBEHook();
-    bool ready = textFixInstalled && resolveIGIL();
+    bool canLowerTextureAtomics = textFixInstalled && resolveIGIL();
     pthread_mutex_unlock(&installLock);
-    if (module && getenv("INTELTEX_DUMP_INPUT")) {  // debugging: every module as it reaches the pass manager
-        static int serial;
-        char path[1024];
-        snprintf(path, sizeof path, "%s/input-%d-%d.ll", getenv("INTELTEX_DUMP_INPUT"), getpid(), serial++);  // services run in parallel
-        if (FILE *f = fopen(path, "w")) { char *text = LLVMPrintModuleToString(module); fputs(text, f); LLVMDisposeMessage(text); fclose(f); }
-    }
+    return canLowerTextureAtomics;
+}
+
+static int hookedRun(void *self, LLVMModuleRef module) {
+    bool canLowerTextureAtomics = installHooksOnce();
     if (module) {
-        if (ivyBridgePlugin && !disabled("INTEL_IVB_INLINE_CONSTANT_FIX")) {
-            unsigned replaced = ivbInlineConstants(module);
-            if (replaced && logging()) fprintf(stderr, "[inteltex] %u load(s) of program-scope constants read their values\n", replaced);
-        }
-        if (ivyBridgePlugin && !disabled("INTEL_IVB_ARGUMENT_BUFFER_FIX")) {
-            unsigned rewritten = ivbArgumentBuffers(module);
-            if (rewritten && logging()) fprintf(stderr, "[inteltex] %u function(s): argument-buffer pointers made hidden buffers\n", rewritten);
-        }
-        if (ivyBridgePlugin && !disabled("INTEL_IVB_ARGUMENT_BUFFER_OFFSETS")) {
-            unsigned offsets = ivbArgumentBufferOffsets(module);
-            if (offsets && logging()) fprintf(stderr, "[inteltex] %u argument-buffer member access(es) in vertex/fragment functions done at byte offsets\n", offsets);
-        }
-        unsigned n = dropInlineAsm(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u inline asm call(s) dropped\n", n);
-        n = dropMaxWorkGroupSize(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u air.max_work_group_size attribute(s) dropped\n", n);
-        n = returnFromEndlessLoops(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u loop(s) that never exit made returns\n", n);
-        n = dropArrayStructInfo(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] struct info dropped from %u array-of-struct argument(s)\n", n);
-        n = ivyBridgePlugin ? 0 : fixEmulatedReferenceSlots(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u argument-buffer reference(s) given the hidden buffer the driver binds\n", n);
-        n = fixEscapedHandleLoads(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u texture/sampler load(s) through escaped pointers re-indexed into the argument\n", n);
-        n = fixVertexSignedSubwords(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u signed i8/i16 conversion(s) in a vertex function done on the 32-bit word\n", n);
-        n = fixGradientCompares(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u depth comparison(s) with gradients done at level 0\n", n);
-        n = foldHalfVectorBitcasts(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u constant(s) with half vectors spelled as bitcasts rewritten\n", n);
-        n = dropSampleCompareBias(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u depth comparison(s) with an LOD bias: bias dropped\n", n);
-        n = lowerIntegerGradients(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u integer gradient sample(s) done at the level the gradients select\n", n);
-        n = widenNarrowDivisions(module);  // before signedDivisionNegations, which then sees the 32-bit divides
-        if (n && logging()) fprintf(stderr, "[inteltex] %u 8/16-bit division(s) done on 32-bit lanes\n", n);
-        n = signedDivisionNegations(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u signed division(s) of a negated value done on the value\n", n);
-        n = selectWideDivisionLanes(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u vector lane(s) picked by a 64-bit quotient done with selects\n", n);
-        n = signedPowerOfTwoDivisions(module);  // after the two division rewrites above
-        if (n && logging()) fprintf(stderr, "[inteltex] %u signed division(s) by a power of two done with shifts\n", n);
-        n = foldConstantCalls(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u integer function call(s) of constants folded\n", n);
-        if (n && (n = selectWideDivisionLanes(module)) && logging())  // the fold can leave a shift of a constant as an index (i59)
-            fprintf(stderr, "[inteltex] %u vector lane(s) picked by a 64-bit shift of a folded constant done with selects\n", n);
-        n = widenNarrowMinMax(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u 8/16-bit min / max / clamp call(s) done on 32-bit lanes\n", n);
-        n = foldConstantSaturation(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u addsat / subsat of constants folded\n", n);
-        n = expandSaturation(module);  // after the fold: what's left may still become constant in the plugin's passes
-        if (n && logging()) fprintf(stderr, "[inteltex] %u 32-bit addsat / signed subsat written out as add, compares and selects\n", n);
-        n = exactMadSat(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u madsat / mulhi / madhi call(s) done with 32-bit operations\n", n);
-        n = exact64BitMultiplies(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u 64-bit multiply / mulhi / madhi call(s) built from 32-bit limbs\n", n);
-        n = linearCubeGathers(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u cube gather(s) given a linear constexpr sampler (seamless at face edges)\n", n);
-        n = greenGathers(module);  // before foldIntegerSampleOffsets, which then fixes the offsets of both gathers
-        if (n && logging()) fprintf(stderr, "[inteltex] %u green gather(s) checked against a red one, sampled where the two agree\n", n);
-        n = foldIntegerSampleOffsets(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u integer texture sample(s): texel offset moved into the coordinates\n", n);
-        n = fixSamplerStateWords(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u constexpr sampler(s) in the [2 x i64] form rewritten as i64\n", n);
-        n = remapComputeLevels(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u explicit level(s) in a compute kernel remapped for the sampler's mip blend\n", n);
-        n = widenThreadgroupBools(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u threadgroup bool(s) widened to i8\n", n);
-        n = wordPrivateSubwords(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u aligned byte/halfword access(es) to private memory done on the 32-bit word\n", n);
-        n = fixFloat3Inputs(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u float3 vertex/fragment input(s) read through fmax\n", n);
-        n = foldNumSamples(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u get_num_samples() call(s) replaced by the pipeline's sample count\n", n);
-        n = splitPrivatePointerSelects(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u load(s)/store(s) through a select of private pointers split per pointer\n", n);
-        n = widenNarrowPrivateArrays(module);  // before selectPrivateArrayIndices, which then rewrites the i32 arrays
-        if (n && logging()) fprintf(stderr, "[inteltex] %u private array(s) of bytes / halfwords done on 32-bit words\n", n);
-        n = selectPrivateArrayIndices(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u variable-index private array access(es) done at constant indices\n", n);
-        n = volatilizePunnedAccesses(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u access(es) to a buffer viewed as different types made volatile\n", n);
-        n = expandConstantCopies(module);  // after volatilizePunnedAccesses (see there)
-        if (n && logging()) fprintf(stderr, "[inteltex] %u constant-length copie(s) done as 32-bit loads and stores\n", n);
-        unsigned flattened = flattenBranchChains(module);
-        if (flattened && logging()) fprintf(stderr, "[inteltex] %u short branch(es) folded into selects\n", flattened);
-        n = selectBufferIndices(module);  // after flattenBranchChains, whose selects can pick pointers
-        if (n && logging()) fprintf(stderr, "[inteltex] %u select(s) of pointers into one buffer turned into a selected index\n", n);
-        n = bitTestCompares(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u compare(s) of a 0/1 value with 1 in a vertex/fragment module done as a compare with 0\n", n);
-        n = expandRenderInt64(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u 64-bit division(s) / variable shift(s) in a vertex/fragment function done on 32-bit halves\n", n);
-        n = widenNarrowVectorCompares(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u compare(s), select(s) and operation(s) on byte / halfword vectors in a vertex/fragment module done on 32-bit lanes\n", n);
-        n = splitHalfwordBytes(module);  // after the rewrites above, which see the module as before
-        if (n && logging()) fprintf(stderr, "[inteltex] %u bitcast(s) of halfwords to bytes in a vertex/fragment module done lane by lane\n", n);
-        n = packByteHalfwords(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u bitcast(s) of bytes to halfwords put together lane by lane (Ivy Bridge)\n", n);
-        if (getenv("INTELTEX_DUMP_REWRITTEN")) {  // debugging: every module after these rewrites
-            static int serial;
-            char path[1024];
-            snprintf(path, sizeof path, "%s/rewritten-%d-%d.ll", getenv("INTELTEX_DUMP_REWRITTEN"), getpid(), serial++);
-            if (FILE *f = fopen(path, "w")) { char *text = LLVMPrintModuleToString(module); fputs(text, f); LLVMDisposeMessage(text); fclose(f); }
-        }
-    }
-    if (module && ready) {
-        unsigned n = lowerTextureAtomics(module);
-        if (n && logging()) fprintf(stderr, "[inteltex] %u texture atomic call(s) lowered\n", n);
-        for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
-            const char *name = LLVMGetValueName(f);
-            if (!strstr(name, "air.atomic_") || !strstr(name, "_texture_") || !LLVMGetFirstUse(f)) continue;
-            char *type = LLVMPrintTypeToString(LLVMTypeOf(f));
-            fprintf(stderr, "[inteltex] not lowered: %s %s\n", name, type);  // the compile fails
-            LLVMDisposeMessage(type);
-        }
-        if (n && getenv("INTELTEX_DUMP")) {  // debugging: the lowered module
-            static int serial;
-            char path[1024];
-            snprintf(path, sizeof path, "%s/lowered-%d.ll", getenv("INTELTEX_DUMP"), serial++);
-            if (FILE *f = fopen(path, "w")) { char *text = LLVMPrintModuleToString(module); fputs(text, f); LLVMDisposeMessage(text); fclose(f); }
-        }
+        dumpModule("INTELTEX_DUMP_INPUT", "input", true, module);  // compiler services run in parallel: per process
+        applyModuleFixes(module);
+        dumpModule("INTELTEX_DUMP_REWRITTEN", "rewritten", true, module);
+        if (canLowerTextureAtomics) lowerTextureAtomicCalls(module);
     }
     int result = passManagerRun(self, module);
     if (unsigned n = uniformMisses.exchange(0); n && logging())

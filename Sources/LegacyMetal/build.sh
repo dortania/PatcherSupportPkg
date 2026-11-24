@@ -72,13 +72,13 @@ clang -arch x86_64 -mmacosx-version-min=13.0 -dynamiclib -O2 -Wall -Wl,-no_warn_
 # 3. Intel adapter (only the Command Line Tools need their libc++ headers named)
 CXXINC=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1
 [[ "$(xcode-select -p)" == *CommandLineTools* ]] && export CPLUS_INCLUDE_PATH=$CXXINC
-clang++ -arch x86_64 -mmacosx-version-min=13.0 -std=c++17 -dynamiclib -O2 -Wall -Wl,-no_warn_inits \
+clang++ -arch x86_64 -mmacosx-version-min=13.0 -std=c++17 -dynamiclib -O2 -Wall -Wl,-no_warn_inits -I"$HERE/Common" \
     -install_name /System/Library/Extensions/AppleIntelHD5000GraphicsMTLDriver.bundle/Contents/MacOS/IntelTextureAtomics.dylib \
     "$HERE/IntelAdapter/intelatomics.cpp" "$HERE/IntelAdapter/libLLVM3802.tbd" -o "$B/IntelTextureAtomics.dylib"
 # 3b. Kepler adapter, and its test build for DYLD_INSERT_LIBRARIES with Tests/tools/localcc.dylib (interposes PassManager::run)
 "$HERE/NVIDIAAdapter/make_tbd.sh"  # its libLLVM link stub, from the functions nvair.cpp uses
 for variant in "" -test; do
-    clang++ -arch x86_64 -mmacosx-version-min=13.0 -std=c++17 -dynamiclib -O2 -Wall -Wl,-no_warn_inits \
+    clang++ -arch x86_64 -mmacosx-version-min=13.0 -std=c++17 -dynamiclib -O2 -Wall -Wl,-no_warn_inits -I"$HERE/Common" \
         ${variant:+-DNVAIR_INTERPOSE -Wl,-not_for_dyld_shared_cache} \
         -install_name /System/Library/Extensions/GeForceAIRPlugin.bundle/Contents/MacOS/GeForceAIRCompat.dylib \
         "$HERE/NVIDIAAdapter/nvair.cpp" "$HERE/NVIDIAAdapter/libLLVM3802.tbd" -o "$B/GeForceAIRCompat$variant.dylib"
