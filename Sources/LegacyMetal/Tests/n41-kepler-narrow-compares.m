@@ -1,11 +1,6 @@
-// n41-kepler-narrow-compares (Kepler adapter, NVAIR_NARROW_COMPARE_FIX): equality and unsigned compares of 8-bit values. A
-// loop that exits when two lanes of a uchar4 select are equal (vf(select(...)) & 3 == 0), reduced from mslfuzz2.py VEC=1
-// ASTYPE=1 seed 13302: with the narrow vectors done lane by lane, the back end got icmp eq i8 (trunc i32 y), 0 and the
-// icmp ne/ugt i8 compares of the lanes, and 198 of 256 threads came out wrong. The same condition with its compares in 32
-// bits is right, while the same added code with the compares left 8-bit is not; the adapter now makes each such compare
-// 32-bit. The kernel on the fuzzer's inputs (seed 1, 256 threads in groups of 64, compiled without fast math, as the
-// fuzzer does): each thread's 8 output words against the CPU reference (cpuref.py), as one FNV-1a hash per thread.
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n41-kepler-narrow-compares: equality and unsigned compares of 8-bit values must be right; the back end got them
+// wrong. Fix: GeForceAIRCompat NVAIR_NARROW_COMPARE_FIX. Checks: the reduced fuzz kernel (seed 13302) against the CPU
+// reference (cpuref.py), 256 threads. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

@@ -1,16 +1,6 @@
-// n45-kepler-metal-array-narrow (Kepler adapter, NVAIR_ARRAY_STRUCT_FIX): n02-kepler-narrow-private-array's kernel with its private arrays written as
-// metal::array<T, N>, as ANGLE writes every GLSL array (Chrome, Safari, Firefox WebGL): a struct holding the array, which
-// reaches the back end as alloca {[N x T]} with GEPs (s, 0, 0, i) and slipped past the private-array fixes made for C
-// arrays; they now see it as the plain array. Without the fix the original's bug is back.
-// The original test's description follows.
-// n02-kepler-narrow-private-array (Kepler adapter, NVAIR_NARROW_PRIVATE_ARRAY_FIX): a private uchar array read on OCLP's
-// Kepler compiler (GeForceAIRPlugin). The array (uchar pc[8]) is stored with truncating stores and read with extending
-// loads, and the back end forwarded a stored 32-bit value to such a load without its mask: pc[v3 & 7] kept the bits above
-// its byte where a 64-bit product and a 64-bit min used it, so v3 came out wrong (mslfuzz2 LONG=1 seed 575, reduced; with
-// a uint array, or the byte from a register, right). The same bug as Intel's i47; seed 770 too. Private arrays of 8- and
-// 16-bit integers reached only through element loads and stores have each load's value masked to its width (through an
-// opaque min, so that it stays; they used to be done on 32-bit words instead). Expected values from the CPU
-// reference (cpuref.py, LONG=1) on the fuzzer's input. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n45-kepler-metal-array-narrow: n02 with its arrays written as metal::array, as ANGLE writes every GLSL array, must
+// pass too; the wrapping struct hid them from the private-array fixes. Fix: GeForceAIRCompat NVAIR_ARRAY_STRUCT_FIX.
+// Checks: n02's kernel with metal::array. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

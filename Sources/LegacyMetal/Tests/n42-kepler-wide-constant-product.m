@@ -1,11 +1,6 @@
-// n42-kepler-wide-constant-product (Kepler adapter, NVAIR_WIDE_CONSTANT_PRODUCT_FIX): a 32-bit product of a value known
-// to fit in 16 bits and a constant wider than that. v1 = vf(short4(...) & mask), each lane masked to 15 bits or less and
-// multiplied by 65599 or 16777619 (mslfuzz2.py VEC=1 ASTYPE=1 seed 8322, reduced), then (int)v1 >> 23 | 1 as a divisor in
-// a loop: 14 of 256 threads came out wrong. With each such product given to its users through an opaque min it is right,
-// and so it is with the narrow factor hidden instead, so it is the back end's idea of the product's value, as in n03 for
-// two 16-bit factors. The kernel on the fuzzer's inputs (seed 1, 256 threads in groups of 64, compiled without fast math,
-// as the fuzzer does): each thread's 8 output words against the CPU reference (cpuref.py), as one FNV-1a hash per thread.
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n42-kepler-wide-constant-product: a product of a 16-bit value and a wider constant must be exact; the back end
+// misjudged its range. Fix: GeForceAIRCompat NVAIR_WIDE_CONSTANT_PRODUCT_FIX. Checks: the reduced fuzz kernel (seed
+// 8322) against the CPU reference (cpuref.py), 256 threads. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

@@ -1,10 +1,6 @@
-// n22-kepler-sample-positions (MetalOldCompat item 71): getDefaultSamplePositions:count: must give each sample's real
-// position. Kepler's 2x and 8x patterns use the standard positions in another order than the one Metal reported (2x:
-// samples 0 and 1 swapped; 8x: sample 0 at (0.0625, 0.4375), which Metal gave as sample 5's), so anything matching sample
-// indices to positions (custom resolves, per-sample techniques) got the wrong sample; 4x was right. Each sample's position
-// is measured on a 1x1 multisampled target: a rectangle covering x < X (then y < Y) for X in steps of 1/64, offset by half
-// a step so no edge passes through a sample; a sample's position is where it first gets covered. At 2x, 4x and 8x.
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n22-kepler-sample-positions: getDefaultSamplePositions:count: must report the hardware's positions; Kepler's 2x and
+// 8x orders differ from MetalOld's table. Fix: MetalOldCompat item 71. Checks: each sample's position measured on a 1x1
+// target at 2x, 4x and 8x. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

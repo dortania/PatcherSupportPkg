@@ -1,11 +1,6 @@
-// n10-kepler-discard-demote (Kepler adapter, NVAIR_DEMOTE_DISCARD): discard_fragment is a demote to a helper lane since
-// Metal 2.3 (and in WGSL): the discarded fragment runs on for its 2x2 quad's derivatives, without side effects. Kepler's
-// plugin library ends the lane there (llvm.nvvm.exit), and every derivative its quad takes after that is 0 on all of the
-// quad's lanes: the WebGPU CTS statement,discard:derivatives read 0 where it wants +/-3. Each quad's (0,0) pixel is
-// discarded; the others take dfdx / dfdy of a per-pixel value (4, 1 / 7, 4: -3 and 3), store them to a buffer and count
-// themselves with an atomic, after the discard. Checked: the derivatives, that discarded pixels neither store nor count,
-// and that they write no color.
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n10-kepler-discard-demote: a discarded fragment must stay a helper for its quad's derivatives (Metal 2.3, WGSL);
+// Kepler ended the lane and later derivatives were 0. Fix: GeForceAIRCompat NVAIR_DEMOTE_DISCARD. Checks: dfdx and dfdy
+// after a discard; discarded pixels neither store, count nor write color. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

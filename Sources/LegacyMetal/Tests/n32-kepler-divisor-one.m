@@ -1,12 +1,6 @@
-// n32-kepler-divisor-one (Kepler adapter, NVAIR_DIVISOR_ONE_FIX): the remainder by a divisor that turns out to be 1, in
-// a big kernel. 0xffffffff % b with b = (31 * x) | 1 equal to 1 came out as 766 instead of 0 for one thread
-// (mslfuzz2.py VEC=1 seed 3841, unreduced: reducing it swapped in another miscompile that the fix doesn't touch); the same
-// kernel with the operands written out was right. A select on b == 1
-// fixes it and the same select on b == 2 doesn't: the divisor-1 path of Kepler's division, which always takes its final
-// correction step. The kernel on the fuzzer's inputs (seed 1, 256 threads in groups of 64, compiled without fast
-// math, as the fuzzer does): each thread's 8 output words against the CPU reference (cpuref.py), as one FNV-1a hash per
-// thread.
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n32-kepler-divisor-one: x % b must be 0 for b = 1; Kepler's division got the divisor-1 path wrong in a big kernel.
+// Fix: GeForceAIRCompat NVAIR_DIVISOR_ONE_FIX. Checks: fuzz seed 3841's kernel (unreduced) against the CPU reference
+// (cpuref.py), 256 threads. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

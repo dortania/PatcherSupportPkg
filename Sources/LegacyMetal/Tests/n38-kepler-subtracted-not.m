@@ -1,11 +1,6 @@
-// n38-kepler-subtracted-not (Kepler adapter, NVAIR_SUB_NOT_FIX): x - ~v0, with ~v0 also feeding a 64-bit shift amount.
-// tc[((uint)(int)(char)mulhi(c, x) - ~v0) & 63] read the slot 2 below the right one on 255 of 256 threads, in a kernel
-// that also shifted a 64-bit value by an amount computed from the same ~v0 (mslfuzz2.py VEC=1 ASTYPE=1 LONG=1 seed 1170,
-// reduced to this kernel). The back end folds the not into the subtraction and computes x + v0 - 1 instead of x + v0 + 1;
-// the fix gives it x + (v0 + 1). The kernel on the fuzzer's inputs (seed 1, 256 threads in groups of 64, compiled without
-// fast math, as the fuzzer does): each thread's 8 output words against the CPU reference (cpuref.py), as one FNV-1a hash
-// per thread.
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n38-kepler-subtracted-not: x - ~y must be x + y + 1; the back end computed x + y - 1. Fix: GeForceAIRCompat
+// NVAIR_SUB_NOT_FIX. Checks: the reduced fuzz kernel (~y also in a 64-bit shift amount) against the CPU reference
+// (cpuref.py), 256 threads. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

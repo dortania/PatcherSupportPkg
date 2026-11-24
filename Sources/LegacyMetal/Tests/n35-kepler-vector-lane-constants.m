@@ -1,11 +1,6 @@
-// n35-kepler-vector-lane-constants (Kepler adapter, NVAIR_VECTOR_CONSTANT_FIX): a 4-lane vector of 8- or 16-bit integers
-// with a constant lane, shifted by different constant amounts per lane and masked with a constant, then two lanes
-// combined. q = (uchar4(201, v1, v2, v3) << uchar4(0, 7, 2, 5)) & uchar4(78, 137, 22, 80), then q.x ^ q.y, came out 0x40
-// instead of 0x48 on every thread: lane x lost bit 3 (mslfuzz2.py VEC=1 seed 7232). The IR the back end gets is right; the
-// back end's handling of the vector and and the vector shift isn't. That expression, the same with shifts of <0, 7, 0, 0>,
-// a ushort4 version, and the seed's own form (the lanes folded into a word and masked to 6 bits), for 256 threads of
-// random inputs, against the CPU.
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n35-kepler-vector-lane-constants: constant masks and per-lane constant shifts of 4-lane 8- and 16-bit vectors must
+// keep every bit; lane x lost one. Fix: GeForceAIRCompat NVAIR_VECTOR_CONSTANT_FIX. Checks: uchar4 and ushort4 forms,
+// 256 threads against the CPU. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

@@ -1,11 +1,6 @@
-// n30-kepler-saturating-multiply-add (Kepler adapter, NVAIR_MAD_SAT_FIX): madsat(a, b, c) in a big kernel. With a = 0,
-// b = 0xfffffffe it came out saturated (0xffffffff) instead of c, for one thread of 256 (mslfuzz2.py LONG=1 seed 2245,
-// reduced: v0 ^= rotate(madsat(a, (uint)(-2), rotate(187855064u, 0xffffffffu)), ...)). The plugin's own body did it, and
-// so did a plain i64 a * b + c: the high word came out nonzero for a product of 0, as a carry into it would make it,
-// while every small kernel with the same operands was right. The reduced kernel on the fuzzer's inputs (seed 1, 256
-// threads in groups of 64, compiled without fast math, as the fuzzer does): each thread's 8 output words against the CPU
-// reference (cpuref.py), as one FNV-1a hash per thread.
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n30-kepler-saturating-multiply-add: madsat(0, b, c) must be c; in a big kernel it saturated (a wrong carry into the
+// high word). Fix: GeForceAIRCompat NVAIR_MAD_SAT_FIX. Checks: the reduced fuzz kernel against the CPU reference
+// (cpuref.py), 256 threads. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

@@ -1,9 +1,6 @@
-// n16-kepler-masked-draw-occlusion (MetalOldCompat item 66): an occlusion query over a draw whose color attachments all
-// have writeMask none, with no depth or stencil attachment. Kepler's driver (GeForceMTLDriver) counted no samples for
-// such a draw at all, so a visible draw read as hidden (WebGPU CTS occlusionQuery basic, reuse and scissor with
-// writeMask 0); an R32Uint attachment, or any depth attachment, still counted. A full-target triangle into RGBA8Unorm
-// (1 and 4 samples) and RGBA16Float, counting mode: 256 samples (x4 for MSAA); the attachment must keep its clear color.
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n16-kepler-masked-draw-occlusion: an occlusion query over a draw with every writeMask none and no depth or stencil
+// must count its samples; Kepler counted none. Fix: MetalOldCompat item 66. Checks: RGBA8Unorm (1 and 4 samples) and
+// RGBA16Float; the attachment keeps its clear color. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

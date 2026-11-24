@@ -1,13 +1,7 @@
-// n34-kepler-sign-extended-dividend (Kepler adapter, NVAIR_SEXT_DIVIDEND_FIX): an unsigned division of a sign-extended
-// 8- or 16-bit value. (uint)((int)(short)x % 28781) / d, with d not a constant, was wrong whenever the remainder was
-// negative: for d = 1, 0xffffbb78 gave 0xffffb901 (mslfuzz2.py VEC=1 seed 5221). The plugin's optimizer narrows the
-// remainder to 16 bits, and the back end divides udiv i32 (sext i16 r), d in floating point as if the dividend had 16
-// significant bits, which as an unsigned number a sign-extended negative value doesn't. That and the other shapes that
-// reach the back end the same way (a remainder by 7, urem, 8 bits, a narrowed division, and three lanes at once) for 256
-// threads of random inputs, against the CPU.
-// Since the fix for 8/16-bit divisions (n43, NVAIR_NARROW_DIVISION_FIX), which makes the narrowed remainder 32-bit, the
-// kernel is right with either fix alone: the run without the fix turns both off.
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n34-kepler-sign-extended-dividend: an unsigned division of a sign-extended 8- or 16-bit value must be exact; the back
+// end divided it in floating point as a 16-bit value. Fix: GeForceAIRCompat NVAIR_SEXT_DIVIDEND_FIX (without:
+// NVAIR_NARROW_DIVISION_FIX off too). Checks: six shapes, 256 threads against the CPU. Argument: GPU name (default:
+// NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

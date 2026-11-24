@@ -1,13 +1,6 @@
-// n24-kepler-viewport-scissor (MetalOldCompat item 69, its scissor half): nothing may be drawn outside the viewport. Kepler's
-// driver limits drawing to the viewport only by clipping with a guard band the size of the viewport; its pixel clip is the
-// render target. With item 69's wider guard band, a triangle reaching past a viewport smaller than the target drew
-// outside it, until the scissor became the app's scissor intersected with the viewport (n23 has the wide-point case). On
-// a 16x16 target: a full-screen triangle through viewport (4, 4, 8, 8) (64 pixels, none outside); the triangle with an
-// app scissor (6, 2, 8, 8) too (its 6x6 overlap with the viewport); viewports (0, 0, 8, 16) and (8, 0, 8, 16) with [[viewport_array_index]] from the instance, each instance's
-// full-screen triangle colored by its index (each half its own color); and a viewport at (2.25, 2.25) size 9 (pixels 2-10,
-// whose centers are inside).
-// "Without" here is item 69's guard bands without the scissor half (MTLSHIM_NV_VIEWPORT_SCISSOR=0). Argument: GPU name
-// substring (default: NVIDIA).
+// n24-kepler-viewport-scissor: with item 69's wide guard bands nothing may be drawn outside the viewport. Fix:
+// MetalOldCompat item 69's scissor half (without: MTLSHIM_NV_VIEWPORT_SCISSOR=0). Checks: a small viewport, an app
+// scissor, a viewport array and a fractional viewport. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

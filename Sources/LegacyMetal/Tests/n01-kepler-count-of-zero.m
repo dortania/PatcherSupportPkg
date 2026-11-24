@@ -1,10 +1,7 @@
-// n01-kepler-count-of-zero (Kepler adapter, NVAIR_COUNT_ZERO_FIX): clz and ctz of a constant 0 on OCLP's Kepler compiler
-// (GeForceAIRPlugin). MSL gives the width (clz(0u) == 32), and the GPU does too at run time, but the plugin's built-in
-// library writes air.clz.i32 as llvm.ctlz.i32(x, true), "undefined for 0", so where the optimizer sees a constant 0 it
-// folds the count to undef: madhi(v, clz(0u), 0u) came out as garbage (mslfuzz2 seed 758, plain kernels, reduced; all 14
-// kernels of seeds 1-1000 that the GTX 770 got wrong were this). Checks clz and ctz of constant 0 in uint, ushort, uchar,
-// ulong and a vector, used as operands, in 256 threads on five inputs against the same code on the CPU.
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n01-kepler-count-of-zero: clz and ctz of a constant 0 must give the width; the plugin's library made them undefined
+// at 0, which the optimizer folded to garbage. Fix: GeForceAIRCompat NVAIR_COUNT_ZERO_FIX. Checks: clz and ctz of
+// constant 0 in uint, ushort, uchar, ulong and a vector, 256 threads against the CPU. Argument: GPU name (default:
+// NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

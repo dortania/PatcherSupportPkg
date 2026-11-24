@@ -1,10 +1,6 @@
-// n49-kepler-stencil-clear-mask (MetalOldCompat item 81): a render pass clearing a stencil attachment to a value above 255.
-// The stencil formats keep 8 bits and WebGPU and Metal take the low ones, but on Kepler clearStencil 258 left the
-// stencil (and the copy after it) unwritten and 65539 failed the command buffer; Safari's WebGPU passes WebGPU's
-// stencilClearValue through (CTS clear_value:stencil_clear_value in WebKit, every stencil format). Checked, for Stencil8
-// and Depth32Float_Stencil8: cleared to 258 and to 65539, each in a command buffer of its own (Kepler reports a fault on
-// the next one), the stencil copied to a buffer: 2 and 3, and every command buffer completes. Stock OCLP on Kepler: FAIL.
-// Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n49-kepler-stencil-clear-mask: a stencil clear value above 255 must clear to its low 8 bits; Kepler left the stencil
+// unwritten or failed the command buffer. Fix: MetalOldCompat item 81. Checks: Stencil8 and Depth32Float_Stencil8
+// cleared to 258 and to 65539. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 int main(int argc, char **argv) {

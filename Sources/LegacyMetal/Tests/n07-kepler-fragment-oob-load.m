@@ -1,14 +1,7 @@
-// n07-kepler-fragment-oob-load (Kepler adapter, NVAIR_FRAGMENT_LOAD_GUARD): a fragment function that reads a device buffer
-// at an index computed from uint2(position) - an offset, drawn into a sub-rectangle starting at odd coordinates, as
-// ANGLE's buffer-to-texture shaders (readFromBuffer*TextureFS) do for WebGL uploads from a pixel unpack buffer that need
-// converting. The helper lanes of the 2x2 quads on the rectangle's edges run it for pixels outside, where the subtraction
-// wraps and the load lands ~4 GB past the buffer. Kepler's driver faults and fails a LATER command buffer with
-// kIOAccelCommandBufferCallbackErrorInvalidResource: Chrome lost its WebGL context in texSubImage2D from PBOs of RGBA4,
-// RGB565, RGB5_A1 and RGB data (Khronos WebGL 2.0.1 deqp texsubimage2d_pbo), and after two GPU process crashes turned
-// WebGL off. Four passes, each its own command buffer, a simple one after each such draw; every one must complete, and
-// the uploaded texels must be right. Stock OCLP on Kepler: FAIL (the faulting draw writes nothing, though its command
-// buffer completes; a later one fails). Fixed: PASS.
-// Argument: GPU name substring (default: NVIDIA).
+// n07-kepler-fragment-oob-load: fragment helper lanes loading at a wrapped index must not fault; Kepler's driver then
+// failed a later command buffer (ANGLE's PBO uploads lost Chrome's WebGL). Fix: GeForceAIRCompat
+// NVAIR_FRAGMENT_LOAD_GUARD. Checks: four such draws, each followed by a command buffer; all complete and the texels
+// are right. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

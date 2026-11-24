@@ -1,10 +1,7 @@
-// n31-kepler-fragment-private-constant-loads (Kepler adapter, NVAIR_PRIVATE_CONSTANT_GRAPHICS_FIX): n26's bug (loads of a
-// private array at a constant index, merged across its variable-index stores) in a fragment function, where the fix had no thread position to make its opaque index from (mslfuzz2.py FRAG=1 seed 2136,
-// the same body as the kernel of n26's seed, reduced). Fragment and vertex functions now make it from their position
-// (the bits of position.x, a float of at least 0) or vertex_id. The reduced fragment function run as the fuzzer runs it
-// (a full-screen triangle on a 256x1 target, one pixel per thread, t = position.x; the fuzzer's inputs, seed 1; compiled
-// without fast math): each thread's 8 output words against the CPU reference (cpuref.py), as one FNV-1a hash per thread.
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n31-kepler-fragment-private-constant-loads: n26's bug in a fragment function, which has no thread position to make
+// the opaque index from. Fix: GeForceAIRCompat NVAIR_PRIVATE_CONSTANT_GRAPHICS_FIX (the index from position or
+// vertex_id). Checks: the reduced fuzz fragment function, one pixel per thread, against cpuref.py. Argument: GPU name
+// (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

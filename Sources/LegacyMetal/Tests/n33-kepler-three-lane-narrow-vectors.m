@@ -1,11 +1,6 @@
-// n33-kepler-three-lane-narrow-vectors (Kepler adapter, NVAIR_ODD_VECTOR_FIX): arithmetic on 3-lane vectors of 8- and
-// 16-bit integers. ushort3(1, 6, 5) | (ushort3(7166, 18911, 44867) & m), with m.z = ushort(x & 1124510566u), lost bit 0 of
-// the constant in lane z (6 for 7) on every thread, while lanes x and y, a ushort2 or ushort4 of the same, and the same
-// expression with either mask left out were right (mslfuzz2.py VEC=1 seed 4480, where it was every thread's result in two
-// words). The IR the back end receives is right; the back end widens a 3-lane vector to 4 lanes in two 32-bit registers,
-// and lane z, beside the undefined fourth lane, is where it goes wrong. That expression and a few more in the same shape
-// (uchar3, short3, xor, add) for 256 threads of random inputs, every lane against the CPU.
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n33-kepler-three-lane-narrow-vectors: arithmetic on 3-lane 8- and 16-bit vectors must be right in lane z; beside the
+// back end's padding lane it lost bits. Fix: GeForceAIRCompat NVAIR_ODD_VECTOR_FIX. Checks: ushort3, uchar3 and short3
+// forms, 256 threads against the CPU. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

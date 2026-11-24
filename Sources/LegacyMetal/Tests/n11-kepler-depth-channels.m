@@ -1,14 +1,7 @@
-// n11-kepler-depth-channels (MetalOldCompat item 62 + Kepler adapter NVAIR_DEPTH_CHANNELS): Kepler's sampler returns a
-// depth texture's depth in all four channels, (d, d, d, d), and a stencil view's value as (s, s, s, s), through
-// texture2d<float> / <uint>, where OpenGL ES wants (d, 0, 0, 1) / (s, 0, 0, 1) and ANGLE (no swizzled views on this GPU)
-// passes the driver's through: WebGL's depth texture tests failed (Khronos WebGL 2.0.1 depth texture formats,
-// fboinvalidate unbind_read_*). A fragment function shaped like ANGLE's (an ANGLE_angleUniforms argument at buffer 17)
-// samples a Depth32Float texture (cleared to 0.25), an RGBA8 texture and the X32_Stencil8 view of a Depth32Float_Stencil8
-// texture (stencil 7) through texture2d, into three render targets.
-// GPUs of family 2 have swizzled views, and ANGLE reads depth and stencil through one that gives (x, 0, 0, 1); what
-// such a read gives without one is undefined in Metal (an R9 M370X gives (d, d, d, d), an M3 Pro (d, d, d, 1)), so the
-// test SKIPs there.
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n11-kepler-depth-channels: depth and stencil read through texture2d must give ANGLE (x, 0, 0, 1); Kepler gives (x, x,
+// x, x). Fix: MetalOldCompat item 62 + GeForceAIRCompat NVAIR_DEPTH_CHANNELS. Checks: an ANGLE-shaped fragment function
+// sampling Depth32Float, RGBA8 and an X32_Stencil8 view. SKIPs on family-2 GPUs (swizzled views). Argument: GPU name
+// (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

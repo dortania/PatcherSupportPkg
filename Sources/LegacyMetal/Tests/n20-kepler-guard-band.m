@@ -1,13 +1,6 @@
-// n20-kepler-guard-band (MetalOldCompat item 69): triangles that cross the edge of the viewport, at 4x MSAA. Kepler's
-// driver clipped them to the viewport (a guard band no bigger than it) and drew the polygon left as a fan, so a pixel on
-// a seam of the fan ran the fragment function once for each part, each time with only that part's samples in
-// [[sample_mask]] (WebGPU CTS fragment_builtins inputs,sample_mask: 7 and 8 for a pixel with all 4 samples covered), and
-// a fragment function's side effects happened twice there. Three triangles on a 4x4 target: two of the CTS's (one edge
-// inside the target, the rest beyond it) and the usual full-screen triangle (-1,-1), (3,-1), (-1,3). Each sample keeps
-// the mask its fragment saw, which must be the pixel's whole coverage; and a fragment function that counts its
-// invocations in a device atomic (and doesn't read sample_mask, which makes Kepler shade each sample) must run once per
-// covered pixel: the full-screen triangle ran 20 times for 16 pixels.
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n20-kepler-guard-band: triangles crossing the viewport edge must shade each pixel once with its whole sample mask;
+// Kepler drew them as fans that split pixels. Fix: MetalOldCompat item 69. Checks: three triangles at 4x MSAA on a 4x4
+// target: sample masks and invocation counts. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

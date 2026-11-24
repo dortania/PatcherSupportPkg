@@ -1,10 +1,6 @@
-// n28-kepler-overflow-check (Kepler adapter, NVAIR_OVERFLOW_FIX): the usual checks for a 32-bit multiply overflowing,
-// (0xffffffffu / a) < b, ulong(a) * ulong(b) > 0xffffffffull and (ulong(a) * ulong(b)) >> 32 != 0, become LLVM's
-// llvm.umul.with.overflow.i32 in Metal's front end (or in the plugin's own optimizer), which the plugin's back end can't
-// select: the pipeline failed with "Unhandled atom in intrinsic: llvm.umul.with.overflow.i32" (mslfuzz2.py VEC=1 seed
-// 2478). The three checks and the product's low word for 256 pairs: every pair of 11 edge values (0, 1, 2, 3, 0xffff,
-// 0x10000, 0x10001, 0x7fffffff, 0x80000000, 0xfffffffe, 0xffffffff) and 135 random ones.
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n28-kepler-overflow-check: multiply-overflow checks must compile; they become llvm.umul.with.overflow, which the back
+// end can't select. Fix: GeForceAIRCompat NVAIR_OVERFLOW_FIX. Checks: three check forms and the low word for 256 pairs
+// of edge and random values. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

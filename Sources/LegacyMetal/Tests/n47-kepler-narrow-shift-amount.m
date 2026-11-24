@@ -1,15 +1,6 @@
-// n47-kepler-narrow-shift-amount (Kepler adapter, NVAIR_NARROW_SHIFT_FIX): right shifts of 8-bit vector lanes by a masked
-// variable amount, v >> (uchar(x) & 7) with x large. The adapter does arithmetic on 2- to 4-lane vectors of 8- and 16-bit
-// integers lane by lane (NVAIR_NARROW_VECTOR_FIX, NVAIR_ODD_VECTOR_FIX), which left lshr/ashr i8 v, (and (trunc i32 x), 7):
-// the back end drops the mask as redundant for an 8-bit shift and shifts by the whole 32-bit register instead, so every
-// lane whose amount came from a value with upper bits set came out wrong (mslfuzz2.py ANGLE=1 FRAG=1 VEC=1 ASTYPE=1 seed
-// 29, reduced: a char3 >> (char3(v0) & 7) inside all(...)). The same lanes in vector form (those passes off) or written as
-// scalar shifts in the source (C promotes them to 32 bits) are right. Right shifts of i8 and i16 scalars are now done in
-// 32 bits on the extended value with the amount through llvm.nvvm.min.u.i32. Here: a char3 and a char4 arithmetic shift
-// under all(... < 1) and a uchar4 logical shift, by (char)v0 & 7 where v0 is 1055511043 in half the threads and 0 in the
-// rest; each thread's 8 words against the CPU reference (cpuref.py) as FNV-1a hashes. Without the fix 117 of the 120
-// threads with a nonzero amount are wrong in the uchar4 word, 56 and 59 in the char ones. Argument: GPU name substring
-// (default: NVIDIA).
+// n47-kepler-narrow-shift-amount: right shifts of 8-bit lanes by a masked amount must use the mask; the back end
+// dropped it and shifted by the whole register. Fix: GeForceAIRCompat NVAIR_NARROW_SHIFT_FIX. Checks: char3, char4 and
+// uchar4 shifts against the CPU reference (cpuref.py), 256 threads. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

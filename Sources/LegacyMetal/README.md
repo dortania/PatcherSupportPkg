@@ -25,7 +25,8 @@ On a Mac with OCLP's legacy Metal stack:
 
     cd Tests && ./build.sh && ./verify.sh
 
-`verify.sh` runs each test without and with its fix, without installing anything. `PAYLOAD=12.5-GCN-25 ./verify.sh`
+`verify.sh` runs each test without and with its fix, without installing anything. Every test FAILs on stock OCLP
+and PASSes with the fixes unless its header says otherwise. `PAYLOAD=12.5-GCN-25 ./verify.sh`
 runs the AMD compiler tests with Tahoe's AMDShared files (they load on Sequoia too). `run.sh` runs them against what is
 installed. `verify.sh` works on Tahoe too: `tools/localcc.dylib` opens the compiler from "/" (OCLP's 31001 `libLLVM` wrapper names
 `libLLVM_helper` by a relative path), and the shim's compiler-service fixes (items 25 and 75, the read sampler rewrite) also

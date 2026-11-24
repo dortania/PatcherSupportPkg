@@ -1,9 +1,6 @@
-// n36-kepler-saturated-product (Kepler adapter, NVAIR_SATURATED_PRODUCT_FIX): a saturating add or subtract of a product.
-// subsat(0xffffffffu, (uint)(uchar)x * 213u) came out 0 instead of 0xffffffff whenever the product was 0, and the signed
-// addsat and subsat with such a product on either side came out wrong on every thread (mslfuzz2.py VEC=1 ASTYPE=1 LONG=1
-// seed 74). The back end folds the multiply into the saturating operation and gets the saturation wrong. Those forms and a
-// uint2 one for 256 threads of random inputs, every eighth thread's byte 0 so that some products are 0, against the CPU.
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n36-kepler-saturated-product: a saturating add or subtract of a product must saturate right; the back end folded the
+// multiply in and got it wrong. Fix: GeForceAIRCompat NVAIR_SATURATED_PRODUCT_FIX. Checks: signed and unsigned forms
+// and a uint2, 256 threads against the CPU. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

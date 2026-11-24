@@ -1,12 +1,6 @@
-// n48-kepler-depth-copy-option (MetalOldCompat item 80): blit copies between a buffer and a depth-only texture with
-// MTLBlitOptionDepthFromDepthStencil, as Safari's WebGPU makes for every depth copy (WebKit's copyTextureToBuffer and
-// writeTexture). Kepler got them wrong: from a Depth16Unorm texture it wrote 32-bit floats (00 00 80 3f for 1.0) and
-// into one it read them (16-bit depth values arrived as 0); without the option both copies are right, and the option
-// only means something for combined depth/stencil textures (WebGPU CTS storeOp depth_stencil_attachment_only,
-// depth16unorm, in WebKit). Checked, for Depth16Unorm and Depth32Float: a buffer of depth values copied into the texture
-// with the option and read back with it (256-byte rows, as WebGPU asks), against the values; and the texture cleared to
-// 1.0 by a render pass and read back with the option. Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name
-// substring (default: NVIDIA).
+// n48-kepler-depth-copy-option: depth-only buffer / texture copies with DepthFromDepthStencil must copy depth as
+// stored; Kepler moved 32-bit floats for Depth16Unorm. Fix: MetalOldCompat item 80. Checks: Depth16Unorm and
+// Depth32Float uploaded and read back, and a render-pass clear read back. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static int check(const char *bug, const char *name, id<MTLDevice> dev, id<MTLCommandQueue> queue, MTLPixelFormat format,

@@ -1,11 +1,6 @@
-// n37-kepler-narrow-vector-loop-exit (Kepler adapter, NVAIR_NARROW_VECTOR_FIX): operations on 4-lane vectors of 8-bit
-// integers deciding when a loop ends. In a loop that runs until all(a != b) for two char4 a and b turned false, nested in a
-// loop the optimizer unrolls, the inner loop stopped at the wrong iteration in a few threads (mslfuzz2.py VEC=1 ASTYPE=1
-// seed 9923, reduced to this kernel). The condition is right when it is only summed in the same loops, and so is the
-// kernel with the lanes compared one by one, or with its narrow vectors done lane by lane, which the fix does. The kernel
-// on the fuzzer's inputs (seed 1, 256 threads in groups of 64, compiled without fast math, as the fuzzer does): each
-// thread's 8 output words against the CPU reference (cpuref.py), as one FNV-1a hash per thread.
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n37-kepler-narrow-vector-loop-exit: a loop ending on all(a != b) for char4 vectors must stop at the right iteration;
+// the back end's packed vectors went wrong. Fix: GeForceAIRCompat NVAIR_NARROW_VECTOR_FIX. Checks: the reduced fuzz
+// kernel against the CPU reference (cpuref.py), 256 threads. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

@@ -1,11 +1,6 @@
-// n18-kepler-threadgroup-cmpxchg (Kepler adapter, NVAIR_LOCAL_CMPXCHG): atomic_compare_exchange_weak_explicit on a
-// threadgroup atomic. When the exchange failed, Kepler left *expected as it was instead of the value it found, so the
-// old value came back as the comparand (WebGPU CTS atomicCompareExchangeWeak compare_exchange_weak_workgroup_basic: every
-// exchange that fails; the device-memory form is right): the plugin's threadgroup body lacks the store its device body
-// makes. Uncontended (each thread on its own atomic, every third exchange meant to succeed), int and uint; then a
-// contended loop that adds 1 to one threadgroup counter from 256 threads with compare-exchange, which only terminates
-// right when a failed exchange returns the value it found.
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n18-kepler-threadgroup-cmpxchg: a failed threadgroup compare-exchange must return the value it found; Kepler left
+// *expected unchanged. Fix: GeForceAIRCompat NVAIR_LOCAL_CMPXCHG. Checks: uncontended int and uint exchanges, and a
+// contended counter loop that only ends when that's right. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

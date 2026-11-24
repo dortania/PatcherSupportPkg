@@ -1,11 +1,6 @@
-// n25-kepler-atomic-join-operand (Kepler adapter, NVAIR_ATOMIC_JOIN_FIX): atomic read-modify-writes whose operand is a
-// phi at the join of a branch on a per-lane condition. The back end merges an atomic whose operand it takes to be the
-// same in every lane of a warp into one atomic (the value times the number of lanes), and takes such a phi to be uniform
-// when its incoming values are: atomic_fetch_add(p, c ? 1u : (max(in[0], 4u) & 255u)), where the front end branches around
-// the load, added one lane's choice for all 32 (mslfuzz.py seed 1744 on the GTX 770: a threadgroup counter off by
-// multiples of the two values' difference). Threadgroup and device counters, the add of that select and of c ? 1u : 97u
-// at the same join, 256 threads in groups of 64, c from the input; compiled without fast math, as the fuzzer does.
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n25-kepler-atomic-join-operand: an atomic whose operand comes out of a per-lane branch must use each lane's value;
+// the back end merged it into one warp-wide atomic. Fix: GeForceAIRCompat NVAIR_ATOMIC_JOIN_FIX. Checks: threadgroup
+// and device counters, 256 threads against the CPU. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

@@ -1,10 +1,6 @@
-// n52-kepler-negative-array-layer (GeForceAIRCompat, NVAIR_ARRAY_LAYER_CLAMP): a texture-array sample or gather at a
-// negative layer must clamp to layer 0, as WebGPU specifies and Apple's GPUs do. Kepler's plugin passes the i32 layer
-// straight to the texture instruction, which takes it as unsigned, so layer -1 of an 8-layer 2D array sampled layer 7;
-// Safari's WebGPU passes WGSL's layer to Metal unclamped (CTS textureSampleLevel sampled_array_2d_coords, arrayIndex -1,
-// in WebKit). Checked in a kernel, at layers -1 and -5: sample, sample at a level and gather of a 2D array of 8 layers
-// (layer L filled with (L + 1) * 20), and sample of a cube array of 2 cubes; every one must read layer 0 (and layers 0,
-// 3, 7 and 9 their own or the last one). Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring
+// n52-kepler-negative-array-layer: a texture-array sample or gather at a negative layer must read layer 0, as WebGPU
+// clamps; Kepler took the i32 layer as unsigned and read the last one. Fix: GeForceAIRCompat NVAIR_ARRAY_LAYER_CLAMP.
+// Checks: 2D-array sample, sample at a level and gather, cube-array sample, at layers -1 and -5. Argument: GPU name
 // (default: NVIDIA).
 #import "repro.h"
 

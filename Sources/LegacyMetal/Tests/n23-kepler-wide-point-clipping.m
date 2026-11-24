@@ -1,10 +1,6 @@
-// n23-kepler-wide-point-clipping (MetalOldCompat item 69, its point part): wide points whose center is outside the
-// viewport. Kepler's driver set the line and point cull guard band to the viewport itself, so a point centered outside
-// it was culled whole, with the part of it that's inside (Khronos WebGL clipping-wide-points). 8-pixel points on a 16x16
-// target: centered 0.4 px left of the left edge (its 4 inside columns, 32 pixels), 0.4 px above the top (32), on the
-// bottom-right corner just outside it (16), inside (64), and 10 px out (0: nothing of it is inside); then centered 0.4 px
-// left of viewport (4, 4, 8, 8) in the target (32 pixels, none outside the viewport: item 69's scissor half).
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n23-kepler-wide-point-clipping: wide points centered outside the viewport must draw their inside part; Kepler culled
+// them whole. Fix: MetalOldCompat item 69 (the point guard band). Checks: 8-pixel points around a 16x16 target's edges
+// and next to a smaller viewport. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

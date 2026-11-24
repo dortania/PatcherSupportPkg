@@ -1,13 +1,6 @@
-// n40-kepler-private-final-loads (Kepler adapter, NVAIR_PRIVATE_FINAL_LOADS_FIX): loads of a private array at constant
-// indexes after its last store. The fix for two loads of one element being taken for one value (n26) gave every
-// constant-index load of such an array an index the back end can't fold, and with that on the 16 loads of the fuzzer's
-// final hash of p[] and pc[], kernels came out wrong, values that never touch the arrays included (mslfuzz2.py VEC=1
-// seeds 4417, 7105 and 14028 at first; with the byte arrays' loads masked instead of done on words, this kernel, VEC=1
-// ASTYPE=1 seed 3890, on 118 of 256 threads). Loads in the returning block with no store to the array after them now keep
-// their constant index: no store can come after them for the back end to take them past. The kernel on the fuzzer's
-// inputs (seed 1, 256 threads in groups of 64, compiled without fast math, as the fuzzer does): each thread's 8 output
-// words against the CPU reference (cpuref.py), as one FNV-1a hash per thread.
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n40-kepler-private-final-loads: loads of a private array after its last store must stay plain; giving them n26's
+// opaque index broke other values. Fix: GeForceAIRCompat NVAIR_PRIVATE_FINAL_LOADS_FIX. Checks: fuzz seed 3890's kernel
+// against the CPU reference (cpuref.py), 256 threads. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

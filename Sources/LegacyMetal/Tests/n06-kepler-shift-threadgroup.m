@@ -1,12 +1,6 @@
-// n06-kepler-shift-threadgroup (Kepler adapter, its 64-bit shift rewrite): a 64-bit shift by a variable amount next to a
-// threadgroup store, barrier and load. The adapter builds such shifts from 32-bit shifts of the halves (the plugin's own
-// came out unsigned next to straight-line code: i67). Its first version chose the < 32 and >= 32 results with selects;
-// where the optimizer could tell the amount was 0 or 1 it made them predicates and a widened bool, and Kepler's code
-// generation then got the result wrong (0) when a threadgroup load followed a barrier nearby, although the IR was right
-// (LONG fuzz seeds 1295 and 1853; this is 1295 reduced). The rewrite now combines the halves through masks. 256 threads,
-// five inputs, against the CPU.
-// Stock OCLP: PASS (its own shift is right here). Fixed: PASS. A guard for the adapter's rewrite. Argument: GPU name
-// substring (default: NVIDIA).
+// n06-kepler-shift-threadgroup: a 64-bit shift by a variable amount next to a threadgroup barrier must be right; the
+// adapter's first, select-based shift rewrite gave 0 there. A guard for GeForceAIRCompat's 64-bit shifts (stock OCLP
+// passes). Checks: 256 threads on five inputs against the CPU. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

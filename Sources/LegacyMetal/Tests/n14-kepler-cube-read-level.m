@@ -1,11 +1,6 @@
-// n14-kepler-cube-read-level (Kepler adapter, NVAIR_CUBE_READ_LEVEL): read() of a cube or cube array at a level above 0
-// read level 0 on Kepler, in color and depth formats alike (s70's compute check of a Depth32Float cube array; reads of 2D
-// and 2D-array textures at a level, and cube samples with level(), are right). The plugin's library reads a cube texel by
-// sampling along the direction of its centre, worked out from level 0's size, with a built-in sampler whose LOD clamp is
-// 0. Every texel of every level, face and layer of an R32Uint cube, an R32Uint cube array and a Depth32Float cube array
-// (16x16, 3 levels) holds its own value, copied in from a buffer, so a read of the wrong level or of a neighbouring texel
-// shows; compute kernels read them all back with read(coordinate, face, [layer,] level).
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n14-kepler-cube-read-level: read() of a cube or cube array at a level above 0 must read that level; Kepler read level
+// 0. Fix: GeForceAIRCompat NVAIR_CUBE_READ_LEVEL. Checks: every texel of 3 levels of an R32Uint cube, an R32Uint cube
+// array and a Depth32Float cube array. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

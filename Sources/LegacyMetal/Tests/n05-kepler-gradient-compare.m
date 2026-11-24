@@ -1,18 +1,7 @@
-// n05-kepler-gradient-compare (Kepler adapter, NVAIR_COMPARE_GRADIENT_FIX): sample_compare with gradients (gradient2d,
-// gradientcube) on OCLP's Kepler compiler (GeForceAIRPlugin). Its library compares on 2D, 2D-array, cube and cube-array
-// depth textures at a level or with a bias only; the gradient forms stayed bare declarations and the pipeline failed to
-// build ("Unhandled constant"). Kepler compares only at level 0, so the adapter makes the comparison there, which is exact
-// for shadow maps of one level.
-// A one-level Depth32Float cube holds a different depth on each face (0.10, 0.25, ... 0.85); for each face, a compare
-// (less) with the reference just below that depth must pass and one just above must fail: in a compute kernel through a
-// sampler argument, and in a fragment function through a constexpr sampler with screen-space gradients. Then 2D (a depth
-// per column, read with and without a constant texel offset), 2D-array (layer 1) and cube-array comparisons with gradients.
-// The R9 M370X's compiler has no gradient comparison either (SC: "a call to an undefined label"; fragment functions fail
-// too), and ANGLE doesn't use one there (deqp's textureGrad, textureGradOffset and textureProjGrad shadow cases pass in
-// Chrome and Firefox), so on AMD the test SKIPs (FIXES.md, known limitations).
-// Intel (Ivy Bridge, Haswell): instruction selection failed on the same forms; the Intel adapter makes them at level 0 too
-// (INTEL_COMPARE_GRADIENT_FIX).
-// Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n05-kepler-gradient-compare: depth comparisons with gradients must compile and compare; the plugin has no gradient
+// form ("Unhandled constant"). Fix: GeForceAIRCompat NVAIR_COMPARE_GRADIENT_FIX (compares at level 0). Checks: cube
+// faces in a kernel and a fragment function, 2D with and without an offset, 2D array, cube array. SKIPs on AMD, which
+// has no gradient compare either. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

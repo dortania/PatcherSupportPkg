@@ -1,13 +1,7 @@
-// n39-kepler-narrow-vector-select (Kepler adapter, NVAIR_NARROW_VECTOR_FIX): a select of 4-lane vectors of 8-bit
-// integers counting a loop. A loop that ends when vf(select(uchar4(...), uchar4(...), uchar4(...) > uchar4(...))) & 3 is 0,
-// in a loop the optimizer unrolls, with its count added to a value used after it, came out wrong on about half the threads
-// (mslfuzz2.py VEC=1 ASTYPE=1 seed 13302, reduced to this kernel). With every other operation on the narrow vectors done
-// lane by lane, only the <4 x i8> select was left, and done lane by lane too it is right. The kernel on the fuzzer's inputs
-// (seed 1, 256 threads in groups of 64, compiled without fast math, as the fuzzer does): each thread's 8 output words
-// against the CPU reference (cpuref.py), as one FNV-1a hash per thread.
-// Since the fix for 8-bit compares (n41, NVAIR_NARROW_COMPARE_FIX) the kernel is right with either fix alone: the run
-// without the fix turns both off.
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n39-kepler-narrow-vector-select: a loop counted by a select of uchar4 vectors must count right; the back end's <4 x
+// i8> select went wrong. Fix: GeForceAIRCompat NVAIR_NARROW_VECTOR_FIX (without: NVAIR_NARROW_COMPARE_FIX off too).
+// Checks: the reduced fuzz kernel against the CPU reference (cpuref.py), 256 threads. Argument: GPU name (default:
+// NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

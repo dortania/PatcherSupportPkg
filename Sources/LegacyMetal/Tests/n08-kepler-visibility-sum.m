@@ -1,11 +1,6 @@
-// n08-kepler-visibility-sum (MetalOldCompat item 59): visibility results with more than one draw counted into a slot.
-// Kepler's driver (GeForceMTLDriver) writes each draw's own sample count to the slot, replacing what it held, so the
-// slot ends up with the LAST draw's count, not the sum over the draws that Metal specifies. WebGL occlusion queries in
-// Chrome reported visible targets invisible (Khronos WebGL 2.0.1 deqp occlusionquery_strict / _conservative, two target
-// draws per query, the second hidden). It also leaves a slot a mode was set on without any draw as it was, where Metal
-// writes 0 (the WebGPU CTS's occlusionQuery empty / initial read old values). Counting and Boolean modes; a 64x64 target,
-// halves of 2048 samples each; the visibility buffer starts filled with 0xAB.
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n08-kepler-visibility-sum: visibility results must sum a pass's draws per slot, and be 0 for a slot with no draw;
+// Kepler kept the last draw's count and old values. Fix: MetalOldCompat item 59. Checks: counting and Boolean modes on
+// a 64x64 target, the buffer prefilled with 0xAB. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

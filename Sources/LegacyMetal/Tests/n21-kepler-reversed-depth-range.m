@@ -1,10 +1,6 @@
-// n21-kepler-reversed-depth-range (MetalOldCompat item 70): viewports whose depth range is reversed (znear above
-// zfar). Metal allows that ("which you can flip", in setViewport:'s documentation) and MoltenVK passes it on from Vulkan;
-// a fragment's depth is znear + z * (zfar - znear). Kepler's driver kept the z scale as |zfar - znear| and the translate as
-// min(znear, zfar), so a reversed range came out in order: znear 1, zfar 0 stored a z of 0.25 as 0.25, not 0.75 (the Iris
-// Pro gets it right). A full-screen triangle at z = 0.25 into Depth32Float through setViewport: with (0, 1), (1, 0),
-// (0.25, 0.75), (0.75, 0.25) and (0.5, 0.5), and through setViewports:count: with viewport 0 reversed.
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n21-kepler-reversed-depth-range: reversed viewport depth ranges (znear > zfar) must be kept; Kepler put them in
+// order. Fix: MetalOldCompat item 70. Checks: z = 0.25 through setViewport: at five ranges, and setViewports:count:.
+// Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

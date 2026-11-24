@@ -1,12 +1,6 @@
-// n27-kepler-cube-gradient-level (Kepler adapter, NVAIR_CUBE_GRADIENT_FIX): the mip level of a cube sample with explicit
-// gradients (gradientcube) in vertex and fragment functions. Kepler's own level was wrong whenever the gradients had a
-// component along the major axis: for one along it, the level rose by about 0.64 per doubling and stopped at 2, the way
-// the difference of the face coordinates of p + d and p does, instead of their derivative (Khronos WebGL 2 deqp
-// texturegrad isamplercube_vertex and _fragment). An integer cube (32, 6 levels, level k holds k) sampled nearest at
-// direction (1, 0.3, 0.2) with gradients along the major axis (in dPdx, in dPdy), diagonal ones, and one within the face
-// (right before too), each scaled to the exact OpenGL level k - 0.25, k and k + 0.25 for k = 0..4: level k, in both
-// stages. The margin of 0.25 leaves room for the approximations OpenGL allows.
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n27-kepler-cube-gradient-level: cube samples with gradients in vertex and fragment functions must pick OpenGL's
+// level; Kepler's was wrong for gradients along the major axis. Fix: GeForceAIRCompat NVAIR_CUBE_GRADIENT_FIX. Checks:
+// levels 0-4 at k - 0.25, k and k + 0.25, in both stages. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 #include <math.h>
 

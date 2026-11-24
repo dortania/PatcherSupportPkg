@@ -1,10 +1,6 @@
-// n15-kepler-volume-copy-stride (MetalOldCompat item 65): copies between a buffer and several slices of a 3D texture
-// with bytesPerImage more than bytesPerRow x height (WebGPU's rowsPerImage above the copy height). Kepler's driver
-// (GeForceMTLDriver) read or wrote slice n at n x bytesPerRow x height, in the padding of the image before it (the
-// WebGPU CTS image_copy rowsPerImage_and_bytesPerRow: 114 failing cases, every one of them 3D). An RGBA8Unorm 4x4x3 and
-// an R32Uint 8x8x4 3D texture, every texel its own value, through padded buffers both ways at several strides, with
-// tight copies as the reference; a copy into slices 1-2 at a z origin too.
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n15-kepler-volume-copy-stride: buffer / 3D-texture copies with bytesPerImage above bytesPerRow x height must use that
+// stride; Kepler put slice n in the padding. Fix: MetalOldCompat item 65. Checks: RGBA8 and R32Uint 3D textures both
+// ways at several strides, and a copy at a z origin. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 int main(int argc, char **argv) { @autoreleasepool {

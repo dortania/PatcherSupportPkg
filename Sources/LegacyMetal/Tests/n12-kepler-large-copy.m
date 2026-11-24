@@ -1,12 +1,6 @@
-// n12-kepler-large-copy (Kepler adapter, NVAIR_LARGE_COPY_LOOP): Kepler's compiler takes time about cubic in the size of
-// a constant-length struct copy (llvm.memcpy, lowered to one load and store per word): copying 168-byte structs between
-// device buffers took 14 s to build, 232-byte ones 37 s, and a WebGPU CTS kernel (shader,execution,expression,call,user,
-// ptr_aliasing) kept the compiler service busy for over 13 minutes while the page waited for its pipeline. A kernel copies
-// two 232-byte structs from an input buffer to two device buffers, swaps a field through pointers, and copies both to the
-// output; the pipeline must build in under 10 s and every output word be right.
-// Intel (Ivy Bridge, Haswell): the copy output->a = *A read A before the swap's store, so the outputs came out unswapped;
-// the Intel adapter writes such copies as 32-bit loads and stores (INTEL_COPY_EXPAND_FIX).
-// Stock OCLP on Kepler: FAIL (slow build). Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n12-kepler-large-copy: a pipeline copying large structs must build in seconds; the back end's time is cubic in a
+// memcpy's size (minutes). Fix: GeForceAIRCompat NVAIR_LARGE_COPY_LOOP. Checks: 232-byte struct copies and a swap
+// through pointers: built in under 10 s, every word right. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 #include <mach/mach_time.h>
 

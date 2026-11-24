@@ -1,11 +1,6 @@
-// n17-kepler-bc-edge-upload (MetalOldCompat item 67): a copy from a buffer into the last row of blocks of a
-// block-compressed texture, at a height short of a whole block (the 13x1 edge row at y = 12 of a 13x13 level). Kepler's
-// driver (GeForceMTLDriver) wrote nothing for it, as if it rounded the block rows down, while edge columns, whole levels
-// and copies out were right (WebGPU CTS image_copy compressed_textures,unaligned_mip_level_0: every BC format). The level
-// is first filled with one set of blocks, then the edge row (13x1), the edge corner (1x1 at 12,12) and an edge row of a
-// level-1 view size (7x3 level: 7x3 at 0,0 is a whole level whose height isn't a block) are uploaded with other blocks,
-// and the whole level read back; BC1 (8-byte blocks) and BC3 (16).
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n17-kepler-bc-edge-upload: an upload into a BC texture's last, partial row of blocks must land; Kepler wrote nothing.
+// Fix: MetalOldCompat item 67. Checks: the edge row, the corner and a 7x3 level, BC1 and BC3, against a full readback.
+// Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 int main(int argc, char **argv) { @autoreleasepool {

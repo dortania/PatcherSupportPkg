@@ -1,18 +1,7 @@
-// n04-kepler-texture-atomics (MetalOldCompat item 58 with the Kepler adapter, NVAIR_TEXTURE_ATOMICS): MSL 3.1 texture
-// atomics on OCLP's Kepler stack, beyond a01's one fetch_add. The plugin has no texture atomics (the compile crashed the
-// compiler); the shim makes R32 2D textures created with MTLTextureUsageShaderAtomic linear in a buffer of their own and
-// binds it at a hidden buffer index, where the adapter turns each texture atomic into a global atomic. Checks, against
-// the same operations on the CPU:
-//   1. every operation (add, sub, min, max, and, or, xor, exchange, compare-exchange that succeeds and one that fails,
-//      load, store) on 333 texels of a managed R32Uint texture; coordinates outside it change nothing;
-//   2. signed min / max / add with ushort coordinates on R32Sint at [[texture(1)]], while the app has its own buffer at
-//      the hidden index (30): a later dispatch that reads buffer 30 still sees the app's buffer;
-//   3. a private texture (header written by a blit): 4096 adds on 4 texels, copied out by a blit;
-//   4. atomics in a fragment function: a full-screen triangle over 16x16 pixels counts 256 and keeps the largest x (15);
-//   5. atomics through an R32Sint view of an R32Uint texture reach the texture;
-//   6. a texture made without MTLTextureUsageShaderAtomic (tiled, no linear form): its atomics don't fault the command
-//      buffer (they do nothing: documented).
-// Stock OCLP: FAIL (crash). Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n04-kepler-texture-atomics: MSL 3.1 texture atomics must work; the plugin has none (the compiler crashed). Fix:
+// MetalOldCompat item 58 + GeForceAIRCompat NVAIR_TEXTURE_ATOMICS. Checks: every operation on a managed R32Uint
+// texture, signed ones with ushort coordinates beside an app buffer at index 30, a private texture, a fragment
+// function, an R32Sint view, and no fault without ShaderAtomic usage. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

@@ -1,11 +1,6 @@
-// n09-kepler-zero-buffers (MetalOldCompat item 60): new buffers must be zero-filled (newBufferWithLength:options: "creates
-// a buffer that the method clears with zero values"). Kepler's driver (GeForceMTLDriver) hands a freed PRIVATE buffer's
-// memory, as it was, to the next private buffer of the same size (a MANAGED buffer's GPU copy too), and does the same with a counter sample buffer's own
-// result buffer: unsampled timestamp slots of a new sample buffer resolved to a freed one's timestamps. Dawn relies on the
-// zero fill: the WebGPU CTS read old values from unused query slots (timestampQuery unused_slots_are_zero), and a WebGPU
-// buffer could show data another part of the page had freed. Fills and frees 1 MB private and managed buffers (0xAB) and 4096-slot
-// sample buffers (every slot sampled), then checks fresh ones read 0.
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n09-kepler-zero-buffers: new buffers must read 0; Kepler handed out freed private buffers, managed buffers' GPU
+// copies and counter sample results as they were. Fix: MetalOldCompat item 60. Checks: 1 MB private and managed buffers
+// and 4096-slot sample buffers, filled, freed and made again. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 int main(int argc, char **argv) { @autoreleasepool {

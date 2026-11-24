@@ -1,9 +1,6 @@
-// n19-kepler-signed-vector-bool (Kepler adapter, NVAIR_SIGNED_BOOL_FIX): bool2 / bool3 / bool4 of vectors of signed
-// integers. Kepler gave false for INT_MIN (and the minimum of char and short vectors): the plugin's library tests each
-// lane as (x & INT_MAX) != 0, the rule for a float lane, so that -0.0 is false (WebGPU CTS unary bool_conversion:i32,
-// vec2-vec4; scalars and unsigned vectors are right). int2 / int3 / int4, short4 and char4 lanes of minimum, -1, 0, 1 and
-// maximum, from a buffer; float4 with -0.0 and 0.0 still false.
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n19-kepler-signed-vector-bool: bool vectors of signed integers must be false only for 0; Kepler gave false for
+// INT_MIN. Fix: GeForceAIRCompat NVAIR_SIGNED_BOOL_FIX. Checks: int2-int4, short4 and char4 at min, -1, 0, 1 and max;
+// float4 -0.0 stays false. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

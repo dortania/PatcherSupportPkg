@@ -1,11 +1,6 @@
-// n13-kepler-half-constant (Kepler adapter, NVAIR_HALF_CONSTANT_FIX): a constant array of half2x2 (what WGSL `const`
-// f16 matrices become: WebGPU CTS shader,execution,expression,constructor,non_zero) reaches Kepler's compiler with each
-// half2 column spelled as a constant expression, bitcast (<1 x i32> <i32 bits> to <2 x half>), and its constant lowering
-// crashes on that (a null dereference): the compiler service died on every try, and the app's next compile then waited
-// on it forever. A kernel copies the constant half2x2 {11, 12, 21, 22} to a buffer.
-// Intel (Ivy Bridge, Haswell): the compiler crashed on the same constant; the Intel adapter rewrites it too
-// (INTEL_HALF_CONSTANT_FIX).
-// Stock OCLP on Kepler: FAIL (the compiler crashes). Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n13-kepler-half-constant: a constant half2x2 array must compile; its bitcast constant expressions crashed the
+// compiler service. Fix: GeForceAIRCompat NVAIR_HALF_CONSTANT_FIX. Checks: a kernel copying the constant {11, 12, 21,
+// 22} out. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

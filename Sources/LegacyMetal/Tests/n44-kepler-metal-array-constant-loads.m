@@ -1,17 +1,6 @@
-// n44-kepler-metal-array-constant-loads (Kepler adapter, NVAIR_ARRAY_STRUCT_FIX): n26-kepler-private-constant-loads's kernel with its private arrays written as
-// metal::array<T, N>, as ANGLE writes every GLSL array (Chrome, Safari, Firefox WebGL): a struct holding the array, which
-// reaches the back end as alloca {[N x T]} with GEPs (s, 0, 0, i) and slipped past the private-array fixes made for C
-// arrays; they now see it as the plain array. Without the fix the original's bug is back.
-// The original test's description follows.
-// n26-kepler-private-constant-loads (Kepler adapter, NVAIR_PRIVATE_CONSTANT_LOAD_FIX): two loads of the same element of
-// a private array at a constant index, with the array written at a variable index between them. The back end took them for
-// one value: v5 = pc[0] before a loop that loads pc[0] again and stores pc[i] came out as the loop's last pc[0], even with
-// every access to the array volatile (mslfuzz2.py seed 2136 on the GTX 770; also the cause of seeds 1413, 1523 and 1896 of
-// the VEC=1 runs, long listed as Kepler limitations). The fuzzer's reduced kernel runs as it is and again with both loads
-// at indexes the back end can't fold, (thread position >> 31) and ((thread position + 1) >> 31), always 0 (one shared 0
-// still left the two addresses alike to the back end); the two must give the same 8 words in
-// every one of 256 threads (inputs: the fuzzer's for seed 2136; compiled without fast math, as the fuzzer does).
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n44-kepler-metal-array-constant-loads: n26 with its arrays written as metal::array, as ANGLE writes every GLSL array,
+// must pass too; the wrapping struct hid them from the private-array fixes. Fix: GeForceAIRCompat
+// NVAIR_ARRAY_STRUCT_FIX. Checks: n26's kernel with metal::array. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

@@ -1,13 +1,6 @@
-// n50-kepler-managed-upload-race (MetalOldCompat item 82): managed buffers written (didModifyRange:) and managed
-// textures written (replaceRegion:), freed on some threads while others commit, as Safari's WebGPU does in its GPU
-// process. Kepler's driver queues such CPU writes on a device-wide list that the next commit, on any queue, walks to
-// upload them, and a resource freed before it was uploaded, while another thread committed, was freed under that
-// commit: it read a nil _res (-[NVMTLCommandBuffer commit], EXC_BAD_ACCESS at 0x2f0) or over-released it (objc_release
-// in MTLResourceListChunkFreeEntries); WebKit's GPU process crashed that way in the WebGPU CTS. The test runs itself
-// again as a child for each kind (so that a crash is a result): two threads make, write and free managed buffers of
-// 256 B to 32 KB (with initial bytes), or managed RGBA8 textures of 16 to 256 texels square, while two threads commit
-// small blits on queues of their own, for 5 s each. Stock OCLP on Kepler: FAIL (the child crashed, within half a second
-// for buffers). Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n50-kepler-managed-upload-race: managed buffers and textures freed between their CPU write and the next commit must
+// not crash it; Kepler's driver freed them under that commit. Fix: MetalOldCompat item 82. Checks: two threads write
+// and free, two commit, 5 s per kind, in a child process. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 #include <spawn.h>
 #include <stdatomic.h>

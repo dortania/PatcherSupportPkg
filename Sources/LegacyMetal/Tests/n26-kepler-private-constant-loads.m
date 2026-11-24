@@ -1,12 +1,6 @@
-// n26-kepler-private-constant-loads (Kepler adapter, NVAIR_PRIVATE_CONSTANT_LOAD_FIX): two loads of the same element of
-// a private array at a constant index, with the array written at a variable index between them. The back end took them for
-// one value: v5 = pc[0] before a loop that loads pc[0] again and stores pc[i] came out as the loop's last pc[0], even with
-// every access to the array volatile (mslfuzz2.py seed 2136 on the GTX 770; also the cause of seeds 1413, 1523 and 1896 of
-// the VEC=1 runs, long listed as Kepler limitations). The fuzzer's reduced kernel runs as it is and again with both loads
-// at indexes the back end can't fold, (thread position >> 31) and ((thread position + 1) >> 31), always 0 (one shared 0
-// still left the two addresses alike to the back end); the two must give the same 8 words in
-// every one of 256 threads (inputs: the fuzzer's for seed 2136; compiled without fast math, as the fuzzer does).
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n26-kepler-private-constant-loads: constant-index loads of a private array element on both sides of a variable-index
+// store must see the store; the back end merged them. Fix: GeForceAIRCompat NVAIR_PRIVATE_CONSTANT_LOAD_FIX. Checks:
+// fuzz seed 2136's kernel against itself with unfoldable indexes, 256 threads. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

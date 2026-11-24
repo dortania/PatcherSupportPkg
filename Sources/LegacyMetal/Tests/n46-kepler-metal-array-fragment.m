@@ -1,15 +1,6 @@
-// n46-kepler-metal-array-fragment (Kepler adapter, NVAIR_ARRAY_STRUCT_FIX): n31-kepler-fragment-private-constant-loads's kernel with its private arrays written as
-// metal::array<T, N>, as ANGLE writes every GLSL array (Chrome, Safari, Firefox WebGL): a struct holding the array, which
-// reaches the back end as alloca {[N x T]} with GEPs (s, 0, 0, i) and slipped past the private-array fixes made for C
-// arrays; they now see it as the plain array. Without the fix the original's bug is back.
-// The original test's description follows.
-// n31-kepler-fragment-private-constant-loads (Kepler adapter, NVAIR_PRIVATE_CONSTANT_GRAPHICS_FIX): n26's bug (loads of a
-// private array at a constant index, merged across its variable-index stores) in a fragment function, where the fix had no thread position to make its opaque index from (mslfuzz2.py FRAG=1 seed 2136,
-// the same body as the kernel of n26's seed, reduced). Fragment and vertex functions now make it from their position
-// (the bits of position.x, a float of at least 0) or vertex_id. The reduced fragment function run as the fuzzer runs it
-// (a full-screen triangle on a 256x1 target, one pixel per thread, t = position.x; the fuzzer's inputs, seed 1; compiled
-// without fast math): each thread's 8 output words against the CPU reference (cpuref.py), as one FNV-1a hash per thread.
-// Stock OCLP on Kepler: FAIL. Fixed: PASS. Argument: GPU name substring (default: NVIDIA).
+// n46-kepler-metal-array-fragment: n31 with its arrays written as metal::array, as ANGLE writes every GLSL array, must
+// pass too; the wrapping struct hid them from the private-array fixes. Fix: GeForceAIRCompat NVAIR_ARRAY_STRUCT_FIX.
+// Checks: n31's fragment function with metal::array. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @

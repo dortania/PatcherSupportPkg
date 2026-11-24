@@ -1,11 +1,6 @@
-// n03-kepler-narrow-product (Kepler adapter, NVAIR_NARROW_MULTIPLY_FIX): 32-bit products of 16-bit factors on OCLP's Kepler
-// compiler (GeForceAIRPlugin). When both factors are known to fit in 16 bits (ushort casts, or masks of 0xffff), the
-// compiler took the product's top bit for clear, though 0xffff * 0xffff = 0xfffe0001: -(int)(~(ushort(a) * ushort(b)) &
-// 0x7fffffff), which is (product | 0x80000000) + 1, came out as product + 0x80000001, wrong by 2^31 whenever the product
-// is 2^31 or more (mslfuzz2 FRAG=1 seed 111, reduced; in kernels and fragment functions alike; a full 32-bit product is
-// right). The same wrong knowledge of a product made a % (((b | 1) * c) | 1) off by one (the or taken for an add: mslfuzz
-// seed 645, reduced). 256 threads on five inputs against the same code on the CPU. Stock OCLP: FAIL. Fixed: PASS. Argument: GPU name
-// substring (default: NVIDIA).
+// n03-kepler-narrow-product: a 32-bit product of two 16-bit factors can have its top bit set; the back end assumed it
+// clear (and took an or with a product for an add). Fix: GeForceAIRCompat NVAIR_NARROW_MULTIPLY_FIX. Checks: both
+// shapes, 256 threads on five inputs against the CPU. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @
