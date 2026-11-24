@@ -1,4 +1,4 @@
-// s54-validation-layers (MetalOldCompat item 41): Metal's validation layers on MetalOld. With MTL_DEBUG_LAYER=1, Tahoe's and
+// s54-validation-layers (MetalOldCompat item 87): Metal's validation layers on MetalOld. With MTL_DEBUG_LAYER=1, Tahoe's and
 // Sequoia's MetalTools crashed on every compute dispatch (a call into a placeholder the Metal wrapper exports as data),
 // asserted "Bicubic filtering of 16-bit normalized values is not supported" on an indirect command buffer, and rejected a
 // matching render pipeline with nonsense values ("colorSampleCount (1065353216)"), aborting the process; with

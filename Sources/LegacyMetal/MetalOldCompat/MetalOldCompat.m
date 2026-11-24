@@ -94,6 +94,7 @@
 //      cleared in WebKit's GPU process
 //  85. Ivy Bridge: vertex functions with 32 inputs, whose input walk never ended: stopped after the 32nd
 //  86. Ivy Bridge: stencil copied into a level of a Depth32Float_Stencil8 zeroed deeper levels' depth: kept around it
+//  87. All: the OS's validation layers (MTL_DEBUG_LAYER, MTL_SHADER_VALIDATION), which abort on MetalOld: switched off
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <objc/message.h>
@@ -660,7 +661,7 @@ static IMP nvOriginal(__unsafe_unretained id receiver, IMP a) {
 // when asked for an encoder for an index that isn't a buffer argument; that leaves WebKit's ANGLE without the encoder
 // it puts WebGL 2 uniform blocks in. MetalOld's implementations are saved here (this initializer runs before the
 // wrapper's) and put back behind a check that returns nil instead of aborting, again when the first device is created.
-// (s14, s65)
+// (s14)
 typedef id (*FunctionEncoderIMP)(id, SEL, NSUInteger, id *, id) __attribute__((ns_returns_retained));
 typedef id (*BindingEncoderIMP)(id, SEL, id) __attribute__((ns_returns_retained));
 static FunctionEncoderIMP origFunctionEncoder;
@@ -1884,7 +1885,7 @@ static void patchDeviceBase(void) {
 // the shim compiles ANGLE's internal-shader source (ANGLEInternalShaders.h, made by make_angle_shaders.py from WebKit's
 // mtl_internal_shaders_autogen.metal) and returns that library if it has every function of the prebuilt one with the
 // same type and function constants, else the prebuilt one. Safari 18.6's older ANGLE gets its own WebKit's source
-// (ANGLEInternalShadersSafari18.h, WebKit 23cdc2123a51). (s74)
+// (ANGLEInternalShadersSafari18.h, WebKit 23cdc2123a51). (s63)
 #include "ANGLEInternalShaders.h"
 #include "ANGLEInternalShadersSafari18.h"
 static BOOL fromChromium(const void *returnAddress);
@@ -1913,7 +1914,7 @@ static BOOL isTooNewANGLELibrary(dispatch_data_t data) {
 
 // Chromium's ANGLE ships the same library built for macOS 10.14 (AIR 2.1), whose texture reads return the texel alone.
 // Tahoe's compiler for this stack mislabels such modules and then downgrades their calls a second time, and the 3802
-// reader aborts the compiler service, so every ANGLE blit pipeline failed. Such a library gets the source too.
+// reader aborts the compiler service, so every ANGLE blit pipeline failed. Such a library gets the source too. (s74)
 static BOOL isTooOldANGLELibrary(dispatch_data_t data) {
     const void *bytes = NULL;
     size_t size = 0;
@@ -1984,11 +1985,12 @@ static id newLibraryData(id self, SEL _cmd, dispatch_data_t data, NSError **erro
 // 11. ANGLE (Chromium, Safari's WebKit) disables its Metal renderer on pre-2016 Mac models and refuses family-1 GPUs.
 // For calls from a Chromium framework image or WebKit's ANGLE: a post-2015 model, and only family-2 GPUs listed to
 // ANGLE, Skia Graphite and Dawn; on Macs with no family-2 GPU, the iGPU reports MTLGPUFamilyMac2. What the 12.x Intel
-// driver then lacks (swizzled views, stencil MSAA resolves, passes without attachments, compares with gradients) and
-// ANGLE's NVIDIA refusal (disableMetalOnNvidia) go on ANGLE_FEATURE_OVERRIDES_DISABLED before ANGLE reads it, so it
-// takes its fallbacks. For WebKit callers, hasEvents goes on ANGLE_FEATURE_OVERRIDES_ENABLED: ANGLE turns it off on
+// driver then lacks (swizzled views, stencil MSAA resolves, compares with gradients) and ANGLE's NVIDIA refusal
+// (disableMetalOnNvidia) go on ANGLE_FEATURE_OVERRIDES_DISABLED before ANGLE reads it, so it takes its fallbacks.
+// Passes without attachments (allowRenderpassWithoutAttachment) join them only when item 73, which makes such passes
+// work, is off (s85). For WebKit callers, hasEvents goes on ANGLE_FEATURE_OVERRIDES_ENABLED: ANGLE turns it off on
 // NVIDIA, and Safari 18 needs GL_ARB_sync for every WebGL context (on Kepler all were created lost); Kepler's shared
-// events work here (s69). (s31, s36, s48, s63)
+// events work here (s69). (s31, s63, s64)
 typedef void (*EndEncodingIMP)(id, SEL);
 
 // 15. The 12.x Intel driver (IGRenderPass::generateResolveOptions) always resolves MSAA into level 0, slice 0, and
@@ -5548,7 +5550,7 @@ static CFTypeRef compatRegistryEntryCreateCFProperty(io_registry_entry_t entry, 
     return CFDataCreate(allocator, (const UInt8 *)model, sizeof model);
 }
 
-// 41. Sequoia's and Tahoe's MetalTools API validation (MTL_DEBUG_LAYER=1) and shader validation
+// 87. Sequoia's and Tahoe's MetalTools API validation (MTL_DEBUG_LAYER=1) and shader validation
 // (MTL_SHADER_VALIDATION=1) are built for the OS's own Metal: on MetalOld they misread pipeline internals, call
 // placeholder exports and abort. Both are switched off, with a note on stderr, before a device is made (at load, and in
 // MTLCreateSystemDefaultDevice / MTLCopyAllDevices for programs that set them at run time). MTLSHIM_VALIDATION=1 leaves
