@@ -5115,21 +5115,23 @@ static void keplerModifiedRetain(void) {
         origNVReplace6 = (NVReplace6IMP)swizzle("NVMTLTexture", "replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:", (IMP)nvReplace6);
     if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] Kepler managed buffers and textures: kept from didModifyRange: / replaceRegion: until the next commit\n");
 }
-// 84. New depth and stencil textures hold what the memory held before, on the Kepler, Haswell/Ivy Bridge and GCN
-// drivers alike: a 64x64 Depth32Float, Depth16Unorm or Stencil8 texture made after one of the same size was cleared
-// (depth 0.7, stencil 0x5a) and freed read that texture's values back, every time (GTX 770, Iris Pro, R9 M370X).
-// Apple's GPUs hand out zeroed memory, and Safari's WebGPU relies on it: it clears a never-written color attachment
-// that a pass loads, but a depth or stencil one only when the pass doesn't store it, so a new depth/stencil texture
-// that a pass loads and stores keeps the old contents (WebGPU CTS
-// resource_init,texture_zero:uninitialized_texture_is_zero, dimension 2d, every DepthTest and StencilTest case with
-// uninitializeMethod "Creation": 8 failing on the GTX 770) and a page could read another resource's freed data. In
-// WebKit's GPU process (Safari's and any WKWebView's), each new depth or stencil texture that can be a render target
-// (not from a heap, whose resources Metal leaves undefined) is now cleared to depth 0 and stencil 0, every level and
-// slice, by passes on the shim's queue that are waited for before it is returned, as item 60 does for buffers, in each
-// of the three drivers' newTextureWithDescriptor: (NVMTLDevice, after item 58's hook; MTLIGAccelDevice, after
-// intelDepthWithoutHiZ's; BronzeMtlDevice). That costs some 1.5-3 ms per texture (GTX 770), which other apps don't
-// need: Chrome's Dawn, Firefox's wgpu and ANGLE clear what they haven't written themselves. MTLSHIM_ZERO_DEPTH=1 turns
-// it on in any process, =0 off. Test: s89.
+// 84. New depth and stencil textures, and new 3D textures, hold what the memory held before, on the Kepler, Haswell/Ivy
+// Bridge and GCN drivers alike: a 64x64 Depth32Float, Depth16Unorm or Stencil8 texture made after one of the same size
+// was cleared (depth 0.7, stencil 0x5a) and freed read that texture's values back, every time (GTX 770, Iris Pro, R9
+// M370X, HD 4000), and so did a 16x16x8 RGBA8 3D render target (GTX 770). Apple's GPUs hand out zeroed memory, and
+// Safari's WebGPU relies on it. It clears a never-written color attachment that a pass loads, but a depth or stencil
+// one only when the pass doesn't store it, so a new depth/stencil texture that a pass loads and stores keeps the old
+// contents (WebGPU CTS resource_init,texture_zero:uninitialized_texture_is_zero, dimension 2d, every DepthTest and
+// StencilTest case with uninitializeMethod "Creation": 8 failing on the GTX 770). And it tracks a 3D texture's clears
+// per level, not per depth plane, so a pass into one plane leaves the level's other planes as the memory left them
+// (rendering,3d_texture_slices:one_color_attachment,mip_levels: 13 failing). A page could read another resource's freed
+// data either way. In WebKit's GPU process (Safari's and any WKWebView's), each new depth, stencil or 3D texture that
+// can be a render target (not from a heap, whose resources Metal leaves undefined) is now cleared to zero, every level
+// and slice or depth plane, by passes on the shim's queue that are waited for before it is returned, as item 60 does
+// for buffers, in each of the three drivers' newTextureWithDescriptor: (NVMTLDevice, after item 58's hook;
+// MTLIGAccelDevice, after intelDepthWithoutHiZ's; BronzeMtlDevice). That costs some 1.5-3 ms per texture (GTX 770),
+// which other apps don't need: Chrome's Dawn, Firefox's wgpu and ANGLE clear what they haven't written themselves.
+// MTLSHIM_ZERO_DEPTH=1 turns it on in any process, =0 off. Test: s89.
 typedef id (*ZeroDepthNewTextureIMP)(id, SEL, MTLTextureDescriptor *) RETURNS_RETAINED;
 static ZeroDepthNewTextureIMP origNVZeroDepth, origIGZeroDepth, origBronzeZeroDepth;
 static id zeroDepthTexture(id device, id<MTLTexture> texture, MTLTextureDescriptor *d) {
@@ -5143,14 +5145,27 @@ static id zeroDepthTexture(id device, id<MTLTexture> texture, MTLTextureDescript
     BOOL depth = f == MTLPixelFormatDepth16Unorm || f == MTLPixelFormatDepth32Float || f == MTLPixelFormatDepth24Unorm_Stencil8 ||
                  f == MTLPixelFormatDepth32Float_Stencil8;
     BOOL stencil = f == MTLPixelFormatStencil8 || f == MTLPixelFormatDepth24Unorm_Stencil8 || f == MTLPixelFormatDepth32Float_Stencil8;
-    if (!texture || (!depth && !stencil) || !(d.usage & MTLTextureUsageRenderTarget) || d.storageMode == MTLStorageModeMemoryless)
+    BOOL volume = !depth && !stencil && d.textureType == MTLTextureType3D;  // a color 3D texture: WebKit clears a level, not its planes
+    if (!texture || (!depth && !stencil && !volume) || !(d.usage & MTLTextureUsageRenderTarget) || d.storageMode == MTLStorageModeMemoryless)
         return texture;
     id<MTLCommandQueue> queue = zeroQueue(device);
     if (!queue) return texture;
     NSUInteger faces = texture.textureType == MTLTextureTypeCube || texture.textureType == MTLTextureTypeCubeArray ? 6 : 1;
     NSUInteger slices = MAX(texture.arrayLength, (NSUInteger)1) * faces;
     id<MTLCommandBuffer> commandBuffer = [queue commandBuffer];
-    for (NSUInteger level = 0; level < texture.mipmapLevelCount; level++)
+    if (volume)
+        for (NSUInteger level = 0; level < texture.mipmapLevelCount; level++)
+            for (NSUInteger plane = 0; plane < MAX(texture.depth >> level, (NSUInteger)1); plane++) {
+                MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+                pass.colorAttachments[0].texture = texture;
+                pass.colorAttachments[0].level = level;
+                pass.colorAttachments[0].depthPlane = plane;
+                pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+                pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0);
+                pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+                [[commandBuffer renderCommandEncoderWithDescriptor:pass] endEncoding];
+            }
+    for (NSUInteger level = 0; !volume && level < texture.mipmapLevelCount; level++)
         for (NSUInteger slice = 0; slice < slices; slice++) {
             MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
             if (depth) {
@@ -5198,7 +5213,7 @@ static void zeroDepthTextures(void) {  // after item 58's and intelDepthWithoutH
         origIGZeroDepth = (ZeroDepthNewTextureIMP)swizzle("MTLIGAccelDevice", "newTextureWithDescriptor:", (IMP)igZeroDepthNewTexture);
     if (definesMethod("BronzeMtlDevice", "newTextureWithDescriptor:"))
         origBronzeZeroDepth = (ZeroDepthNewTextureIMP)swizzle("BronzeMtlDevice", "newTextureWithDescriptor:", (IMP)bronzeZeroDepthNewTexture);
-    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] depth and stencil textures: zeroed at creation (WebKit GPU process, or MTLSHIM_ZERO_DEPTH=1)\n");
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] depth, stencil and 3D textures: zeroed at creation (WebKit GPU process, or MTLSHIM_ZERO_DEPTH=1)\n");
 }
 // 61. The Kepler driver's -resolveCounters:inRange:destinationBuffer:destinationOffset: reads the samples from the sample
 // buffer's own result buffer (counterResultBuffer, 16 bytes a sample) but leaves it out of the command buffer's resources,

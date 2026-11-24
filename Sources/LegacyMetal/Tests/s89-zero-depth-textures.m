@@ -1,13 +1,15 @@
-// s89-zero-depth-textures (MetalOldCompat item 84): new depth and stencil textures must read zero. The Kepler, Haswell,
-// Ivy Bridge and GCN drivers hand a new depth or stencil texture the memory a freed one of the same size left, as it
-// was, and Safari's WebGPU relies on new textures being zero (as Apple's GPUs make them) for a depth/stencil attachment
-// that a pass loads and stores: WebGPU CTS resource_init,texture_zero:uninitialized_texture_is_zero (2d, DepthTest and
-// StencilTest after "Creation") read the old values, which a page could use to read another resource's freed data.
-// (Item 84 is on in WebKit's GPU process, elsewhere with MTLSHIM_ZERO_DEPTH=1, which the test sets for itself.) Checked,
-// for Depth32Float (5 levels, 3 slices), Depth16Unorm, Stencil8 and Depth32Float_Stencil8 (both aspects), 64x64 render
-// targets: textures of the same kind are cleared to depth 0.7 / stencil 0x5a and freed, then every level and slice of a
-// new one is copied to a buffer and must be all zero. Stock OCLP: FAIL (GTX 770, Iris Pro, R9 M370X). Fixed: PASS.
-// Argument: GPU name substring (default: the system default GPU).
+// s89-zero-depth-textures (MetalOldCompat item 84): new depth, stencil and 3D textures must read zero. The Kepler,
+// Haswell, Ivy Bridge and GCN drivers hand a new depth or stencil texture (and a 3D one) the memory a freed one of the
+// same size left, as it was, and Safari's WebGPU relies on new textures being zero (as Apple's GPUs make them) for a
+// depth/stencil attachment that a pass loads and stores (WebGPU CTS
+// resource_init,texture_zero:uninitialized_texture_is_zero, 2d, DepthTest and StencilTest after "Creation") and for the
+// planes of a 3D texture a pass didn't write (rendering,3d_texture_slices): it read the old values, which a page could
+// use to read another resource's freed data. (Item 84 is on in WebKit's GPU process, elsewhere with
+// MTLSHIM_ZERO_DEPTH=1, which the test sets for itself.) Checked, for Depth32Float (5 levels, 3 slices), Depth16Unorm,
+// Stencil8 and Depth32Float_Stencil8 (both aspects), 64x64 render targets, and a 16x16x8 RGBA8 3D render target with 2
+// levels: textures of the same kind are filled (depth 0.7, stencil 0x5a, color 0.4/0.6/0.2/1) and freed, then every
+// level and slice or plane of a new one is copied to a buffer and must be all zero. Stock OCLP: FAIL (GTX 770, Iris
+// Pro, R9 M370X, HD 4000). Fixed: PASS. Argument: GPU name substring (default: the system default GPU).
 #import "repro.h"
 
 static int check(const char *bug, const char *name, id<MTLDevice> dev, id<MTLCommandQueue> queue, MTLPixelFormat format,
@@ -82,6 +84,57 @@ static int check(const char *bug, const char *name, id<MTLDevice> dev, id<MTLCom
     return -1;
 }
 
+static int checkVolume(const char *bug, const char *name, id<MTLDevice> dev, id<MTLCommandQueue> queue) {  // a 3D color render target
+    MTLTextureDescriptor *td = [MTLTextureDescriptor new];
+    td.textureType = MTLTextureType3D;
+    td.pixelFormat = MTLPixelFormatRGBA8Unorm;
+    td.width = 16;
+    td.height = 16;
+    td.depth = 8;
+    td.mipmapLevelCount = 2;
+    td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+    td.storageMode = MTLStorageModePrivate;
+    for (int round = 0; round < 4; round++) {
+        @autoreleasepool {  // the canary: 3D textures of the same kind, every level and plane written, and freed
+            id<MTLCommandBuffer> cb = [queue commandBuffer];
+            for (int k = 0; k < 4; k++) {
+                id<MTLTexture> old = [dev newTextureWithDescriptor:td];
+                for (NSUInteger level = 0; level < 2; level++)
+                    for (NSUInteger plane = 0; plane < (8u >> level); plane++) {
+                        MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+                        pass.colorAttachments[0].texture = old;
+                        pass.colorAttachments[0].level = level;
+                        pass.colorAttachments[0].depthPlane = plane;
+                        pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+                        pass.colorAttachments[0].clearColor = MTLClearColorMake(0.4, 0.6, 0.2, 1);
+                        pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+                        [[cb renderCommandEncoderWithDescriptor:pass] endEncoding];
+                    }
+            }
+            if (!reproRun(cb)) return FAIL(bug, "%s: 3D canary passes: command buffer failed", name);
+        }
+        id<MTLTexture> texture = [dev newTextureWithDescriptor:td];
+        for (NSUInteger level = 0; level < 2; level++) {
+            NSUInteger side = 16 >> level, planes = 8 >> level;
+            id<MTLBuffer> out = [dev newBufferWithLength:side * 4 * side * planes options:MTLResourceStorageModeShared];
+            memset(out.contents, 0xee, out.length);
+            id<MTLCommandBuffer> cb = [queue commandBuffer];
+            id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+            [blit copyFromTexture:texture sourceSlice:0 sourceLevel:level sourceOrigin:MTLOriginMake(0, 0, 0)
+                       sourceSize:MTLSizeMake(side, side, planes) toBuffer:out destinationOffset:0 destinationBytesPerRow:side * 4
+          destinationBytesPerImage:side * 4 * side];
+            [blit endEncoding];
+            if (!reproRun(cb)) return FAIL(bug, "%s: 3D read back: command buffer failed", name);
+            const uint8_t *o = out.contents;
+            for (NSUInteger i = 0; i < out.length; i++)
+                if (o[i])
+                    return FAIL(bug, "%s: a new 16x16x8 RGBA8 3D render target's level %lu, plane %lu, byte %lu is 0x%02x (try %d)", name,
+                                (unsigned long)level, (unsigned long)(i / (side * 4 * side)), (unsigned long)(i % (side * 4 * side)), o[i], round + 1);
+        }
+    }
+    return -1;
+}
+
 int main(int argc, char **argv) {
     @autoreleasepool {
         const char *bug = "s89-zero-depth-textures";
@@ -96,7 +149,8 @@ int main(int argc, char **argv) {
         if ((r = check(bug, name, dev, queue, MTLPixelFormatDepth16Unorm, "Depth16Unorm", 1, 1)) >= 0) return r;
         if ((r = check(bug, name, dev, queue, MTLPixelFormatStencil8, "Stencil8", 1, 1)) >= 0) return r;
         if ((r = check(bug, name, dev, queue, MTLPixelFormatDepth32Float_Stencil8, "Depth32Float_Stencil8", 1, 1)) >= 0) return r;
+        if ((r = checkVolume(bug, name, dev, queue)) >= 0) return r;
         return PASS(bug, "%s: new depth and stencil textures read zero on every level and slice (Depth32Float with 5 levels and 3 slices, "
-                         "Depth16Unorm, Stencil8, Depth32Float_Stencil8)", name);
+                         "Depth16Unorm, Stencil8, Depth32Float_Stencil8; a 3D RGBA8 render target)", name);
     }
 }
