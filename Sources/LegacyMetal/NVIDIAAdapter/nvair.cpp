@@ -1,107 +1,12 @@
-// GeForceAIRCompat.dylib: AIR compatibility for OCLP's Kepler Metal compiler (GeForceAIRPlugin, GTX 600/700 GPUs on
-// macOS 14+), which runs on the shared 3802 libLLVM like Intel's plugin (IntelAdapter/intelatomics.cpp, same hook).
-//
-// The plugin links its built-in library into each module before its first llvm::legacy::PassManager::run: the AIR
-// intrinsics it knows get bodies there (air.popcount.i32 -> llvm.ctpop.i32, air.min.u.i32 -> llvm.nvvm.min.u.i32), and
-// its instruction selection matches a few more by name (air.simd_ shuffle, broadcast, shuffle_up, shuffle_down,
-// shuffle_xor). Every other AIR intrinsic stays a bare declaration, which selection takes for a call to an external
-// function and fails on ("Unhandled constant") when the pipeline is made; a few under air.simd_ trap the compiler
-// instead ("Compiler encountered an internal error"). Front ends newer than the plugin (2020) emit more of them, among
-// them every 64-bit min, max, mulhi and madhi: Blender's and the fuzzer's 64-bit integer code, i49 and four tests whose
-// subject is another GPU's bug (a21, a22, a34, i27) couldn't make a pipeline on Kepler.
-//
-// Before each PassManager::run, each bare declaration of an intrinsic below gets a body made of IR the plugin compiles,
-// becomes internal and always_inline, and is inlined (LLVM's always-inliner), so selection never sees it:
-//   air.{min,max}.{u,s}.i64, air.clamp.{u,s}.i64   compare and select
-//   air.popcount.i64, air.clz.i64, air.ctz.i64     on the two 32-bit halves (llvm.ctpop/ctlz/cttz.i32)
-//   air.reverse_bits.i64                           the halves reversed (llvm.nvvm.reverse_bits) and swapped
-//   air.abs.s.i64                                  compare and select
-//   air.mul_hi.{u,s}.i64, air.mad_hi.{u,s}.i64     from four 32 x 32 -> 64 bit products (signed: corrected after)
-//   air.quad_shuffle_xor.<type>                    air.simd_shuffle_xor.<type> with the mask's low 2 bits (a quad is
-//                                                   4 aligned lanes of the 32-wide SIMD group, so lane ^ (mask & 3)
-//                                                   is the same lane either way)
-// These are exact. Reductions over a SIMD group or quad (simd_sum, quad_sum, ...), simd_ballot, simd_all/any and the
-// active-thread mask are not provided: the plugin has no vote instruction or lane mask to build them from, and a
-// butterfly of shuffles is only right when all 32 lanes are active. Any AIR intrinsic still bare after this is logged
-// (NVAIR_LOG), and the compile fails as before.
-//
-// Two 64-bit instructions the plugin compiles but gets wrong (a 64-bit value is a pair of 32-bit registers, and both
-// lowerings leave the high one unset or wrong), measured on a GTX 770 against the CPU over 4096 random pairs each:
-//   zext / sext i1 -> i64   (o = a < b ? 1 : 0 for ulongs: all 4096 had garbage high words) -> 0 or 1 through
-//                           llvm.nvvm.min.u.i32 and a zext from 32 bits (a select of 1 and 0, the obvious form, is
-//                           folded back into the zext by the plugin's optimizer), negated for sext
-//   udiv, urem, sdiv, srem i64 (94% of quotients wrong; with a constant divisor too, which becomes a 64-bit
-//                           multiply-high that is also wrong) -> nvair.udiv64 / nvair.urem64: 64 unrolled steps of
-//                           shift, compare, select and subtract (straight-line: a branch and loop there let the
-//                           plugin misorder private-array accesses), signed through the magnitudes. Division by 0
-//                           gives all ones (Metal leaves it undefined).
-//   shl, lshr, ashr i64 by a variable amount: from 32-bit shifts of the halves. In a fragment function next to straight-
-//                           line division code, a signed one came out unsigned (i67: long >> s, 102 of 256 pixels).
-// Vectors of them (ulong2 / ulong2) one lane at a time. NVAIR_I64_FIX=0 turns these off, NVAIR_SHIFT_FIX=0 the shifts only.
-//
-// Constexpr samplers from newer front ends: a library built with Xcode 16.3+ (AIR 2.7, iMovie 10.4.4's viewer shader)
-// stores each as a [2 x i64] constant where the plugin reads the one i64 the 3802 runtime compiler writes (the same
-// word, bit 63 set; the macOS 14 form). On the array the plugin traps ("Compiler encountered an internal error").
-// Rewritten to the one-word form, as IntelAdapter does for Intel's back end. NVAIR_SAMPLER_STATE_FIX=0 turns it off.
-//
-// Threadgroup bools (i1 globals in threadgroup memory) widened to i8, as IntelAdapter does. NVAIR_THREADGROUP_BOOL_FIX=0.
-//
-// Cube array indices below 0 raised to 0, as AMDAdapter does. NVAIR_CUBE_ARRAY_FIX=0.
-//
-// Integer arithmetic on 3-lane vectors of 8- and 16-bit integers (lane z went wrong beside the padding lane) done lane by
-// lane. NVAIR_ODD_VECTOR_FIX=0.
-//
-// Right shifts of 8- and 16-bit scalars (which those lane-by-lane rewrites make of vector shifts; the back end shifted by the
-// whole register when the amount was masked) done in 32 bits. NVAIR_NARROW_SHIFT_FIX=0.
-//
-// LLVM's {u,s}{add,sub,mul}.with.overflow intrinsics, which Metal's front end makes of overflow checks and the back end
-// can't select, made plain arithmetic. NVAIR_OVERFLOW_FIX=0.
-//
-// Gradient samples of 3D textures and cubes in compute kernels (which broke the kernel) done at the level they pick.
-// NVAIR_GRADIENT_FIX=0. Cube gradient samples in vertex and fragment functions (the hardware's level was wrong for
-// gradients along the major axis) the same way, NVAIR_CUBE_GRADIENT_FIX=0; so are 3D ones in vertex functions (deqp's
-// isampler3d_vertex cases in ANGLE's shaders), NVAIR_VERTEX_3D_GRADIENT_FIX=0.
-//
-// Depth comparisons at a computed level or bias (which returned the depth) done at level 0 / the implicit level.
-// NVAIR_COMPARE_LEVEL_FIX=0.
-//
-// Depth comparisons with gradients (no body: the pipeline failed) done at level 0. NVAIR_COMPARE_GRADIENT_FIX=0.
-//
-// clz and ctz asked for the defined result at 0 (the library's undefined one folds to garbage for a constant 0).
-// NVAIR_COUNT_ZERO_FIX=0.
-//
-// Loads from private arrays of bytes and halfwords masked to their width (a stored word reached them unmasked).
-// NVAIR_NARROW_PRIVATE_ARRAY_FIX=0.
-//
-// discard_fragment in fragment functions with derivatives made a demote to a helper lane (the lane ended there, and its
-// quad's later derivatives were 0). NVAIR_DEMOTE_DISCARD=0.
-//
-// Device loads in fragment functions at a 32-bit index with its top bit set read element 0 (helper lanes' wrapped
-// indexes faulted the driver, which failed a later command buffer: ANGLE's PBO uploads). NVAIR_FRAGMENT_LOAD_GUARD=0.
-//
-// 32-bit products of 16-bit factors, and products an or uses, hidden from the optimizer behind an opaque min (it took
-// bits of products for clear). NVAIR_NARROW_MULTIPLY_FIX=0.
-//
-// Half vectors spelled as bitcasts of integers in constant initializers (a constant half2x2 array crashed the
-// compiler) rewritten as plain half vectors. NVAIR_HALF_CONSTANT_FIX=0.
-//
-// Constant-length copies (llvm.memcpy) of 64 bytes or more made word loops (the back end's time was cubic in their size:
-// a WebGPU CTS kernel kept the compiler busy for minutes). NVAIR_LARGE_COPY_LOOP=0.
-//
-// Depth and stencil textures sampled through texture2d in ANGLE's shaders made (x, 0, 0, 1) from a mask MetalOldCompat
-// item 62 binds (the sampler gave (x, x, x, x)). NVAIR_DEPTH_CHANNELS=0.
-//
-// Texture atomics on read_write texture2d<uint/int> (no body in the plugin: the compiler crashed) made global atomics on
-// the linear buffer MetalOldCompat item 58 gives such textures, bound at a hidden buffer index. NVAIR_TEXTURE_ATOMICS=0.
-//
-// Negative array layers of samples and gathers clamped to layer 0 (the hardware took them as unsigned, so -1 sampled
-// the last layer; WebGPU clamps, and Safari's WebGPU leaves it to the GPU). NVAIR_ARRAY_LAYER_CLAMP=0.
-//
-// Installed (planned): GeForceAIRPlugin.bundle/Contents/MacOS/GeForceAIRCompat.dylib, a weak dependency of
-// GeForceAIRPlugin. Test use: DYLD_INSERT_LIBRARIES=Tests/tools/localcc.dylib:build/GeForceAIRCompat-test.dylib
+// GeForceAIRCompat.dylib: AIR compatibility for OCLP's Kepler Metal compiler (GeForceAIRPlugin, GTX 600/700 on macOS
+// 14+). It redirects the plugin's import of llvm::legacy::PassManager::run, so that before each run the module, already
+// linked with the plugin's built-in library, goes through kModuleFixes: bodies for AIR intrinsics the plugin lacks and
+// rewrites of IR its back end compiles wrong. Each fix has an NVAIR_* switch (=0: off), which the tests' "without the
+// fix" column uses; FIXES.md lists them.
+// Installed next to GeForceAIRPlugin as its weak dependency GeForceAIRCompat.dylib; in tests:
+// DYLD_INSERT_LIBRARIES=Tests/tools/localcc.dylib:build/GeForceAIRCompat-test.dylib.
 //   NVAIR_LOG=1             log what is rewritten (NVAIR_LOG=/path: append to that file)
 //   NVAIR_DUMP_INPUT=<dir>  write every module as it reaches the pass manager
-//   NVAIR_INTRINSICS=0      rewrite nothing
 #include <dlfcn.h>
 #include <unistd.h>
 #include <mach-o/dyld.h>
@@ -129,7 +34,10 @@ static const char *const kPluginSuffix = "/GeForceAIRPlugin";
 static bool logging() { return getenv("NVAIR_LOG") != nullptr; }
 static bool disabled(const char *name) { const char *v = getenv(name); return v && !strcmp(v, "0"); }
 
-// ---- bodies for AIR intrinsics the plugin lacks ----------------------------------------------------------------------
+// ---- bodies for AIR intrinsics the plugin lacks ---------------------------------------------------------------------
+// AIR intrinsics newer than the plugin stay bare declarations that instruction selection rejects ("Unhandled
+// constant"): the 64-bit integer ones and quad_shuffle_xor get exact bodies, inlined afterwards; SIMD reductions and
+// ballot can't be built without a vote instruction. NVAIR_INTRINSICS. (a21, a22, a34, i27, i49)
 struct Gen {
     LLVMModuleRef module;
     LLVMContextRef context;
@@ -342,19 +250,19 @@ static void inlineBodies(LLVMModuleRef module) {
     LLVMDisposePassManager(pm);
 }
 
-// ---- 64-bit instructions the plugin gets wrong -----------------------------------------------------------------------
+// ---- 64-bit instructions the plugin gets wrong ----------------------------------------------------------------------
+// A 64-bit value is a register pair, and the plugin's zext/sext from i1, 64-bit division and remainder, and variable
+// 64-bit shifts left the high half wrong: rebuilt from 32-bit operations (division as 64 straight-line steps; the 1-bit
+// extensions through the opaque min, as a select folds back). NVAIR_I64_FIX, NVAIR_SHIFT_FIX (shifts). (i67, n06)
 static void markInline(LLVMContextRef context, LLVMValueRef f) {
     static const unsigned alwaysInline = LLVMGetEnumAttributeKindForName("alwaysinline", 12);
     LLVMSetLinkage(f, LLVMInternalLinkage);
     LLVMAddAttributeAtIndex(f, LLVMAttributeFunctionIndex, LLVMCreateEnumAttribute(context, alwaysInline, 0));
 }
 
-// nvair.udiv64 / nvair.urem64 (i64 a, i64 b): restoring division, one quotient bit per step from the top, unrolled into
-// straight-line code (64 steps of shift, compare, select and subtract). The first version took a 32-bit division when
-// both operands fit and looped otherwise; with its branch and loop inlined, Kepler's compiler got a private-array load
-// and store around two such divisions in the wrong order (pc[a / b] = (uchar)(c / (d | pc[i])) read the stored byte:
-// mslfuzz2 LONG=1 seed 770, reduced), and the straight-line form compiles right. The quotient's bits are collected in two
-// 32-bit halves: widening a bool to 64 bits is what the plugin gets wrong. Division by 0 gives all ones (remainder: a).
+// nvair.udiv64 / nvair.urem64: restoring division unrolled into 64 straight-line steps, the quotient collected in two
+// 32-bit halves. A looped form miscompiled private-array accesses around it and the plugin widens bools to 64 bits
+// wrong (n06). Division by 0 gives all ones (remainder: a).
 static LLVMValueRef divisionHelper(Gen &g, bool remainder) {
     const char *name = remainder ? "nvair.urem64" : "nvair.udiv64";
     if (LLVMValueRef f = LLVMGetNamedFunction(g.module, name)) return f;
@@ -403,13 +311,9 @@ static LLVMValueRef divideLane(Gen &g, LLVMBuilderRef b, int op, LLVMValueRef x,
     return result;
 }
 
-// One lane of an i64 shift by a variable amount, from 32-bit shifts of the halves, without selects: the < 32 and >= 32
-// results are combined through a mask (all ones below 32), the bits that cross over come from a double shift that is 0
-// for an amount of 0, and the amount goes through llvm.nvvm.min.u.i32 so the optimizer can't bound it. A first version
-// chose with selects; where the optimizer could tell the amount was 0 or 1 it turned them into predicates and a widened
-// i1, which Kepler's code generation got wrong next to a threadgroup load after a barrier (the shift's result came out
-// 0: LONG fuzz seeds 1295 and 1853, reduced), though the IR was right. Every 32-bit shift amount is masked into 0-31, so
-// nothing is poison.
+// One lane of an i64 shift by a variable amount from 32-bit shifts of the halves, combined through masks, not selects
+// (the optimizer turns selects into a widened i1, which Kepler gets wrong), the amount behind the opaque min. Every
+// 32-bit amount is masked into 0-31, so nothing is poison. (n06)
 static LLVMValueRef shiftLane(Gen &g, LLVMBuilderRef b, int op, LLVMValueRef x, LLVMValueRef amount) {
     LLVMTypeRef params[2] = {g.i32, g.i32};
     LLVMValueRef minArgs[2] = {LLVMBuildAnd(b, LLVMBuildTrunc(b, amount, g.i32, ""), g.c32(63), ""), g.c32(63)};
@@ -480,7 +384,9 @@ static unsigned fixWideInstructions(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
-// ---- constexpr samplers from newer front ends ([2 x i64] -> i64 with bit 63 set; IntelAdapter's fixSamplerStateWords) ----
+// ---- constexpr samplers from newer front ends (IntelAdapter's fixSamplerStateWords) ---------------------------------
+// Xcode 16.3+ libraries (AIR 2.7) store a constexpr sampler as [2 x i64] where the plugin reads one i64 and traps:
+// rewritten to the one-word form (bit 63 set), as the Intel adapter does. NVAIR_SAMPLER_STATE_FIX. (i05)
 extern "C" void mdNodeReplaceOperand(void *node, unsigned index, void *replacement) asm("__ZN4llvm6MDNode18replaceOperandWithEjPNS_8MetadataE");
 extern "C" void *valueAsMetadata(LLVMValueRef value) asm("__ZN4llvm15ValueAsMetadata3getEPNS_5ValueE");
 
@@ -535,13 +441,9 @@ static unsigned fixSamplerStateWords(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
-// ---- threadgroup bools (IntelAdapter's widenThreadgroupBools) ---------------------------------------------------------
-// LLVM shrinks a threadgroup bool to an i1 global; on Kepler a value stored to it and read back never arrived (a10:
-// the output keeps its fill, WebKit's WebGPU workgroupUniformLoad on bool). Such globals become i8: loads compare with
-// 0 (a truncation is turned back into an i1 load), stores zero-extend, both volatile so the optimizer doesn't shrink
-// the global again. The i1 global stays, unused and renamed (the plugin keeps pointers to the module's objects across
-// the run, as with its declarations). NVAIR_THREADGROUP_BOOL_FIX=0 turns it off.
-
+// ---- threadgroup bools (IntelAdapter's widenThreadgroupBools) -------------------------------------------------------
+// A value stored to an i1 threadgroup global and read back never arrived on Kepler: such globals become volatile i8
+// (the i1 one stays, unused and renamed: the plugin keeps pointers into the module). NVAIR_THREADGROUP_BOOL_FIX. (a10)
 static unsigned widenThreadgroupBools(LLVMModuleRef module, Gen &g) {
     LLVMTypeRef i8 = LLVMInt8TypeInContext(g.context);
     std::vector<LLVMValueRef> globals;
@@ -584,11 +486,9 @@ static unsigned widenThreadgroupBools(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
-// ---- cube array indices below 0 (AMDAdapter's clampCubeArrayIndices) -----------------------------------------------------
-// A cube array sample, gather or compare with an index below 0 read another cube than the first (a09, WebGPU CTS cube
-// array cases with negative indices, which ask for the nearest layer): the index is raised to 0 first, with a compare
-// and select (a new air.max declaration would be one the plugin has no body for). NVAIR_CUBE_ARRAY_FIX=0 turns it off.
-
+// ---- cube array indices below 0 (AMDAdapter's clampCubeArrayIndices) ------------------------------------------------
+// A cube-array sample, gather or compare at an index below 0 read another cube than the first: the index is raised to 0
+// with a compare and select (an air.max declaration would have no body). NVAIR_CUBE_ARRAY_FIX. (a09)
 static unsigned clampCubeArrayIndices(LLVMModuleRef module, Gen &g) {
     static const struct { const char *prefix; unsigned index; } kForms[] = {
         {"air.sample_texture_cube_array.", 3}, {"air.sample_texture_cube_array_grad.", 3}, {"air.gather_texture_cube_array.", 3},
@@ -626,28 +526,17 @@ static unsigned clampCubeArrayIndices(LLVMModuleRef module, Gen &g) {
     return clamped;
 }
 
-// ---- cube reads at a level -----------------------------------------------------------------------------------------------
-// read() of a cube or cube array at a level above 0 gave level 0 on Kepler, in depth and color formats alike (GTX 770;
-// reads of 2D and 2D-array textures at a level are right, and so is a cube sample with level(); s70's compute check of a
-// Depth32Float cube array). The plugin's library reads a cube texel by a sample.tex.cube[.array].lod along the direction
-// of its centre, with the level as the LOD, but works the direction out from level 0's size (txq ... lod(texture, 0)) and
-// samples with a built-in sampler, 0x8000000000002049, whose LOD clamp is 0 and which has no mip filter. Each such body
-// in the module gets the level's size and the same sampler with a nearest mip filter and the largest LOD clamp (bit 19 and
-// 0x7bff, half 65504, in bits 48-63, as constexpr sampler(filter::nearest, mip_filter::nearest) is encoded). Level 0
-// reads the same texel as before. A body that isn't exactly that (two size queries at 0, one sample with that sampler)
-// is left alone; one given the level in an earlier run (the plugin runs its pass managers twice) is skipped.
-// NVAIR_CUBE_READ_LEVEL=0 turns it off.
+// ---- cube reads at a level ------------------------------------------------------------------------------------------
+// read() of a cube (array) at a level above 0 read level 0: the plugin's body samples along the texel's direction from
+// level 0's size with a built-in sampler without mip filter and with LOD clamp 0. Each such body gets the level's size
+// and a nearest-mip sampler with the largest LOD clamp (bodies fixed in an earlier run are skipped).
+// NVAIR_CUBE_READ_LEVEL. (n14)
 enum { kOpIntToPtr = 40 };  // LLVM-C's LLVMIntToPtr
 static bool startsWith(const char *s, const char *prefix);
 
-// Array layers of samples and gathers. The plugin passes the layer of a texture-array sample or gather, an i32, straight
-// to llvm.nvvm.{sample,gather}[.compare].tex.{1d,2d,cube}.array*, and the hardware takes it as unsigned: layers past
-// the end are clamped to the last one, and so is a negative layer, which the sampler should clamp to 0 (layer -1 of an
-// 8-layer 2D array sampled layer 7). WebGPU clamps the layer to [0, layers - 1], and Safari's WebGPU passes WGSL's i32
-// layer to Metal unclamped (CTS textureSampleLevel/textureSample/textureSampleBias sampled_array_2d_coords, arrayIndex
-// -1, in WebKit); Metal's own GPUs clamp it that way. Every such intrinsic has the layer at argument 3; it is made
-// select(layer < 0, 0, layer) (a constant one folded), once (the select is named nvair.layer: the plugin runs its pass
-// managers twice). Test n52. NVAIR_ARRAY_LAYER_CLAMP=0 turns it off.
+// Kepler takes an array sample's or gather's i32 layer as unsigned, so a negative layer read the last one where WebGPU
+// clamps to 0 (Safari passes WGSL's layer unclamped): the layer argument of llvm.nvvm.{sample,gather}*.array* becomes
+// select(layer < 0, 0, layer). NVAIR_ARRAY_LAYER_CLAMP. (n52)
 static unsigned clampArrayLayers(LLVMModuleRef module, Gen &g) {
     unsigned fixed = 0;
     LLVMBuilderRef b = nullptr;
@@ -726,13 +615,10 @@ static unsigned fixCubeReadLevels(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
-// ---- compare-exchange on threadgroup memory ----------------------------------------------------------------------------
-// atomic_compare_exchange_weak_explicit on a threadgroup atomic that failed left the expected value as it was on Kepler
-// instead of the value it found, so the old value came back as the comparand (GTX 770; WebGPU CTS atomicCompareExchangeWeak
-// compare_exchange_weak_workgroup_basic: every exchange that fails; the device-memory form is right). The plugin's
-// library body for air.atomic.local.cmpxchg.* lacks the store of the found value into *expected that its
-// air.atomic.global.cmpxchg.* body makes where the exchange fails, and marks the pointer readonly. Each such body gets the
-// store, at the start of its failure block, and loses readonly. NVAIR_LOCAL_CMPXCHG=0 turns it off.
+// ---- compare-exchange on threadgroup memory -------------------------------------------------------------------------
+// A failed threadgroup compare-exchange left *expected unchanged: the plugin's local cmpxchg body lacks the store of
+// the found value that its global one makes (and marks the pointer readonly). The store is added. NVAIR_LOCAL_CMPXCHG.
+// (n18)
 enum { kOpBr = 2, kOpStore = 28 };  // LLVM-C's LLVMBr, LLVMStore
 
 static unsigned fixLocalCompareExchange(LLVMModuleRef module, Gen &g) {
@@ -776,15 +662,10 @@ static unsigned fixLocalCompareExchange(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
-// ---- atomics whose operand comes out of a divergent branch ---------------------------------------------------------------
-// The back end merges an atomic read-modify-write whose operand it takes to be the same in every lane of a warp into one
-// atomic of that value times the number of lanes (or the value once, for max / and / ...). It takes a phi to be uniform
-// when its incoming values are, missing that a phi at the join of a branch on a per-lane condition differs per lane: so
-// atomic_fetch_add(p, c ? 1u : x), with x uniform (a load from a constant address, a min / max of uniform values) and the
-// front end's branch around the load, added one lane's choice for the whole warp (GTX 770; mslfuzz.py seed 1744: a
-// threadgroup counter off by multiples of the two values' difference; device atomics alike). Each such operand (a phi,
-// or casts, arithmetic and selects over one) goes through a volatile private slot before the atomic, which the back end
-// can't take for uniform. NVAIR_ATOMIC_JOIN_FIX=0 turns it off.
+// ---- atomics whose operand comes out of a divergent branch ----------------------------------------------------------
+// The back end merges an atomic whose operand it takes for warp-uniform into one atomic for the warp, and takes a phi
+// of uniform values for uniform even at the join of a per-lane branch: such operands go through a volatile private
+// slot. NVAIR_ATOMIC_JOIN_FIX. (n25)
 static bool reachesPhi(LLVMValueRef v, int depth) {
     if (!v || !LLVMIsAInstruction(v)) return false;
     if (LLVMIsAPHINode(v)) return true;
@@ -825,12 +706,9 @@ static unsigned fixAtomicJoinOperands(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
-// ---- signed integers to bool ------------------------------------------------------------------------------------------
-// bool2(int2) and the other vectors of signed integers gave false for INT_MIN on Kepler (GTX 770; WebGPU CTS unary
-// bool_conversion:i32, vec2-vec4; scalars and unsigned vectors are right). The plugin's library body for
-// air.convert.u.v<n>i1.s.v<n>i<w> tests each lane as (x & (2^(w-1) - 1)) != 0, which is how a float lane is tested (so that
-// -0.0 is false), not an integer one. Each such and in those bodies is replaced by the value it masks: x != 0.
-// NVAIR_SIGNED_BOOL_FIX=0 turns it off.
+// ---- signed integers to bool ----------------------------------------------------------------------------------------
+// The plugin's body for bool vectors of signed integers tests (x & INT_MAX) != 0, the float test, so INT_MIN gave
+// false: the mask is dropped (x != 0). NVAIR_SIGNED_BOOL_FIX. (n19)
 static unsigned fixSignedBoolConversions(LLVMModuleRef module, Gen &g) {
     (void)g;
     unsigned fixed = 0;
@@ -852,29 +730,10 @@ static unsigned fixSignedBoolConversions(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
-// ---- gradient samples of 3D textures and cubes --------------------------------------------------------------------------
-// A sample of a 3D texture, cube or cube array with explicit gradients (gradient3d, gradientcube) in a compute kernel
-// broke the kernel on Kepler: its stores after the sample never happened (GTX 770; 2D and 2D-array gradients are right,
-// and so are all of them in fragment functions; a09's gradient read, i08's 3D integer one). The plugin lowers them to
-// llvm.nvvm.sample.tex.{3d,3d.offset,cube,cube.array}.grad; each becomes the .lod form with the level the texture
-// unit would pick (Vulkan's and OpenGL's formula, without anisotropy): 3D, lod = log2 of the longer of the two gradients
-// scaled by the size of level 0; cubes, the same on the derivatives of the face coordinates of the major axis,
-// (db * ma - b * dma) / (2 * ma^2) for the other two axes b, scaled by the face size. Sizes from llvm.nvvm.txq.*.
-// NVAIR_GRADIENT_FIX=0 turns it off for compute modules (!air.kernel).
-// Cube gradients in vertex and fragment functions get the same level: the hardware's was wrong there whenever the
-// gradients had a component along the major axis. Its level for a gradient along the major axis rose by about 0.64 per
-// doubling and stopped at level 2, and diagonal ones drifted too (switches at 0.67, 1.80, 3.14 for 0.5, 1.5, 2.5),
-// though gradients within the face were exact. That is the signature of the difference of the face coordinates of p + d
-// and p, which saturates as d grows, instead of their derivative (work/grad/grad3.m; Khronos WebGL 2 deqp texturegrad
-// isamplercube_vertex and _fragment). NVAIR_CUBE_GRADIENT_FIX=0 turns the cube part off.
-// 3D gradients in vertex functions get it too: in ANGLE's vertex shaders the hardware's 3D gradient sample failed deqp's
-// isampler3d_vertex cases (texturegrad, texturegradoffset, textureprojgrad, textureprojgradoffset), which pass with the
-// explicit level; natively the same samples (deqp's 93x93 grid of coordinates and gradients, RGBA8Sint, a runtime
-// sampler, attributes from a buffer) matched the explicit level at every vertex, and so did an opaque x1 on ANGLE's
-// gradients, so what differs in ANGLE's shaders isn't found. Where the hardware is right the level is the same (vertex
-// functions lose anisotropy for these samples). NVAIR_VERTEX_3D_GRADIENT_FIX=0 turns it off. 3D gradients in fragment
-// functions keep the hardware's level, with anisotropy (within 0.11 of the exact level for diagonal gradients, a
-// formula OpenGL allows; deqp's fragment cases pass).
+// ---- gradient samples of 3D textures and cubes ----------------------------------------------------------------------
+// Gradient samples of 3D textures and cubes broke compute kernels, cube gradients along the major axis got the wrong
+// level elsewhere, and so did 3D ones in ANGLE's vertex shaders: each is done at the level Vulkan's formula picks (no
+// anisotropy). NVAIR_GRADIENT_FIX (compute), NVAIR_CUBE_GRADIENT_FIX, NVAIR_VERTEX_3D_GRADIENT_FIX. (a09, i08, n27)
 enum { LLVMRealOGE = 3, LLVMRealOLT = 4 };
 
 struct FloatGen {
@@ -1015,14 +874,10 @@ static unsigned fixGradientSamples(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
-// ---- depth comparisons at a level other than a constant 0 -----------------------------------------------------------------
-// On Kepler a depth comparison (sample_compare) with an explicit level or a bias that isn't a constant 0 returns the
-// texel's depth instead of the comparison: level(1.0), level(0.4), level(-1.0) and bias(5.0) all did, on a one-level
-// texture too, while the implicit level, level(0.0) and bias(0.0) compare (GTX 770, fragment function; i03, ANGLE's
-// texture(sampler2DShadow, coord, bias)). Gradient comparisons have no body at all. There is no form that compares at a
-// level above 0, so: a .lod comparison is done at level 0 (exact for shadow maps with one level, which every level
-// clamps to; a mipmapped one compares at level 0), and in fragment functions a .bias one at the implicit level, as
-// IntelAdapter does for Intel's compiler. NVAIR_COMPARE_LEVEL_FIX=0 turns it off.
+// ---- depth comparisons at a level other than a constant 0 -----------------------------------------------------------
+// A depth comparison at a level or bias other than a constant 0 returned the depth: a .lod one is done at level 0
+// (exact for one-level shadow maps), a .bias one in fragment functions at the implicit level. NVAIR_COMPARE_LEVEL_FIX.
+// (i03)
 static unsigned fixDepthCompareLevels(LLVMModuleRef module, Gen &g) {
     static const char kPrefix[] = "llvm.nvvm.sample.compare.tex.";
     bool compute = LLVMGetNamedMetadataNumOperands(module, "air.kernel") != 0;
@@ -1078,15 +933,9 @@ static unsigned fixDepthCompareLevels(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
-// ---- depth comparisons with gradients (no body in the plugin) ---------------------------------------------------------
-// The plugin's library has sample_compare on 2D, 2D-array, cube and cube-array depth textures at a level or with a bias,
-// and no gradient form: a comparison with gradient2d(...) or gradientcube(...) stayed a bare declaration, which
-// instruction selection fails on ("Unhandled constant"). Kepler compares only at level 0 anyway (see the next fix), so
-// such a comparison is made at level 0 through the intrinsic the library's own level form calls
-// (llvm.nvvm.sample.compare.tex.<shape>[.offset].lod): exact for shadow maps of one level, level 0 of a mipmapped one.
-// A 2D comparison with a texel offset keeps it when the offset is a constant (the hardware takes it as an immediate);
-// one with a computed offset is left as it is. The newer front ends' { float, i8 } result gets the comparison in the
-// float. NVAIR_COMPARE_GRADIENT_FIX=0 turns it off.
+// ---- depth comparisons with gradients (no body in the plugin) -------------------------------------------------------
+// Depth comparisons with gradients have no body in the plugin (instruction selection fails): done at level 0 through
+// the library's own level intrinsic, keeping a constant texel offset. NVAIR_COMPARE_GRADIENT_FIX. (i78, n05)
 static unsigned fixGradientCompares(LLVMModuleRef module, Gen &g) {
     enum { kStructKind = 10, kPointerKind = 12 };
     LLVMTypeRef f32 = LLVMFloatTypeInContext(g.context), v2 = LLVMVectorType(f32, 2), v3 = LLVMVectorType(f32, 3), v4 = LLVMVectorType(f32, 4);
@@ -1183,12 +1032,10 @@ static unsigned fixGradientCompares(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
-// ---- clz and ctz of a constant 0 ----------------------------------------------------------------------------------------
-// The plugin's built-in library writes air.clz.i32 as llvm.ctlz.i32(x, true): "the result for 0 is undefined". At run
-// time the GPU gives 32 for 0 anyway, but where the optimizer sees a constant 0 it folds the count to undef, and Metal's
-// clz(0) is the width: madhi(v, clz(0u), 0) came out as garbage on Kepler (fuzz seed 758, plain kernels). Every
-// llvm.ctlz / llvm.cttz call asks for the defined result instead (false), which the hardware gives at no cost.
-// NVAIR_COUNT_ZERO_FIX=0 turns it off.
+// ---- clz and ctz of a constant 0 ------------------------------------------------------------------------------------
+// The library's clz/ctz are undefined at 0, which the optimizer folds to garbage for a constant 0 (Metal's is the
+// width): every llvm.ctlz/cttz asks for the defined result, which the hardware gives anyway. NVAIR_COUNT_ZERO_FIX.
+// (n01)
 static unsigned defineCountOfZero(LLVMModuleRef module, Gen &g) {
     unsigned fixed = 0;
     LLVMValueRef yes = LLVMConstInt(g.i1, 1, 0), no = LLVMConstInt(g.i1, 0, 0);
@@ -1205,31 +1052,12 @@ static unsigned defineCountOfZero(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
-// ---- private arrays of bytes and halfwords done on 32-bit words (IntelAdapter's widenNarrowPrivateArrays) ---------------
-// A private uchar / ushort array (uchar pc[8]) is stored with truncating stores and read with extending loads, and Kepler's
-// back end forwarded a stored 32-bit value to such a load without masking it: pc[i] kept the bits above its byte where a
-// 64-bit product and compare used it (mslfuzz2 LONG=1 seeds 575 and 770, reduced: with a uint array, or the byte from a
-// register, right). The same bug as Intel's i47. An array of 8- or 16-bit integers that only GEPs into its elements reach,
-// with only loads and stores of the element type behind them, keeps its element type, and each load's value reaches its
-// users masked to its width, through llvm.nvvm.min.u.i32 so that neither optimizer can drop the mask as redundant:
-// trunc(min.u(zext(load), ~0) & 0xff). NVAIR_NARROW_PRIVATE_ARRAY_FIX=0 turns it off.
-// This used to be done by making the array one of i32 (stores zero-extending, loads truncating), which fixed the same
-// kernels, but with the word array a store and a later load at a variable index inside a loop, with enough other code
-// around them, could give the load the slot's old value, and the kernels that went wrong that way shifted with almost
-// any change to the rest of the adapter (FIXES.md, Known limitations: VEC=1 seeds 2603, 3890 and 4417 and FRAG=1 VEC=1
-// seeds 1089 and 2712 at the end). With the masked loads instead, 2603, 3890 and 1089 are right, n02 still passes, and none
-// of the other seeds that ever failed went wrong. NVAIR_PRIVATE_ARRAY_WORDS=1 brings the word array back.
-
-// Private arrays wrapped in a struct: ANGLE writes GLSL arrays as metal::array<T, N>, a struct holding the array, so such a
-// private array reaches the back end as alloca {[N x T]} with GEPs (s, 0, 0, i), where the C arrays the private-array fixes
-// match (fixPrivateConstantLoads, widenNarrowPrivateArrays, ...) are alloca [N x T] with GEPs (a, 0, i). Their bugs came
-// back in that form, which every WebGL shader with a GLSL array has (Chrome, Safari, Firefox): n02, n26 and n31 written
-// with metal::array failed (57 of 256 threads, 11 of 2048 words, 71 of 256 pixels) where the C-array versions pass; the
-// AMD adapter had the same gap (item 78). Such an alloca becomes the array itself, before the other passes: each GEP
-// (s, 0, 0, rest) becomes (a, 0, rest), (s, 0, 0) becomes a, and any other use (lifetime markers, a memcpy, (s, 0)) gets
-// the array's address cast to the struct's pointer type: the same memory. NVAIR_ARRAY_STRUCT_FIX=0 turns it off.
-// Tests: n44, n45, n46 (n26, n02 and n31 with metal::array).
-
+// ---- private arrays of bytes and halfwords done on 32-bit words (IntelAdapter's widenNarrowPrivateArrays) -----------
+// The back end forwarded a stored word to a narrow load from a private uchar/ushort array without masking it: each such
+// load's value is masked to its width through the opaque min. NVAIR_NARROW_PRIVATE_ARRAY_FIX (i47, n02);
+// NVAIR_PRIVATE_ARRAY_WORDS=1 brings back the older i32-array form, which was layout-sensitive.
+// ANGLE writes GLSL arrays as metal::array, a struct around the array that the private-array fixes don't match: such an
+// alloca becomes the array itself, before them. NVAIR_ARRAY_STRUCT_FIX. (n44, n45, n46)
 static unsigned unwrapArrayStructs(LLVMModuleRef module, Gen &g) {
     enum { kStructKind = 10, kArrayKind = 11 };
     std::vector<LLVMValueRef> allocas;
@@ -1371,17 +1199,10 @@ static unsigned widenNarrowPrivateArrays(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
-// ---- device loads in fragment functions at a negative 32-bit index ------------------------------------------------------
-// Kepler's driver faults on a load outside every buffer, and reports it on a later command buffer as
-// kIOAccelCommandBufferCallbackErrorInvalidResource (the app sees that command buffer fail; ANGLE loses the context).
-// Fragment functions run helper lanes for the pixels of a 2x2 quad outside the primitive or the scissor rectangle, and
-// their loads count: ANGLE's buffer-to-texture shaders (readFromBuffer*TextureFS, how WebGL uploads from a pixel unpack
-// buffer that needs converting) compute uint2(position) - textureOffset, which wraps for those lanes, and read
-// ~4 GB past the buffer: Chrome's WebGL lost its context in texSubImage2D from a PBO of RGBA4, RGB565, RGB5_A1 and RGB
-// data, and after two GPU process crashes turned WebGL off (Khronos WebGL 2.0.1, deqp texsubimage2d_pbo). On a 2 GB
-// card no buffer reaches 2^31 bytes, so a 32-bit index with its top bit set can only be outside: in fragment modules,
-// such an index (the i32 a device load's GEP widens) reads element 0 instead, as x & ~(x >> 31) (no predicate).
-// NVAIR_FRAGMENT_LOAD_GUARD=0 turns it off.
+// ---- device loads in fragment functions at a negative 32-bit index --------------------------------------------------
+// Kepler faults on a load outside every buffer (a later command buffer fails), and helper lanes of ANGLE's PBO-upload
+// shaders compute wrapped indices: in fragment modules a 32-bit index with its top bit set, beyond any buffer on a 2 GB
+// card, reads element 0 instead. NVAIR_FRAGMENT_LOAD_GUARD. (n07)
 enum { kGuardAnd = 23, kGuardXor = 25, kPointerKind = 12 };  // LLVM-C's LLVMAnd, LLVMXor, LLVMPointerTypeKind
 static bool guardedIndex(LLVMValueRef x) {  // x & ~(x >> 31), as this pass writes it
     if (!LLVMIsAInstruction(x) || LLVMGetInstructionOpcode(x) != kGuardAnd) return false;
@@ -1420,16 +1241,9 @@ static unsigned guardFragmentLoads(LLVMModuleRef module, Gen &g) {
 }
 
 // ---- discard_fragment as demote-to-helper ---------------------------------------------------------------------------
-// The plugin's library defines air.discard_fragment as llvm.nvvm.discard_fragment + llvm.nvvm.exit: the lane ends there,
-// and every derivative its 2x2 quad takes after that is 0, on all of the quad's lanes (dfdx of a value computed before
-// the discard too; before the discard they're right). Metal 2.3 and WGSL make a discarded fragment a helper that runs on
-// for its quad's derivatives, and front ends rely on it (Tint emits discard_fragment() and takes dpdx after it): the WebGPU
-// CTS statement,discard:derivatives read 0 where it wants +/-3, and an implicit-LOD sample after an alpha-test discard
-// picks level 0 in the quads at the cut-out's edge. In a fragment function that calls air.discard_fragment itself, where
-// a derivative, texture sample or quad / SIMD operation can run after a discard, each call sets a private flag, the lane
-// runs on, and it is discarded where the function returns; its device stores, atomics and texture writes after the
-// flag is set are skipped (each through an always-inline nvair.guard: the inliner splits the blocks). A function that only
-// reaches discard_fragment through a call keeps it as it was. NVAIR_DEMOTE_DISCARD=0 turns it off.
+// The plugin ends a discarded lane, so its quad's later derivatives are 0, where Metal 2.3 and WGSL keep it as a
+// helper: a discard sets a flag, the lane runs on with its stores skipped, and is discarded on return.
+// NVAIR_DEMOTE_DISCARD. (n10)
 static bool startsWith(const char *s, const char *prefix) { return !strncmp(s, prefix, strlen(prefix)); }
 static LLVMValueRef calledFunction(LLVMValueRef call) {
     LLVMValueRef callee = LLVMGetCalledValue(call);
@@ -1449,8 +1263,8 @@ static bool sideEffect(LLVMValueRef inst) {
     const char *name = f ? LLVMGetValueName(f) : "";
     return (startsWith(name, "air.atomic.") && !strstr(name, "fence")) || startsWith(name, "air.write_texture");
 }
-// Whether code that needs the quad's other lanes (helpersNeeded) can run after this discard: the rest of its block and every
-// block reachable from there.
+// Whether code that needs the quad's other lanes (helpersNeeded) can run after this discard: the rest of its block and
+// every block reachable from there.
 static bool helpersAfter(LLVMValueRef discardCall) {
     auto needs = [](LLVMValueRef inst) {
         if (!LLVMIsACallInst(inst)) return false;
@@ -1578,22 +1392,13 @@ static unsigned demoteDiscards(LLVMModuleRef module, Gen &g) {
     return demoted;
 }
 
-// ---- 32-bit products of 16-bit factors -----------------------------------------------------------------------------------
-// When both factors of a 32-bit multiply are known to fit in 16 bits (zero-extended bytes / halfwords, masked with
-// 0xffff or less, or such values or'ed together), Kepler's compiler took the product's top bit for clear, though 0xffff * 0xffff = 0xfffe0001: with it,
-// -(int)(~(ushort(a) * ushort(b)) & 0x7fffffff), which is (product | 0x80000000) + 1, came out as product + 0x80000001,
-// wrong by 2^31 for about half of all inputs (mslfuzz2 FRAG=1 seed 111, reduced; in kernels too; a full 32-bit product
-// is right). One factor goes through llvm.nvvm.min.u.i32(x, ~0u), the value unchanged but its range hidden from the
-// optimizer. The same wrong knowledge of a product made x % (((b | 1) * c) | 1) off by one in 17% of cases (the or taken
-// for an add: mslfuzz GEN=mslfuzz.py seed 645, reduced; a divisor that isn't a product is right): an or that uses a
-// 32-bit product gets it through the same opaque min. NVAIR_NARROW_MULTIPLY_FIX=0 turns both off. A narrow factor times
-// a constant wider than 16 bits had the same problem: in VEC=1 seed 8322, v1 = vf(short4(...) & mask), lanes masked to 15
-// bits and multiplied by 65599 and 16777619, then (int)v1 >> 23 | 1 as a divisor, came out wrong on 25 threads; with each
-// such product given to its users through the opaque min it is right, and so it is with the factor hidden instead (which
-// made seed 14028 wrong), so it is the back end's knowledge of the product, not the multiply. NVAIR_WIDE_CONSTANT_PRODUCT_FIX=0.
+// ---- 32-bit products of 16-bit factors ------------------------------------------------------------------------------
+// With both factors known to fit in 16 bits the back end took the product's top bit for clear (and an or with a product
+// for an add): one factor, and a product an or uses, go through the opaque min. NVAIR_NARROW_MULTIPLY_FIX (n03);
+// products of a narrow value and a wide constant reach their users the same way, NVAIR_WIDE_CONSTANT_PRODUCT_FIX (n42).
 enum { LLVMMul = 12, LLVMAnd = 23, LLVMOr = 24, LLVMXor = 25, LLVMSelect = 46 };
-// Known to fit in 16 bits: a constant up to 0xffff, a zero-extended byte or halfword, an and with such a value, an or / xor
-// / select of two such values, a shift right by 16 or more (what LLVM leaves of ushort casts, masks and | 0x8000).
+// Known to fit in 16 bits: a constant up to 0xffff, a zero-extended byte or halfword, an and with such a value, an or /
+// xor / select of two such values, a shift right by 16 or more (what LLVM leaves of ushort casts, masks and | 0x8000).
 static bool narrowFactor(LLVMValueRef v, int depth = 0) {
     if (LLVMIsAConstantInt(v)) return LLVMConstIntGetZExtValue(v) <= 0xffffu;
     if (depth > 4 || !LLVMIsAInstruction(v)) return false;
@@ -1670,20 +1475,12 @@ static unsigned hideNarrowProducts(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
-// ---- texture atomics on linear 2D textures (MetalOldCompat item 58) --------------------------------------------------
-// Kepler's back end has no texture (surface) atomics the plugin can emit, and its library has no body for MSL 3.1's
-// texture atomics (atomic_fetch_add etc. on a read_write texture2d<uint> or texture2d<int>): the compile crashed the
-// compiler service (a01). MetalOldCompat item 58 makes each R32Uint / R32Sint 2D texture created with
-// MTLTextureUsageShaderAtomic a linear texture in a buffer of its own, the texels after a 256-byte header {magic, row
-// pitch in words, width, height}, and binds that buffer (or a dummy without the magic, for any other texture) at a hidden
-// buffer index before each draw or dispatch. Here each texture atomic becomes the plugin's own global atomic on that
-// buffer at word 64 + y * pitch + x, or on scratch word 8 of the header when the coordinate is outside the texture or the
-// buffer has no header (relaxed order, the only one MSL allows on textures). The hidden indices: each read_write
-// texture2d<uint> / texture2d<int> argument (not arrays), in order of [[texture(n)]], gets one, counted down from 30 over
-// the buffer indices the function doesn't use (vertex functions keep 0-16 for vertex buffers); item 58 works the same out
-// from the pipeline's reflection, which can't see what the plugin adds. The function is rebuilt with a parameter per
-// texture its atomics use (__nvta_<n>); the old one stays, empty and renamed. Other texture types (1D, 2D arrays, 3D,
-// texture buffers) have no linear form on Kepler and are left as they are. NVAIR_TEXTURE_ATOMICS=0 turns it off.
+// ---- texture atomics on linear 2D textures (MetalOldCompat item 58) -------------------------------------------------
+// The plugin can't compile texture atomics (the compiler crashed). Item 58 puts such textures in a buffer after a
+// 256-byte header {magic, row pitch in words, width, height}; each atomic becomes a global one at word 64 + y * pitch +
+// x (scratch word 8 when outside or headerless), the buffer at a hidden index per read_write texture2d<uint/int>
+// argument, counted down from 30 over unused indices (vertex functions keep 0-16), as item 58 counts them.
+// NVAIR_TEXTURE_ATOMICS. (a01, n04)
 extern "C" void functionCopyAttributesFrom(void *function, const void *source) asm("__ZN4llvm8Function18copyAttributesFromEPKNS_11GlobalValueE");
 extern "C" void basicBlockInsertInto(void *block, void *function, void *before) asm("__ZN4llvm10BasicBlock10insertIntoEPNS_8FunctionEPS0_");
 
@@ -1881,14 +1678,10 @@ static unsigned lowerTextureAtomics(LLVMModuleRef module, Gen &g) {
     return lowered;
 }
 
-// ---- depth / stencil textures' channels in ANGLE's shaders (MetalOldCompat item 62) ------------------------------------
-// Kepler's sampler returns a depth texture's depth in all four channels, (d, d, d, d), and a stencil view's value as
-// (s, s, s, s), through texture2d<float> / <uint>; OpenGL ES wants (d, 0, 0, 1) and (s, 0, 0, 1), and ANGLE gets that from
-// swizzled views this driver doesn't make. In an ANGLE vertex or fragment function (an ANGLE_angleUniforms argument) with a
-// texture argument that isn't a depth texture, each sample or read of a texture argument comes out (x, 0, 0, 1) when bit
-// n (its [[texture(n)]]) of a mask is set: a constant uint array at a hidden buffer index (__nvds), the next free one
-// counted down from 30 after the texture atomics' (vertex functions keep 0-16), which item 62 works out the same way from
-// the pipeline's reflection and fills before each draw from the textures bound. NVAIR_DEPTH_CHANNELS=0 turns it off.
+// ---- depth / stencil textures' channels in ANGLE's shaders (MetalOldCompat item 62) ---------------------------------
+// Kepler's sampler returns (d, d, d, d) for depth and (s, s, s, s) for stencil where OpenGL ES wants (x, 0, 0, 1): in
+// ANGLE's shaders a sample or read of texture argument n gives (x, 0, 0, 1) when bit n of a mask is set, at the next
+// hidden index after item 58's (item 62 fills it per draw). NVAIR_DEPTH_CHANNELS. (n11)
 static bool depthTextureArgument(const std::vector<LLVMValueRef> &f) {
     for (size_t k = 0; k + 1 < f.size(); k++)
         if (isString(f[k], "air.arg_type_name")) {
@@ -2009,13 +1802,10 @@ static unsigned fixDepthChannels(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
-// ---- large copies as loops ---------------------------------------------------------------------------------------------
-// The plugin's back end takes time about cubic in the size of a constant-length llvm.memcpy (it lowers each to one load
-// and store a word): a pipeline copying a 168-byte struct between device buffers took 14 s to build, 232 bytes 37 s, and
-// a WebGPU CTS kernel copying a few such structs (shader,execution,expression,call,user,ptr_aliasing) kept the compiler
-// service busy for over 13 minutes (the page never got its pipeline). A memcpy of 64 bytes or more, word-aligned and a
-// whole number of words, becomes a loop of word loads and stores (nvair.copy.<dst>.<src>, always-inline), its trip count
-// behind the plugin's opaque llvm.nvvm.min.u.i32 so the optimizer can't unroll it back. NVAIR_LARGE_COPY_LOOP=0.
+// ---- large copies as loops ------------------------------------------------------------------------------------------
+// The back end's time is about cubic in a constant-length memcpy's size (a WebGPU CTS kernel took 13 minutes): copies
+// of 64 bytes or more, whole words, become word loops with the trip count behind the opaque min. NVAIR_LARGE_COPY_LOOP.
+// (n12)
 static LLVMValueRef copyHelper(Gen &g, unsigned dstSpace, unsigned srcSpace) {
     char name[64];
     snprintf(name, sizeof name, "nvair.copy.%u.%u", dstSpace, srcSpace);
@@ -2084,13 +1874,9 @@ static unsigned loopLargeCopies(LLVMModuleRef module, Gen &g) {
     return (unsigned)copies.size();
 }
 
-// ---- half vectors spelled as bitcasts in constants --------------------------------------------------------------------
-// A constant array of half2x2 (WGSL `const` matrices of f16: WebGPU CTS shader,execution,expression,constructor) reaches
-// the plugin with each half2 column spelled as a constant expression, bitcast (<1 x i32> <i32 bits> to <2 x half>), and
-// its constant lowering crashes on that (a null dereference in a recursive walk: the compiler service died on every try,
-// and the app's next compile waited on it forever). half2 alone, half4, half3x3 and float2x2 constants are spelled
-// plainly and compile. In global initializers, each such bitcast becomes the plain half vector it stands for.
-// NVAIR_HALF_CONSTANT_FIX=0 turns it off.
+// ---- half vectors spelled as bitcasts in constants ------------------------------------------------------------------
+// A constant half2x2 array arrives with each column as a bitcast constant expression, which crashes the plugin's
+// constant lowering: such bitcasts in global initializers become plain half vectors. NVAIR_HALF_CONSTANT_FIX. (n13)
 enum { kOpBitCast = 41 };  // LLVM-C's LLVMBitCast
 static double halfBitsToDouble(unsigned h) {
     int sign = (h >> 15) & 1, exponent = (h >> 10) & 31;
@@ -2169,24 +1955,11 @@ static void logBareIntrinsics(LLVMModuleRef module) {
     }
 }
 
-// ---- private arrays: loads at a constant index ------------------------------------------------------------------------
-// The back end took two loads of the same element of a private array at a constant index for one value when the array is
-// also written at a variable index between them: with v5 = pc[0] before a loop that loads pc[0] again and stores pc[i],
-// v5 came out as the loop's last pc[0] (as if reloaded after it), even with every access to the array volatile
-// (mslfuzz2.py seed 2136 on the GTX 770; the same kernel with the loop's load at pc[1], or the first load at an index the
-// back end can't fold, is right). In kernels, each load from a private array that is also accessed at a variable index
-// gets such an index: the constant plus ((the kernel's thread position + k) >> 31), always 0, a different k for each
-// load so that no two of them look alike (a kernel without a thread-position argument is left alone: the back end has
-// no special register read for an adapter to add). NVAIR_PRIVATE_CONSTANT_LOAD_FIX=0 turns it off. Fragment and vertex
-// functions get it too, from their position or vertex_id (FRAG=1 seed 2136, the same body as the kernel of seed 2136);
-// NVAIR_PRIVATE_CONSTANT_GRAPHICS_FIX=0 turns that part off. Stores are left alone: the same index on constant-index
-// stores in loops made VEC=1 seed 2603 right but broke seed 3890, and rewriting almost any one of 2603's stores alone made
-// it right, so that was moving a layout-sensitive miscompile, not fixing one (FIXES.md, Known limitations).
-// Loads in the returning block with no store to the array after them are left alone too: no store can come after them, so
-// there is nothing to take them past, and the extra index arithmetic on the 16 loads of the fuzzer's final hash of p[] and
-// pc[] was itself what made VEC=1 seeds 4417, 7105 and 14028 and FRAG=1 VEC=1 seed 2636 wrong (each right with this pass off,
-// or with those loads left alone, while seed 2136, the pass's own case, stays right). NVAIR_PRIVATE_FINAL_LOADS_FIX=0
-// rewrites them as well.
+// ---- private arrays: loads at a constant index ----------------------------------------------------------------------
+// The back end took two loads of one private-array element at a constant index for one value across a store at a
+// variable index: such loads get an always-zero index from the thread position, a different one each.
+// NVAIR_PRIVATE_CONSTANT_LOAD_FIX (n26), NVAIR_PRIVATE_CONSTANT_GRAPHICS_FIX (n31); loads after the last store stay,
+// NVAIR_PRIVATE_FINAL_LOADS_FIX=0 too (n40).
 static bool loadAfterLastStore(LLVMValueRef load, LLVMValueRef array) {
     LLVMValueRef term = LLVMGetBasicBlockTerminator(LLVMGetInstructionParent(load));
     if (!term || LLVMGetInstructionOpcode(term) != 1) return false;  // ret
@@ -2282,14 +2055,9 @@ static unsigned fixPrivateConstantLoads(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
-// ---- overflow intrinsics ---------------------------------------------------------------------------------------------------
-// Metal's front end turns overflow checks into LLVM's *.with.overflow intrinsics: (0xffffffffu / a) < b and
-// ulong(a) * ulong(b) > 0xffffffffull both become llvm.umul.with.overflow.i32, which the plugin's back end can't select
-// ("Unhandled atom in intrinsic: llvm.umul.with.overflow.i32": the pipeline failed; mslfuzz2.py VEC=1 seed 2478). Each
-// {u,s}{add,sub,mul}.with.overflow.i{8,16,32,64} becomes plain arithmetic: the result, and the overflow bit from a compare
-// (add, sub) or from the high half of the product (mul: in i64 for i32 and narrower, the adapter's mulHi for i64).
-// The plugin's own optimizer makes them too (a udiv -1 compare in one run of the pass manager is the intrinsic in the
-// next), so this runs on every module. NVAIR_OVERFLOW_FIX=0 turns it off.
+// ---- overflow intrinsics --------------------------------------------------------------------------------------------
+// The back end can't select LLVM's *.with.overflow intrinsics, which the front end and the plugin's optimizer make of
+// overflow checks: each becomes plain arithmetic plus a compare or the product's high half. NVAIR_OVERFLOW_FIX. (n28)
 static unsigned fixOverflowIntrinsics(LLVMModuleRef module, Gen &g) {
     std::vector<LLVMValueRef> functions;
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
@@ -2370,16 +2138,9 @@ static unsigned fixOverflowIntrinsics(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
-// ---- saturating multiply-add ------------------------------------------------------------------------------------------------
-// madsat(a, b, c) (air.mad_sat.{u,s}.i{8,16,32}) came out saturated in a big kernel for madsat(0, 0xfffffffe, c), which is
-// c (mslfuzz2.py LONG=1 seed 2245: one thread of 256; every small kernel with the same operands, constant or not, was
-// right). The plugin's own body did it, and so did a plain i64 a * b + c with the clamp on its high word: that high word
-// came out nonzero for a product of 0, as a carry into it would make it, though the IR (after the plugin's optimizer)
-// was right. With the carry into the high word computed by a compare instead of a 64-bit add it is right. So each call
-// becomes the adapter's own body without 64-bit adds: 8 and 16 bits in 32-bit arithmetic (the exact a * b + c fits), 32
-// bits as the 64-bit product's two words plus c with the carry from a compare; clamped to the type's range, the clamp
-// decided against values InstCombine can't see through (behind the plugin's own llvm.nvvm.min.u.i32, as for the overflow
-// intrinsics). Scalar forms only. NVAIR_MAD_SAT_FIX=0 turns it off.
+// ---- saturating multiply-add ----------------------------------------------------------------------------------------
+// madsat came out saturated for a zero product in a big kernel (a carry into the 64-bit high word): each call gets the
+// adapter's body, with the carry from a compare instead of a 64-bit add. NVAIR_MAD_SAT_FIX. (n30)
 static unsigned lowerMadSat(LLVMModuleRef module, Gen &g) {
     std::vector<LLVMValueRef> functions;
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
@@ -2456,15 +2217,10 @@ static unsigned lowerMadSat(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
-// ---- remainder by a divisor that turns out to be 1 ----------------------------------------------------------------------------
-// In a big kernel, 0xffffffff % b with b = (31 * x) | 1 = 1 came out as 766 instead of 0 for one thread (mslfuzz2.py VEC=1
-// seed 3841; the kernel with the operands written out was right). Kepler's division takes its final correction step every
-// time for a divisor of 1, so that step going wrong in some register contexts shows there. Each 32-bit remainder whose
-// divisor isn't a constant becomes select(b == 1, 0, the original): with that the kernel is right, while the same select
-// on b == 2 (an exact equivalent too, as much of a change to the code) left it wrong. Remainders only: guarding divisions
-// as well, which no failing kernel needed, made LONG=1 seed 3034 wrong (each half alone left it right, the layout-dependent
-// miscompile of the known limitations). The arm goes through the plugin's opaque llvm.nvvm.min.u.i32, since InstCombine
-// drops a select whose arms it can prove equal. NVAIR_DIVISOR_ONE_FIX=0 turns it off.
+// ---- remainder by a divisor that turns out to be 1 ------------------------------------------------------------------
+// A 32-bit remainder by a variable divisor of 1 went wrong in some register contexts (the division's final correction
+// always runs for 1): x % b becomes select(b == 1, 0, x % b), the arm through the opaque min. NVAIR_DIVISOR_ONE_FIX.
+// (n32)
 static unsigned guardDivisorOne(LLVMModuleRef module, Gen &g) {
     std::vector<LLVMValueRef> divs;
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
@@ -2506,18 +2262,9 @@ static unsigned guardDivisorOne(LLVMModuleRef module, Gen &g) {
     return n;
 }
 
-// ---- a 2- or 4-lane vector of 8- or 16-bit integers masked or shifted with a constant ----------------------------------
-// q = (uchar4(201, v1, v2, v3) << uchar4(0, 7, 2, 5)) & uchar4(78, 137, 22, 80), then q.x ^ q.y, came out 0x40 instead of
-// 0x48 (0xc0 for 0xc8) on every thread: lane x, the constant 201 & 78, lost bit 3 (mslfuzz2.py VEC=1 seed 7232, where it
-// was a threadgroup index, so every thread's result in a word, and two more words in some threads). The IR the back end
-// gets is right: a shl <4 x i8> by <0, 7, 2, 5>, an and with a constant, two extractelements and an 8-bit or (the
-// optimizer's form of that xor, the lanes' bits being disjoint). The same with ushort4 goes wrong too; a variable lane x,
-// the same shift for every lane, a uchar2, no mask, xor or or with the constant, an add of the two lanes instead, or lane x
-// alone were right. Done lane by lane, the and alone fixes the seed, but with shifts of <0, 7, 0, 0> the vector shift left
-// over still goes wrong; the shift and the and both done lane by lane fix every form. So each and with a constant, and
-// each shl, lshr and ashr by constant amounts that aren't the same for every lane, of a 2- or 4-lane vector of 8- or
-// 16-bit integers, is done lane by lane (Kepler has no packed 8- or 16-bit logic or shifts, so the back end takes the
-// vector apart anyway; 3-lane vectors: below). NVAIR_VECTOR_CONSTANT_FIX=0 turns it off.
+// ---- a 2- or 4-lane vector of 8- or 16-bit integers masked or shifted with a constant -------------------------------
+// An and with a constant, or shifts by per-lane constant amounts, of a 2- or 4-lane 8/16-bit vector lost bits: done
+// lane by lane (Kepler takes such vectors apart anyway). NVAIR_VECTOR_CONSTANT_FIX. (n35)
 static bool perLaneAmounts(LLVMValueRef c) {  // a constant vector whose lanes aren't all the same constant
     if (!LLVMIsAConstant(c)) return false;
     bool dv = LLVMIsAConstantDataVector(c), cv = LLVMIsAConstantVector(c);
@@ -2568,17 +2315,9 @@ static unsigned scalarizeConstantLaneOps(LLVMModuleRef module, Gen &g) {
     return (unsigned)ops.size();
 }
 
-// ---- divisions and remainders of 8- and 16-bit values ---------------------------------------------------------------------
-// The back end got divisions and remainders of 8- and 16-bit scalars wrong, the way it got their compares wrong (below): in
-// FRAG=1 VEC=1 ASTYPE=1 seed 2712, a loop exiting on (ushort4(1, 1, ushort(v3), 1) / (ushort4(1, 1, ushort(x), 1) | 1)) & 3,
-// the narrow vectors done lane by lane left udiv i16 (trunc i32 product), (or (trunc i32 x), 1), and up to 55 of 256 pixels
-// came out wrong per word, under every other switch; the same lane written as a 32-bit or as a scalar ushort division in
-// the source is right, and so is the shader with the division made 32-bit, while the same added code with the division
-// left 16-bit (the operands through the opaque min and truncated again) is not. Each udiv and urem (zero-extended) and
-// sdiv and srem (sign-extended) of i8 or i16 scalars is now done in 32 bits on the extended operands, each non-constant one
-// through llvm.nvvm.min.u.i32(x, ~0) so that the optimizer can't narrow it back, and truncated. That also made VEC=1 seed
-// 4417 and VEC=1 ASTYPE=1 LONG=1 seed 4339 right (a uchar4 remainder by a select of lanes), both listed as layout-dependent,
-// and no other seed that ever failed wrong. NVAIR_NARROW_DIVISION_FIX=0 turns it off.
+// ---- divisions and remainders of 8- and 16-bit values ---------------------------------------------------------------
+// Divisions and remainders of i8/i16 scalars came out wrong: done in 32 bits on the extended operands, through the
+// opaque min so the optimizer can't narrow them back. NVAIR_NARROW_DIVISION_FIX. (n34, n43)
 static unsigned widenNarrowDivisions(LLVMModuleRef module, Gen &g) {
     std::vector<LLVMValueRef> ops;
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
@@ -2619,17 +2358,9 @@ static unsigned widenNarrowDivisions(LLVMModuleRef module, Gen &g) {
     return (unsigned)ops.size();
 }
 
-// ---- right shifts of 8- and 16-bit values --------------------------------------------------------------------------------
-// Lanes of a narrow vector shifted right by a masked variable amount came out wrong: in a fragment shader reduced from
-// ANGLE=1 FRAG=1 VEC=1 ASTYPE=1 seed 29, all(char3(1, char(x ^ v0), 1) >> (char3(1, char(v0), 1) & char3(1, 7, 1)) < 1), the
-// 3-lane arithmetic done lane by lane (above) left ashr i8 (trunc i32 a), (and (trunc i32 v0), 7), and the threads where v0
-// had upper bits set were wrong; the char4 and uchar4 forms of it (made scalar by scalarizeNarrowVectors) too, and all of
-// them right in vector form or written as scalar shifts in the source, which C promotes to 32 bits. The amount is what
-// matters: with only the amount through llvm.nvvm.min.u.i32 and truncated again the shifts are right, while the value
-// zero-extended for an arithmetic shift changes nothing, so the back end drops the mask as redundant for an 8-bit shift and
-// shifts by the whole 32-bit register. Each lshr (zero-extended) and ashr (sign-extended) of an i8 or i16 scalar is now done
-// in 32 bits, the value through the opaque min when not constant and the amount through it always, so that the optimizer
-// can't narrow it back, and truncated. Test n47. NVAIR_NARROW_SHIFT_FIX=0 turns it off.
+// ---- right shifts of 8- and 16-bit values ---------------------------------------------------------------------------
+// For an i8/i16 right shift by a masked amount the back end dropped the mask and shifted by the whole register: done in
+// 32 bits, the amount (and a variable value) through the opaque min. NVAIR_NARROW_SHIFT_FIX. (n47)
 static unsigned widenNarrowShifts(LLVMModuleRef module, Gen &g) {
     std::vector<LLVMValueRef> ops;
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
@@ -2673,18 +2404,9 @@ static unsigned widenNarrowShifts(LLVMModuleRef module, Gen &g) {
     return (unsigned)ops.size();
 }
 
-// ---- compares of 8- and 16-bit values -----------------------------------------------------------------------------------
-// The back end got equality and unsigned compares of 8- and 16-bit scalars wrong: in a kernel reduced from VEC=1 seed 13302,
-// a loop exiting when two lanes of a uchar4 select are equal, the narrow vectors done lane by lane (above) left
-// icmp eq i8 (trunc i32 y), 0 and icmp ne/ugt i8 compares of the lanes, and 199 of 256 threads came out wrong; the same
-// condition written with the compares in 32 bits (and y, 255) is right, and so is the kernel with each such compare made
-// 32-bit, while the same added code with the compares left 8-bit (the operand through llvm.nvvm.min.u.i32 and truncated
-// again) is not. Each eq, ne and unsigned icmp of i8 or i16 scalars now compares the operands zero-extended to 32 bits, a
-// non-constant one through llvm.nvvm.min.u.i32(x, ~0) so that the optimizer can't narrow the compare back. That also made
-// VEC=1 seeds 1523, 7501, 11519 and 12616 right (listed as layout-dependent), and seed 4417 wrong again. Signed compares are
-// left alone: widening them as well (sign-extended) changed none of those seeds for the better and made seed 14028 wrong.
-// The kernel of n39 (selects of narrow vectors) is right with either this or the selects done lane by lane.
-// NVAIR_NARROW_COMPARE_FIX=0 turns it off.
+// ---- compares of 8- and 16-bit values -------------------------------------------------------------------------------
+// Equality and unsigned compares of i8/i16 scalars came out wrong: done on operands zero-extended to 32 bits through
+// the opaque min (signed ones stay: widening them broke other kernels). NVAIR_NARROW_COMPARE_FIX. (n39, n41)
 static unsigned widenNarrowCompares(LLVMModuleRef module, Gen &g) {
     std::vector<LLVMValueRef> cmps;
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
@@ -2714,23 +2436,10 @@ static unsigned widenNarrowCompares(LLVMModuleRef module, Gen &g) {
     return (unsigned)cmps.size();
 }
 
-// ---- operations on 2- to 4-lane vectors of 8- or 16-bit integers ---------------------------------------------------------
-// In a loop that runs until all(a != b) for two char4 a and b turned false, nested in a loop the optimizer unrolls, the
-// inner loop stopped at the wrong iteration in a few threads (mslfuzz2.py VEC=1 ASTYPE=1 seed 9923, about 20 threads'
-// results). The condition is right when it is only summed in the same loops, and the loops are right without the outer
-// one; the same lanes compared one by one and combined with & are right, and so is the kernel once its narrow vectors are
-// gone. Doing only the compare lane by lane left the bug; the and of two char4 that each have constant lanes, feeding
-// the compare, is part of it, and the full kernel needed every such vector operation done lane by lane. With that, VEC=1
-// seeds 5171, 5865, 6785 and 7105, listed as layout-dependent, are right as well: what moved with the code's layout was
-// the back end's handling of these vectors, which it packs into one register (Kepler has no packed 8- or 16-bit
-// arithmetic, so it takes them apart anyway). Each integer add, sub, mul, division, remainder, shift, and, or and xor of a
-// 2- to 4-lane vector of 8- or 16-bit integers, each icmp of one, and each zext or sext of a compare's <N x i1> to such
-// lanes (which any and all do), and each select of such vectors, is now done lane by lane. The selects came later: a
-// kernel reduced from VEC=1 seed 13302, with a loop counted by vf(select(..., uchar4(...) > uchar4(...))) & 3, was wrong on
-// 138 threads with only a <4 x i8> select left in vector form, and right with it lane by lane, as were five seeds listed in
-// FIXES.md (10949, 1025, 1837, 3303, 2126); one, 7105, right since this pass, went wrong again. The 3-lane arithmetic and the constant
-// masks and shifts (below, above) keep their own switches, which this pass follows. Conversions done lane by lane changed nothing.
-// NVAIR_NARROW_VECTOR_FIX=0 turns it off.
+// ---- operations on 2- to 4-lane vectors of 8- or 16-bit integers ----------------------------------------------------
+// The back end's packed handling of 2- to 4-lane 8/16-bit vectors went wrong in loops: integer arithmetic, logic,
+// shifts, compares, their extensions and selects on such vectors are done lane by lane. NVAIR_NARROW_VECTOR_FIX. (n37,
+// n39)
 static bool narrowVectorType(LLVMTypeRef t) {
     if (LLVMGetTypeKind(t) != LLVMVectorTypeKind || LLVMGetVectorSize(t) < 2 || LLVMGetVectorSize(t) > 4) return false;
     LLVMTypeRef e = LLVMGetElementType(t);
@@ -2809,15 +2518,9 @@ static unsigned scalarizeNarrowVectors(LLVMModuleRef module, Gen &g) {
     return (unsigned)ops.size();
 }
 
-// ---- a saturating add or subtract of a product ----------------------------------------------------------------------------
-// subsat(0xffffffffu, (uint)(uchar)x * 213u) came out 0 instead of 0xffffffff whenever the product was 0, and the signed
-// addsat(a, (int)(uchar)x * 213) and subsat, with the product either side, came out wrong on every thread (a value that
-// followed the thread index) (mslfuzz2.py VEC=1 ASTYPE=1 LONG=1 seed 74). The IR the back end gets is right: a mul by the
-// constant feeding llvm.nvvm.{add,sub}.sat.{s,u}.i32. The back end folds the multiply into the saturating operation and
-// gets the saturation wrong (for the unsigned subtract it is as if the borrow came from the carry of a + -b, which a b
-// of 0 never sets). A product with a variable factor, a shift, the plain value, ushort, and the unsigned add were right.
-// Each operand of a 32-bit saturating add or subtract that is a mul now goes through the opaque minimum, as for the narrow
-// products above, so the two stay separate operations. NVAIR_SATURATED_PRODUCT_FIX=0 turns it off.
+// ---- a saturating add or subtract of a product ----------------------------------------------------------------------
+// The back end folds a multiply into a following saturating add or subtract and gets the saturation wrong: the product
+// goes through the opaque min. NVAIR_SATURATED_PRODUCT_FIX. (n36)
 static unsigned hideSaturatedProducts(LLVMModuleRef module, Gen &g) {
     static const char *const names[] = {"air.add_sat.s.i32", "air.add_sat.u.i32", "air.sub_sat.s.i32", "air.sub_sat.u.i32",
                                         "llvm.nvvm.add.sat.s.i32", "llvm.nvvm.add.sat.u.i32", "llvm.nvvm.sub.sat.s.i32", "llvm.nvvm.sub.sat.u.i32"};
@@ -2846,13 +2549,8 @@ static unsigned hideSaturatedProducts(LLVMModuleRef module, Gen &g) {
     return (unsigned)todo.size();
 }
 
-// ---- a subtraction of a bitwise not ------------------------------------------------------------------------------------
-// tc[((uint)(int)(char)mulhi(c, x) - ~v0) & 63] read the slot 2 below the right one on 255 of 256 threads, in a kernel
-// that also shifted a 64-bit value by an amount computed from the same ~v0 (mslfuzz2.py VEC=1 ASTYPE=1 LONG=1 seed 1170;
-// the two statements alone are enough). The IR the back end gets is right: sub i32 %x, %neg with %neg = xor %v0, -1, the
-// same %neg feeding the shift amount. x - ~v0 is x + v0 + 1; the back end, folding the not into the subtraction,
-// computes x + v0 - 1. With x + (v0 + 1) written out, or a constant shift amount, it is right. Each 32-bit sub whose
-// second operand is an xor with -1 now becomes x + (y + 1), which is the same value. NVAIR_SUB_NOT_FIX=0 turns it off.
+// ---- a subtraction of a bitwise not ---------------------------------------------------------------------------------
+// The back end folded x - ~y into x + y - 1 (it is x + y + 1): written as x + (y + 1). NVAIR_SUB_NOT_FIX. (n38)
 static unsigned rewriteSubtractedNots(LLVMModuleRef module, Gen &g) {
     enum { kSub = 10, kXor = 25 };
     auto allOnes = [](LLVMValueRef c) { return LLVMIsAConstantInt(c) && LLVMConstIntGetZExtValue(c) == 0xffffffffull; };
@@ -2879,18 +2577,10 @@ static unsigned rewriteSubtractedNots(LLVMModuleRef module, Gen &g) {
     return (unsigned)subs.size();
 }
 
-// ---- an unsigned division of a sign-extended 8- or 16-bit value ---------------------------------------------------------
-// (uint)((int)(short)x % 28781) / d, with d not a constant, came out wrong whenever the remainder was negative: for d = 1,
-// 0xffffbb78 gave 0xffffb901 (mslfuzz2.py VEC=1 seed 5221, where it was 58 threads' results; the statement alone in a
-// kernel is wrong in 139 of 256 threads). The plugin's optimizer narrows the remainder to 16 bits, so the back end gets
-// udiv i32 (sext i16 r), d, and it divides that in floating point, as if the dividend had 16 significant bits: right for a
-// signed division, but as an unsigned number a sign-extended negative value is close to 2^32, and the float's 24 bits plus
-// one correction step leave the quotient hundreds off (0xffffbb78 rounds to 0xffffbb00, a reciprocal of 1 a unit low takes
-// it to 0xffffb900, the correction adds 1). Same for a narrowed signed division, for 8 bits, and for urem; a signed division
-// of the same, the same value sign-extended with shifts (what (int)(short)x of a 32-bit x is), a constant d, a sign-extended
-// divisor, and 64-bit divisions of a sign-extended int are right. The dividend of each 32-bit udiv and urem that is a sext
-// goes through the opaque minimum (as for the narrow products above), which keeps the value and hides the sext.
-// NVAIR_SEXT_DIVIDEND_FIX=0 turns it off.
+// ---- an unsigned division of a sign-extended 8- or 16-bit value -----------------------------------------------------
+// The back end divides an unsigned division of a sign-extended i8/i16 in floating point as if it had 16 significant
+// bits, wrong for negative values: the dividend goes through the opaque min, hiding the sext. NVAIR_SEXT_DIVIDEND_FIX.
+// (n34)
 static unsigned hideSignExtendedDividends(LLVMModuleRef module, Gen &g) {
     std::vector<LLVMValueRef> divs;
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
@@ -2915,14 +2605,9 @@ static unsigned hideSignExtendedDividends(LLVMModuleRef module, Gen &g) {
     return (unsigned)divs.size();
 }
 
-// ---- arithmetic on 3-lane vectors of 8- and 16-bit integers --------------------------------------------------------------
-// ushort3(1, 6, 5) | (ushort3(7166, 18911, 44867) & m), with m.z = ushort(x & 1124510566u), lost bit 0 of the constant in
-// lane z (6 for 7) on every thread, while lanes x and y, a ushort2 or ushort4 of the same, and the same expression with
-// either mask left out were right (mslfuzz2.py VEC=1 seed 4480: every thread's result wrong in two words). The IR the back
-// end receives, after the plugin's optimizer, is right; the back end widens a 3-lane vector to 4 lanes in two 32-bit
-// registers, and lane z, beside the undefined fourth lane, is where it goes wrong. Each integer add, sub, mul, shift,
-// and, or, xor, division and remainder on a 3-lane vector of 8- or 16-bit integers is done lane by lane (Kepler has no
-// packed 16-bit arithmetic, so the lanes were separate instructions anyway). NVAIR_ODD_VECTOR_FIX=0 turns it off.
+// ---- arithmetic on 3-lane vectors of 8- and 16-bit integers ---------------------------------------------------------
+// Lane z of a 3-lane 8/16-bit vector, beside the back end's undefined padding lane, came out wrong: integer arithmetic
+// on such vectors is done lane by lane. NVAIR_ODD_VECTOR_FIX. (n33)
 static unsigned scalarizeOddVectors(LLVMModuleRef module, Gen &g) {
     enum { kAdd = 8, kSub = 10, kMul = 12, kShl = 20, kLShr = 21, kAShr = 22, kAnd = 23, kOr = 24, kXor = 25 };
     std::vector<LLVMValueRef> ops;
@@ -2971,10 +2656,9 @@ static unsigned scalarizeOddVectors(LLVMModuleRef module, Gen &g) {
     return (unsigned)ops.size();
 }
 
-// ---- inline asm (IntelAdapter's dropInlineAsm) -------------------------------------------------------------------------
-// ANGLE writes __asm__("") into every loop body it translates; it arrives as `call void asm sideeffect "", ""()`, a call
-// without a called function, and the plugin reads that function's name (null: the compiler service crashes, as on
-// Intel). The call is dropped. NVAIR_INLINE_ASM_FIX=0 turns it off.
+// ---- inline asm (IntelAdapter's dropInlineAsm) ----------------------------------------------------------------------
+// ANGLE puts __asm__("") in every loop; the plugin reads the name of the call's absent function and crashes: dropped.
+// NVAIR_INLINE_ASM_FIX. (i81)
 static unsigned dropInlineAsm(LLVMModuleRef module) {
     unsigned dropped = 0;
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
