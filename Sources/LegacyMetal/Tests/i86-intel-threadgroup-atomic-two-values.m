@@ -28,7 +28,7 @@ int main(int argc, char **argv) {
         const char *name = dev.name.UTF8String;
         NSString *why = nil;
         id<MTLComputePipelineState> ps = reproComputePipeline(dev, source, nil, &why);
-        if (!ps) return FAIL(bug, "%s: %s", name, why.UTF8String);
+        if (!ps) return FAIL(bug, "%s", why.UTF8String);
         id<MTLBuffer> out = [dev newBufferWithLength:kThreads * 2 * sizeof(uint32_t) options:MTLResourceStorageModeShared];
         memset(out.contents, 0xee, out.length);
         id<MTLCommandBuffer> cb = [[dev newCommandQueue] commandBuffer];
