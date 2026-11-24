@@ -3211,6 +3211,54 @@ static unsigned dropInlineAsm(LLVMModuleRef module) {
     return dropped;
 }
 
+// The module fixes, in the order they run (each counts what it rewrote; 0 = nothing to do). A null switch name: the
+// fix reads its own switches. needsInlining: the fix calls bodies made internal and always_inline, inlined afterwards.
+struct ModuleFix {
+    const char *switchName;
+    unsigned (*apply)(LLVMModuleRef, Gen &);
+    const char *logFormat;
+    bool needsInlining;
+};
+static const ModuleFix kModuleFixes[] = {
+    {"NVAIR_INLINE_ASM_FIX", [](LLVMModuleRef m, Gen &) { return dropInlineAsm(m); }, "[nvair] %u inline asm call(s) dropped\n", false},
+    {"NVAIR_ARRAY_STRUCT_FIX", unwrapArrayStructs, "[nvair] %u private array(s) in a struct (metal::array) made plain arrays\n", false},  // before the private-array fixes
+    {"NVAIR_TEXTURE_ATOMICS", lowerTextureAtomics, "[nvair] %u texture atomic(s) made global atomics on linear texture buffers\n", false},
+    {"NVAIR_DEPTH_CHANNELS", fixDepthChannels, nullptr, false},
+    {"NVAIR_CUBE_READ_LEVEL", fixCubeReadLevels, "[nvair] %u cube read body(ies) given the level's size and a mip-filtered sampler\n", false},
+    {"NVAIR_ARRAY_LAYER_CLAMP", clampArrayLayers, "[nvair] %u texture-array layer(s) clamped at 0\n", false},
+    {"NVAIR_LOCAL_CMPXCHG", fixLocalCompareExchange, "[nvair] %u threadgroup compare-exchange body(ies) given the store of the value found\n", false},
+    {"NVAIR_SIGNED_BOOL_FIX", fixSignedBoolConversions, "[nvair] %u sign mask(s) taken out of signed-to-bool conversions\n", false},
+    {"NVAIR_ATOMIC_JOIN_FIX", fixAtomicJoinOperands, "[nvair] %u atomic operand(s) from a branch join put through a private slot\n", false},
+    {"NVAIR_PRIVATE_CONSTANT_LOAD_FIX", fixPrivateConstantLoads, "[nvair] %u constant-index private load(s) given an opaque index\n", false},
+    {"NVAIR_ODD_VECTOR_FIX", scalarizeOddVectors, "[nvair] %u operation(s) on 3-lane 8/16-bit vectors done lane by lane\n", false},
+    {"NVAIR_VECTOR_CONSTANT_FIX", scalarizeConstantLaneOps, "[nvair] %u and(s)/shift(s) of a 2/4-lane 8/16-bit vector by a constant done lane by lane\n", false},
+    {"NVAIR_DIVISOR_ONE_FIX", guardDivisorOne, "[nvair] %u remainder(s) guarded for a divisor of 1\n", false},
+    {"NVAIR_SEXT_DIVIDEND_FIX", hideSignExtendedDividends, "[nvair] %u unsigned division(s) of a sign-extended value given an opaque dividend\n", false},
+    {"NVAIR_SUB_NOT_FIX", rewriteSubtractedNots, "[nvair] %u subtraction(s) of a bitwise not made x + (y + 1)\n", false},
+    {"NVAIR_SATURATED_PRODUCT_FIX", hideSaturatedProducts, "[nvair] %u product(s) given to a saturating add/subtract through an opaque value\n", false},
+    {"NVAIR_NARROW_VECTOR_FIX", scalarizeNarrowVectors, "[nvair] %u operation(s) on 2-4 lane 8/16-bit vectors done lane by lane\n", false},
+    {"NVAIR_NARROW_DIVISION_FIX", widenNarrowDivisions, "[nvair] %u division(s)/remainder(s) of 8/16-bit values made 32-bit\n", false},
+    {"NVAIR_NARROW_SHIFT_FIX", widenNarrowShifts, "[nvair] %u right shift(s) of 8/16-bit values made 32-bit\n", false},
+    {"NVAIR_NARROW_COMPARE_FIX", widenNarrowCompares, "[nvair] %u compare(s) of 8/16-bit values made 32-bit\n", false},
+    {"NVAIR_MAD_SAT_FIX", lowerMadSat, "[nvair] %u madsat call(s) given the adapter's own body\n", false},
+    {"NVAIR_OVERFLOW_FIX", fixOverflowIntrinsics, "[nvair] %u overflow intrinsic(s) made plain arithmetic\n", false},
+    {"NVAIR_INTRINSICS", [](LLVMModuleRef, Gen &g) { return defineMissingIntrinsics(g); }, "[nvair] %u intrinsic(s) given bodies\n", true},
+    {"NVAIR_I64_FIX", fixWideInstructions, "[nvair] %u 64-bit instruction(s) rewritten\n", true},
+    {"NVAIR_SAMPLER_STATE_FIX", fixSamplerStateWords, "[nvair] %u constexpr sampler(s) in the [2 x i64] form rewritten as i64\n", false},
+    {"NVAIR_THREADGROUP_BOOL_FIX", widenThreadgroupBools, "[nvair] %u threadgroup bool(s) widened to i8\n", false},
+    {"NVAIR_CUBE_ARRAY_FIX", clampCubeArrayIndices, "[nvair] %u cube array index(es) raised to 0\n", false},
+    {nullptr, fixGradientSamples, "[nvair] %u 3D / cube gradient sample(s) done at their level\n", false},  // NVAIR_GRADIENT_FIX, NVAIR_CUBE_GRADIENT_FIX
+    {"NVAIR_NARROW_MULTIPLY_FIX", hideNarrowProducts, "[nvair] %u product(s) of 16-bit factors given an opaque factor\n", false},
+    {"NVAIR_FRAGMENT_LOAD_GUARD", guardFragmentLoads, "[nvair] %u fragment device load(s) kept from a negative index\n", false},
+    {"NVAIR_DEMOTE_DISCARD", demoteDiscards, nullptr, true},
+    {"NVAIR_HALF_CONSTANT_FIX", foldHalfVectorBitcasts, "[nvair] %u constant(s) with half vectors spelled as bitcasts rewritten\n", false},
+    {"NVAIR_LARGE_COPY_LOOP", loopLargeCopies, "[nvair] %u large copy(ies) made word loops\n", true},
+    {"NVAIR_NARROW_PRIVATE_ARRAY_FIX", widenNarrowPrivateArrays, "[nvair] %u private byte / halfword array(s) with masked loads (or on 32-bit words)\n", false},
+    {"NVAIR_COUNT_ZERO_FIX", defineCountOfZero, "[nvair] %u clz/ctz call(s) made defined for 0\n", false},
+    {"NVAIR_COMPARE_GRADIENT_FIX", fixGradientCompares, "[nvair] %u gradient comparison(s) made at level 0\n", false},
+    {"NVAIR_COMPARE_LEVEL_FIX", fixDepthCompareLevels, "[nvair] %u depth comparison(s) moved to a level that compares\n", false},
+};
+
 static int hookedRun(void *self, LLVMModuleRef module) {
 #ifdef NVAIR_INTERPOSE  // the test build catches every PassManager::run in the process: act for the GeForce plugin's only
     {
@@ -3228,80 +3276,16 @@ static int hookedRun(void *self, LLVMModuleRef module) {
         if (FILE *f = fopen(path, "w")) { char *text = LLVMPrintModuleToString(module); fputs(text, f); LLVMDisposeMessage(text); fclose(f); }
     }
     if (module) {
-        unsigned inlineAsm = disabled("NVAIR_INLINE_ASM_FIX") ? 0 : dropInlineAsm(module);
-        if (inlineAsm && logging()) fprintf(stderr, "[nvair] %u inline asm call(s) dropped\n", inlineAsm);
         Gen g = makeGen(module);
-        unsigned unwrapped = disabled("NVAIR_ARRAY_STRUCT_FIX") ? 0 : unwrapArrayStructs(module, g);  // before the private-array fixes
-        if (unwrapped && logging()) fprintf(stderr, "[nvair] %u private array(s) in a struct (metal::array) made plain arrays\n", unwrapped);
-        unsigned atomics = disabled("NVAIR_TEXTURE_ATOMICS") ? 0 : lowerTextureAtomics(module, g);
-        if (atomics && logging()) fprintf(stderr, "[nvair] %u texture atomic(s) made global atomics on linear texture buffers\n", atomics);
-        unsigned depthChannels = disabled("NVAIR_DEPTH_CHANNELS") ? 0 : fixDepthChannels(module, g);
-        (void)depthChannels;
-        unsigned cubeReads = disabled("NVAIR_CUBE_READ_LEVEL") ? 0 : fixCubeReadLevels(module, g);
-        unsigned layers = disabled("NVAIR_ARRAY_LAYER_CLAMP") ? 0 : clampArrayLayers(module, g);
-        if (layers && logging()) fprintf(stderr, "[nvair] %u texture-array layer(s) clamped at 0\n", layers);
-        unsigned exchanges = disabled("NVAIR_LOCAL_CMPXCHG") ? 0 : fixLocalCompareExchange(module, g);
-        unsigned signedBools = disabled("NVAIR_SIGNED_BOOL_FIX") ? 0 : fixSignedBoolConversions(module, g);
-        unsigned joinAtomics = disabled("NVAIR_ATOMIC_JOIN_FIX") ? 0 : fixAtomicJoinOperands(module, g);
-        unsigned constantLoads = disabled("NVAIR_PRIVATE_CONSTANT_LOAD_FIX") ? 0 : fixPrivateConstantLoads(module, g);
-        if (constantLoads && logging()) fprintf(stderr, "[nvair] %u constant-index private load(s) given an opaque index\n", constantLoads);
-        if (joinAtomics && logging()) fprintf(stderr, "[nvair] %u atomic operand(s) from a branch join put through a private slot\n", joinAtomics);
-        if (signedBools && logging()) fprintf(stderr, "[nvair] %u sign mask(s) taken out of signed-to-bool conversions\n", signedBools);
-        if (exchanges && logging()) fprintf(stderr, "[nvair] %u threadgroup compare-exchange body(ies) given the store of the value found\n", exchanges);
-        if (cubeReads && logging()) fprintf(stderr, "[nvair] %u cube read body(ies) given the level's size and a mip-filtered sampler\n", cubeReads);
-        unsigned oddVectors = disabled("NVAIR_ODD_VECTOR_FIX") ? 0 : scalarizeOddVectors(module, g);
-        if (oddVectors && logging()) fprintf(stderr, "[nvair] %u operation(s) on 3-lane 8/16-bit vectors done lane by lane\n", oddVectors);
-        unsigned laneOps = disabled("NVAIR_VECTOR_CONSTANT_FIX") ? 0 : scalarizeConstantLaneOps(module, g);
-        if (laneOps && logging()) fprintf(stderr, "[nvair] %u and(s)/shift(s) of a 2/4-lane 8/16-bit vector by a constant done lane by lane\n", laneOps);
-        unsigned divisors = disabled("NVAIR_DIVISOR_ONE_FIX") ? 0 : guardDivisorOne(module, g);
-        if (divisors && logging()) fprintf(stderr, "[nvair] %u remainder(s) guarded for a divisor of 1\n", divisors);
-        unsigned sextDividends = disabled("NVAIR_SEXT_DIVIDEND_FIX") ? 0 : hideSignExtendedDividends(module, g);
-        if (sextDividends && logging()) fprintf(stderr, "[nvair] %u unsigned division(s) of a sign-extended value given an opaque dividend\n", sextDividends);
-        unsigned subNots = disabled("NVAIR_SUB_NOT_FIX") ? 0 : rewriteSubtractedNots(module, g);
-        if (subNots && logging()) fprintf(stderr, "[nvair] %u subtraction(s) of a bitwise not made x + (y + 1)\n", subNots);
-        unsigned satProducts = disabled("NVAIR_SATURATED_PRODUCT_FIX") ? 0 : hideSaturatedProducts(module, g);
-        if (satProducts && logging()) fprintf(stderr, "[nvair] %u product(s) given to a saturating add/subtract through an opaque value\n", satProducts);
-        unsigned narrowVectors = disabled("NVAIR_NARROW_VECTOR_FIX") ? 0 : scalarizeNarrowVectors(module, g);
-        if (narrowVectors && logging()) fprintf(stderr, "[nvair] %u operation(s) on 2-4 lane 8/16-bit vectors done lane by lane\n", narrowVectors);
-        unsigned wideDivisions = disabled("NVAIR_NARROW_DIVISION_FIX") ? 0 : widenNarrowDivisions(module, g);
-        if (wideDivisions && logging()) fprintf(stderr, "[nvair] %u division(s)/remainder(s) of 8/16-bit values made 32-bit\n", wideDivisions);
-        unsigned wideShifts = disabled("NVAIR_NARROW_SHIFT_FIX") ? 0 : widenNarrowShifts(module, g);
-        if (wideShifts && logging()) fprintf(stderr, "[nvair] %u right shift(s) of 8/16-bit values made 32-bit\n", wideShifts);
-        unsigned wideCompares = disabled("NVAIR_NARROW_COMPARE_FIX") ? 0 : widenNarrowCompares(module, g);
-        if (wideCompares && logging()) fprintf(stderr, "[nvair] %u compare(s) of 8/16-bit values made 32-bit\n", wideCompares);
-        unsigned madSats = disabled("NVAIR_MAD_SAT_FIX") ? 0 : lowerMadSat(module, g);
-        if (madSats && logging()) fprintf(stderr, "[nvair] %u madsat call(s) given the adapter's own body\n", madSats);
-        unsigned overflows = disabled("NVAIR_OVERFLOW_FIX") ? 0 : fixOverflowIntrinsics(module, g);
-        if (overflows && logging()) fprintf(stderr, "[nvair] %u overflow intrinsic(s) made plain arithmetic\n", overflows);
-        unsigned defined = disabled("NVAIR_INTRINSICS") ? 0 : defineMissingIntrinsics(g);
-        unsigned fixed = disabled("NVAIR_I64_FIX") ? 0 : fixWideInstructions(module, g);
-        unsigned samplers = disabled("NVAIR_SAMPLER_STATE_FIX") ? 0 : fixSamplerStateWords(module, g);
-        unsigned bools = disabled("NVAIR_THREADGROUP_BOOL_FIX") ? 0 : widenThreadgroupBools(module, g);
-        if (bools && logging()) fprintf(stderr, "[nvair] %u threadgroup bool(s) widened to i8\n", bools);
-        unsigned cubes = disabled("NVAIR_CUBE_ARRAY_FIX") ? 0 : clampCubeArrayIndices(module, g);
-        if (cubes && logging()) fprintf(stderr, "[nvair] %u cube array index(es) raised to 0\n", cubes);
-        unsigned gradients = fixGradientSamples(module, g);  // its switches: NVAIR_GRADIENT_FIX, NVAIR_CUBE_GRADIENT_FIX
-        if (gradients && logging()) fprintf(stderr, "[nvair] %u 3D / cube gradient sample(s) done at their level\n", gradients);
-        unsigned products = disabled("NVAIR_NARROW_MULTIPLY_FIX") ? 0 : hideNarrowProducts(module, g);
-        if (products && logging()) fprintf(stderr, "[nvair] %u product(s) of 16-bit factors given an opaque factor\n", products);
-        unsigned guarded = disabled("NVAIR_FRAGMENT_LOAD_GUARD") ? 0 : guardFragmentLoads(module, g);
-        if (guarded && logging()) fprintf(stderr, "[nvair] %u fragment device load(s) kept from a negative index\n", guarded);
-        unsigned demoted = disabled("NVAIR_DEMOTE_DISCARD") ? 0 : demoteDiscards(module, g);
-        unsigned halves = disabled("NVAIR_HALF_CONSTANT_FIX") ? 0 : foldHalfVectorBitcasts(module, g);
-        if (halves && logging()) fprintf(stderr, "[nvair] %u constant(s) with half vectors spelled as bitcasts rewritten\n", halves);
-        unsigned copies = disabled("NVAIR_LARGE_COPY_LOOP") ? 0 : loopLargeCopies(module, g);
-        if (copies && logging()) fprintf(stderr, "[nvair] %u large copy(ies) made word loops\n", copies);
-        unsigned narrow = disabled("NVAIR_NARROW_PRIVATE_ARRAY_FIX") ? 0 : widenNarrowPrivateArrays(module, g);
-        if (narrow && logging()) fprintf(stderr, "[nvair] %u private byte / halfword array(s) with masked loads (or on 32-bit words)\n", narrow);
-        unsigned counts = disabled("NVAIR_COUNT_ZERO_FIX") ? 0 : defineCountOfZero(module, g);
-        if (counts && logging()) fprintf(stderr, "[nvair] %u clz/ctz call(s) made defined for 0\n", counts);
-        unsigned gradients2 = disabled("NVAIR_COMPARE_GRADIENT_FIX") ? 0 : fixGradientCompares(module, g);
-        if (gradients2 && logging()) fprintf(stderr, "[nvair] %u gradient comparison(s) made at level 0\n", gradients2);
-        unsigned compares = disabled("NVAIR_COMPARE_LEVEL_FIX") ? 0 : fixDepthCompareLevels(module, g);
-        if (compares && logging()) fprintf(stderr, "[nvair] %u depth comparison(s) moved to a level that compares\n", compares);
-        if (samplers && logging()) fprintf(stderr, "[nvair] %u constexpr sampler(s) in the [2 x i64] form rewritten as i64\n", samplers);
-        if (defined || fixed || demoted || copies) inlineBodies(module);
-        if (logging() && (defined || fixed)) fprintf(stderr, "[nvair] %u intrinsic(s) given bodies, %u 64-bit instruction(s) rewritten\n", defined, fixed);
+        bool inliningNeeded = false;
+        for (const ModuleFix &fix : kModuleFixes) {
+            if (fix.switchName && disabled(fix.switchName)) continue;
+            unsigned count = fix.apply(module, g);
+            if (!count) continue;
+            inliningNeeded |= fix.needsInlining;
+            if (fix.logFormat && logging()) fprintf(stderr, fix.logFormat, count);
+        }
+        if (inliningNeeded) inlineBodies(module);
         if (logging()) logBareIntrinsics(module);
     }
     return passManagerRun(self, module);
