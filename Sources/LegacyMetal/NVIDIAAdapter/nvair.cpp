@@ -108,111 +108,110 @@ static bool shape(LLVMValueRef f, unsigned ret, unsigned count, const unsigned *
     return true;
 }
 
-// Builds a body for the bare declaration f if its name and type are one this file provides; true if it did.
-static bool define(Gen &g, LLVMValueRef f, const char *name) {
-    static const unsigned k64[3] = {64, 64, 64}, kClz[2] = {64, 1};
-    const char *rest;
-    bool isSigned = false;
-    enum { None, Min, Max, Clamp, Popcount, Clz, Ctz, MulHi, MadHi, QuadXor, Reverse, Abs } kind = None;
-    if ((rest = !strncmp(name, "air.min.", 8) ? name + 8 : nullptr)) kind = Min;
-    else if ((rest = !strncmp(name, "air.max.", 8) ? name + 8 : nullptr)) kind = Max;
-    else if ((rest = !strncmp(name, "air.clamp.", 10) ? name + 10 : nullptr)) kind = Clamp;
-    else if ((rest = !strncmp(name, "air.mul_hi.", 11) ? name + 11 : nullptr)) kind = MulHi;
-    else if ((rest = !strncmp(name, "air.mad_hi.", 11) ? name + 11 : nullptr)) kind = MadHi;
-    else if (!strcmp(name, "air.popcount.i64")) kind = Popcount;
-    else if (!strcmp(name, "air.clz.i64")) kind = Clz;
-    else if (!strcmp(name, "air.ctz.i64")) kind = Ctz;
-    else if (!strcmp(name, "air.reverse_bits.i64")) kind = Reverse;
-    else if (!strcmp(name, "air.abs.s.i64")) kind = Abs;
-    else if (!strncmp(name, "air.quad_shuffle_xor.", 21)) kind = QuadXor;
-    if (rest) {  // <u|s>.i64
-        if (strcmp(rest, "u.i64") && strcmp(rest, "s.i64")) return false;
+enum IntrinsicKind { kMin, kMax, kClamp, kPopcount, kClz, kCtz, kMulHi, kMadHi, kQuadXor, kReverse, kAbs };
+enum NameMatch { kExactName, kNamePrefix, kSignedI64Prefix };  // kSignedI64Prefix: the prefix, then u.i64 or s.i64
+static const struct { const char *name; NameMatch match; IntrinsicKind kind; unsigned arity; } kMissingIntrinsics[] = {
+    {"air.min.", kSignedI64Prefix, kMin, 2}, {"air.max.", kSignedI64Prefix, kMax, 2}, {"air.clamp.", kSignedI64Prefix, kClamp, 3},
+    {"air.mul_hi.", kSignedI64Prefix, kMulHi, 2}, {"air.mad_hi.", kSignedI64Prefix, kMadHi, 3},
+    {"air.popcount.i64", kExactName, kPopcount, 1}, {"air.clz.i64", kExactName, kClz, 2}, {"air.ctz.i64", kExactName, kCtz, 2},
+    {"air.reverse_bits.i64", kExactName, kReverse, 1}, {"air.abs.s.i64", kExactName, kAbs, 1},
+    {"air.quad_shuffle_xor.", kNamePrefix, kQuadXor, 2},
+};
+
+// The entry of kMissingIntrinsics a declaration's name and type match, or -1.
+static int missingIntrinsic(LLVMValueRef f, const char *name, bool &isSigned) {
+    static const unsigned kWide[3] = {64, 64, 64}, kCountWidths[2] = {64, 1}, kShuffleWidths[2] = {0, 16};
+    int entry = -1;
+    for (int i = 0; i < (int)(sizeof kMissingIntrinsics / sizeof *kMissingIntrinsics) && entry < 0; i++) {
+        const auto &m = kMissingIntrinsics[i];
+        if (m.match == kExactName ? !strcmp(name, m.name) : startsWith(name, m.name)) entry = i;
+    }
+    if (entry < 0) return -1;
+    const auto &m = kMissingIntrinsics[entry];
+    if (m.match == kSignedI64Prefix) {
+        const char *rest = name + strlen(m.name);
+        if (strcmp(rest, "u.i64") && strcmp(rest, "s.i64")) return -1;
         isSigned = rest[0] == 's';
     }
-    unsigned arity = kind == Clamp || kind == MadHi ? 3 : kind == Popcount || kind == Reverse || kind == Abs ? 1 : 2;
-    switch (kind) {
-        case None: return false;
-        case Clz: case Ctz: if (!shape(f, 64, 2, kClz)) return false; break;
-        case QuadXor: {
-            static const unsigned kXor[2] = {0, 16};
-            LLVMTypeRef type = LLVMGetElementType(LLVMTypeOf(f));
-            if (!shape(f, 0, 2, kXor)) return false;
-            LLVMTypeRef params[2];
+    switch (m.kind) {
+        case kClz: case kCtz: return shape(f, 64, 2, kCountWidths) ? entry : -1;
+        case kQuadXor: {  // (T value, i16 lane mask) -> T
+            LLVMTypeRef type = LLVMGetElementType(LLVMTypeOf(f)), params[2];
+            if (!shape(f, 0, 2, kShuffleWidths)) return -1;
             LLVMGetParamTypes(type, params);
-            if (LLVMGetReturnType(type) != params[0]) return false;
-            break;
+            return LLVMGetReturnType(type) == params[0] ? entry : -1;
         }
-        default: if (!shape(f, 64, arity, k64)) return false;
+        default: return shape(f, 64, m.arity, kWide) ? entry : -1;
     }
+}
 
-    // The body goes into a function of this file's own, and the calls are pointed at it: the plugin keeps its AIR
-    // declaration (it deletes the declarations it collected once the run is over), and LLVM's always-inliner deletes
-    // the helper once every call is inlined (a dead internal always_inline function), which the plugin never sees.
-    LLVMValueRef declaration = f;
-    char helper[160];
-    snprintf(helper, sizeof helper, "nvair.impl.%s", name);
-    f = LLVMAddFunction(g.module, helper, LLVMGetElementType(LLVMTypeOf(declaration)));
-    LLVMPositionBuilderAtEnd(g.b, LLVMAppendBasicBlockInContext(g.context, f, "entry"));
-    LLVMValueRef p0 = LLVMGetParam(f, 0), p1 = arity > 1 || kind == Clz || kind == Ctz || kind == QuadXor ? LLVMGetParam(f, 1) : nullptr;
-    LLVMValueRef result = nullptr;
+// The body of the intrinsic `kind` in helper f, whose entry block the builder is at; returns the result.
+static LLVMValueRef buildIntrinsicBody(Gen &g, IntrinsicKind kind, bool isSigned, unsigned arity, LLVMValueRef f, const char *name) {
     LLVMBuilderRef b = g.b;
+    LLVMValueRef p0 = LLVMGetParam(f, 0), p1 = arity > 1 ? LLVMGetParam(f, 1) : nullptr;
     switch (kind) {
-        case Min: case Max: {
-            int pred = kind == Min ? (isSigned ? LLVMIntSLT : LLVMIntULT) : (isSigned ? LLVMIntSGT : LLVMIntUGT);
-            result = LLVMBuildSelect(b, LLVMBuildICmp(b, pred, p0, p1, ""), p0, p1, "");
-            break;
+        case kMin: case kMax: {
+            int pred = kind == kMin ? (isSigned ? LLVMIntSLT : LLVMIntULT) : (isSigned ? LLVMIntSGT : LLVMIntUGT);
+            return LLVMBuildSelect(b, LLVMBuildICmp(b, pred, p0, p1, ""), p0, p1, "");
         }
-        case Clamp: {  // clamp(x, lo, hi) = min(max(x, lo), hi)
+        case kClamp: {  // clamp(x, lo, hi) = min(max(x, lo), hi)
             LLVMValueRef p2 = LLVMGetParam(f, 2);
             LLVMValueRef m = LLVMBuildSelect(b, LLVMBuildICmp(b, isSigned ? LLVMIntSGT : LLVMIntUGT, p0, p1, ""), p0, p1, "");
-            result = LLVMBuildSelect(b, LLVMBuildICmp(b, isSigned ? LLVMIntSLT : LLVMIntULT, m, p2, ""), m, p2, "");
-            break;
+            return LLVMBuildSelect(b, LLVMBuildICmp(b, isSigned ? LLVMIntSLT : LLVMIntULT, m, p2, ""), m, p2, "");
         }
-        case Popcount:
-            result = g.wide(LLVMBuildAdd(b, g.count32("ctpop", g.lo(p0)), g.count32("ctpop", g.hi(p0)), ""));
-            break;
-        case Reverse: {  // each half reversed by the plugin's own llvm.nvvm.reverse_bits, and the halves swapped
+        case kPopcount:
+            return g.wide(LLVMBuildAdd(b, g.count32("ctpop", g.lo(p0)), g.count32("ctpop", g.hi(p0)), ""));
+        case kReverse: {  // each half reversed by the plugin's own llvm.nvvm.reverse_bits, and the halves swapped
             LLVMTypeRef params[1] = {g.i32};
             LLVMValueRef reverse = g.intrinsic("llvm.nvvm.reverse_bits", g.i32, params, 1), lo[1] = {g.lo(p0)}, hi[1] = {g.hi(p0)};
             LLVMValueRef top = LLVMBuildShl(b, g.wide(g.call(reverse, lo, 1)), g.c64(32), "");
-            result = LLVMBuildOr(b, top, g.wide(g.call(reverse, hi, 1)), "");
-            break;
+            return LLVMBuildOr(b, top, g.wide(g.call(reverse, hi, 1)), "");
         }
-        case Abs:
-            result = LLVMBuildSelect(b, LLVMBuildICmp(b, LLVMIntSLT, p0, g.c64(0), ""), LLVMBuildSub(b, g.c64(0), p0, ""), p0, "");
-            break;
-        case Clz: {  // the high half's count, or 32 + the low half's when the high half is 0
+        case kAbs:
+            return LLVMBuildSelect(b, LLVMBuildICmp(b, LLVMIntSLT, p0, g.c64(0), ""), LLVMBuildSub(b, g.c64(0), p0, ""), p0, "");
+        case kClz: {  // the high half's count, or 32 + the low half's when the high half is 0
             LLVMValueRef h = g.hi(p0), isZero = LLVMBuildICmp(b, LLVMIntEQ, h, g.c32(0), "");
             LLVMValueRef low = LLVMBuildAdd(b, g.count32("ctlz", g.lo(p0)), g.c32(32), "");
-            result = g.wide(LLVMBuildSelect(b, isZero, low, g.count32("ctlz", h), ""));
-            break;
+            return g.wide(LLVMBuildSelect(b, isZero, low, g.count32("ctlz", h), ""));
         }
-        case Ctz: {  // the low half's count, or 32 + the high half's when the low half is 0
+        case kCtz: {  // the low half's count, or 32 + the high half's when the low half is 0
             LLVMValueRef l = g.lo(p0), isZero = LLVMBuildICmp(b, LLVMIntEQ, l, g.c32(0), "");
             LLVMValueRef high = LLVMBuildAdd(b, g.count32("cttz", g.hi(p0)), g.c32(32), "");
-            result = g.wide(LLVMBuildSelect(b, isZero, high, g.count32("cttz", l), ""));
-            break;
+            return g.wide(LLVMBuildSelect(b, isZero, high, g.count32("cttz", l), ""));
         }
-        case MulHi: result = g.mulHi(p0, p1, isSigned); break;
-        case MadHi: result = LLVMBuildAdd(b, g.mulHi(p0, p1, isSigned), LLVMGetParam(f, 2), ""); break;
-        case QuadXor: {
+        case kMulHi: return g.mulHi(p0, p1, isSigned);
+        case kMadHi: return LLVMBuildAdd(b, g.mulHi(p0, p1, isSigned), LLVMGetParam(f, 2), "");
+        case kQuadXor: {  // the SIMD-group shuffle within the quad: lane mask & 3
             char simd[128];
-            snprintf(simd, sizeof simd, "air.simd_shuffle_xor.%s", name + 21);
+            snprintf(simd, sizeof simd, "air.simd_shuffle_xor.%s", name + strlen("air.quad_shuffle_xor."));
             LLVMValueRef shuffle = LLVMGetNamedFunction(g.module, simd);
             if (!shuffle) shuffle = LLVMAddFunction(g.module, simd, LLVMGetElementType(LLVMTypeOf(f)));
             LLVMValueRef args[2] = {p0, LLVMBuildAnd(b, p1, LLVMConstInt(g.i16, 3, 0), "")};
-            result = g.call(shuffle, args, 2);
-            break;
+            return g.call(shuffle, args, 2);
         }
-        case None: break;
     }
-    LLVMBuildRet(b, result);
-    LLVMSetLinkage(f, LLVMInternalLinkage);
+    return nullptr;
+}
+
+// Builds a body for the bare declaration f if its name and type are one this file provides; true if it did. The body
+// goes into an internal always-inline helper (nvair.impl.<name>) and the calls are pointed at it: the plugin keeps its
+// declaration (it deletes the declarations it collected after the run), and the always-inliner deletes the helper.
+static bool define(Gen &g, LLVMValueRef f, const char *name) {
+    bool isSigned = false;
+    int entry = missingIntrinsic(f, name, isSigned);
+    if (entry < 0) return false;
+    char helperName[160];
+    snprintf(helperName, sizeof helperName, "nvair.impl.%s", name);
+    LLVMValueRef helper = LLVMAddFunction(g.module, helperName, LLVMGetElementType(LLVMTypeOf(f)));
+    LLVMPositionBuilderAtEnd(g.b, LLVMAppendBasicBlockInContext(g.context, helper, "entry"));
+    const auto &m = kMissingIntrinsics[entry];
+    LLVMBuildRet(g.b, buildIntrinsicBody(g, m.kind, isSigned, m.arity, helper, name));
+    LLVMSetLinkage(helper, LLVMInternalLinkage);
     static const unsigned alwaysInline = LLVMGetEnumAttributeKindForName("alwaysinline", 12),
                           noInline = LLVMGetEnumAttributeKindForName("noinline", 8);
-    LLVMRemoveEnumAttributeAtIndex(f, LLVMAttributeFunctionIndex, noInline);
-    LLVMAddAttributeAtIndex(f, LLVMAttributeFunctionIndex, LLVMCreateEnumAttribute(g.context, alwaysInline, 0));
-    LLVMReplaceAllUsesWith(declaration, f);  // the declaration stays, unused
+    LLVMRemoveEnumAttributeAtIndex(helper, LLVMAttributeFunctionIndex, noInline);
+    LLVMAddAttributeAtIndex(helper, LLVMAttributeFunctionIndex, LLVMCreateEnumAttribute(g.context, alwaysInline, 0));
+    LLVMReplaceAllUsesWith(f, helper);  // the declaration stays, unused
     return true;
 }
 
