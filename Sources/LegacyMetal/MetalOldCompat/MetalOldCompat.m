@@ -147,6 +147,8 @@
 //      setup): its blit methods run one at a time
 //  85. vertex functions with 32 inputs on the Ivy Bridge driver, whose input walk never ended (an abort): it is
 //      stopped after the 32nd
+//  86. stencil copied into a mip level of a Depth32Float_Stencil8 texture on the Ivy Bridge driver, which zeroed the depth
+//      of the deeper levels: their depth is kept around the copy
 // (The 12.5 AMD driver's own bugs are fixed in AMDBronzeCompat.dylib, which the driver loads: BronzeCompat/.)
 // Loaded into every Metal client by a weak load command added to OCLP's Metal.framework wrapper; does nothing unless
 // _MTLDevice comes from MetalOld.dylib. Set MTLSHIM_VERBOSE=1 to log what it does (to stderr; MTLSHIM_VERBOSE=oslog
@@ -3442,6 +3444,62 @@ static void noteDepthStencilWrite(id encoder, id<MTLTexture> t, NSUInteger slice
                          [NSValue valueWithBytes:&size objCType:@encode(MTLSize)], @(what)]];
 }
 
+// 86. Stencil copied into a mip level of a Depth32Float_Stencil8 texture on the Ivy Bridge driver: a stencil copy into
+// level 1 (copyFromBuffer:...toTexture: with StencilFromDepthStencil, or a texture copy, which takes both aspects) lands,
+// but for some sizes it also zeroes the depth of every deeper level (63x63: levels 2-4 all lost their depth; 48x48 part
+// of level 2; 32x32 and 33x33 nothing). WebKit zero-fills a texture's levels that weren't written yet with such blits
+// before it reads them, so the depth a render pass had put in another level read back as 0 (WebGPU CTS texture_zero,
+// depth32float-stencil8 with 5 levels, the canary on levels 2 and 4). Item 37's and item 33's texture copies into such
+// a level do the same. Around every stencil copy into level 1 or deeper of a mipmapped 2D Depth32Float_Stencil8 texture,
+// the depth of the deeper levels is copied out to a scratch buffer first and back in after it, in the same encoder.
+// Arrays and cubes lose it the same way (only the slice copied into) and still do: their depth copies go through item
+// 63's passes, and render passes on them through item 33's temporary, whose stencil copy back is such a copy again.
+// MTLSHIM_STENCIL_KEEPS_DEPTH=0 turns it off. Test: s90.
+static BOOL ivbStencilKeepsDepth(void) {
+    static BOOL on;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        const char *setting = getenv("MTLSHIM_STENCIL_KEEPS_DEPTH"), *image = class_getImageName(objc_getClass("MTLIGAccelBlitCommandEncoder"));
+        on = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !(setting && !strcmp(setting, "0"));
+    });
+    return on;
+}
+static void keepingDeeperDepth(id encoder, id<MTLTexture> t, NSUInteger slice, NSUInteger level, BOOL writesStencil, void (^copy)(void)) {
+    NSUInteger levels = t.mipmapLevelCount;
+    if (!writesStencil || level < 1 || level + 1 >= levels || levels > 16 || t.pixelFormat != MTLPixelFormatDepth32Float_Stencil8 ||
+        t.textureType != MTLTextureType2D || !ivbStencilKeepsDepth()) {
+        copy();
+        return;
+    }
+    NSUInteger offsets[16] = {0}, rows[16] = {0}, total = 0;
+    for (NSUInteger k = level + 1; k < levels; k++) {
+        NSUInteger w = MAX(1u, t.width >> k), h = MAX(1u, t.height >> k);
+        rows[k] = (w * 4 + 255) & ~(NSUInteger)255;
+        offsets[k] = total;
+        total += rows[k] * h;
+    }
+    id<MTLBuffer> keep = [t.device newBufferWithLength:total options:MTLResourceStorageModePrivate];
+    if (!keep) {
+        copy();
+        return;
+    }
+    id<MTLBlitCommandEncoder> e = encoder;
+    for (NSUInteger k = level + 1; k < levels; k++) {
+        NSUInteger w = MAX(1u, t.width >> k), h = MAX(1u, t.height >> k);
+        [e copyFromTexture:t sourceSlice:slice sourceLevel:k sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(w, h, 1) toBuffer:keep
+            destinationOffset:offsets[k] destinationBytesPerRow:rows[k] destinationBytesPerImage:rows[k] * h options:MTLBlitOptionDepthFromDepthStencil];
+    }
+    copy();
+    for (NSUInteger k = level + 1; k < levels; k++) {
+        NSUInteger w = MAX(1u, t.width >> k), h = MAX(1u, t.height >> k);
+        [e copyFromBuffer:keep sourceOffset:offsets[k] sourceBytesPerRow:rows[k] sourceBytesPerImage:rows[k] * h sourceSize:MTLSizeMake(w, h, 1)
+                toTexture:t destinationSlice:slice destinationLevel:k destinationOrigin:MTLOriginMake(0, 0, 0) options:MTLBlitOptionDepthFromDepthStencil];
+    }
+    id<MTLCommandBuffer> commandBuffer = objc_getAssociatedObject(encoder, kBlitCommandBuffer);
+    [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> done) { (void)keep; }];  // kept until the GPU is done with it
+    if (getenv("MTLSHIM_VERBOSE")) shimLog("[mtlshim] stencil copy into level %lu: depth of levels %lu-%lu kept\n", (unsigned long)level, (unsigned long)level + 1, (unsigned long)levels - 1);
+}
+
 static id igBlitEncoder(id self, SEL _cmd) {
     id encoder = origIGBlitEncoder(self, _cmd);
     if (encoder) objc_setAssociatedObject(encoder, kBlitCommandBuffer, self, OBJC_ASSOCIATION_ASSIGN);  // ends before its buffer
@@ -3470,7 +3528,9 @@ static void igBufferToTextureOptions(id self, SEL _cmd, id buffer, NSUInteger of
     t = viewBlitTarget(t, &slice, &level);  // item 49
     if (stencilCopyIn(self, buffer, offset, row, image, size, t, slice, level, origin, options, YES)) return;  // item 37
     if (depthLevelCopyIn(self, buffer, offset, row, size, t, slice, level, origin, options)) return;  // item 63
-    origIGBufferToTextureOptions(self, _cmd, buffer, offset, row, image, size, t, slice, level, origin, options);
+    keepingDeeperDepth(self, t, slice, level, (options & MTLBlitOptionStencilFromDepthStencil) != 0, ^{  // item 86
+        origIGBufferToTextureOptions(self, _cmd, buffer, offset, row, image, size, t, slice, level, origin, options);
+    });
     noteDepthStencilWrite(self, t, slice, level, origin, size, options);
 }
 // 72. Copies between a format and its sRGB variant on Ivy Bridge and Haswell. copyFromTexture:...toTexture: from RGBA8Unorm to
@@ -3536,7 +3596,9 @@ static void igTextureToTexture(id self, SEL _cmd, id source, NSUInteger sourceSl
     t = viewBlitTarget(t, &slice, &level);
     if (srgbPairCopy(self, source, sourceSlice, sourceLevel, sourceOrigin, size, t, slice, level, origin)) return;  // item 72
     if (depthLevelCopyBetween(self, source, sourceSlice, sourceLevel, sourceOrigin, size, t, slice, level, origin, MTLBlitOptionNone)) return;  // item 63
-    origIGTextureToTexture(self, _cmd, source, sourceSlice, sourceLevel, sourceOrigin, size, t, slice, level, origin);
+    keepingDeeperDepth(self, t, slice, level, YES, ^{  // item 86
+        origIGTextureToTexture(self, _cmd, source, sourceSlice, sourceLevel, sourceOrigin, size, t, slice, level, origin);
+    });
     noteDepthStencilWrite(self, t, slice, level, origin, size, MTLBlitOptionNone);
 }
 static void igTextureToTextureOptions(id self, SEL _cmd, id source, NSUInteger sourceSlice, NSUInteger sourceLevel, MTLOrigin sourceOrigin,
@@ -3550,7 +3612,9 @@ static void igTextureToTextureOptions(id self, SEL _cmd, id source, NSUInteger s
     t = viewBlitTarget(t, &slice, &level);
     if (srgbPairCopy(self, source, sourceSlice, sourceLevel, sourceOrigin, size, t, slice, level, origin)) return;  // item 72
     if (depthLevelCopyBetween(self, source, sourceSlice, sourceLevel, sourceOrigin, size, t, slice, level, origin, options)) return;  // item 63
-    origIGTextureToTextureOptions(self, _cmd, source, sourceSlice, sourceLevel, sourceOrigin, size, t, slice, level, origin, options);
+    keepingDeeperDepth(self, t, slice, level, (options & MTLBlitOptionDepthFromDepthStencil) == 0, ^{  // item 86
+        origIGTextureToTextureOptions(self, _cmd, source, sourceSlice, sourceLevel, sourceOrigin, size, t, slice, level, origin, options);
+    });
     noteDepthStencilWrite(self, t, slice, level, origin, size, options);
 }
 
