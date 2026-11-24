@@ -92,3 +92,48 @@ __attribute__((unused)) static BOOL reproRun(id<MTLCommandBuffer> cb) {
     [cb waitUntilCompleted];
     return cb.status == MTLCommandBufferStatusCompleted;
 }
+// Kernel k of `source` (a unique comment first, so no cached binary is reused), or nil with the result text in *why.
+__attribute__((unused)) static id<MTLComputePipelineState> reproComputePipeline(id<MTLDevice> dev, NSString *source,
+                                                                                MTLCompileOptions *options, NSString **why) {
+    NSError *err = nil;
+    id<MTLLibrary> lib = [dev newLibraryWithSource:[reproUniqueComment() stringByAppendingString:source] options:options error:&err];
+    if (!lib) { *why = [NSString stringWithFormat:@"compile: %@", err.localizedDescription]; return nil; }
+    id<MTLComputePipelineState> ps = [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"k"] error:&err];
+    if (!ps) *why = [NSString stringWithFormat:@"%@: pipeline: %@", dev.name, err.localizedDescription];
+    return ps;
+}
+// Runs a fuzz kernel k(in [[buffer(0)]], out [[buffer(1)]]) as mslfuzz2.py does (fast math off, the inputs of seed 1,
+// 256 threads in groups of 64) and checks each thread's 8 words, as FNV-1a, against the CPU reference's `want`.
+__attribute__((unused)) static int reproFuzzKernel(const char *bug, id<MTLDevice> dev, NSString *src, const uint32_t want[256],
+                                                   const char *passText) {
+    const char *name = dev.name.UTF8String;
+    MTLCompileOptions *options = [MTLCompileOptions new];
+    options.fastMathEnabled = NO;
+    NSString *why = nil;
+    id<MTLComputePipelineState> ps = reproComputePipeline(dev, src, options, &why);
+    if (!ps) return FAIL(bug, "%s", why.UTF8String);
+    enum { T = 256 };
+    id<MTLBuffer> in = [dev newBufferWithLength:T * 4 * 4 options:MTLResourceStorageModeShared];
+    id<MTLBuffer> out = [dev newBufferWithLength:T * 8 * 4 options:MTLResourceStorageModeShared];
+    uint32_t x = 1u * 2654435761u + 12345u;  // the fuzzer's inputs, seed 1
+    for (int i = 0; i < T * 4; i++) { x ^= x << 13; x ^= x >> 17; x ^= x << 5; ((uint32_t *)in.contents)[i] = (i % 7 == 0) ? (x & 0xff) : x; }
+    memset(out.contents, 0xcd, out.length);
+    id<MTLCommandBuffer> cb = [[dev newCommandQueue] commandBuffer];
+    id<MTLComputeCommandEncoder> ce = [cb computeCommandEncoder];
+    [ce setComputePipelineState:ps];
+    [ce setBuffer:in offset:0 atIndex:0];
+    [ce setBuffer:out offset:0 atIndex:1];
+    [ce dispatchThreadgroups:MTLSizeMake(T / 64, 1, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
+    [ce endEncoding];
+    if (!reproRun(cb)) return FAIL(bug, "%s: command buffer failed", name);
+    const uint32_t *o = out.contents;
+    int wrong = 0, first = -1;
+    for (int t = 0; t < T; t++) {
+        uint32_t h = 2166136261u;
+        for (int w = 0; w < 8; w++)
+            for (int b = 0; b < 4; b++) { h ^= (o[t * 8 + w] >> (8 * b)) & 0xff; h *= 16777619u; }
+        if (h != want[t]) { wrong++; if (first < 0) first = t; }
+    }
+    if (wrong) return FAIL(bug, "%s: %d of %d threads differ from the CPU reference (first: thread %d)", name, wrong, T, first);
+    return PASS(bug, "%s: %s", name, passText);
+}

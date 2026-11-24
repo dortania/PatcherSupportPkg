@@ -74,36 +74,5 @@ int main(int argc, char **argv) { @autoreleasepool {
     const char *bug = "n47-kepler-narrow-shift-amount";
     id<MTLDevice> dev = reproDevice(argc, argv, "NVIDIA");
     if (!dev) return SKIP(bug, "no such GPU");
-    const char *name = dev.name.UTF8String;
-    NSError *err = nil;
-    MTLCompileOptions *options = [MTLCompileOptions new];
-    options.fastMathEnabled = NO;  // as the fuzzer compiles
-    id<MTLLibrary> lib = [dev newLibraryWithSource:[reproUniqueComment() stringByAppendingString:src] options:options error:&err];
-    if (!lib) return FAIL(bug, "compile: %s", err.localizedDescription.UTF8String);
-    id<MTLComputePipelineState> ps = [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"k"] error:&err];
-    if (!ps) return FAIL(bug, "%s: pipeline: %s", name, err.localizedDescription.UTF8String);
-    enum { T = 256 };
-    id<MTLBuffer> in = [dev newBufferWithLength:T * 4 * 4 options:MTLResourceStorageModeShared];
-    id<MTLBuffer> out = [dev newBufferWithLength:T * 8 * 4 options:MTLResourceStorageModeShared];
-    uint32_t x = 1u * 2654435761u + 12345u;  // the fuzzer's inputs, seed 1
-    for (int i = 0; i < T * 4; i++) { x ^= x << 13; x ^= x >> 17; x ^= x << 5; ((uint32_t *)in.contents)[i] = (i % 7 == 0) ? (x & 0xff) : x; }
-    memset(out.contents, 0xcd, out.length);
-    id<MTLCommandBuffer> cb = [[dev newCommandQueue] commandBuffer];
-    id<MTLComputeCommandEncoder> ce = [cb computeCommandEncoder];
-    [ce setComputePipelineState:ps];
-    [ce setBuffer:in offset:0 atIndex:0];
-    [ce setBuffer:out offset:0 atIndex:1];
-    [ce dispatchThreadgroups:MTLSizeMake(T / 64, 1, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
-    [ce endEncoding];
-    if (!reproRun(cb)) return FAIL(bug, "%s: command buffer failed", name);
-    const uint32_t *o = out.contents;
-    int wrong = 0, first = -1;
-    for (int t = 0; t < T; t++) {
-        uint32_t h = 2166136261u;
-        for (int w = 0; w < 8; w++)
-            for (int b = 0; b < 4; b++) { h ^= (o[t * 8 + w] >> (8 * b)) & 0xff; h *= 16777619u; }
-        if (h != want[t]) { wrong++; if (first < 0) first = t; }
-    }
-    if (wrong) return FAIL(bug, "%s: %d of %d threads differ from the CPU reference (first: thread %d)", name, wrong, T, first);
-    return PASS(bug, "%s: right shifts of 8-bit vector lanes by a masked variable amount are right", name);
+    return reproFuzzKernel(bug, dev, src, want, "right shifts of 8-bit vector lanes by a masked variable amount are right");
 }}
