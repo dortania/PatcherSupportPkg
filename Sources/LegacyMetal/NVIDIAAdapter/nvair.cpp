@@ -880,90 +880,116 @@ static unsigned fixDepthCompareLevels(LLVMModuleRef module, Gen &g) {
 // ---- depth comparisons with gradients (no body in the plugin) -------------------------------------------------------
 // Depth comparisons with gradients have no body in the plugin (instruction selection fails): done at level 0 through
 // the library's own level intrinsic, keeping a constant texel offset. NVAIR_COMPARE_GRADIENT_FIX. (i78, n05)
-static unsigned fixGradientCompares(LLVMModuleRef module, Gen &g) {
+// Parameters: (texture, sampler, i32, coord, [i32 layer,] float reference, dPdx, dPdy, [float min LOD clamp,]
+// [i1 offset?, int2 offset,] i32); the 3802 runtime compiler's forms have no clamp, the newer front ends' have.
+struct GradientCompareForm { const char *air, *shape; bool cube, array; };
+static const GradientCompareForm kGradientCompareForms[] = {
+    {"air.sample_compare_depth_2d_grad.f32", "2d", false, false},
+    {"air.sample_compare_depth_2d_array_grad.f32", "2d.array", false, true},
+    {"air.sample_compare_depth_cube_grad.f32", "cube", true, false},
+    {"air.sample_compare_depth_cube_array_grad.f32", "cube.array", true, true},
+};
+struct GradientCompareLayout {
+    unsigned reference;  // the parameter index of the depth reference
+    int offsetFlag;      // of the i1 has-offset parameter, -1 for cubes
+    bool pair;           // the newer front ends' { float, i8 } result
+    LLVMTypeRef result;
+    unsigned samplerSpace;
+};
+enum { kCompareCoordParam = 3, kCompareLayerParam = 4 };
+// Whether the declaration's type is one of the forms above, and where its parameters are.
+static bool gradientCompareLayout(Gen &g, LLVMTypeRef type, const GradientCompareForm &form, GradientCompareLayout &out) {
     enum { kStructKind = 10, kPointerKind = 12 };
-    LLVMTypeRef f32 = LLVMFloatTypeInContext(g.context), v2 = LLVMVectorType(f32, 2), v3 = LLVMVectorType(f32, 3), v4 = LLVMVectorType(f32, 4);
-    LLVMTypeRef v2i = LLVMVectorType(g.i32, 2), i8 = LLVMInt8TypeInContext(g.context);
-    // (texture, sampler, i32, coord, [i32 layer,] float reference, dPdx, dPdy, [float min LOD clamp,] [i1 offset?, int2 offset,] i32):
-    // the 3802 runtime compiler's forms have no clamp, the newer front ends' have
-    static const struct { const char *air, *shape; bool cube, array; } kForms[] = {
-        {"air.sample_compare_depth_2d_grad.f32", "2d", false, false},
-        {"air.sample_compare_depth_2d_array_grad.f32", "2d.array", false, true},
-        {"air.sample_compare_depth_cube_grad.f32", "cube", true, false},
-        {"air.sample_compare_depth_cube_array_grad.f32", "cube.array", true, true},
-    };
+    LLVMTypeRef f32 = LLVMFloatTypeInContext(g.context), v2i = LLVMVectorType(g.i32, 2);
+    LLVMTypeRef coordType = LLVMVectorType(f32, form.cube ? 3 : 2);
+    unsigned count = LLVMCountParamTypes(type), r = form.array ? 5 : 4, dx = r + 1, after = r + 3;
+    LLVMTypeRef params[12];
+    if (count > 12 || count < after + 1) return false;
+    LLVMGetParamTypes(type, params);
+    if (LLVMGetTypeKind(params[0]) != kPointerKind || LLVMGetTypeKind(params[1]) != kPointerKind ||
+        params[kCompareCoordParam] != coordType || params[r] != f32 || params[dx] != coordType || params[dx + 1] != coordType ||
+        (form.array && !isInt(params[kCompareLayerParam], 32)))
+        return false;
+    unsigned next = after + (params[after] == f32 ? 1 : 0);  // past the clamp, if any
+    out.offsetFlag = -1;
+    if (!form.cube) {  // i1 has-offset, int2 offset, i32
+        if (count != next + 3 || !isInt(params[next], 1) || params[next + 1] != v2i || !isInt(params[next + 2], 32)) return false;
+        out.offsetFlag = (int)next;
+    } else if (count != next + 1 || !isInt(params[next], 32)) {
+        return false;
+    }
+    out.result = LLVMGetReturnType(type);
+    out.pair = LLVMGetTypeKind(out.result) == kStructKind;
+    if (!out.pair && out.result != f32) return false;
+    if (out.pair && (LLVMCountStructElementTypes(out.result) < 1 || LLVMStructGetTypeAtIndex(out.result, 0) != f32)) return false;
+    out.reference = r;
+    out.samplerSpace = LLVMGetPointerAddressSpace(params[1]);
+    return true;
+}
+// Whether the call has a constant texel offset (in *offset); false for a computed one, which is left as it is.
+static bool constantTexelOffset(LLVMValueRef call, int offsetFlag, bool *offset) {
+    *offset = false;
+    if (offsetFlag < 0) return true;
+    LLVMValueRef flag = LLVMGetOperand(call, offsetFlag), value = LLVMGetOperand(call, offsetFlag + 1);
+    if (!LLVMIsAConstantInt(flag)) return false;
+    *offset = LLVMConstIntGetZExtValue(flag) && !LLVMIsAConstantAggregateZero(value);
+    return !*offset || LLVMIsAConstantDataVector(value) || LLVMIsAConstantVector(value);
+}
+// The call as the library's level form at level 0 (llvm.nvvm.sample.compare.tex.<shape>[.offset].lod), its result in
+// the call's type.
+static LLVMValueRef levelZeroCompare(Gen &g, LLVMBuilderRef b, LLVMValueRef call, const GradientCompareForm &form,
+                                     const GradientCompareLayout &layout, bool offset) {
+    LLVMTypeRef f32 = LLVMFloatTypeInContext(g.context), v4 = LLVMVectorType(f32, 4), v2i = LLVMVectorType(g.i32, 2);
+    LLVMTypeRef texturePointer = LLVMPointerType(LLVMInt8TypeInContext(g.context), 1);
+    LLVMTypeRef samplerPointer = LLVMPointerType(LLVMInt8TypeInContext(g.context), layout.samplerSpace);
+    char name[112];
+    snprintf(name, sizeof name, "llvm.nvvm.sample.compare.tex.%s%s.lod.v4f32.p1i8.p%ui8", form.shape, offset ? ".offset" : "",
+             layout.samplerSpace);
+    LLVMTypeRef lodParams[7];
+    unsigned n = 0;
+    lodParams[n++] = texturePointer, lodParams[n++] = samplerPointer, lodParams[n++] = form.cube ? v4 : LLVMVectorType(f32, 2);
+    if (form.array) lodParams[n++] = g.i32;
+    lodParams[n++] = f32;
+    if (offset) lodParams[n++] = v2i;
+    lodParams[n++] = f32;
+    LLVMValueRef lod = g.intrinsic(name, v4, lodParams, n);
+    LLVMPositionBuilderBefore(b, call);
+    LLVMValueRef coord = LLVMGetOperand(call, kCompareCoordParam);
+    if (form.cube) {  // float3 -> float4
+        LLVMValueRef packed = LLVMConstNull(v4);
+        for (unsigned k = 0; k < 3; k++)
+            packed = LLVMBuildInsertElement(b, packed, LLVMBuildExtractElement(b, coord, g.c32(k), ""), g.c32(k), "");
+        coord = packed;
+    }
+    LLVMValueRef args[7];
+    unsigned a = 0;
+    args[a++] = LLVMBuildBitCast(b, LLVMGetOperand(call, 0), texturePointer, "");
+    args[a++] = LLVMBuildBitCast(b, LLVMGetOperand(call, 1), samplerPointer, "");
+    args[a++] = coord;
+    if (form.array) args[a++] = LLVMGetOperand(call, kCompareLayerParam);
+    args[a++] = LLVMGetOperand(call, layout.reference);
+    if (offset) args[a++] = LLVMGetOperand(call, layout.offsetFlag + 1);
+    args[a++] = LLVMConstReal(f32, 0.0);
+    LLVMValueRef value = LLVMBuildExtractElement(b, LLVMBuildCall(b, lod, args, a, ""), g.c32(0), "");
+    if (!layout.pair) return value;
+    LLVMValueRef whole = LLVMBuildInsertValue(b, LLVMGetUndef(layout.result), value, 0, "");
+    if (LLVMCountStructElementTypes(layout.result) > 1 && isInt(LLVMStructGetTypeAtIndex(layout.result, 1), 8))
+        whole = LLVMBuildInsertValue(b, whole, LLVMConstInt(LLVMStructGetTypeAtIndex(layout.result, 1), 1, 0), 1, "");  // resident
+    return whole;
+}
+static unsigned fixGradientCompares(LLVMModuleRef module, Gen &g) {
     unsigned fixed = 0;
     LLVMBuilderRef b = nullptr;
-    for (const auto &form : kForms) {
+    for (const auto &form : kGradientCompareForms) {
         LLVMValueRef f = LLVMGetNamedFunction(module, form.air);
         if (!f || !LLVMIsDeclaration(f) || !LLVMGetFirstUse(f)) continue;
-        LLVMTypeRef type = LLVMGetElementType(LLVMTypeOf(f));
-        unsigned count = LLVMCountParamTypes(type), c = 3, r = form.array ? 5 : 4, dx = r + 1, after = r + 3;
-        LLVMTypeRef params[12];
-        if (count > 12 || count < after + 1) continue;
-        LLVMGetParamTypes(type, params);
-        LLVMTypeRef coordType = form.cube ? v3 : v2;
-        if (LLVMGetTypeKind(params[0]) != kPointerKind || LLVMGetTypeKind(params[1]) != kPointerKind || params[c] != coordType ||
-            params[r] != f32 || params[dx] != coordType || params[dx + 1] != coordType || (form.array && !isInt(params[4], 32)))
-            continue;
-        unsigned next = after + (params[after] == f32 ? 1 : 0);  // past the clamp, if any
-        int hasOffset = -1;
-        if (!form.cube) {  // i1 has-offset, int2 offset, i32
-            if (count != next + 3 || !isInt(params[next], 1) || params[next + 1] != v2i || !isInt(params[next + 2], 32)) continue;
-            hasOffset = (int)next;
-        } else if (count != next + 1 || !isInt(params[next], 32)) {
-            continue;
-        }
-        LLVMTypeRef result = LLVMGetReturnType(type);
-        bool pair = LLVMGetTypeKind(result) == kStructKind;
-        if (!pair && result != f32) continue;
-        if (pair && (LLVMCountStructElementTypes(result) < 1 || LLVMStructGetTypeAtIndex(result, 0) != f32)) continue;
-        unsigned samplerSpace = LLVMGetPointerAddressSpace(params[1]);
-        LLVMTypeRef texturePointer = LLVMPointerType(i8, 1), samplerPointer = LLVMPointerType(i8, samplerSpace);
-        std::vector<LLVMValueRef> calls = callsTo(f);
-        for (LLVMValueRef call : calls) {
-            bool offset = false;
-            if (hasOffset >= 0) {
-                LLVMValueRef flag = LLVMGetOperand(call, hasOffset), value = LLVMGetOperand(call, hasOffset + 1);
-                if (!LLVMIsAConstantInt(flag)) continue;  // computed: left as it is
-                offset = LLVMConstIntGetZExtValue(flag) && !LLVMIsAConstantAggregateZero(value);
-                if (offset && !LLVMIsAConstantDataVector(value) && !LLVMIsAConstantVector(value)) continue;
-            }
-            char name[112];
-            snprintf(name, sizeof name, "llvm.nvvm.sample.compare.tex.%s%s.lod.v4f32.p1i8.p%ui8", form.shape, offset ? ".offset" : "", samplerSpace);
-            LLVMTypeRef lodParams[7];
-            unsigned n = 0;
-            lodParams[n++] = texturePointer, lodParams[n++] = samplerPointer, lodParams[n++] = form.cube ? v4 : v2;
-            if (form.array) lodParams[n++] = g.i32;
-            lodParams[n++] = f32;
-            if (offset) lodParams[n++] = v2i;
-            lodParams[n++] = f32;
-            LLVMValueRef lod = g.intrinsic(name, v4, lodParams, n);
+        GradientCompareLayout layout;
+        if (!gradientCompareLayout(g, LLVMGetElementType(LLVMTypeOf(f)), form, layout)) continue;
+        for (LLVMValueRef call : callsTo(f)) {
+            bool offset;
+            if (!constantTexelOffset(call, layout.offsetFlag, &offset)) continue;
             if (!b) b = LLVMCreateBuilderInContext(g.context);
-            LLVMPositionBuilderBefore(b, call);
-            LLVMValueRef coord = LLVMGetOperand(call, c);
-            if (form.cube) {
-                LLVMValueRef packed = LLVMConstNull(v4);
-                for (unsigned k = 0; k < 3; k++)
-                    packed = LLVMBuildInsertElement(b, packed, LLVMBuildExtractElement(b, coord, g.c32(k), ""), g.c32(k), "");
-                coord = packed;
-            }
-            LLVMValueRef args[7];
-            unsigned a = 0;
-            args[a++] = LLVMBuildBitCast(b, LLVMGetOperand(call, 0), texturePointer, "");
-            args[a++] = LLVMBuildBitCast(b, LLVMGetOperand(call, 1), samplerPointer, "");
-            args[a++] = coord;
-            if (form.array) args[a++] = LLVMGetOperand(call, 4);
-            args[a++] = LLVMGetOperand(call, r);
-            if (offset) args[a++] = LLVMGetOperand(call, hasOffset + 1);
-            args[a++] = LLVMConstReal(f32, 0.0);
-            LLVMValueRef value = LLVMBuildExtractElement(b, LLVMBuildCall(b, lod, args, a, ""), g.c32(0), "");
-            if (pair) {
-                LLVMValueRef whole = LLVMBuildInsertValue(b, LLVMGetUndef(result), value, 0, "");
-                if (LLVMCountStructElementTypes(result) > 1 && isInt(LLVMStructGetTypeAtIndex(result, 1), 8))
-                    whole = LLVMBuildInsertValue(b, whole, LLVMConstInt(LLVMStructGetTypeAtIndex(result, 1), 1, 0), 1, "");  // resident
-                value = whole;
-            }
+            LLVMValueRef value = levelZeroCompare(g, b, call, form, layout, offset);
             LLVMReplaceAllUsesWith(call, value);
             LLVMInstructionEraseFromParent(call);
             fixed++;
