@@ -2252,164 +2252,173 @@ static MTLRenderPassDescriptor *withMaskedStencilClear(MTLRenderPassDescriptor *
     return copy;
 }
 
-static id igRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor) {
-    descriptor = withMaskedStencilClear(withDummyTarget(self, passWithFourSamples(self, descriptor)));  // items 77, 73 and 81
-    MTLRenderPassDescriptor *redirected = nil;
-    NSMutableArray *copies = nil;  // {temporary, destination, level, slice, depth plane}
-    for (NSUInteger i = 0; descriptor && i < 8; i++) {
+// A render pass being rewritten for the 12.x Intel driver: the pass as asked for (after items 77, 73 and 81), the copy
+// the driver gets once a rewrite needs one, and the copies out of temporary textures due when the encoder ends.
+typedef struct {
+    MTLRenderPassDescriptor *requested;
+    MTLRenderPassDescriptor *redirected;
+    NSMutableArray *copiesAtEnd;  // {temporary, destination, level, slice, depth plane}
+} IGPassRewrite;
+static MTLRenderPassDescriptor *currentPass(IGPassRewrite *pass) { return pass->redirected ?: pass->requested; }
+static MTLRenderPassDescriptor *redirectedPass(IGPassRewrite *pass) {
+    if (!pass->redirected) pass->redirected = [pass->requested copy];
+    return pass->redirected;
+}
+static void copyAtEnd(IGPassRewrite *pass, NSArray *copy) {
+    if (!pass->copiesAtEnd) pass->copiesAtEnd = [NSMutableArray array];
+    [pass->copiesAtEnd addObject:copy];
+}
+static id<MTLTexture> temporaryRenderTarget(id<MTLCommandBuffer> commandBuffer, MTLPixelFormat format, NSUInteger width,
+                                            NSUInteger height, NSUInteger sampleCount) {
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format width:width height:height
+                                                                               mipmapped:NO];
+    if (sampleCount > 1) td.textureType = MTLTextureType2DMultisample, td.sampleCount = sampleCount;
+    td.usage = MTLTextureUsageRenderTarget;
+    td.storageMode = MTLStorageModePrivate;
+    return [commandBuffer.device newTextureWithDescriptor:td];
+}
+// Copies a subresource of `source` (from its origin, at depth plane `plane`) into level 0 of `temporary`.
+static void copyIntoTemporary(id<MTLCommandBuffer> commandBuffer, id<MTLTexture> source, NSUInteger slice, NSUInteger level,
+                              NSUInteger plane, id<MTLTexture> temporary) {
+    id<MTLBlitCommandEncoder> blit = [commandBuffer blitCommandEncoder];
+    [blit copyFromTexture:source sourceSlice:slice sourceLevel:level sourceOrigin:MTLOriginMake(0, 0, plane)
+               sourceSize:MTLSizeMake(temporary.width, temporary.height, 1) toTexture:temporary destinationSlice:0
+         destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
+    [blit endEncoding];
+}
+
+// Item 24: narrow color targets, and narrow formats at level 1+, are cleared through a temporary texture first.
+static void clearNarrowTargetsFirst(id<MTLCommandBuffer> commandBuffer, IGPassRewrite *pass) {
+    for (NSUInteger i = 0; i < 8; i++) {
+        MTLRenderPassColorAttachmentDescriptor *a = pass->requested.colorAttachments[i];
         id<MTLTexture> root = nil;
         NSUInteger level = 0, slice = 0;
-        BOOL narrow = clearsNarrowly(descriptor.colorAttachments[i], &root, &level, &slice);
-        if (!narrow && !clearsNarrowFormatMip(descriptor.colorAttachments[i], &root, &level, &slice)) continue;
-        clearThroughTemporary(self, descriptor.colorAttachments[i], root, level, slice, narrow ? 4 : MAX(root.width >> level, 1));
-        if (!redirected) {
-            redirected = [descriptor copy];
-            copies = [NSMutableArray array];
-        }
-        redirected.colorAttachments[i].loadAction = MTLLoadActionLoad;
+        BOOL narrow = clearsNarrowly(a, &root, &level, &slice);
+        if (!narrow && !clearsNarrowFormatMip(a, &root, &level, &slice)) continue;
+        clearThroughTemporary(commandBuffer, a, root, level, slice, narrow ? 4 : MAX(root.width >> level, 1));
+        redirectedPass(pass).colorAttachments[i].loadAction = MTLLoadActionLoad;
         if (verbose()) shimLog("[mtlshim] color target cleared through a temporary texture\n");
     }
-    for (NSUInteger i = 0; descriptor && i < 8; i++) {
-        MTLRenderPassColorAttachmentDescriptor *a = descriptor.colorAttachments[i];
+}
+// Item 15: resolves into a level or slice other than 0 go to a temporary texture, copied there at the end.
+static void resolveAboveLevelZeroThroughTemporaries(id<MTLCommandBuffer> commandBuffer, IGPassRewrite *pass) {
+    for (NSUInteger i = 0; i < 8; i++) {
+        MTLRenderPassColorAttachmentDescriptor *a = pass->requested.colorAttachments[i];
         id<MTLTexture> resolve = a.resolveTexture;
         if (!resolve || (a.storeAction != MTLStoreActionMultisampleResolve && a.storeAction != MTLStoreActionStoreAndMultisampleResolve))
             continue;
         NSUInteger level = a.resolveLevel, slice = a.resolveSlice;
         id<MTLTexture> target = rootTexture(resolve, &level, &slice);
         if (!level && !slice && !a.resolveDepthPlane) continue;
-        MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:resolve.pixelFormat
-            width:MAX(target.width >> level, 1) height:MAX(target.height >> level, 1) mipmapped:NO];
-        td.usage = MTLTextureUsageRenderTarget;
-        td.storageMode = MTLStorageModePrivate;
-        id<MTLTexture> temporary = [((id<MTLCommandBuffer>)self).device newTextureWithDescriptor:td];
+        id<MTLTexture> temporary = temporaryRenderTarget(commandBuffer, resolve.pixelFormat, MAX(target.width >> level, 1),
+                                                         MAX(target.height >> level, 1), 1);
         if (!temporary) continue;
-        if (!redirected) {
-            redirected = [descriptor copy];
-            copies = [NSMutableArray array];
-        }
-        MTLRenderPassColorAttachmentDescriptor *r = redirected.colorAttachments[i];
+        MTLRenderPassColorAttachmentDescriptor *r = redirectedPass(pass).colorAttachments[i];
         r.resolveTexture = temporary;
         r.resolveLevel = r.resolveSlice = r.resolveDepthPlane = 0;
-        [copies addObject:@[temporary, target, @(level), @(slice), @(a.resolveDepthPlane)]];
+        copyAtEnd(pass, @[temporary, target, @(level), @(slice), @(a.resolveDepthPlane)]);
     }
-    // 23. A 3D color target at level 1+ on the same driver writes the wrong depth planes (one on plane 0 also writes
-    // plane 1, one on plane 1 neither): the pass renders into a temporary 2D texture of the level's size, loaded from
-    // the plane first if the pass loads, and copied to the plane when the encoder ends. (s23)
-    for (NSUInteger i = 0; descriptor && i < 8; i++) {
-        MTLRenderPassColorAttachmentDescriptor *a = (redirected ?: descriptor).colorAttachments[i];
+}
+// Item 23: 3D color targets at level 1+ are rendered through a temporary 2D texture of the level's size.
+static void render3DLevelsThroughTemporaries(id<MTLCommandBuffer> commandBuffer, IGPassRewrite *pass) {
+    for (NSUInteger i = 0; i < 8; i++) {
+        MTLRenderPassColorAttachmentDescriptor *a = currentPass(pass).colorAttachments[i];
         NSUInteger level = a.level, slice = a.slice;
         id<MTLTexture> root = a.texture ? rootTexture(a.texture, &level, &slice) : nil;
         if (!root || root.textureType != MTLTextureType3D || !level) continue;
-        MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:root.pixelFormat
-            width:MAX(root.width >> level, 1) height:MAX(root.height >> level, 1) mipmapped:NO];
-        td.usage = MTLTextureUsageRenderTarget;
-        td.storageMode = MTLStorageModePrivate;
-        id<MTLTexture> temporary = [((id<MTLCommandBuffer>)self).device newTextureWithDescriptor:td];
+        id<MTLTexture> temporary = temporaryRenderTarget(commandBuffer, root.pixelFormat, MAX(root.width >> level, 1),
+                                                         MAX(root.height >> level, 1), 1);
         if (!temporary) continue;
         NSUInteger plane = a.depthPlane;
-        if (a.loadAction == MTLLoadActionLoad) {
-            id<MTLBlitCommandEncoder> blit = [(id<MTLCommandBuffer>)self blitCommandEncoder];
-            [blit copyFromTexture:root sourceSlice:0 sourceLevel:level sourceOrigin:MTLOriginMake(0, 0, plane)
-                       sourceSize:MTLSizeMake(temporary.width, temporary.height, 1) toTexture:temporary destinationSlice:0
-                 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
-            [blit endEncoding];
-        }
-        if (!redirected) {
-            redirected = [descriptor copy];
-            copies = [NSMutableArray array];
-        }
-        MTLRenderPassColorAttachmentDescriptor *r = redirected.colorAttachments[i];
+        if (a.loadAction == MTLLoadActionLoad) copyIntoTemporary(commandBuffer, root, 0, level, plane, temporary);
+        MTLRenderPassColorAttachmentDescriptor *r = redirectedPass(pass).colorAttachments[i];
         r.texture = temporary;
         r.level = r.slice = r.depthPlane = 0;
-        if (a.storeAction == MTLStoreActionStore) [copies addObject:@[temporary, root, @(level), @0, @(plane)]];
+        if (a.storeAction == MTLStoreActionStore) copyAtEnd(pass, @[temporary, root, @(level), @0, @(plane)]);
         if (verbose()) shimLog("[mtlshim] 3D target (level %lu, plane %lu) rendered through a 2D texture\n", (unsigned long)level, (unsigned long)plane);
     }
-    // 33. On the same driver render passes and blits disagree on stencil textures with several levels or slices (a pass
-    // above level / slice 0 doesn't load what's there; one at level 0 overwrites what blits wrote, as shaders see it).
-    // A pass with a stencil attachment on such a texture, or a depth attachment on a Depth32Float_Stencil8 one, renders
-    // into a temporary texture of the subresource's size, copied in by a blit if the pass loads and back if it stores.
-    // (s17, s37)
-    {
-        MTLRenderPassDescriptor *current = redirected ?: descriptor;
-        MTLRenderPassStencilAttachmentDescriptor *st = current.stencilAttachment;
-        MTLRenderPassDepthAttachmentDescriptor *dp = current.depthAttachment;
-        // the stencil attachment, or a depth attachment on a Depth32Float_Stencil8 texture (written by blits here too)
-        BOOL useStencil = st.texture != nil;
-        NSUInteger level = useStencil ? st.level : dp.level, slice = useStencil ? st.slice : dp.slice;
-        id<MTLTexture> attached = useStencil ? st.texture : dp.texture;
-        id<MTLTexture> root = attached ? rootTexture(attached, &level, &slice) : nil;
-        BOOL separateStencil = root && (root.pixelFormat == MTLPixelFormatStencil8 || root.pixelFormat == MTLPixelFormatDepth32Float_Stencil8);
-        BOOL sharedDepth = dp.texture && (!useStencil || (dp.texture == st.texture && dp.level == st.level && dp.slice == st.slice));
-        if (separateStencil && (root.mipmapLevelCount > 1 || root.arrayLength > 1) && !disabled("MTLSHIM_STENCIL_SUBRESOURCE") &&
-            (!dp.texture || sharedDepth) && root.textureType != MTLTextureType3D) {
-            MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:root.pixelFormat
-                width:MAX(root.width >> level, 1) height:MAX(root.height >> level, 1) mipmapped:NO];
-            if (root.sampleCount > 1) td.textureType = MTLTextureType2DMultisample, td.sampleCount = root.sampleCount;
-            td.usage = MTLTextureUsageRenderTarget;
-            td.storageMode = MTLStorageModePrivate;
-            id<MTLTexture> temporary = [((id<MTLCommandBuffer>)self).device newTextureWithDescriptor:td];
-            if (temporary) {
-                BOOL loads = (useStencil && st.loadAction == MTLLoadActionLoad) || (sharedDepth && dp.loadAction == MTLLoadActionLoad);
-                BOOL stores = (useStencil && st.storeAction == MTLStoreActionStore) || (sharedDepth && dp.storeAction == MTLStoreActionStore);
-                if (loads) {
-                    id<MTLBlitCommandEncoder> blit = [(id<MTLCommandBuffer>)self blitCommandEncoder];
-                    [blit copyFromTexture:root sourceSlice:slice sourceLevel:level sourceOrigin:MTLOriginMake(0, 0, 0)
-                               sourceSize:MTLSizeMake(temporary.width, temporary.height, 1) toTexture:temporary destinationSlice:0
-                         destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
-                    [blit endEncoding];
-                }
-                if (!redirected) {
-                    redirected = [descriptor copy];
-                    copies = [NSMutableArray array];
-                }
-                if (useStencil) {
-                    redirected.stencilAttachment.texture = temporary;
-                    redirected.stencilAttachment.level = redirected.stencilAttachment.slice = redirected.stencilAttachment.depthPlane = 0;
-                }
-                if (sharedDepth) {
-                    redirected.depthAttachment.texture = temporary;
-                    redirected.depthAttachment.level = redirected.depthAttachment.slice = redirected.depthAttachment.depthPlane = 0;
-                }
-                if (stores) [copies addObject:@[temporary, root, @(level), @(slice), @0]];
-                if (verbose())
-                    shimLog("[mtlshim] stencil at level %lu slice %lu rendered through a temporary texture\n", (unsigned long)level, (unsigned long)slice);
-            }
-        }
+}
+// Item 33: a stencil attachment on a texture with several levels or slices (or a depth attachment on such a
+// Depth32Float_Stencil8 texture) is rendered through a temporary texture of the subresource's size.
+static void renderStencilSubresourceThroughTemporary(id<MTLCommandBuffer> commandBuffer, IGPassRewrite *pass) {
+    MTLRenderPassDescriptor *current = currentPass(pass);
+    MTLRenderPassStencilAttachmentDescriptor *st = current.stencilAttachment;
+    MTLRenderPassDepthAttachmentDescriptor *dp = current.depthAttachment;
+    BOOL useStencil = st.texture != nil;
+    NSUInteger level = useStencil ? st.level : dp.level, slice = useStencil ? st.slice : dp.slice;
+    id<MTLTexture> attached = useStencil ? st.texture : dp.texture;
+    id<MTLTexture> root = attached ? rootTexture(attached, &level, &slice) : nil;
+    BOOL separateStencil = root && (root.pixelFormat == MTLPixelFormatStencil8 || root.pixelFormat == MTLPixelFormatDepth32Float_Stencil8);
+    BOOL sharedDepth = dp.texture && (!useStencil || (dp.texture == st.texture && dp.level == st.level && dp.slice == st.slice));
+    BOOL severalSubresources = root.mipmapLevelCount > 1 || root.arrayLength > 1;
+    if (!separateStencil || !severalSubresources || disabled("MTLSHIM_STENCIL_SUBRESOURCE") || (dp.texture && !sharedDepth) ||
+        root.textureType == MTLTextureType3D)
+        return;
+    id<MTLTexture> temporary = temporaryRenderTarget(commandBuffer, root.pixelFormat, MAX(root.width >> level, 1),
+                                                     MAX(root.height >> level, 1), root.sampleCount);
+    if (!temporary) return;
+    BOOL loads = (useStencil && st.loadAction == MTLLoadActionLoad) || (sharedDepth && dp.loadAction == MTLLoadActionLoad);
+    BOOL stores = (useStencil && st.storeAction == MTLStoreActionStore) || (sharedDepth && dp.storeAction == MTLStoreActionStore);
+    if (loads) copyIntoTemporary(commandBuffer, root, slice, level, 0, temporary);
+    MTLRenderPassDescriptor *redirected = redirectedPass(pass);
+    if (useStencil) {
+        redirected.stencilAttachment.texture = temporary;
+        redirected.stencilAttachment.level = redirected.stencilAttachment.slice = redirected.stencilAttachment.depthPlane = 0;
     }
-    // Item 51: a combined depth/stencil texture attached as stencil only is attached as depth too.
-    BOOL depthAdded = NO;
-    {
-        MTLRenderPassDescriptor *current = redirected ?: descriptor;
-        MTLRenderPassStencilAttachmentDescriptor *st = current.stencilAttachment;
-        MTLPixelFormat format = st.texture.pixelFormat;
-        if (ivbStencilWithDepth && st.texture && !current.depthAttachment.texture &&
-            (format == MTLPixelFormatDepth32Float_Stencil8 || format == MTLPixelFormatDepth24Unorm_Stencil8)) {
-            if (!redirected) redirected = [descriptor copy];
-            MTLRenderPassDepthAttachmentDescriptor *dp = redirected.depthAttachment;
-            dp.texture = st.texture;
-            dp.level = st.level;
-            dp.slice = st.slice;
-            dp.depthPlane = st.depthPlane;
-            dp.loadAction = MTLLoadActionLoad;
-            dp.storeAction = MTLStoreActionStore;
-            depthAdded = YES;
-            if (verbose()) shimLog("[mtlshim] stencil-only pass: depth attached as well\n");
-        }
+    if (sharedDepth) {
+        redirected.depthAttachment.texture = temporary;
+        redirected.depthAttachment.level = redirected.depthAttachment.slice = redirected.depthAttachment.depthPlane = 0;
     }
-    id encoder = origIGRenderEncoder(self, _cmd, redirected ?: descriptor);
-    if (encoder && depthAdded) objc_setAssociatedObject(encoder, kDepthAddedForStencil, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    if (encoder) setDefaultViewport(encoder, descriptor);
-    if (encoder && depthClearNeedsDraw(descriptor)) drawDepthClear(encoder, redirected ?: descriptor, descriptor);  // item 64
-    id<MTLTexture> levelPass = encoder ? depthLevelPassTexture(redirected ?: descriptor) : nil;  // item 68
-    if (levelPass) objc_setAssociatedObject(encoder, kPendingDepthLevelRepair, @[self, levelPass], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (stores) copyAtEnd(pass, @[temporary, root, @(level), @(slice), @0]);
+    if (verbose())
+        shimLog("[mtlshim] stencil at level %lu slice %lu rendered through a temporary texture\n", (unsigned long)level, (unsigned long)slice);
+}
+// Item 51: a combined depth/stencil texture attached as stencil only is attached as depth too. YES if it was.
+static BOOL attachDepthToStencilOnlyPass(IGPassRewrite *pass) {
+    MTLRenderPassStencilAttachmentDescriptor *st = currentPass(pass).stencilAttachment;
+    MTLPixelFormat format = st.texture.pixelFormat;
+    BOOL combined = format == MTLPixelFormatDepth32Float_Stencil8 || format == MTLPixelFormatDepth24Unorm_Stencil8;
+    if (!ivbStencilWithDepth || !st.texture || currentPass(pass).depthAttachment.texture || !combined) return NO;
+    MTLRenderPassDepthAttachmentDescriptor *dp = redirectedPass(pass).depthAttachment;
+    dp.texture = st.texture;
+    dp.level = st.level;
+    dp.slice = st.slice;
+    dp.depthPlane = st.depthPlane;
+    dp.loadAction = MTLLoadActionLoad;
+    dp.storeAction = MTLStoreActionStore;
+    if (verbose()) shimLog("[mtlshim] stencil-only pass: depth attached as well\n");
+    return YES;
+}
+// What the encoder has to do later: items 51, 64, 68, 50 and the copies out of temporaries at its end.
+static void noteEncoderFollowUps(id encoder, id<MTLCommandBuffer> commandBuffer, IGPassRewrite *pass, BOOL depthAdded) {
+    MTLRenderPassDescriptor *descriptor = pass->requested, *driverPass = currentPass(pass);
+    if (depthAdded) objc_setAssociatedObject(encoder, kDepthAddedForStencil, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    setDefaultViewport(encoder, descriptor);
+    if (depthClearNeedsDraw(descriptor)) drawDepthClear(encoder, driverPass, descriptor);  // item 64
+    id<MTLTexture> levelPass = depthLevelPassTexture(driverPass);  // item 68
+    if (levelPass) objc_setAssociatedObject(encoder, kPendingDepthLevelRepair, @[commandBuffer, levelPass], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     id<MTLTexture> depth = descriptor.depthAttachment.texture;  // item 50
-    if (encoder && ivbDepthTouch && depth && depth.textureType == MTLTextureType2DMultisample && (depth.usage & MTLTextureUsageShaderRead) &&
+    if (ivbDepthTouch && depth && depth.textureType == MTLTextureType2DMultisample && (depth.usage & MTLTextureUsageShaderRead) &&
         descriptor.depthAttachment.loadAction == MTLLoadActionClear)
-        objc_setAssociatedObject(encoder, kPendingDepthTouch, @[self, depth], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    if (encoder && copies.count) {
-        if (verbose()) shimLog("[mtlshim] %lu attachment(s) copied out of temporary textures at the end\n", (unsigned long)copies.count);
-        objc_setAssociatedObject(encoder, kPendingResolveCopies, @[self, copies], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(encoder, kPendingDepthTouch, @[commandBuffer, depth], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (pass->copiesAtEnd.count) {
+        if (verbose()) shimLog("[mtlshim] %lu attachment(s) copied out of temporary textures at the end\n", (unsigned long)pass->copiesAtEnd.count);
+        objc_setAssociatedObject(encoder, kPendingResolveCopies, @[commandBuffer, pass->copiesAtEnd], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
+}
+
+static id igRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor) {
+    descriptor = withMaskedStencilClear(withDummyTarget(self, passWithFourSamples(self, descriptor)));  // items 77, 73 and 81
+    IGPassRewrite pass = {descriptor, nil, nil};
+    if (descriptor) {
+        clearNarrowTargetsFirst(self, &pass);
+        resolveAboveLevelZeroThroughTemporaries(self, &pass);
+        render3DLevelsThroughTemporaries(self, &pass);
+    }
+    renderStencilSubresourceThroughTemporary(self, &pass);
+    BOOL depthAdded = attachDepthToStencilOnlyPass(&pass);
+    id encoder = origIGRenderEncoder(self, _cmd, currentPass(&pass));
+    if (encoder) noteEncoderFollowUps(encoder, self, &pass, depthAdded);
     return encoder;
 }
 
