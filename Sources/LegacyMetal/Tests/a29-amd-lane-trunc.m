@@ -28,11 +28,9 @@ int main(int argc, char **argv) {
         const char *bug = "a29-amd-lane-trunc";
         id<MTLDevice> dev = reproDevice(argc, argv, "AMD");
         if (!dev) return SKIP(bug, "no such GPU");
-        NSError *err = nil;
-        id<MTLLibrary> lib = [dev newLibraryWithSource:[reproUniqueComment() stringByAppendingString:src] options:nil error:&err];
-        if (!lib) return FAIL(bug, "compile: %s", err.localizedDescription.UTF8String);
-        id<MTLComputePipelineState> ps = [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"k"] error:&err];
-        if (!ps) return FAIL(bug, "%s: pipeline: %s", dev.name.UTF8String, err.localizedDescription.UTF8String);
+        NSString *why = nil;
+        id<MTLComputePipelineState> ps = reproComputePipeline(dev, src, nil, &why);
+        if (!ps) return FAIL(bug, "%s", why.UTF8String);
         uint32_t input[kThreads * 4], seed = 0x2545f491u;
         for (int i = 0; i < kThreads * 4; i++) { seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5; input[i] = seed; }
         id<MTLBuffer> in = [dev newBufferWithBytes:input length:sizeof input options:MTLResourceStorageModeShared];

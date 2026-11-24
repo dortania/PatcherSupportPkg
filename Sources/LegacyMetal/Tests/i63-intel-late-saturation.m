@@ -66,14 +66,8 @@ int main(int argc, char **argv) {
             id<MTLComputePipelineState> ps = [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:which ? @"kb" : @"ka"] error:&err];
             if (!ps) return FAIL(bug, "%s: no pipeline: %s", dev.name.UTF8String, err.localizedDescription.UTF8String);
             id<MTLBuffer> out = [dev newBufferWithLength:N * 32 options:MTLResourceStorageModeShared];
-            id<MTLCommandBuffer> cb = [[dev newCommandQueue] commandBuffer];
-            id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
-            [enc setComputePipelineState:ps];
-            [enc setBuffer:in offset:0 atIndex:0];
-            [enc setBuffer:out offset:0 atIndex:1];
-            [enc dispatchThreadgroups:MTLSizeMake(N / 64, 1, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
-            [enc endEncoding];
-            if (!reproRun(cb)) return FAIL(bug, "%s: command buffer failed", dev.name.UTF8String);
+            if (!reproDispatch([dev newCommandQueue], ps, @[in, out], MTLSizeMake(N / 64, 1, 1), MTLSizeMake(64, 1, 1)))
+                return FAIL(bug, "%s: command buffer failed", dev.name.UTF8String);
             const uint32_t *got = out.contents;
             int wrong[8] = {0}, first[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
             for (uint32_t t = 0; t < N; t++) {

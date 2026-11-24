@@ -34,13 +34,8 @@ int main(int argc, char **argv) {
         if (!ps) return FAIL(bug, "%s: pipeline: %s", name, error.localizedDescription.UTF8String);
         enum { N = 256 };
         id<MTLBuffer> out = [dev newBufferWithLength:N * 4 options:MTLResourceStorageModeShared];
-        id<MTLCommandBuffer> cb = [[dev newCommandQueue] commandBuffer];
-        id<MTLComputeCommandEncoder> ce = [cb computeCommandEncoder];
-        [ce setComputePipelineState:ps];
-        [ce setBuffer:out offset:0 atIndex:0];
-        [ce dispatchThreadgroups:MTLSizeMake(N / 64, 1, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
-        [ce endEncoding];
-        if (!reproRun(cb)) return FAIL(bug, "%s: command buffer failed", name);
+        if (!reproDispatch([dev newCommandQueue], ps, @[out], MTLSizeMake(N / 64, 1, 1), MTLSizeMake(64, 1, 1)))
+            return FAIL(bug, "%s: command buffer failed", name);
         const uint32_t *o = out.contents;
         for (uint32_t t = 0; t < N; t++) {
             uint32_t want = ((t & ~63u) + 63u - (t & 63u)) * 3u + 1u;

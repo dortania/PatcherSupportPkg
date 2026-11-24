@@ -126,25 +126,17 @@ int main(int argc, char **argv) {
         id<MTLDevice> dev = reproDevice(argc, argv, "Intel");
         if (!dev) return SKIP(bug, "no such GPU");
         const char *name = dev.name.UTF8String;
-        NSError *err = nil;
-        id<MTLLibrary> lib = [dev newLibraryWithSource:[reproUniqueComment() stringByAppendingString:src] options:nil error:&err];
-        if (!lib) return FAIL(bug, "compile: %s", err.localizedDescription.UTF8String);
-        id<MTLComputePipelineState> ps = [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"k"] error:&err];
-        if (!ps) return FAIL(bug, "%s: pipeline: %s", name, err.localizedDescription.UTF8String);
+        NSString *why = nil;
+        id<MTLComputePipelineState> ps = reproComputePipeline(dev, src, nil, &why);
+        if (!ps) return FAIL(bug, "%s", why.UTF8String);
         enum { T = 256 };
         id<MTLBuffer> in = [dev newBufferWithLength:T * 16 options:MTLResourceStorageModeShared];
         id<MTLBuffer> out = [dev newBufferWithLength:T * 32 options:MTLResourceStorageModeShared];
         uint32_t x = 2654435761u + 12345u, *w = in.contents;  // the differential fuzzer's input, seed 1
         for (int i = 0; i < T * 4; i++) { x ^= x << 13; x ^= x >> 17; x ^= x << 5; w[i] = (i % 7 == 0) ? (x & 0xff) : x; }
         memset(out.contents, 0xcd, T * 32);
-        id<MTLCommandBuffer> cb = [[dev newCommandQueue] commandBuffer];
-        id<MTLComputeCommandEncoder> ce = [cb computeCommandEncoder];
-        [ce setComputePipelineState:ps];
-        [ce setBuffer:in offset:0 atIndex:0];
-        [ce setBuffer:out offset:0 atIndex:1];
-        [ce dispatchThreadgroups:MTLSizeMake(T / 64, 1, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
-        [ce endEncoding];
-        if (!reproRun(cb)) return FAIL(bug, "%s: command buffer failed", name);
+        if (!reproDispatch([dev newCommandQueue], ps, @[in, out], MTLSizeMake(T / 64, 1, 1), MTLSizeMake(64, 1, 1)))
+            return FAIL(bug, "%s: command buffer failed", name);
         const uint32_t *o = out.contents;
         int wrong = 0, first = -1;
         int firstWord = 0;

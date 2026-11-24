@@ -21,11 +21,9 @@ int main(int argc, char **argv) {
         for (int k = 0; k < kNumOffsets; k++)  // gather offsets must be constant expressions
             [src appendFormat:@"    case %d: out[i] = t.gather(s, c[i], int2(%d, %d)); break;\n", k, kOffsets[k][0], kOffsets[k][1]];
         [src appendString:@"    }\n}\n"];
-        NSError *err = nil;
-        id<MTLLibrary> lib = [dev newLibraryWithSource:[reproUniqueComment() stringByAppendingString:src] options:nil error:&err];
-        if (!lib) return FAIL(bug, "compile: %s", err.localizedDescription.UTF8String);
-        id<MTLComputePipelineState> ps = [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"k"] error:&err];
-        if (!ps) return FAIL(bug, "%s: pipeline: %s", name, err.localizedDescription.UTF8String);
+        NSString *why = nil;
+        id<MTLComputePipelineState> ps = reproComputePipeline(dev, src, nil, &why);
+        if (!ps) return FAIL(bug, "%s", why.UTF8String);
         MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR32Float width:8 height:8 mipmapped:YES];
         id<MTLTexture> tex = [dev newTextureWithDescriptor:td];
         for (int level = 0; level < (int)td.mipmapLevelCount; level++) {

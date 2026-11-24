@@ -42,11 +42,9 @@ int main(int argc, char **argv) { @autoreleasepool {
         "    out[i * 6 + 4] = float4(tu.gather(s, p, int2(0), component::y));\n"
         "    out[i * 6 + 5] = t.gather(s, p, int2(0), component::x);\n"
         "}\n";
-    NSError *err = nil;
-    id<MTLLibrary> lib = [dev newLibraryWithSource:[reproUniqueComment() stringByAppendingString:src] options:nil error:&err];
-    if (!lib) return FAIL(bug, "compile: %s", err.localizedDescription.UTF8String);
-    id<MTLComputePipelineState> ps = [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"k"] error:&err];
-    if (!ps) return FAIL(bug, "%s: pipeline: %s", name, err.localizedDescription.UTF8String);
+    NSString *why = nil;
+    id<MTLComputePipelineState> ps = reproComputePipeline(dev, src, nil, &why);
+    if (!ps) return FAIL(bug, "%s", why.UTF8String);
     MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRG32Float width:8 height:8 mipmapped:NO];
     id<MTLTexture> tex = [dev newTextureWithDescriptor:td];
     td.textureType = MTLTextureType2DArray;

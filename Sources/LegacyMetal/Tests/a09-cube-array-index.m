@@ -27,11 +27,9 @@ int main(int argc, char **argv) {
         const char *bug = "a09-cube-array-index";
         id<MTLDevice> dev = reproDevice(argc, argv, "AMD");
         if (!dev) return SKIP(bug, "no such GPU");
-        NSError *err = nil;
-        id<MTLLibrary> lib = [dev newLibraryWithSource:[reproUniqueComment() stringByAppendingString:src] options:nil error:&err];
-        if (!lib) return FAIL(bug, "compile: %s", err.localizedDescription.UTF8String);
-        id<MTLComputePipelineState> ps = [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"k"] error:&err];
-        if (!ps) return FAIL(bug, "%s: pipeline: %s", dev.name.UTF8String, err.localizedDescription.UTF8String);
+        NSString *why = nil;
+        id<MTLComputePipelineState> ps = reproComputePipeline(dev, src, nil, &why);
+        if (!ps) return FAIL(bug, "%s", why.UTF8String);
 
         MTLTextureDescriptor *td = [MTLTextureDescriptor new];
         td.textureType = MTLTextureTypeCubeArray;

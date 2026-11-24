@@ -17,11 +17,9 @@ int main(int argc, char **argv) {
         id<MTLDevice> dev = reproDevice(argc, argv, "Intel");
         if (!dev) return SKIP(bug, "no such GPU");
         const char *name = dev.name.UTF8String;
-        NSError *err = nil;
-        id<MTLLibrary> lib = [dev newLibraryWithSource:[reproUniqueComment() stringByAppendingString:src] options:nil error:&err];
-        if (!lib) return FAIL(bug, "compile: %s", err.localizedDescription.UTF8String);
-        id<MTLComputePipelineState> ps = [dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"k"] error:&err];
-        if (!ps) return FAIL(bug, "%s: pipeline: %s", name, err.localizedDescription.UTF8String);
+        NSString *why = nil;
+        id<MTLComputePipelineState> ps = reproComputePipeline(dev, src, nil, &why);
+        if (!ps) return FAIL(bug, "%s", why.UTF8String);
         id<MTLCommandQueue> queue = [dev newCommandQueue];
         uint32_t x = 2463534242u;
         for (int run = 0; run < 20; run++) {

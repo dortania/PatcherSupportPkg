@@ -77,14 +77,8 @@ int main(int argc, char **argv) { @autoreleasepool {
                 in[i] = i % 7 == 0 ? x & 255u : x;
             }
             memset(output.contents, 0xcd, T * 32);
-            id<MTLCommandBuffer> cb = [queue commandBuffer];
-            id<MTLComputeCommandEncoder> ce = [cb computeCommandEncoder];
-            [ce setComputePipelineState:ps];
-            [ce setBuffer:input offset:0 atIndex:0];
-            [ce setBuffer:output offset:0 atIndex:1];
-            [ce dispatchThreadgroups:MTLSizeMake(4, 1, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
-            [ce endEncoding];
-            if (!reproRun(cb)) return FAIL(bug, "%s: command buffer failed", name);
+            if (!reproDispatch(queue, ps, @[input, output], MTLSizeMake(4, 1, 1), MTLSizeMake(64, 1, 1)))
+                return FAIL(bug, "%s: command buffer failed", name);
             int wrong = 0, first = -1;
             uint32_t got = 0, want = 0;
             for (unsigned t = 0; t < T; t++) {

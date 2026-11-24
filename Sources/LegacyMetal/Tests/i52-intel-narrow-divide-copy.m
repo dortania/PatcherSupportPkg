@@ -44,14 +44,8 @@ int main(int argc, char **argv) { @autoreleasepool {
     for (unsigned s = 0; s < sizeof seeds / sizeof *seeds; s++) {
         uint32_t x = seeds[s] * 2654435761u + 12345u, *in = input.contents;
         for (unsigned i = 0; i < T * 4; i++) { x ^= x << 13; x ^= x >> 17; x ^= x << 5; in[i] = i % 7 == 0 ? x & 255u : x; }
-        id<MTLCommandBuffer> cb = [queue commandBuffer];
-        id<MTLComputeCommandEncoder> ce = [cb computeCommandEncoder];
-        [ce setComputePipelineState:ps];
-        [ce setBuffer:input offset:0 atIndex:0];
-        [ce setBuffer:output offset:0 atIndex:1];
-        [ce dispatchThreadgroups:MTLSizeMake(4, 1, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
-        [ce endEncoding];
-        if (!reproRun(cb)) return FAIL(bug, "command buffer failed");
+        if (!reproDispatch(queue, ps, @[input, output], MTLSizeMake(4, 1, 1), MTLSizeMake(64, 1, 1)))
+            return FAIL(bug, "command buffer failed");
         int wrong = 0, first = -1;
         for (unsigned t = 0; t < T; t++)
             if (((uint32_t *)output.contents)[t] != reference(in, t) && !wrong++) first = (int)t;

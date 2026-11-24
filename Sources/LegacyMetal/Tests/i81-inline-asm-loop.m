@@ -42,14 +42,8 @@ int main(int argc, char **argv) {
         const float k[16] = {1, 2, 3, 4, 10, 20, 30, 40, 100, 200, 300, 400, 1000, 2000, 3000, 4000};
         id<MTLBuffer> out = [dev newBufferWithLength:16 options:MTLResourceStorageModeShared];
         id<MTLBuffer> in = [dev newBufferWithBytes:k length:sizeof k options:MTLResourceStorageModeShared];
-        id<MTLCommandBuffer> cb = [[dev newCommandQueue] commandBuffer];
-        id<MTLComputeCommandEncoder> e = [cb computeCommandEncoder];
-        [e setComputePipelineState:compute];
-        [e setBuffer:out offset:0 atIndex:0];
-        [e setBuffer:in offset:0 atIndex:1];
-        [e dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
-        [e endEncoding];
-        if (!reproRun(cb)) return FAIL(bug, "%s: the kernel's command buffer failed", dev.name.UTF8String);
+        if (!reproDispatch([dev newCommandQueue], compute, @[out, in], MTLSizeMake(1, 1, 1), MTLSizeMake(1, 1, 1)))
+            return FAIL(bug, "%s: the kernel's command buffer failed", dev.name.UTF8String);
         const float *sum = out.contents;
         if (sum[0] != 1111 || sum[1] != 2222 || sum[2] != 3333 || sum[3] != 4444)
             return FAIL(bug, "%s: the loop's sum is %g %g %g %g, want 1111 2222 3333 4444", dev.name.UTF8String, sum[0], sum[1], sum[2], sum[3]);
