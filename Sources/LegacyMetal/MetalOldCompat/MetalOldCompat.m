@@ -122,6 +122,11 @@
 
 static void shimLog(const char *format, ...) __attribute__((format(printf, 1, 2)));
 static bool verbose(void) { return getenv("MTLSHIM_VERBOSE") != NULL; }
+// A fix is on unless its switch is set to 0.
+static bool disabled(const char *setting) {
+    const char *value = getenv(setting);
+    return value && !strcmp(value, "0");
+}
 static void shimLog(const char *format, ...) {
     char line[1024];
     va_list args;
@@ -313,7 +318,7 @@ static ValidateTextureIMP origValidateTexture;
 static char kTwoSamplesKey;
 static BOOL promotesTwoSamples(id<MTLDevice> device) {
     static int enabled = -1;
-    if (enabled < 0) { const char *setting = getenv("MTLSHIM_MSAA2"); enabled = !(setting && !strcmp(setting, "0")); }
+    if (enabled < 0) { enabled = !disabled("MTLSHIM_MSAA2"); }
     if (!enabled || !device) return NO;
     NSNumber *known = objc_getAssociatedObject(device, &kTwoSamplesKey);
     if (known) return known.boolValue;
@@ -713,9 +718,8 @@ static id nilIndirectArgumentEncoder(id self, SEL _cmd, id layout) {
 }
 
 static void guardArgumentEncoders(void) {
-    const char *setting = getenv("MTLSHIM_ARGUMENT_ENCODER_GUARD");
     Method m = class_getInstanceMethod(objc_getClass("MTLIOAccelDevice"), sel_registerName("newIndirectArgumentEncoderWithLayout:"));
-    if ((setting && !strcmp(setting, "0")) || !m || !definesMethod("MTLIOAccelDevice", "newIndirectArgumentEncoderWithLayout:") ||
+    if (disabled("MTLSHIM_ARGUMENT_ENCODER_GUARD") || !m || !definesMethod("MTLIOAccelDevice", "newIndirectArgumentEncoderWithLayout:") ||
         !fromMetalOld(method_getImplementation(m)))
         return;
     method_setImplementation(m, (IMP)nilIndirectArgumentEncoder);
@@ -1330,9 +1334,8 @@ AB_DRAW(DInd, (id self, SEL _cmd, id indirect, NSUInteger o, MTLSize t), (self, 
 
 static void installIvbArgumentBuffers(void) {
     static BOOL done;
-    const char *setting = getenv("MTLSHIM_IVB_ARGUMENT_BUFFERS");
     Class device = objc_getClass("MTLIGAccelDevice");
-    if (done || !device || (setting && !strcmp(setting, "0")) || definesMethod("MTLIGAccelDevice", "newArgumentEncoderWithLayout:") ||
+    if (done || !device || disabled("MTLSHIM_IVB_ARGUMENT_BUFFERS") || definesMethod("MTLIGAccelDevice", "newArgumentEncoderWithLayout:") ||
         definesMethod("MTLIGAccelDevice", "newIndirectArgumentBufferLayoutWithStructType:"))
         return;  // not the Ivy Bridge driver (the 12.x driver has argument buffers of its own), or switched off
     done = YES;
@@ -1373,8 +1376,7 @@ static void installIvbArgumentBuffers(void) {
     const char *const setSamplersLod[3] = {"setVertexSamplerStates:lodMinClamps:lodMaxClamps:withRange:",
                                            "setFragmentSamplerStates:lodMinClamps:lodMaxClamps:withRange:",
                                            "setSamplerStates:lodMinClamps:lodMaxClamps:withRange:"};
-    const char *handles = getenv("MTLSHIM_IVB_ARGUMENT_BUFFER_TEXTURES");
-    BOOL texturesOn = !(handles && !strcmp(handles, "0"));
+    BOOL texturesOn = !disabled("MTLSHIM_IVB_ARGUMENT_BUFFER_TEXTURES");
     for (int st = 0; st < 3 && texturesOn; st++)
         if (!definesMethod(stageClass[st], setTexture[st]) || !definesMethod(stageClass[st], setTextures[st]) ||
             !definesMethod(stageClass[st], setSampler[st]) || !definesMethod(stageClass[st], setSamplers[st]) ||
@@ -1562,11 +1564,10 @@ static void ipDrawXIB(id self, SEL _cmd, MTLPrimitiveType type, NSUInteger count
 
 static void ivbDrawParameters(void) {
     static BOOL done;
-    const char *setting = getenv("MTLSHIM_IVB_DRAW_PARAMETERS");
     static const char *const kRender = "MTLIGAccelRenderCommandEncoder";
     Class encoder = objc_getClass(kRender);
     const char *image = encoder ? class_getImageName(encoder) : NULL;
-    if (done || !image || !strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") || (setting && !strcmp(setting, "0"))) return;
+    if (done || !image || !strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") || disabled("MTLSHIM_IVB_DRAW_PARAMETERS")) return;
     const struct { const char *sel; IMP imp; IMP *orig; } draws[] = {
         {"drawPrimitives:indirectBuffer:indirectBufferOffset:", (IMP)ipDrawPInd, (IMP *)&ipOrigDrawPInd},
         {"drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:", (IMP)ipDrawXInd, (IMP *)&ipOrigDrawXInd},
@@ -1964,8 +1965,7 @@ static id newLibraryData(id self, SEL _cmd, dispatch_data_t data, NSError **erro
             shimLog("[mtlshim] library written: %s\n", path.UTF8String);
         }
     }
-    const char *oldSetting = getenv("MTLSHIM_OLD_ANGLE_LIBRARY");
-    BOOL tooNew = isTooNewANGLELibrary(data), tooOld = !tooNew && !(oldSetting && !strcmp(oldSetting, "0")) && isTooOldANGLELibrary(data);
+    BOOL tooNew = isTooNewANGLELibrary(data), tooOld = !tooNew && !disabled("MTLSHIM_OLD_ANGLE_LIBRARY") && isTooOldANGLELibrary(data);
     if (!library || !fromChromium(__builtin_return_address(0)) || !(tooNew || tooOld)) return library;
     NSError *failure = nil;
     BOOL safari18 = [((id<MTLLibrary>)library).functionNames containsObject:@"readFromBufferToFloatTexture"];  // a kernel there
@@ -2106,7 +2106,7 @@ static void clearThroughTemporary(id<MTLCommandBuffer> commandBuffer, MTLRenderP
 // Test: s56.
 static void setDefaultViewport(id<MTLRenderCommandEncoder> encoder, MTLRenderPassDescriptor *descriptor) {
     static int enabled = -1;
-    if (enabled < 0) enabled = !(getenv("MTLSHIM_DEFAULT_VIEWPORTS") && !strcmp(getenv("MTLSHIM_DEFAULT_VIEWPORTS"), "0"));
+    if (enabled < 0) enabled = !disabled("MTLSHIM_DEFAULT_VIEWPORTS");
     if (!enabled) return;
     NSUInteger width = descriptor.renderTargetWidth, height = descriptor.renderTargetHeight;
     if (!width || !height) {
@@ -2336,10 +2336,9 @@ static id igRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *descriptor
         NSUInteger level = useStencil ? st.level : dp.level, slice = useStencil ? st.slice : dp.slice;
         id<MTLTexture> attached = useStencil ? st.texture : dp.texture;
         id<MTLTexture> root = attached ? rootTexture(attached, &level, &slice) : nil;
-        const char *setting = getenv("MTLSHIM_STENCIL_SUBRESOURCE");
         BOOL separateStencil = root && (root.pixelFormat == MTLPixelFormatStencil8 || root.pixelFormat == MTLPixelFormatDepth32Float_Stencil8);
         BOOL sharedDepth = dp.texture && (!useStencil || (dp.texture == st.texture && dp.level == st.level && dp.slice == st.slice));
-        if (separateStencil && (root.mipmapLevelCount > 1 || root.arrayLength > 1) && !(setting && !strcmp(setting, "0")) &&
+        if (separateStencil && (root.mipmapLevelCount > 1 || root.arrayLength > 1) && !disabled("MTLSHIM_STENCIL_SUBRESOURCE") &&
             (!dp.texture || sharedDepth) && root.textureType != MTLTextureType3D) {
             MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:root.pixelFormat
                 width:MAX(root.width >> level, 1) height:MAX(root.height >> level, 1) mipmapped:NO];
@@ -2519,10 +2518,9 @@ static void nvRenderEndEncoding(id self, SEL _cmd) {
 }
 static void keplerResolveLevels(void) {
     static const char *const kBuffer = "NVMTLCommandBuffer", *const kEncoder = "NVMTLRenderCommandEncoder_KEPLER_A";
-    const char *setting = getenv("MTLSHIM_NV_RESOLVE_LEVEL");
     if (origNVRenderEncoder || !definesMethod(kBuffer, "renderCommandEncoderWithDescriptor:") || !definesMethod(kEncoder, "endEncoding"))
         return;
-    nvResolveLevels = !(setting && !strcmp(setting, "0"));  // the hook stays for item 73
+    nvResolveLevels = !disabled("MTLSHIM_NV_RESOLVE_LEVEL");  // the hook stays for item 73
     origNVRenderEndEncoding = (EndEncodingIMP)keplerSwizzle(kEncoder, "endEncoding", (IMP)nvRenderEndEncoding);
     origNVRenderEncoder = (RenderEncoderIMP)swizzle(kBuffer, "renderCommandEncoderWithDescriptor:", (IMP)nvRenderEncoder);
 }
@@ -2619,8 +2617,7 @@ static void computeSamplerCompare(void) {
     static const unsigned char kExpected[42] = {
         0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x53, 0xff, 0x87, 0x6c, 0x06, 0x00, 0x00, 0x4c, 0x8b,
         0x1a, 0x4d, 0x85, 0xdb, 0x0f, 0x84, 0x13, 0x04, 0x00, 0x00, 0x4c, 0x8b, 0x89, 0xd8, 0x01, 0x00, 0x00, 0x44, 0x8b, 0x56, 0x0c};
-    const char *setting = getenv("MTLSHIM_COMPUTE_SAMPLER_COMPARE");
-    if (origPatchSamplerObject || (setting && !strcmp(setting, "0"))) return;
+    if (origPatchSamplerObject || disabled("MTLSHIM_COMPUTE_SAMPLER_COMPARE")) return;
     Class c = objc_getClass("MTLIGSampler");
     Ivar state = c ? class_getInstanceVariable(c, "samplerState") : NULL;
     if (!state || !strstr(ivar_getTypeEncoding(state), "\"SamplerDisable\"b1\"CubeSurfaceControlMode\"b1\"ShadowFunction\"b3")) return;
@@ -2634,8 +2631,7 @@ static void computeSamplerCompare(void) {
     if (!entry || (!ivb && memcmp(entry, kExpected, sizeof kExpected))) return;
     if (ivb) chalPacketHeapOffset = 0x1f0;
     igSamplerStateIvarOffset = ivar_getOffset(state);
-    const char *preclamp = getenv("MTLSHIM_COMPUTE_LOD_PRECLAMP");
-    computeLodPreClamp = !(preclamp && !strcmp(preclamp, "0")) && strstr(ivar_getTypeEncoding(state), "\"LODPreClampEnable\"b1\"TextureBorderColorMode\"b1\"\"b1\"SamplerDisable\"b1");
+    computeLodPreClamp = !disabled("MTLSHIM_COMPUTE_LOD_PRECLAMP") && strstr(ivar_getTypeEncoding(state), "\"LODPreClampEnable\"b1\"TextureBorderColorMode\"b1\"\"b1\"SamplerDisable\"b1");
     origPatchSamplerObject = (PatchSamplerObjectFn)(ivb ? hookPrologue(entry, 17, (void *)computePatchSamplerObject)
                                                         : hookStandardPrologue(entry, (void *)computePatchSamplerObject));
     if (verbose())
@@ -2649,7 +2645,7 @@ static void computeSamplerCompare(void) {
 // in; only the sampler reads them (typed writes don't bound-check against Depth).
 static void targetMinLod(id self) {
     static int enabled = -1;
-    if (enabled < 0) { const char *setting = getenv("MTLSHIM_TARGET_MIN_LOD"); enabled = !(setting && !strcmp(setting, "0")); }
+    if (enabled < 0) { enabled = !disabled("MTLSHIM_TARGET_MIN_LOD"); }
     if (!enabled) return;
     uint32_t *dword5 = (uint32_t *)((uint8_t *)(__bridge void *)self + igSurfaceStateOffset + 32 + 20);  // hwSurfaceStateTarget
     uint32_t lod = *dword5 & 0xf, minLod = (*dword5 >> 4) & 0xf;
@@ -2659,7 +2655,7 @@ static void targetMinLod(id self) {
 }
 static void targetDepth(id self) {
     static int enabled = -1;
-    if (enabled < 0) { const char *setting = getenv("MTLSHIM_TARGET_DEPTH"); enabled = !(setting && !strcmp(setting, "0")); }
+    if (enabled < 0) { enabled = !disabled("MTLSHIM_TARGET_DEPTH"); }
     if (!enabled) return;
     uint32_t *sampler = (uint32_t *)((uint8_t *)(__bridge void *)self + igSurfaceStateOffset), *target = sampler + 8;
     uint32_t samplerDepth = sampler[3] >> 21, targetDepth = target[3] >> 21, minimumElement = (sampler[4] >> 18) & 0x7ff;
@@ -2692,13 +2688,12 @@ static void stencilViewAlignment(void) {
         "\"CubeFaceEnablesNegativeZ\"b1\"CubeFaceEnablesPositiveY\"b1\"CubeFaceEnablesNegativeY\"b1\"CubeFaceEnablesPositiveX\"b1"
         "\"CubeFaceEnablesNegativeX\"b1\"MediaBoundaryPixelMode\"b2\"RenderCacheReadWriteMode\"b1\"\"b1\"SurfaceArraySpacing\"b1"
         "\"VerticalLineStrideOffset\"b1\"VerticalLineStride\"b1\"TileWalk\"b1\"TiledSurface\"b1\"SurfaceHorizontalAlignment\"b1";
-    const char *setting = getenv("MTLSHIM_STENCIL_VIEW_ALIGN");
     Class texture = objc_getClass("MTLIGAccelTexture");
     Ivar info = texture ? class_getInstanceVariable(texture, "m_Info") : NULL;
     const char *encoding = info ? ivar_getTypeEncoding(info) : "";
     BOOL haswell = !strncmp(encoding, kLayout, sizeof kLayout - 1) && strstr(encoding, "}\"hwSurfaceStateTarget\"{SGfxSurfaceState=");
     BOOL ivyBridge = !strncmp(encoding, kLayoutIVB, sizeof kLayoutIVB - 1) && strstr(encoding, "}\"hwSurfaceStateTarget\"{SGfxSurfaceState_Gen7=");
-    if (origIGInitSurfaceState || (setting && !strcmp(setting, "0")) || !info || !(haswell || ivyBridge) ||
+    if (origIGInitSurfaceState || disabled("MTLSHIM_STENCIL_VIEW_ALIGN") || !info || !(haswell || ivyBridge) ||
         !definesMethod("MTLIGAccelTexture", "initializeHWSurfaceState"))
         return;
     igSurfaceStateOffset = ivar_getOffset(info);
@@ -2779,8 +2774,7 @@ static void endWithoutHiZ(id device, bool saved) {
 // the texture reports its real format. Heap textures are left alone (the heap was sized for Stencil8). Test: s40.
 static MTLTextureDescriptor *sampleableStencilStandIn(MTLTextureDescriptor *descriptor) {
     if (descriptor.pixelFormat != MTLPixelFormatStencil8 || descriptor.sampleCount <= 1) return nil;
-    const char *setting = getenv("MTLSHIM_MSAA_STENCIL8");
-    if (setting && !strcmp(setting, "0")) return nil;
+    if (disabled("MTLSHIM_MSAA_STENCIL8")) return nil;
     MTLTextureDescriptor *standIn = [descriptor copy];
     standIn.pixelFormat = MTLPixelFormatDepth32Float_Stencil8;
     standIn.usage |= MTLTextureUsagePixelFormatView;
@@ -2903,8 +2897,7 @@ static id<MTLTexture> stencilCopyTemporary(id<MTLTexture> t, NSUInteger slice, N
     MTLPixelFormat f = t.pixelFormat;
     BOOL stencil = f == MTLPixelFormatStencil8 || ((options & MTLBlitOptionStencilFromDepthStencil) &&
                                                    (f == MTLPixelFormatDepth32Float_Stencil8 || f == MTLPixelFormatDepth24Unorm_Stencil8));
-    const char *setting = getenv("MTLSHIM_STENCIL_COPY");
-    if (!stencil || (setting && !strcmp(setting, "0"))) return nil;
+    if (!stencil || disabled("MTLSHIM_STENCIL_COPY")) return nil;
     MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:f width:size.width height:size.height mipmapped:NO];
     d.storageMode = MTLStorageModePrivate;
     d.usage = MTLTextureUsageShaderRead;
@@ -3024,8 +3017,7 @@ static void nvStencilUploadOrder(void) {
     static const char *const kEncoder = "NVMTLBlitCommandEncoder_KEPLER_A", *const kBufferToTexture =
         "copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:";
     char withOptions[256];
-    const char *setting = getenv("MTLSHIM_NV_STENCIL_ORDER");
-    if (origNVBufferToTexture || (setting && !strcmp(setting, "0")) || !definesMethod(kEncoder, kBufferToTexture)) return;
+    if (origNVBufferToTexture || disabled("MTLSHIM_NV_STENCIL_ORDER") || !definesMethod(kEncoder, kBufferToTexture)) return;
     origNVBufferToTexture = (BufferToTextureIMP)keplerSwizzle(kEncoder, kBufferToTexture, (IMP)nvBufferToTexture);
     snprintf(withOptions, sizeof withOptions, "%soptions:", kBufferToTexture);
     if (definesMethod(kEncoder, withOptions))
@@ -3102,10 +3094,9 @@ static void nvVolumeCopies(void) {  // items 65, 67 and 80; after item 53, whose
                              *const kTextureToBuffer =
         "copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:";
     char withOptions[256];
-    const char *volume = getenv("MTLSHIM_NV_VOLUME_COPY"), *edge = getenv("MTLSHIM_NV_BLOCK_EDGE"), *depth = getenv("MTLSHIM_NV_DEPTH_COPY");
-    nvVolumeOn = !(volume && !strcmp(volume, "0"));
-    nvBlockEdgeOn = !(edge && !strcmp(edge, "0"));
-    nvDepthCopyOn = !(depth && !strcmp(depth, "0"));
+    nvVolumeOn = !disabled("MTLSHIM_NV_VOLUME_COPY");
+    nvBlockEdgeOn = !disabled("MTLSHIM_NV_BLOCK_EDGE");
+    nvDepthCopyOn = !disabled("MTLSHIM_NV_DEPTH_COPY");
     if (origNVVolumeB2T || (!nvVolumeOn && !nvBlockEdgeOn && !nvDepthCopyOn) || !definesMethod(kEncoder, kBufferToTexture)) return;
     origNVVolumeB2T = (BufferToTextureIMP)keplerSwizzle(kEncoder, kBufferToTexture, (IMP)nvVolumeB2T);
     snprintf(withOptions, sizeof withOptions, "%soptions:", kBufferToTexture);
@@ -3122,8 +3113,8 @@ static void stencilCopies(void) {
         "copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:";
     char withOptions[256];
     if (origIGTextureToBuffer || !definesMethod("MTLIGAccelBlitCommandEncoder", kTextureToBuffer)) return;
-    const char *setting = getenv("MTLSHIM_STENCIL_COPY"), *image = class_getImageName(objc_getClass("MTLIGAccelBlitCommandEncoder"));
-    ivbStencilRows = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !(setting && !strcmp(setting, "0"));
+    const char *image = class_getImageName(objc_getClass("MTLIGAccelBlitCommandEncoder"));
+    ivbStencilRows = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !disabled("MTLSHIM_STENCIL_COPY");
     origIGTextureToBuffer = (TextureToBufferIMP)swizzle("MTLIGAccelBlitCommandEncoder", kTextureToBuffer, (IMP)igTextureToBuffer);
     snprintf(withOptions, sizeof withOptions, "%soptions:", kTextureToBuffer);
     if (definesMethod("MTLIGAccelBlitCommandEncoder", withOptions))
@@ -3193,8 +3184,8 @@ static BOOL ivbStencilKeepsDepth(void) {
     static BOOL on;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        const char *setting = getenv("MTLSHIM_STENCIL_KEEPS_DEPTH"), *image = class_getImageName(objc_getClass("MTLIGAccelBlitCommandEncoder"));
-        on = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !(setting && !strcmp(setting, "0"));
+        const char *image = class_getImageName(objc_getClass("MTLIGAccelBlitCommandEncoder"));
+        on = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !disabled("MTLSHIM_STENCIL_KEEPS_DEPTH");
     });
     return on;
 }
@@ -3746,21 +3737,16 @@ static void blitsIntoDepthStencil(void) {
         "copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:";
     static const char *const kTextureToTexture =
         "copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:";
-    const char *views = getenv("MTLSHIM_VIEW_BLITS"), *image = class_getImageName(objc_getClass("MTLIGAccelBlitCommandEncoder"));
-    ivbViewBlits = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !(views && !strcmp(views, "0"));  // item 49
-    const char *clearDraw = getenv("MTLSHIM_DEPTH_CLEAR_DRAW");
-    ivbDepthClearDraw = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !(clearDraw && !strcmp(clearDraw, "0"));  // item 64
-    hswDepthClearDraw = image && strstr(image, "/AppleIntelHD5000GraphicsMTLDriver.bundle/") && !(clearDraw && !strcmp(clearDraw, "0"));
-    const char *levelBlits = getenv("MTLSHIM_DEPTH_LEVEL_BLITS");
-    ivbDepthLevelBlits = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !(levelBlits && !strcmp(levelBlits, "0"));  // item 63
-    const char *levelRepair = getenv("MTLSHIM_DEPTH_LEVEL_REPAIR");
-    ivbDepthLevelRepair = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !(levelRepair && !strcmp(levelRepair, "0"));  // item 68
-    const char *srgbCopy = getenv("MTLSHIM_SRGB_COPY");
+    const char *image = class_getImageName(objc_getClass("MTLIGAccelBlitCommandEncoder"));
+    ivbViewBlits = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !disabled("MTLSHIM_VIEW_BLITS");  // item 49
+    ivbDepthClearDraw = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !disabled("MTLSHIM_DEPTH_CLEAR_DRAW");  // item 64
+    hswDepthClearDraw = image && strstr(image, "/AppleIntelHD5000GraphicsMTLDriver.bundle/") && !disabled("MTLSHIM_DEPTH_CLEAR_DRAW");
+    ivbDepthLevelBlits = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !disabled("MTLSHIM_DEPTH_LEVEL_BLITS");  // item 63
+    ivbDepthLevelRepair = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !disabled("MTLSHIM_DEPTH_LEVEL_REPAIR");  // item 68
     ivbSrgbCopies = image && (strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") || strstr(image, "/AppleIntelHD5000GraphicsMTLDriver.bundle/")) &&
-                    !(srgbCopy && !strcmp(srgbCopy, "0"));  // item 72 (Ivy Bridge and Haswell)
+                    !disabled("MTLSHIM_SRGB_COPY");  // item 72 (Ivy Bridge and Haswell)
     char withOptions[256];
-    const char *setting = getenv("MTLSHIM_DEPTH_STENCIL_BLITS");
-    if (origIGBlitEndEncoding || (setting && !strcmp(setting, "0"))) return;
+    if (origIGBlitEndEncoding || disabled("MTLSHIM_DEPTH_STENCIL_BLITS")) return;
     if (!definesMethod("MTLIGAccelCommandBuffer", "blitCommandEncoder") || !definesMethod("MTLIGAccelBlitCommandEncoder", "endEncoding") ||
         !definesMethod("MTLIGAccelBlitCommandEncoder", kBufferToTexture) || !definesMethod("MTLIGAccelBlitCommandEncoder", kTextureToTexture))
         return;
@@ -3878,10 +3864,9 @@ static void nearestCubeClamp(void) {
     // the 12.x driver's sampler state, and the Ivy Bridge driver's, the same fields under another name
     static const char kLayout[] = "{SGfxSamplerState=\"AnisotropicAlgorithm\"b1\"TextureLODBias\"b13\"MinModeFilter\"b3\"MagModeFilter\"b3";
     static const char kLayoutIVB[] = "{SGfxSamplerState_Gen7=\"AnisotropicAlgorithm\"b1\"TextureLODBias\"b13\"MinModeFilter\"b3\"MagModeFilter\"b3";
-    const char *setting = getenv("MTLSHIM_NEAREST_CUBE_CLAMP");
     Class c = objc_getClass("MTLIGSampler");
     Ivar state = c ? class_getInstanceVariable(c, "samplerState") : NULL;
-    if (origIGInitSamplerState || (setting && !strcmp(setting, "0")) || !state ||
+    if (origIGInitSamplerState || disabled("MTLSHIM_NEAREST_CUBE_CLAMP") || !state ||
         (strncmp(ivar_getTypeEncoding(state), kLayout, sizeof kLayout - 1) &&
          strncmp(ivar_getTypeEncoding(state), kLayoutIVB, sizeof kLayoutIVB - 1)) ||
         !strstr(ivar_getTypeEncoding(state), "\"SamplerDisable\"b1\"CubeSurfaceControlMode\"b1") || !definesMethod("MTLIGSampler", "initializeSamplerState:"))
@@ -3933,8 +3918,7 @@ static void encoderLodClamps(void) {
         {"MTLIGAccelComputeCommandEncoder", "setSamplerState:lodMinClamp:lodMaxClamp:atIndex:",
          "setSamplerStates:lodMinClamps:lodMaxClamps:withRange:", (IMP)igSamplerLodkLodCompute, (IMP)igSamplersLodkLodCompute},
     };
-    const char *setting = getenv("MTLSHIM_ENCODER_LOD_CLAMP");
-    if (setting && !strcmp(setting, "0")) return;
+    if (disabled("MTLSHIM_ENCODER_LOD_CLAMP")) return;
     for (int stage = 0; stage < kLodStages; stage++) {
         if (!origIGSamplerLod[stage] && definesMethod(kHooks[stage].cls, kHooks[stage].one))
             origIGSamplerLod[stage] = (SetSamplerLodIMP)swizzle(kHooks[stage].cls, kHooks[stage].one, kHooks[stage].hookOne);
@@ -4001,8 +3985,7 @@ static id igSwizzleView(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType
 }
 
 static void swizzledViews(void) {
-    const char *setting = getenv("MTLSHIM_SWIZZLE_VIEW");
-    if (origIGSwizzleView || (setting && !strcmp(setting, "0")) ||
+    if (origIGSwizzleView || disabled("MTLSHIM_SWIZZLE_VIEW") ||
         !definesMethod("MTLIGAccelTexture", "newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:"))
         return;
     origIGSwizzleView = (SwizzleViewIMP)swizzle("MTLIGAccelTexture", "newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:",
@@ -4031,9 +4014,8 @@ static id nvNoIndirectCommandBuffer(id self, SEL _cmd, id descriptor, NSUInteger
 }
 static void keplerMissingMethods(void) {
     static BOOL done;
-    const char *setting = getenv("MTLSHIM_KEPLER_METHODS");
     Class texture = objc_getClass("NVMTLTexture"), device = objc_getClass("NVMTLDevice");
-    if (done || (setting && !strcmp(setting, "0")) || !texture || !device ||
+    if (done || disabled("MTLSHIM_KEPLER_METHODS") || !texture || !device ||
         !class_respondsToSelector(texture, @selector(newTextureViewWithPixelFormat:textureType:levels:slices:)))
         return;
     done = YES;
@@ -4059,8 +4041,7 @@ static id nvNewViewRange(id self, SEL _cmd, MTLPixelFormat format, MTLTextureTyp
 }
 static void keplerViewsOfViews(void) {
     static const char *const kTexture = "NVMTLTexture", *const kView = "newTextureViewWithPixelFormat:textureType:levels:slices:";
-    const char *setting = getenv("MTLSHIM_NV_VIEW_OF_VIEW");
-    if (origNVNewViewRange || (setting && !strcmp(setting, "0")) || !definesMethod(kTexture, kView)) return;
+    if (origNVNewViewRange || disabled("MTLSHIM_NV_VIEW_OF_VIEW") || !definesMethod(kTexture, kView)) return;
     origNVNewViewRange = (NewViewRangeIMP)swizzle(kTexture, kView, (IMP)nvNewViewRange);
 }
 
@@ -4437,8 +4418,7 @@ static void keplerTextureAtomics(void) {
     static BOOL done;
     static const char *const kDevice = "NVMTLDevice", *const kRender = "NVMTLRenderCommandEncoder_KEPLER_A",
                              *const kCompute = "NVMTLComputeCommandEncoder_KEPLER_COMPUTE_A";
-    const char *setting = getenv("MTLSHIM_NV_TEXTURE_ATOMICS");
-    if (done || (setting && !strcmp(setting, "0")) || !definesMethod(kDevice, "newTextureWithDescriptor:")) return;
+    if (done || disabled("MTLSHIM_NV_TEXTURE_ATOMICS") || !definesMethod(kDevice, "newTextureWithDescriptor:")) return;
     const char *const stageClass[3] = {kRender, kRender, kCompute};
     const char *const setBuffer[3] = {"setVertexBuffer:offset:atIndex:", "setFragmentBuffer:offset:atIndex:", "setBuffer:offset:atIndex:"};
     const char *const setOffset[3] = {"setVertexBufferOffset:atIndex:", "setFragmentBufferOffset:atIndex:", "setBufferOffset:atIndex:"};
@@ -4453,8 +4433,7 @@ static void keplerTextureAtomics(void) {
             return;  // not the Kepler driver these hooks know
     if (!definesMethod(kRender, "setRenderPipelineState:") || !definesMethod(kCompute, "setComputePipelineState:")) return;
     done = YES;
-    const char *depth = getenv("MTLSHIM_NV_DEPTH_CHANNELS");
-    ktaDepthChannels = !(depth && !strcmp(depth, "0"));  // item 62 rides on these hooks
+    ktaDepthChannels = !disabled("MTLSHIM_NV_DEPTH_CHANNELS");  // item 62 rides on these hooks
     const IMP bufferHooks[3] = {(IMP)ktaSetBufferVertex, (IMP)ktaSetBufferFragment, (IMP)ktaSetBufferCompute};
     const IMP offsetHooks[3] = {(IMP)ktaSetOffsetVertex, (IMP)ktaSetOffsetFragment, (IMP)ktaSetOffsetCompute};
     const IMP buffersHooks[3] = {(IMP)ktaSetBuffersVertex, (IMP)ktaSetBuffersFragment, (IMP)ktaSetBuffersCompute};
@@ -4702,8 +4681,7 @@ static id nvNewCounterBuffer(id self, SEL _cmd, id descriptor, NSError **error) 
 }
 static void keplerZeroBuffers(void) {
     static BOOL done;
-    const char *setting = getenv("MTLSHIM_NV_ZERO_BUFFERS");
-    if (done || (setting && !strcmp(setting, "0")) || !definesMethod("NVMTLDevice", "newBufferWithLength:options:")) return;
+    if (done || disabled("MTLSHIM_NV_ZERO_BUFFERS") || !definesMethod("NVMTLDevice", "newBufferWithLength:options:")) return;
     done = YES;
     origNVNewBuffer = (NVNewBufferIMP)swizzle("NVMTLDevice", "newBufferWithLength:options:", (IMP)nvNewBuffer);
     visDriverNewBuffer = origNVNewBuffer;
@@ -4766,8 +4744,7 @@ static void nvCommit(id self, SEL _cmd) {
 }
 static void keplerModifiedRetain(void) {
     static BOOL done;
-    const char *setting = getenv("MTLSHIM_NV_MODIFIED_RETAIN");
-    if (done || (setting && !strcmp(setting, "0")) || !definesMethod("NVMTLBuffer", "didModifyRange:") ||
+    if (done || disabled("MTLSHIM_NV_MODIFIED_RETAIN") || !definesMethod("NVMTLBuffer", "didModifyRange:") ||
         !definesMethod("NVMTLCommandBuffer", "commit")) return;
     done = YES;
     origNVModify = (NVModifyIMP)swizzle("NVMTLBuffer", "didModifyRange:", (IMP)nvModifyRange);
@@ -4857,8 +4834,7 @@ static id bronzeZeroDepthNewTexture(id self, SEL _cmd, MTLTextureDescriptor *d) 
 }
 static void zeroDepthTextures(void) {  // after item 58's and intelDepthWithoutHiZ's hooks, which it wraps
     static BOOL done;
-    const char *setting = getenv("MTLSHIM_ZERO_DEPTH");
-    if (done || (setting && !strcmp(setting, "0"))) return;
+    if (done || disabled("MTLSHIM_ZERO_DEPTH")) return;
     done = YES;
     if (definesMethod("NVMTLDevice", "newTextureWithDescriptor:"))
         origNVZeroDepth = (ZeroDepthNewTextureIMP)swizzle("NVMTLDevice", "newTextureWithDescriptor:", (IMP)nvZeroDepthNewTexture);
@@ -4894,9 +4870,8 @@ static void nvResolveCounters(id self, SEL _cmd, id sampleBuffer, NSRange range,
 }
 static void keplerResolveResidency(void) {
     static BOOL done;
-    const char *setting = getenv("MTLSHIM_NV_RESOLVE_RESIDENCY");
     static const char *const kClass = "NVMTLBlitCommandEncoder_KEPLER_A", *const kSel = "resolveCounters:inRange:destinationBuffer:destinationOffset:";
-    if (done || (setting && !strcmp(setting, "0")) || !definesMethod(kClass, kSel)) return;
+    if (done || disabled("MTLSHIM_NV_RESOLVE_RESIDENCY") || !definesMethod(kClass, kSel)) return;
     done = YES;
     origNVResolveCounters = (NVResolveCountersIMP)keplerSwizzle(kClass, kSel, (IMP)nvResolveCounters);
     if (verbose()) shimLog("[mtlshim] Kepler counter resolves: result buffer made resident\n");
@@ -4987,8 +4962,7 @@ static void clipSetScissors(__unsafe_unretained id self, SEL _cmd, const MTLScis
 // 10 places for each of the two; those 20 bytes are patched once the driver is in, if all 20 are there. (n20, n23, n24)
 static void keplerGuardBand(void) {
     static BOOL done;
-    const char *setting = getenv("MTLSHIM_NV_GUARD_BAND"), *pointSetting = getenv("MTLSHIM_NV_POINT_GUARD_BAND");
-    BOOL geometry = !(setting && !strcmp(setting, "0")), points = !(pointSetting && !strcmp(pointSetting, "0"));
+    BOOL geometry = !disabled("MTLSHIM_NV_GUARD_BAND"), points = !disabled("MTLSHIM_NV_POINT_GUARD_BAND");
     Class device = objc_getClass("NVMTLDevice");
     Dl_info info;
     static const char *const kRender = "NVMTLRenderCommandEncoder_KEPLER_A";
@@ -5021,8 +4995,7 @@ static void keplerGuardBand(void) {
         vm_protect(mach_task_self(), page, vm_page_size * 2, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
         patched++;
     }
-    const char *scissor = getenv("MTLSHIM_NV_VIEWPORT_SCISSOR");  // =0 only to see what the scissor half prevents
-    if (patched && !(scissor && !strcmp(scissor, "0"))) {
+    if (patched && !disabled("MTLSHIM_NV_VIEWPORT_SCISSOR")) {  // =0 only to see what the scissor half prevents
         origClipSetViewport = (ClipSetViewportIMP)keplerSwizzle(kRender, "setViewport:", (IMP)clipSetViewport);
         origClipSetViewports = (ClipSetViewportsIMP)keplerSwizzle(kRender, "setViewports:count:", (IMP)clipSetViewports);
         origClipSetScissor = (ClipSetScissorIMP)keplerSwizzle(kRender, "setScissorRect:", (IMP)clipSetScissor);
@@ -5082,8 +5055,7 @@ static ptrdiff_t nvSetterStateOffset(const char *cls, const char *sel, size_t le
 static void keplerReversedDepth(void) {
     static BOOL done;
     static const char *const kClass = "NVMTLRenderCommandEncoder_KEPLER_A";
-    const char *setting = getenv("MTLSHIM_NV_REVERSED_DEPTH");
-    if (done || (setting && !strcmp(setting, "0")) || !definesMethod(kClass, "setViewport:") || !definesMethod(kClass, "setViewports:count:"))
+    if (done || disabled("MTLSHIM_NV_REVERSED_DEPTH") || !definesMethod(kClass, "setViewport:") || !definesMethod(kClass, "setViewports:count:"))
         return;
     done = YES;
     // movupd %xmm0, 0x950(%rax) / movss %xmm1, 0x964(%rax) (padded to 9 with the next instruction's first byte), and the
@@ -5116,11 +5088,10 @@ static void nvSamplePositions(id self, SEL _cmd, MTLSamplePosition *positions, N
 }
 static void keplerSamplePositions(void) {
     static BOOL done;
-    const char *setting = getenv("MTLSHIM_NV_SAMPLE_POSITIONS");
     Class device = objc_getClass("NVMTLDevice");
     SEL sel = sel_registerName("getDefaultSamplePositions:count:");
     Method inherited = device ? class_getInstanceMethod(device, sel) : NULL;
-    if (done || (setting && !strcmp(setting, "0")) || !inherited || definesMethod("NVMTLDevice", "getDefaultSamplePositions:count:") ||
+    if (done || disabled("MTLSHIM_NV_SAMPLE_POSITIONS") || !inherited || definesMethod("NVMTLDevice", "getDefaultSamplePositions:count:") ||
         !definesMethod("NVMTLRenderCommandEncoder_KEPLER_A", "setViewport:"))
         return;
     done = YES;
@@ -5131,8 +5102,7 @@ static void keplerSamplePositions(void) {
 static void keplerVisibilitySums(void) {
     static BOOL done;
     static const char *const kBuffer = "NVMTLCommandBuffer", *const kRender = "NVMTLRenderCommandEncoder_KEPLER_A";
-    const char *setting = getenv("MTLSHIM_NV_VISIBILITY_SUM");
-    if (done || (setting && !strcmp(setting, "0")) || !definesMethod(kBuffer, "renderCommandEncoderWithDescriptor:") ||
+    if (done || disabled("MTLSHIM_NV_VISIBILITY_SUM") || !definesMethod(kBuffer, "renderCommandEncoderWithDescriptor:") ||
         !definesMethod(kRender, "endEncoding") || !definesMethod(kRender, "setVisibilityResultMode:offset:"))
         return;
     done = YES;
@@ -5198,8 +5168,7 @@ static void igDispatchThreadgroups(id self, SEL _cmd, MTLSize groups, MTLSize th
 }
 
 static void mpsStatisticsWidth(void) {
-    const char *setting = getenv("MTLSHIM_MPS_STATISTICS");
-    if ((setting && !strcmp(setting, "0")) || origIGDispatchThreadgroups) return;
+    if (disabled("MTLSHIM_MPS_STATISTICS") || origIGDispatchThreadgroups) return;
     const char *cls = "MTLIGAccelComputeCommandEncoder";
     if (!definesMethod(cls, "setComputePipelineState:") || !definesMethod(cls, "setThreadgroupMemoryLength:atIndex:") ||
         !definesMethod(cls, "dispatchThreadgroups:threadsPerThreadgroup:"))
@@ -5247,8 +5216,8 @@ IVB_LOCKED_BLIT(T2T, (id self, SEL _cmd, id a, NSUInteger sl, NSUInteger l, MTLO
 IVB_LOCKED_BLIT(Mips, (id self, SEL _cmd, id t), (self, _cmd, t))
 static void ivbSerializedBlits(void) {
     static BOOL done;
-    const char *setting = getenv("MTLSHIM_IVB_BLIT_LOCK"), *image = class_getImageName(objc_getClass("MTLIGAccelBlitCommandEncoder"));
-    if (done || !image || !strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") || (setting && !strcmp(setting, "0"))) return;
+    const char *image = class_getImageName(objc_getClass("MTLIGAccelBlitCommandEncoder"));
+    if (done || !image || !strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") || disabled("MTLSHIM_IVB_BLIT_LOCK")) return;
     done = YES;
     const struct { const char *sel; IMP imp; IMP *orig; } blits[] = {
         {"fillBuffer:range:value:", (IMP)ivbBlitFill, (IMP *)&ivbOrigBlitFill},
@@ -5312,8 +5281,8 @@ static BOOL ivbGenerateVF(id self, SEL _cmd, void *arg) {
     return result;
 }
 static void ivbVertexInputs(void) {
-    const char *setting = getenv("MTLSHIM_IVB_VERTEX_INPUTS"), *image = class_getImageName(objc_getClass("MTLIGRenderPipelineState"));
-    if (origIvbGenerateVF || !image || !strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") || (setting && !strcmp(setting, "0"))) return;
+    const char *image = class_getImageName(objc_getClass("MTLIGRenderPipelineState"));
+    if (origIvbGenerateVF || !image || !strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") || disabled("MTLSHIM_IVB_VERTEX_INPUTS")) return;
     Ivar vs = class_getInstanceVariable(objc_getClass("MTLIGRenderPipelineState"), "mVS");
     if (!vs || !definesMethod("MTLIGRenderPipelineState", "generate3DStateVF:") ||
         !definesMethod("MTLVertexAttributeDescriptorArrayInternal", "objectAtIndexedSubscript:"))
@@ -5331,10 +5300,9 @@ static void patchDriverClasses(void) {
     os_unfair_lock_lock(&lock);
     if (!origIGRenderEncoder && definesMethod("MTLIGAccelCommandBuffer", "renderCommandEncoderWithDescriptor:") &&
         definesMethod("MTLIGAccelRenderCommandEncoder", "endEncoding")) {
-        const char *touch = getenv("MTLSHIM_MSAA_DEPTH_RESOLVE"), *image = class_getImageName(objc_getClass("MTLIGAccelRenderCommandEncoder"));
-        ivbDepthTouch = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !(touch && !strcmp(touch, "0"));  // item 50
-        const char *withDepth = getenv("MTLSHIM_STENCIL_WITH_DEPTH");  // item 51
-        if (image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !(withDepth && !strcmp(withDepth, "0")) &&
+        const char *image = class_getImageName(objc_getClass("MTLIGAccelRenderCommandEncoder"));
+        ivbDepthTouch = image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !disabled("MTLSHIM_MSAA_DEPTH_RESOLVE");  // item 50
+        if (image && strstr(image, "/AppleIntelHD4000GraphicsMTLDriver.bundle/") && !disabled("MTLSHIM_STENCIL_WITH_DEPTH") &&
             definesMethod("MTLIGAccelDevice", "newDepthStencilStateWithDescriptor:") &&
             definesMethod("MTLIGAccelRenderCommandEncoder", "setDepthStencilState:")) {
             origIGNewDepthStencilState = (NewDepthStencilStateIMP)swizzle("MTLIGAccelDevice", "newDepthStencilStateWithDescriptor:", (IMP)igNewDepthStencilState);
@@ -5477,8 +5445,7 @@ static BOOL anyFamilyTwo(void) {
 static BOOL familyOneAsTwo(void) {
     static int state;  // 0 not decided yet, 1 yes, -1 no
     if (!state) {
-        const char *setting = getenv("MTLSHIM_ANGLE_MAC2");
-        state = (setting && !strcmp(setting, "0")) || anyFamilyTwo() ? -1 : 1;
+        state = disabled("MTLSHIM_ANGLE_MAC2") || anyFamilyTwo() ? -1 : 1;
     }
     return state > 0;
 }
@@ -5492,8 +5459,7 @@ static void disableFeaturesFamilyOneLacks(void) {
         // item 73 is off: with it, ANGLE gets the dummy target and needs such passes for
         // WEBGL_shader_pixel_local_storage.
         static const char kLacking[] = "hasTextureSwizzle:hasStencilAutoResolve:allowSamplerCompareGradient:disableMetalOnNvidia";
-        const char *attachments = getenv("MTLSHIM_NO_ATTACHMENTS");
-        BOOL emulated = !(attachments && !strcmp(attachments, "0"));
+        BOOL emulated = !disabled("MTLSHIM_NO_ATTACHMENTS");
         const char *set = getenv("ANGLE_FEATURE_OVERRIDES_DISABLED");
         char *value = NULL;
         if (asprintf(&value, "%s%s%s%s", set && *set ? set : "", set && *set ? ":" : "", kLacking,
@@ -5514,8 +5480,7 @@ static void enableEventsForWebKit(const void *returnAddress) {
     const char *image = callerImage(returnAddress);
     if (strcmp(image, "libANGLE-shared.dylib") && strcmp(image, "WebCore") && strcmp(image, "WebKit")) return;
     dispatch_once(&once, ^{
-        const char *setting = getenv("MTLSHIM_ANGLE_EVENTS");
-        if (setting && !strcmp(setting, "0")) return;
+        if (disabled("MTLSHIM_ANGLE_EVENTS")) return;
         const char *set = getenv("ANGLE_FEATURE_OVERRIDES_ENABLED");
         char *value = NULL;
         if (set && *set && asprintf(&value, "%s:hasEvents", set) < 0) value = NULL;
@@ -5819,8 +5784,7 @@ static bool hostsCompiler(void) {
 }
 
 static void installAIR27Retargeting(void) {
-    const char *setting = getenv("MTLSHIM_AIR27");
-    if ((setting && !strcmp(setting, "0")) || !hostsCompiler()) return;
+    if (disabled("MTLSHIM_AIR27") || !hostsCompiler()) return;
     _dyld_register_func_for_add_image(interposeCompilerImage);  // also called for the images already loaded
 }
 
@@ -5894,8 +5858,7 @@ static void interposeLLVMWrapper(const struct mach_header *mh, intptr_t slide) {
 }
 
 static void installOldAIRPassThrough(void) {
-    const char *setting = getenv("MTLSHIM_OLD_AIR");
-    if ((setting && !strcmp(setting, "0")) || !hostsCompiler()) return;
+    if (disabled("MTLSHIM_OLD_AIR") || !hostsCompiler()) return;
     _dyld_register_func_for_add_image(interposeLLVMWrapper);  // also called for the images already loaded
 }
 
@@ -5995,8 +5958,7 @@ static void compileRequest(id self, SEL _cmd, id request, BOOL frameworkLinking,
 }
 
 static void installFunctionCacheKeys(void) {
-    const char *setting = getenv("MTLSHIM_CACHE_KEYS");
-    if (setting && !strcmp(setting, "0")) return;
+    if (disabled("MTLSHIM_CACHE_KEYS")) return;
     Class compiler = objc_getClass("MTLCompiler");
     Method store = class_getInstanceMethod(compiler, sel_registerName("cacheCompilerData:cachedData:hashMap:libraryData:functionCache:"));
     Method add = class_getInstanceMethod(compiler,
@@ -6202,8 +6164,7 @@ static void hookCoordinateEmulation(const struct mach_header *mh, intptr_t slide
 }
 
 static void installReadSamplerRewrite(void) {
-    const char *setting = getenv("MTLSHIM_READ_SAMPLER");
-    if ((setting && !strcmp(setting, "0")) || !hostsCompiler()) return;
+    if (disabled("MTLSHIM_READ_SAMPLER") || !hostsCompiler()) return;
     _dyld_register_func_for_add_image(hookCoordinateEmulation);  // also called for the images already loaded
 }
 
@@ -6347,8 +6308,7 @@ static id keptPortraitLibrary(id self, SEL _cmd, NSURL *url) {
     }
 }
 static void keepPortraitLibraries(void) {
-    const char *setting = getenv("MTLSHIM_SDOF_LIBRARY");
-    if ((setting && !strcmp(setting, "0")) || access("/System/Library/Frameworks/CoreImage.framework/Versions/A/CoreImageOld.dylib", F_OK)) return;
+    if (disabled("MTLSHIM_SDOF_LIBRARY") || access("/System/Library/Frameworks/CoreImage.framework/Versions/A/CoreImageOld.dylib", F_OK)) return;
     Method m = class_getClassMethod([NSData class], @selector(dataWithContentsOfURL:));
     if (m) origDataWithContentsOfURL = method_setImplementation(m, (IMP)keptPortraitLibrary);
 }
@@ -6390,8 +6350,7 @@ static void reflectionWithFunction(id self, SEL _cmd, id function, NSUInteger op
     origReflectionWithFunction(self, _cmd, function, options, sync, pipelineLibrary, binaryArchives, unwrapping);
 }
 static void installStitchingReflection(void) {
-    const char *setting = getenv("MTLSHIM_STITCHING_REFLECTION");
-    if (setting && !strcmp(setting, "0")) return;
+    if (disabled("MTLSHIM_STITCHING_REFLECTION")) return;
     Method m = class_getInstanceMethod(objc_getClass("MTLCompiler"),
                                        sel_registerName("reflectionWithFunction:options:sync:pipelineLibrary:binaryArchives:completionHandler:"));
     if (m && !strcmp(method_getTypeEncoding(m), "v60@0:8@16Q24c32@36@44@?52"))
@@ -6465,9 +6424,8 @@ static void installMPSGraphSoftMax(void) {
     static BOOL done;
     if (done) return;
     os_unfair_lock_lock(&lock);
-    const char *setting = getenv("MTLSHIM_MPSGRAPH_SOFTMAX");
     Class graph = objc_getClass("MPSGraph");
-    if (done || (setting && !strcmp(setting, "0"))) done = YES;
+    if (done || disabled("MTLSHIM_MPSGRAPH_SOFTMAX")) done = YES;
     else if (graph) {
         done = YES;  // one try once the class is there
         Method m = class_getInstanceMethod(graph, @selector(softMaxWithTensor:axis:name:));
@@ -6486,9 +6444,8 @@ static void installMPSMatmulFallback(void) {
     static BOOL done;
     if (done) return;
     os_unfair_lock_lock(&lock);
-    const char *setting = getenv("MTLSHIM_MPS_MATMUL");
     Class matmul = objc_getClass("MPSNDArrayMatrixMultiplication");
-    if (done || (setting && !strcmp(setting, "0"))) done = YES;
+    if (done || disabled("MTLSHIM_MPS_MATMUL")) done = YES;
     else if (matmul) {
         done = YES;  // one try once the class is there
         SEL encode = sel_registerName("encodeToMPSCommandEncoder:commandBuffer:sourceArrays:resultState:destinationArray:kernelDAGObject:");
@@ -6545,9 +6502,8 @@ static void installMetalFXTemporalLimit(void) {
     static BOOL done;
     if (done) return;
     os_unfair_lock_lock(&lock);
-    const char *setting = getenv("MTLSHIM_METALFX_TEMPORAL");
     Class descriptor = objc_getClass("MTLFXTemporalScalerDescriptor");
-    if (done || (setting && !strcmp(setting, "0"))) done = YES;
+    if (done || disabled("MTLSHIM_METALFX_TEMPORAL")) done = YES;
     else if (descriptor) {
         done = YES;
         Method supports = class_getClassMethod(descriptor, @selector(supportsDevice:));
