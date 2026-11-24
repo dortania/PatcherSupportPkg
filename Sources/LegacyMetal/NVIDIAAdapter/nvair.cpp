@@ -52,17 +52,20 @@ struct Gen {
         return f ? f : LLVMAddFunction(module, name, LLVMFunctionType(ret, params, count, 0));
     }
     LLVMValueRef call(LLVMValueRef f, LLVMValueRef *args, unsigned count) { return LLVMBuildCall(b, f, args, count, ""); }
+    // llvm.nvvm.min.u.i32(v, bound), the plugin's own min, which neither optimizer sees through: with bound ~0 the value
+    // is unchanged but its range and origin are hidden, so a rewrite can't be folded back
+    LLVMValueRef opaqueMin(LLVMBuilderRef at, LLVMValueRef v, LLVMValueRef bound) {
+        LLVMTypeRef params[2] = {i32, i32};
+        LLVMValueRef args[2] = {v, bound};
+        return LLVMBuildCall(at, intrinsic("llvm.nvvm.min.u.i32", i32, params, 2), args, 2, "");
+    }
     LLVMValueRef lo(LLVMValueRef v) { return LLVMBuildTrunc(b, v, i32, ""); }
     LLVMValueRef hi(LLVMValueRef v) { return LLVMBuildTrunc(b, LLVMBuildLShr(b, v, c64(32), ""), i32, ""); }
     LLVMValueRef wide(LLVMValueRef v) { return LLVMBuildZExt(b, v, i64, ""); }
     // c (i1) as 0 or 1 in 64 bits, through llvm.nvvm.min.u.i32 (the plugin's own min, opaque to InstCombine): select c,
     // 1, 0 and zext (zext c) are folded back into zext i1 -> i64 by the plugin's optimizer, and that is what it gets wrong
     LLVMValueRef bool64(LLVMBuilderRef at, LLVMValueRef c) {
-        LLVMTypeRef params[2] = {i32, i32};
-        LLVMValueRef args[2] = {LLVMBuildZExt(at, c, i32, ""), LLVMConstInt(i32, 1, 0)};
-        LLVMValueRef min = LLVMGetNamedFunction(module, "llvm.nvvm.min.u.i32");
-        if (!min) min = LLVMAddFunction(module, "llvm.nvvm.min.u.i32", LLVMFunctionType(i32, params, 2, 0));
-        return LLVMBuildZExt(at, LLVMBuildCall(at, min, args, 2, ""), i64, "");
+        return LLVMBuildZExt(at, opaqueMin(at, LLVMBuildZExt(at, c, i32, ""), c32(1)), i64, "");
     }
     // llvm.ctpop/ctlz/cttz.i32; the count intrinsics are asked for with zero defined (32)
     LLVMValueRef count32(const char *op, LLVMValueRef v) {
@@ -316,9 +319,7 @@ static LLVMValueRef divideLane(Gen &g, LLVMBuilderRef b, int op, LLVMValueRef x,
 // (the optimizer turns selects into a widened i1, which Kepler gets wrong), the amount behind the opaque min. Every
 // 32-bit amount is masked into 0-31, so nothing is poison. (n06)
 static LLVMValueRef shiftLane(Gen &g, LLVMBuilderRef b, int op, LLVMValueRef x, LLVMValueRef amount) {
-    LLVMTypeRef params[2] = {g.i32, g.i32};
-    LLVMValueRef minArgs[2] = {LLVMBuildAnd(b, LLVMBuildTrunc(b, amount, g.i32, ""), g.c32(63), ""), g.c32(63)};
-    LLVMValueRef s = LLVMBuildCall(b, g.intrinsic("llvm.nvvm.min.u.i32", g.i32, params, 2), minArgs, 2, "");
+    LLVMValueRef s = g.opaqueMin(b, LLVMBuildAnd(b, LLVMBuildTrunc(b, amount, g.i32, ""), g.c32(63), ""), g.c32(63));
     LLVMValueRef s5 = LLVMBuildAnd(b, s, g.c32(31), ""), rest = LLVMBuildSub(b, g.c32(31), s5, "");
     LLVMValueRef m = LLVMBuildSub(b, g.c32(0), LLVMBuildXor(b, LLVMBuildLShr(b, s, g.c32(5), ""), g.c32(1), ""), ""), nm = LLVMBuildNot(b, m, "");
     LLVMValueRef lo = LLVMBuildTrunc(b, x, g.i32, ""), hi = LLVMBuildTrunc(b, LLVMBuildLShr(b, x, g.c64(32), ""), g.i32, ""), newLo, newHi;
@@ -1090,7 +1091,6 @@ static unsigned widenNarrowPrivateArrays(LLVMModuleRef module, Gen &g) {
         if (!plain || geps.empty()) continue;
         if (!getenv("NVAIR_PRIVATE_ARRAY_WORDS")) {  // keep the byte array, each load's value masked (see above)
             if (!b) b = LLVMCreateBuilderInContext(g.context);
-            LLVMTypeRef params[2] = {g.i32, g.i32};
             for (LLVMValueRef gep : geps) {
                 std::vector<LLVMValueRef> loads;
                 for (LLVMUseRef v = LLVMGetFirstUse(gep); v; v = LLVMGetNextUse(v))
@@ -1105,8 +1105,7 @@ static unsigned widenNarrowPrivateArrays(LLVMModuleRef module, Gen &g) {
                     if (!next) continue;
                     LLVMPositionBuilderBefore(b, next);
                     LLVMValueRef z = LLVMBuildZExt(b, load, g.i32, "");
-                    LLVMValueRef args[2] = {z, g.c32(~0u)};
-                    LLVMValueRef m = LLVMBuildCall(b, g.intrinsic("llvm.nvvm.min.u.i32", g.i32, params, 2), args, 2, "");
+                    LLVMValueRef m = g.opaqueMin(b, z, g.c32(~0u));
                     LLVMValueRef t = LLVMBuildTrunc(b, LLVMBuildAnd(b, m, g.c32(width == 8 ? 0xffu : 0xffffu), ""), element, "");
                     LLVMReplaceAllUsesWith(load, t);
                     LLVMSetOperand(z, 0, load);
@@ -1365,7 +1364,6 @@ static unsigned hideNarrowProducts(LLVMModuleRef module, Gen &g) {
     bool wideConstants = !disabled("NVAIR_WIDE_CONSTANT_PRODUCT_FIX");
     unsigned fixed = 0;
     LLVMBuilderRef b = nullptr;
-    LLVMTypeRef params[2] = {g.i32, g.i32};
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
         if (LLVMIsDeclaration(f) || !strncmp(LLVMGetValueName(f), "nvair.", 6)) continue;
         for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
@@ -1381,8 +1379,7 @@ static unsigned hideNarrowProducts(LLVMModuleRef module, Gen &g) {
                     if (!b) b = LLVMCreateBuilderInContext(g.context);
                     LLVMValueRef next = LLVMGetNextInstruction(inst);
                     if (next) LLVMPositionBuilderBefore(b, next);
-                    LLVMValueRef args[2] = {inst, g.c32(~0u)};
-                    LLVMValueRef hidden = LLVMBuildCall(b, g.intrinsic("llvm.nvvm.min.u.i32", g.i32, params, 2), args, 2, "");
+                    LLVMValueRef hidden = g.opaqueMin(b, inst, g.c32(~0u));
                     for (LLVMValueRef user : ors)
                         for (unsigned i = 0; i < 2; i++)
                             if (LLVMGetOperand(user, i) == inst) LLVMSetOperand(user, i, hidden);
@@ -1398,8 +1395,7 @@ static unsigned hideNarrowProducts(LLVMModuleRef module, Gen &g) {
                     if (!next) continue;
                     if (!b) b = LLVMCreateBuilderInContext(g.context);
                     LLVMPositionBuilderBefore(b, next);
-                    LLVMValueRef args[2] = {inst, g.c32(~0u)};
-                    LLVMValueRef hidden = LLVMBuildCall(b, g.intrinsic("llvm.nvvm.min.u.i32", g.i32, params, 2), args, 2, "");
+                    LLVMValueRef hidden = g.opaqueMin(b, inst, g.c32(~0u));
                     LLVMReplaceAllUsesWith(inst, hidden);
                     LLVMSetOperand(hidden, 0, inst);
                     fixed++;
@@ -1409,8 +1405,7 @@ static unsigned hideNarrowProducts(LLVMModuleRef module, Gen &g) {
                 if (!narrowFactor(x) || !narrowFactor(y) || LLVMIsAConstantInt(x)) continue;
                 if (!b) b = LLVMCreateBuilderInContext(g.context);
                 LLVMPositionBuilderBefore(b, inst);
-                LLVMValueRef args[2] = {x, g.c32(~0u)};
-                LLVMValueRef hidden = LLVMBuildCall(b, g.intrinsic("llvm.nvvm.min.u.i32", g.i32, params, 2), args, 2, "");
+                LLVMValueRef hidden = g.opaqueMin(b, x, g.c32(~0u));
                 LLVMSetOperand(inst, 0, hidden);
                 fixed++;
             }
@@ -1794,9 +1789,7 @@ static LLVMValueRef copyHelper(Gen &g, unsigned dstSpace, unsigned srcSpace) {
     LLVMPositionBuilderAtEnd(b, entry);
     LLVMValueRef dst = LLVMBuildBitCast(b, LLVMGetParam(f, 0), LLVMPointerType(g.i32, dstSpace), "");
     LLVMValueRef src = LLVMBuildBitCast(b, LLVMGetParam(f, 1), LLVMPointerType(g.i32, srcSpace), "");
-    LLVMTypeRef two[2] = {g.i32, g.i32};
-    LLVMValueRef minArgs[2] = {LLVMGetParam(f, 2), g.c32(~0u)};
-    LLVMValueRef count = LLVMBuildCall(b, g.intrinsic("llvm.nvvm.min.u.i32", g.i32, two, 2), minArgs, 2, "");
+    LLVMValueRef count = g.opaqueMin(b, LLVMGetParam(f, 2), g.c32(~0u));
     LLVMBuildBr(b, loop);
     LLVMPositionBuilderAtEnd(b, loop);
     LLVMValueRef i = LLVMBuildPhi(b, g.i32, "");
@@ -2063,11 +2056,7 @@ static unsigned fixOverflowIntrinsics(LLVMModuleRef module, Gen &g) {
             // llvm.nvvm.min.u.i32: against constants, InstCombine folds them straight back into the intrinsics (the plugin
             // optimizes between the runs of this pass)
             LLVMTypeRef i32 = g.i32, i64 = LLVMInt64TypeInContext(g.context);
-            auto minU = [&](LLVMValueRef v, unsigned long long k) {
-                LLVMTypeRef params[2] = {i32, i32};
-                LLVMValueRef args[2] = {v, LLVMConstInt(i32, k, 0)};
-                return LLVMBuildCall(b, g.intrinsic("llvm.nvvm.min.u.i32", i32, params, 2), args, 2, "");
-            };
+            auto minU = [&](LLVMValueRef v, unsigned long long k) { return g.opaqueMin(b, v, g.c32(k)); };
             auto to32 = [&](LLVMValueRef v) { return w == 32 ? v : LLVMBuildZExt(b, v, i32, ""); };
             if (op == 0) {  // signed: x and y of one sign, the sum of the other; unsigned: the sum below x
                 r = LLVMBuildAdd(b, x, y, "");
@@ -2123,11 +2112,7 @@ static unsigned lowerMadSat(LLVMModuleRef module, Gen &g) {
     LLVMBuilderRef b = LLVMCreateBuilderInContext(g.context);
     LLVMTypeRef i32 = g.i32, i64 = LLVMInt64TypeInContext(g.context);
     auto c32 = [&](unsigned long long v) { return LLVMConstInt(i32, v, 0); };
-    auto minU = [&](LLVMValueRef v, unsigned long long k) {
-        LLVMTypeRef params[2] = {i32, i32};
-        LLVMValueRef args[2] = {v, c32(k)};
-        return LLVMBuildCall(b, g.intrinsic("llvm.nvvm.min.u.i32", i32, params, 2), args, 2, "");
-    };
+    auto minU = [&](LLVMValueRef v, unsigned long long k) { return g.opaqueMin(b, v, g.c32(k)); };
     auto nonzero = [&](LLVMValueRef v) { return LLVMBuildICmp(b, LLVMIntNE, v, minU(v, 0), ""); };  // v != 0, opaquely
     unsigned fixed = 0;
     for (LLVMValueRef f : functions) {
@@ -2218,15 +2203,13 @@ static unsigned guardDivisorOne(LLVMModuleRef module, Gen &g) {
             }
     if (divs.empty()) return 0;
     LLVMBuilderRef b = LLVMCreateBuilderInContext(g.context);
-    LLVMTypeRef params[2] = {g.i32, g.i32};
     unsigned n = 0;
     for (LLVMValueRef inst : divs) {
         LLVMValueRef next = LLVMGetNextInstruction(inst);
         if (!next) continue;
         LLVMValueRef d = LLVMGetOperand(inst, 1);
         LLVMPositionBuilderBefore(b, next);
-        LLVMValueRef args[2] = {LLVMBuildAnd(b, d, g.c32(0), ""), g.c32(0xffffffff)};  // 0
-        LLVMValueRef special = LLVMBuildCall(b, g.intrinsic("llvm.nvvm.min.u.i32", g.i32, params, 2), args, 2, "");
+        LLVMValueRef special = g.opaqueMin(b, LLVMBuildAnd(b, d, g.c32(0), ""), g.c32(0xffffffff));  // 0
         LLVMValueRef r = LLVMBuildSelect(b, LLVMBuildICmp(b, LLVMIntEQ, d, g.c32(1), ""), special, inst, "");
         LLVMReplaceAllUsesWith(inst, r);
         LLVMSetOperand(r, 2, inst);
@@ -2305,7 +2288,6 @@ static unsigned widenNarrowDivisions(LLVMModuleRef module, Gen &g) {
             }
     if (ops.empty()) return 0;
     LLVMBuilderRef b = LLVMCreateBuilderInContext(g.context);
-    LLVMTypeRef params[2] = {g.i32, g.i32};
     for (LLVMValueRef inst : ops) {
         int op = LLVMGetInstructionOpcode(inst);
         bool sgn = op == LLVMSDiv || op == LLVMSRem;
@@ -2320,8 +2302,7 @@ static unsigned widenNarrowDivisions(LLVMModuleRef module, Gen &g) {
                 v[i] = g.c32((unsigned)c);
                 continue;
             }
-            LLVMValueRef args[2] = {sgn ? LLVMBuildSExt(b, x, g.i32, "") : LLVMBuildZExt(b, x, g.i32, ""), g.c32(~0u)};
-            v[i] = LLVMBuildCall(b, g.intrinsic("llvm.nvvm.min.u.i32", g.i32, params, 2), args, 2, "");
+            v[i] = g.opaqueMin(b, sgn ? LLVMBuildSExt(b, x, g.i32, "") : LLVMBuildZExt(b, x, g.i32, ""), g.c32(~0u));
         }
         LLVMValueRef r = op == LLVMUDiv ? LLVMBuildUDiv(b, v[0], v[1], "") : op == LLVMSDiv ? LLVMBuildSDiv(b, v[0], v[1], "")
                        : op == LLVMURem ? LLVMBuildURem(b, v[0], v[1], "") : LLVMBuildSRem(b, v[0], v[1], "");
@@ -2348,7 +2329,6 @@ static unsigned widenNarrowShifts(LLVMModuleRef module, Gen &g) {
             }
     if (ops.empty()) return 0;
     LLVMBuilderRef b = LLVMCreateBuilderInContext(g.context);
-    LLVMTypeRef params[2] = {g.i32, g.i32};
     for (LLVMValueRef inst : ops) {
         bool sgn = LLVMGetInstructionOpcode(inst) == LLVMAShr;
         unsigned w = LLVMGetIntTypeWidth(LLVMTypeOf(inst));
@@ -2363,12 +2343,10 @@ static unsigned widenNarrowShifts(LLVMModuleRef module, Gen &g) {
                 v[i] = g.c32((unsigned)c);
                 continue;
             }
-            LLVMValueRef args[2] = {extendSign ? LLVMBuildSExt(b, x, g.i32, "") : LLVMBuildZExt(b, x, g.i32, ""), g.c32(~0u)};
-            v[i] = LLVMBuildCall(b, g.intrinsic("llvm.nvvm.min.u.i32", g.i32, params, 2), args, 2, "");
+            v[i] = g.opaqueMin(b, extendSign ? LLVMBuildSExt(b, x, g.i32, "") : LLVMBuildZExt(b, x, g.i32, ""), g.c32(~0u));
         }
         if (LLVMIsAConstantInt(LLVMGetOperand(inst, 1))) {  // a constant amount: through the opaque min too, so the optimizer can't narrow it back
-            LLVMValueRef args[2] = {v[1], g.c32(~0u)};
-            v[1] = LLVMBuildCall(b, g.intrinsic("llvm.nvvm.min.u.i32", g.i32, params, 2), args, 2, "");
+            v[1] = g.opaqueMin(b, v[1], g.c32(~0u));
         }
         LLVMValueRef r = sgn ? LLVMBuildAShr(b, v[0], v[1], "") : LLVMBuildLShr(b, v[0], v[1], "");
         LLVMReplaceAllUsesWith(inst, LLVMBuildTrunc(b, r, LLVMTypeOf(inst), ""));
@@ -2393,15 +2371,13 @@ static unsigned widenNarrowCompares(LLVMModuleRef module, Gen &g) {
             }
     if (cmps.empty()) return 0;
     LLVMBuilderRef b = LLVMCreateBuilderInContext(g.context);
-    LLVMTypeRef params[2] = {g.i32, g.i32};
     for (LLVMValueRef c : cmps) {
         LLVMPositionBuilderBefore(b, c);
         LLVMValueRef ops[2];
         for (int i = 0; i < 2; i++) {
             LLVMValueRef x = LLVMGetOperand(c, i);
             if (LLVMIsAConstantInt(x)) { ops[i] = g.c32((unsigned)LLVMConstIntGetZExtValue(x)); continue; }
-            LLVMValueRef args[2] = {LLVMBuildZExt(b, x, g.i32, ""), g.c32(~0u)};
-            ops[i] = LLVMBuildCall(b, g.intrinsic("llvm.nvvm.min.u.i32", g.i32, params, 2), args, 2, "");
+            ops[i] = g.opaqueMin(b, LLVMBuildZExt(b, x, g.i32, ""), g.c32(~0u));
         }
         LLVMReplaceAllUsesWith(c, LLVMBuildICmp(b, LLVMGetICmpPredicate(c), ops[0], ops[1], ""));
         LLVMInstructionEraseFromParent(c);
@@ -2513,11 +2489,9 @@ static unsigned hideSaturatedProducts(LLVMModuleRef module, Gen &g) {
     }
     if (todo.empty()) return 0;
     LLVMBuilderRef b = LLVMCreateBuilderInContext(g.context);
-    LLVMTypeRef params[2] = {g.i32, g.i32};
     for (auto &[call, k] : todo) {
         LLVMPositionBuilderBefore(b, call);
-        LLVMValueRef args[2] = {LLVMGetOperand(call, k), g.c32(~0u)};
-        LLVMSetOperand(call, k, LLVMBuildCall(b, g.intrinsic("llvm.nvvm.min.u.i32", g.i32, params, 2), args, 2, ""));
+        LLVMSetOperand(call, k, g.opaqueMin(b, LLVMGetOperand(call, k), g.c32(~0u)));
     }
     LLVMDisposeBuilder(b);
     return (unsigned)todo.size();
@@ -2569,11 +2543,9 @@ static unsigned hideSignExtendedDividends(LLVMModuleRef module, Gen &g) {
     }
     if (divs.empty()) return 0;
     LLVMBuilderRef b = LLVMCreateBuilderInContext(g.context);
-    LLVMTypeRef params[2] = {g.i32, g.i32};
     for (LLVMValueRef inst : divs) {
         LLVMPositionBuilderBefore(b, inst);
-        LLVMValueRef args[2] = {LLVMGetOperand(inst, 0), g.c32(~0u)};
-        LLVMSetOperand(inst, 0, LLVMBuildCall(b, g.intrinsic("llvm.nvvm.min.u.i32", g.i32, params, 2), args, 2, ""));
+        LLVMSetOperand(inst, 0, g.opaqueMin(b, LLVMGetOperand(inst, 0), g.c32(~0u)));
     }
     LLVMDisposeBuilder(b);
     return (unsigned)divs.size();
