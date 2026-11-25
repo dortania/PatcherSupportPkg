@@ -512,6 +512,44 @@ static unsigned clampArrayLayers(LLVMModuleRef module, Gen &g) {
     return fixed;
 }
 
+// ---- sample bias outside [-16, 15.99] -------------------------------------------------------------------------------
+// Kepler's sampler applies a bias above 15.99 in full, where WGSL and Metal clamp it to [-16, 15.99], and Safari passes
+// WGSL's bias unclamped: the bias, the last argument of each llvm.nvvm.sample*.bias* call, is clamped first.
+// NVAIR_BIAS_CLAMP. (n53)
+static unsigned clampSampleBias(LLVMModuleRef module, Gen &g) {
+    enum { kOrderedGreater = 2, kOrderedLess = 4 };  // LLVMRealPredicate
+    const double kMinBias = -16.0, kMaxBias = 15.99;
+    LLVMTypeRef f32 = LLVMFloatTypeInContext(g.context);
+    unsigned fixed = 0;
+    LLVMBuilderRef b = nullptr;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
+        const char *name = LLVMGetValueName(f);
+        if (!startsWith(name, "llvm.nvvm.sample.") || !strstr(name, ".bias")) continue;
+        for (LLVMValueRef call : callsTo(f)) {
+            int args = LLVMGetNumArgOperands(call);
+            LLVMValueRef bias = args > 0 ? LLVMGetOperand(call, args - 1) : nullptr;
+            if (!bias || LLVMTypeOf(bias) != f32) continue;
+            if (LLVMIsAConstantFP(bias)) {
+                int lossy = 0;
+                double value = LLVMConstRealGetDouble(bias, &lossy);
+                if (value >= kMinBias && value <= (double)(float)kMaxBias) continue;
+                LLVMSetOperand(call, args - 1, LLVMConstReal(f32, value < kMinBias ? kMinBias : kMaxBias));
+                fixed++;
+                continue;
+            }
+            if (LLVMIsAInstruction(bias) && startsWith(LLVMGetValueName(bias), "nvair.bias")) continue;  // an earlier run's
+            if (!b) b = LLVMCreateBuilderInContext(g.context);
+            LLVMPositionBuilderBefore(b, call);
+            LLVMValueRef lo = LLVMConstReal(f32, kMinBias), hi = LLVMConstReal(f32, kMaxBias);
+            LLVMValueRef raised = LLVMBuildSelect(b, LLVMBuildFCmp(b, kOrderedLess, bias, lo, ""), lo, bias, "");
+            LLVMSetOperand(call, args - 1, LLVMBuildSelect(b, LLVMBuildFCmp(b, kOrderedGreater, raised, hi, ""), hi, raised, "nvair.bias"));
+            fixed++;
+        }
+    }
+    if (b) LLVMDisposeBuilder(b);
+    return fixed;
+}
+
 // ---- cube reads at a level ------------------------------------------------------------------------------------------
 // read() of a cube (array) at a level above 0 read level 0: the plugin's body samples along the texel's direction from
 // level 0's size with a built-in sampler without mip filter and with LOD clamp 0. Each such body gets the level's size
@@ -2630,6 +2668,7 @@ static const ModuleFix kModuleFixes[] = {
     {"NVAIR_DEPTH_CHANNELS", fixDepthChannels, nullptr, false},
     {"NVAIR_CUBE_READ_LEVEL", fixCubeReadLevels, "[nvair] %u cube read body(ies) given the level's size and a mip-filtered sampler\n", false},
     {"NVAIR_ARRAY_LAYER_CLAMP", clampArrayLayers, "[nvair] %u texture-array layer(s) clamped at 0\n", false},
+    {"NVAIR_BIAS_CLAMP", clampSampleBias, "[nvair] %u sample bias(es) clamped to [-16, 15.99]\n", false},
     {"NVAIR_LOCAL_CMPXCHG", fixLocalCompareExchange, "[nvair] %u threadgroup compare-exchange body(ies) given the store of the value found\n", false},
     {"NVAIR_SIGNED_BOOL_FIX", fixSignedBoolConversions, "[nvair] %u sign mask(s) taken out of signed-to-bool conversions\n", false},
     {"NVAIR_ATOMIC_JOIN_FIX", fixAtomicJoinOperands, "[nvair] %u atomic operand(s) from a branch join put through a private slot\n", false},
