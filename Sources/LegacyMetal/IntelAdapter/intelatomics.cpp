@@ -4791,6 +4791,49 @@ static unsigned volatileReloadsAfterOtherStores(LLVMModuleRef module) {
     return marked;
 }
 
+// ---- inserts at a run-time index into vectors of bools, bytes and halfwords ----------------------------------------
+// The back end lowers such an insert to a vector select it has no pattern for and aborts ("Cannot select ... v2i8 =
+// IGILISD::SELECT", i88; WebGPU's dynamically indexed bool vectors). Each one becomes a select per lane between the new
+// value and the lane's old one, inserted at constant indices.
+
+enum { kNarrowestFullLaneBits = 32 };
+static bool narrowIntegerLanes(LLVMTypeRef vector) {
+    if (!lanes(vector)) return false;
+    LLVMTypeRef element = LLVMGetElementType(vector);
+    return LLVMGetTypeKind(element) == kTypeKindInteger && LLVMGetIntTypeWidth(element) < kNarrowestFullLaneBits;
+}
+static bool insertsAtRunTimeIndex(LLVMValueRef inst) {
+    return LLVMIsAInsertElementInst(inst) && !LLVMIsAConstant(LLVMGetOperand(inst, 2)) && narrowIntegerLanes(LLVMTypeOf(inst));
+}
+static LLVMValueRef insertBySelects(LLVMBuilderRef b, LLVMValueRef insert) {
+    LLVMValueRef vector = LLVMGetOperand(insert, 0), value = LLVMGetOperand(insert, 1), index = LLVMGetOperand(insert, 2);
+    LLVMValueRef result = vector;
+    for (unsigned k = 0, count = lanes(LLVMTypeOf(vector)); k < count; k++) {
+        LLVMValueRef lane = LLVMConstInt(LLVMTypeOf(index), k, false);
+        LLVMValueRef chosen = LLVMBuildSelect(b, LLVMBuildICmp(b, kICmpEQ, index, lane, ""), value,
+                                              LLVMBuildExtractElement(b, vector, lane, ""), "");
+        result = LLVMBuildInsertElement(b, result, chosen, lane, "");
+    }
+    return result;
+}
+static unsigned selectNarrowVectorInserts(LLVMModuleRef module) {
+    if (disabled("INTEL_NARROW_VECTOR_INSERT_FIX")) return 0;
+    std::vector<LLVMValueRef> inserts;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst))
+                if (insertsAtRunTimeIndex(inst)) inserts.push_back(inst);
+    if (inserts.empty()) return 0;
+    LLVMBuilderRef b = LLVMCreateBuilderInContext(LLVMGetModuleContext(module));
+    for (LLVMValueRef insert : inserts) {
+        LLVMPositionBuilderBefore(b, insert);
+        LLVMReplaceAllUsesWith(insert, insertBySelects(b, insert));
+        LLVMInstructionEraseFromParent(insert);
+    }
+    LLVMDisposeBuilder(b);
+    return (unsigned)inserts.size();
+}
+
 static unsigned flattenBranchChains(LLVMModuleRef module) {
     if (disabled("INTEL_BRANCH_CHAIN_FIX")) return 0;
     const char *setting = getenv("INTEL_BRANCH_CHAIN_MIN");
@@ -5632,6 +5675,7 @@ static const ModuleFix kModuleFixes[] = {
     {foldIntegerSampleOffsets, "%u integer texture sample(s): texel offset moved into the coordinates"},
     {fixSamplerStateWords, "%u constexpr sampler(s) in the [2 x i64] form rewritten as i64"},
     {remapComputeLevels, "%u explicit level(s) in a compute kernel remapped for the sampler's mip blend"},
+    {selectNarrowVectorInserts, "%u insert(s) at a run-time index into a bool / byte / halfword vector done with a select per lane"},
     {widenThreadgroupBools, "%u threadgroup bool(s) widened to i8"},
     {pinConstantThreadgroupAtomics, "%u threadgroup atomic(s) holding only constants read once, volatile"},
     {wordPrivateSubwords, "%u aligned byte/halfword access(es) to private memory done on the 32-bit word"},
