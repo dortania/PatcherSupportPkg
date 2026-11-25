@@ -4734,6 +4734,63 @@ static unsigned volatilizePunnedAccesses(LLVMModuleRef module) {
     return marked;
 }
 
+// ---- reloads after a store through another pointer -----------------------------------------------------------------
+// Within a block the back end gives a load of p the value of an earlier load of p when a store through another pointer
+// of the same address space comes between them, even after a store to p: "x = *p; *p = x + 1; *q = y; return *p"
+// returns the old x (i87). Such a reload is made volatile, which the back end reads from memory.
+
+static LLVMValueRef withoutBitcasts(LLVMValueRef pointer) {
+    while (pointer && LLVMIsABitCastInst(pointer)) pointer = LLVMGetOperand(pointer, 0);
+    return pointer;
+}
+static bool sameAddress(LLVMValueRef a, LLVMValueRef b) {  // one pointer, or equal GEPs of one pointer
+    a = withoutBitcasts(a);
+    b = withoutBitcasts(b);
+    if (a == b) return true;
+    if (!LLVMIsAGetElementPtrInst(a) || !LLVMIsAGetElementPtrInst(b) || LLVMGetNumOperands(a) != LLVMGetNumOperands(b)) return false;
+    for (int i = 1; i < LLVMGetNumOperands(a); i++)
+        if (LLVMGetOperand(a, i) != LLVMGetOperand(b, i)) return false;
+    return sameAddress(LLVMGetOperand(a, 0), LLVMGetOperand(b, 0));
+}
+static unsigned addressSpaceOf(LLVMValueRef pointer) { return LLVMGetPointerAddressSpace(LLVMTypeOf(pointer)); }
+
+struct StoredPointer {
+    LLVMValueRef pointer;
+    bool storedThroughAnotherSince;
+};
+static void noteStore(std::vector<StoredPointer> &stored, LLVMValueRef pointer) {
+    for (StoredPointer &earlier : stored)
+        if (addressSpaceOf(earlier.pointer) == addressSpaceOf(pointer) && !sameAddress(earlier.pointer, pointer))
+            earlier.storedThroughAnotherSince = true;
+    stored.erase(std::remove_if(stored.begin(), stored.end(),
+                                [pointer](const StoredPointer &earlier) { return sameAddress(earlier.pointer, pointer); }),
+                 stored.end());
+    stored.push_back({pointer, false});
+}
+static bool reloadsAfterAnotherStore(const std::vector<StoredPointer> &stored, LLVMValueRef pointer) {
+    return std::any_of(stored.begin(), stored.end(), [pointer](const StoredPointer &earlier) {
+        return earlier.storedThroughAnotherSince && sameAddress(earlier.pointer, pointer);
+    });
+}
+static unsigned volatileReloadsAfterOtherStores(LLVMModuleRef module) {
+    if (disabled("INTEL_STALE_RELOAD_FIX")) return 0;
+    unsigned marked = 0;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb)) {
+            std::vector<StoredPointer> stored;  // device / threadgroup pointers stored to in this block
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+                if (LLVMIsAStoreInst(inst) && sharedPointer(LLVMGetOperand(inst, 1))) {
+                    noteStore(stored, LLVMGetOperand(inst, 1));
+                } else if (LLVMIsALoadInst(inst) && !LLVMGetVolatile(inst) && sharedPointer(LLVMGetOperand(inst, 0)) &&
+                           reloadsAfterAnotherStore(stored, LLVMGetOperand(inst, 0))) {
+                    LLVMSetVolatile(inst, 1);
+                    marked++;
+                }
+            }
+        }
+    return marked;
+}
+
 static unsigned flattenBranchChains(LLVMModuleRef module) {
     if (disabled("INTEL_BRANCH_CHAIN_FIX")) return 0;
     const char *setting = getenv("INTEL_BRANCH_CHAIN_MIN");
@@ -5587,6 +5644,7 @@ static const ModuleFix kModuleFixes[] = {
     {expandConstantCopies, "%u constant-length copie(s) done as 32-bit loads and stores"},  // after volatilizePunnedAccesses (see there)
     {flattenBranchChains, "%u short branch(es) folded into selects"},
     {selectBufferIndices, "%u select(s) of pointers into one buffer turned into a selected index"},  // after flattenBranchChains, whose selects can pick pointers
+    {volatileReloadsAfterOtherStores, "%u reload(s) after a store through another pointer made volatile"},  // after the rewrites that add loads and stores
     {bitTestCompares, "%u compare(s) of a 0/1 value with 1 in a vertex/fragment module done as a compare with 0"},
     {expandRenderInt64, "%u 64-bit division(s) / variable shift(s) in a vertex/fragment function done on 32-bit halves"},
     {widenNarrowVectorCompares, "%u compare(s), select(s) and operation(s) on byte / halfword vectors in a vertex/fragment module done on 32-bit lanes"},
