@@ -2456,6 +2456,50 @@ static unsigned dropSampleCompareBias(LLVMModuleRef module) {
     return fixed;
 }
 
+// ---- sample with a bias beyond [-16, 15.99] ------------------------------------------------------------------------
+// The sampler applies a bias past 15.99 in full and walks down the mips, where Metal and WGSL clamp it to [-16, 15.99]
+// (n53; WebKit passes WGSL's textureSampleBias bias through unclamped). The bias is clamped before the sample.
+
+static const double kMinBias = -16.0, kMaxBias = 15.99;
+static bool samplesWithBias(LLVMValueRef function) {  // air.sample_texture_* / air.sample_depth_*, not gradient samples
+    const char *name = LLVMGetValueName(function);
+    return (!strncmp(name, "air.sample_texture_", 19) || !strncmp(name, "air.sample_depth_", 17)) && !strstr(name, "_grad");
+}
+static LLVMValueRef clampedBias(LLVMBuilderRef b, LLVMValueRef bias) {
+    LLVMTypeRef f32 = LLVMTypeOf(bias);
+    LLVMValueRef low = LLVMConstReal(f32, kMinBias), high = LLVMConstReal(f32, kMaxBias);
+    if (LLVMIsAConstantFP(bias)) {
+        int lossy = 0;
+        double value = LLVMConstRealGetDouble(bias, &lossy);
+        return value < kMinBias ? low : value > kMaxBias ? high : bias;
+    }
+    LLVMValueRef aboveLow = LLVMBuildSelect(b, LLVMBuildFCmp(b, kRealOLT, bias, low, ""), low, bias, "");
+    return LLVMBuildSelect(b, LLVMBuildFCmp(b, kRealOLT, high, aboveLow, ""), high, aboveLow, "");
+}
+static unsigned clampSampleBias(LLVMModuleRef module) {
+    if (disabled("INTEL_BIAS_CLAMP_FIX")) return 0;
+    LLVMTypeRef f32 = LLVMFloatTypeInContext(LLVMGetModuleContext(module));
+    LLVMBuilderRef b = LLVMCreateBuilderInContext(LLVMGetModuleContext(module));
+    unsigned clamped = 0;
+    for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f)) {
+        if (!samplesWithBias(f)) continue;
+        for (LLVMUseRef u = LLVMGetFirstUse(f); u; u = LLVMGetNextUse(u)) {
+            LLVMValueRef call = LLVMGetUser(u);
+            int n = LLVMGetNumOperands(call);  // arguments, then the callee: ..., i1 isLevel, float lod, i32, callee
+            if (!LLVMIsACallInst(call) || n < 4 || LLVMGetOperand(call, n - 1) != f) continue;
+            LLVMValueRef isLevel = LLVMGetOperand(call, n - 4), bias = LLVMGetOperand(call, n - 3);
+            if (!LLVMIsAConstantInt(isLevel) || LLVMConstIntGetZExtValue(isLevel) || LLVMTypeOf(bias) != f32) continue;
+            LLVMPositionBuilderBefore(b, call);
+            LLVMValueRef clamp = clampedBias(b, bias);
+            if (clamp == bias) continue;
+            LLVMSetOperand(call, n - 3, clamp);
+            clamped++;
+        }
+    }
+    LLVMDisposeBuilder(b);
+    return clamped;
+}
+
 // ---- integer textures: gradient samples and texel offsets -----------------------------------------------------------
 // Integer textures are only sampled with nearest filtering, where the LOD only picks the level. Three back-end bugs:
 // - a gradient sample in a compute kernel crashes it (LowerReadImage_Int): it becomes an explicit-level sample (i08);
@@ -5658,6 +5702,7 @@ static const ModuleFix kModuleFixes[] = {
     {fixGradientCompares, "%u depth comparison(s) with gradients done at level 0"},
     {foldHalfVectorBitcasts, "%u constant(s) with half vectors spelled as bitcasts rewritten"},
     {dropSampleCompareBias, "%u depth comparison(s) with an LOD bias: bias dropped"},
+    {clampSampleBias, "%u sample bias(es) clamped to [-16, 15.99]"},  // after dropSampleCompareBias, whose biases are gone
     {lowerIntegerGradients, "%u integer gradient sample(s) done at the level the gradients select"},
     {widenNarrowDivisions, "%u 8/16-bit division(s) done on 32-bit lanes"},  // before signedDivisionNegations, which then sees the 32-bit divides
     {signedDivisionNegations, "%u signed division(s) of a negated value done on the value"},
