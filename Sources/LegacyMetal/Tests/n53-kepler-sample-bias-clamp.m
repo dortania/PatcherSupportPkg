@@ -1,6 +1,7 @@
 // n53-kepler-sample-bias-clamp: sample()'s bias must be clamped to [-16, 15.99], as WGSL and Metal specify; Kepler's
-// sampler applied a bias of 20 or 25 in full. Fix: GeForceAIRCompat NVAIR_BIAS_CLAMP. Checks: 2D and 2D-array samples at
-// implicit LOD -17 with bias 15.99, 20, 25 and a constant 25, and at LOD +19 with bias -25. Argument: GPU name (default: NVIDIA).
+// and Intel's samplers applied a bias of 20 or 25 in full. Fix: GeForceAIRCompat NVAIR_BIAS_CLAMP, IntelTextureAtomics
+// INTEL_BIAS_CLAMP_FIX. Checks: 2D and 2D-array samples at an implicit LOD of about -19 with bias 15.99, 20, 25 and a
+// constant 25, and at about +19 with bias -25. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"
@@ -9,7 +10,7 @@ static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n
     "vertex V v(uint i [[vertex_id]]) { float2 q = float2((i << 1) & 2, i & 2); V o; o.p = float4(q * 2 - 1, 0, 1); return o; }\n"
     "fragment float4 f(V in [[stage_in]], texture2d<float> t [[texture(0)]], texture2d_array<float> a [[texture(1)]],\n"
     "                  sampler s [[sampler(0)]], constant Case &c [[buffer(0)]]) {\n"
-    "  float2 uv = float2(0.25) + in.p.xy * c.scale;\n"
+    "  float2 uv = in.p.xy * c.scale;\n"
     "  return float4(t.sample(s, uv, bias(c.bias)).r, a.sample(s, uv, 1, bias(c.bias)).r, t.sample(s, uv, bias(25.0)).r, 1); }\n";
 
 int main(int argc, char **argv) { @autoreleasepool {
@@ -54,8 +55,9 @@ int main(int argc, char **argv) { @autoreleasepool {
     id<MTLTexture> target = [dev newTextureWithDescriptor:rt];
     id<MTLCommandQueue> queue = [dev newCommandQueue];
 
-    // uv changes by `scale` per pixel: 1e-6 is an implicit LOD of about -17, 1e5 about +19 (8 texels)
-    const struct { float scale, bias; int wantLevel; } cases[] = {{1e-6f, 15.99f, 0}, {1e-6f, 20.0f, 0}, {1e-6f, 25.0f, 0}, {1e5f, -25.0f, 3}};
+    // uv changes by `scale` per pixel (exactly, near 0): 2.5e-7 is an implicit LOD of about -19 (about -17 on Haswell), 1e5 about
+    // +19 (8 texels); clamped, bias 15.99 still reads level 0 and -25 the last level on both
+    const struct { float scale, bias; int wantLevel; } cases[] = {{2.5e-7f, 15.99f, 0}, {2.5e-7f, 20.0f, 0}, {2.5e-7f, 25.0f, 0}, {1e5f, -25.0f, 3}};
     for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
         MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
         pass.colorAttachments[0].texture = target;
@@ -83,7 +85,7 @@ int main(int argc, char **argv) { @autoreleasepool {
             int got = px[k] < 50 ? 0 : px[k] < 115 ? 1 : px[k] < 190 ? 2 : 3;
             if (got != want)
                 return FAIL(bug, "%s: %s with bias %.2f at implicit LOD %s read level %d, want %d", name, what[k], k == 2 ? 25.0 : cases[i].bias,
-                            cases[i].scale < 1 ? "-17" : "+19", got, want);
+                            cases[i].scale < 1 ? "-19" : "+19", got, want);
         }
     }
     return PASS(bug, "%s: sample() biases are clamped to [-16, 15.99] (2D, 2D array, constant bias)", name);
