@@ -4490,6 +4490,15 @@ static unsigned splitPrivatePointerSelects(LLVMModuleRef module) {
 // INTEL_BRANCH_CHAIN_MOVE (most instructions a moved block may have, default 16), INTEL_BRANCH_CHAIN_MIN (conditional
 // branches before it runs, default 12). Phis become selects only for numbers and vectors, never handles (a05).
 
+using BlockPredecessors = std::map<LLVMBasicBlockRef, std::vector<LLVMBasicBlockRef>>;
+static BlockPredecessors blockPredecessors(LLVMValueRef f) {
+    BlockPredecessors preds;
+    for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+        if (LLVMValueRef term = LLVMGetBasicBlockTerminator(bb))
+            for (unsigned i = 0, n = LLVMGetNumSuccessors(term); i < n; i++) preds[LLVMGetSuccessor(term, i)].push_back(bb);
+    return preds;
+}
+
 namespace flatten {
 enum { kFunctionIndex = ~0u, kMaxSteps = 4096 };
 static int maxMoved = 16;
@@ -4591,10 +4600,7 @@ static unsigned conditionalBranches(LLVMValueRef f) {
 
 // One rewrite in `f`; false when there is nothing left to do.
 static bool step(LLVMBuilderRef b, LLVMValueRef f, LLVMValueRef yes, LLVMValueRef no) {
-    std::map<LLVMBasicBlockRef, std::vector<LLVMBasicBlockRef>> preds;
-    for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
-        if (LLVMValueRef term = LLVMGetBasicBlockTerminator(bb))
-            for (unsigned i = 0, n = LLVMGetNumSuccessors(term); i < n; i++) preds[LLVMGetSuccessor(term, i)].push_back(bb);
+    BlockPredecessors preds = blockPredecessors(f);
     auto onlyFrom = [&](LLVMBasicBlockRef bb, LLVMBasicBlockRef p) { return preds[bb].size() == 1 && preds[bb][0] == p; };
     auto hasPhis = [](LLVMBasicBlockRef bb) { LLVMValueRef first = LLVMGetFirstInstruction(bb); return first && LLVMIsAPHINode(first); };
     for (LLVMBasicBlockRef p = LLVMGetFirstBasicBlock(f); p; p = LLVMGetNextBasicBlock(p)) {
@@ -4778,10 +4784,12 @@ static unsigned volatilizePunnedAccesses(LLVMModuleRef module) {
     return marked;
 }
 
-// ---- reloads after a store through another pointer -----------------------------------------------------------------
-// Within a block the back end gives a load of p the value of an earlier load of p when a store through another pointer
-// of the same address space comes between them, even after a store to p: "x = *p; *p = x + 1; *q = y; return *p"
-// returns the old x (i87). Such a reload is made volatile, which the back end reads from memory.
+// ---- stale reloads -------------------------------------------------------------------------------------------------
+// The back end gives a load the value of an earlier access to the same address when a store through a pointer that may
+// alias it comes between them: "x = *p; *q = 7; return *p" returns x when q points at p, and so does
+// "(*p)++; (*q)++; return *p" (i87). Its own loop unrolling runs after these rewrites, so the accesses are followed
+// along every path, around loops too, and such a load is made volatile, which the back end reads from memory.
+// Pointers into two different buffer arguments of an entry point don't alias (Metal's front end assumes so already).
 
 static LLVMValueRef withoutBitcasts(LLVMValueRef pointer) {
     while (pointer && LLVMIsABitCastInst(pointer)) pointer = LLVMGetOperand(pointer, 0);
@@ -4798,40 +4806,100 @@ static bool sameAddress(LLVMValueRef a, LLVMValueRef b) {  // one pointer, or eq
 }
 static unsigned addressSpaceOf(LLVMValueRef pointer) { return LLVMGetPointerAddressSpace(LLVMTypeOf(pointer)); }
 
-struct StoredPointer {
+static bool isEntryPoint(LLVMModuleRef module, LLVMValueRef function) {
+    return isEntry(module, "air.kernel", function) || isEntry(module, "air.vertex", function) || isEntry(module, "air.fragment", function);
+}
+static bool isBufferArgumentOfEntry(LLVMModuleRef module, LLVMValueRef root) {  // not a hidden argument-buffer member
+    static const char kArgumentBufferMemberPrefix[] = "__ivbab_";
+    return LLVMIsAArgument(root) && isEntryPoint(module, LLVMGetParamParent(root)) &&
+           strncmp(LLVMGetValueName(root), kArgumentBufferMemberPrefix, sizeof kArgumentBufferMemberPrefix - 1);
+}
+static bool mayAlias(LLVMModuleRef module, LLVMValueRef a, LLVMValueRef b) {
+    if (addressSpaceOf(a) != addressSpaceOf(b)) return false;
+    LLVMValueRef rootA = pointerRoot(a), rootB = pointerRoot(b);
+    if (rootA == rootB) return true;
+    bool distinctGlobals = LLVMIsAGlobalVariable(rootA) && LLVMIsAGlobalVariable(rootB);
+    bool distinctEntryBuffers = isBufferArgumentOfEntry(module, rootA) && isBufferArgumentOfEntry(module, rootB);
+    return !distinctGlobals && !distinctEntryBuffers;
+}
+
+struct TrackedAddress {
     LLVMValueRef pointer;
-    bool storedThroughAnotherSince;
+    bool storedThroughAnotherSince;  // since the last access to it, on some path
 };
-static void noteStore(std::vector<StoredPointer> &stored, LLVMValueRef pointer) {
-    for (StoredPointer &earlier : stored)
-        if (addressSpaceOf(earlier.pointer) == addressSpaceOf(pointer) && !sameAddress(earlier.pointer, pointer))
-            earlier.storedThroughAnotherSince = true;
-    stored.erase(std::remove_if(stored.begin(), stored.end(),
-                                [pointer](const StoredPointer &earlier) { return sameAddress(earlier.pointer, pointer); }),
-                 stored.end());
-    stored.push_back({pointer, false});
+using AccessState = std::vector<TrackedAddress>;
+
+static TrackedAddress *trackedAt(AccessState &state, LLVMValueRef pointer) {
+    for (TrackedAddress &tracked : state)
+        if (sameAddress(tracked.pointer, pointer)) return &tracked;
+    return nullptr;
 }
-static bool reloadsAfterAnotherStore(const std::vector<StoredPointer> &stored, LLVMValueRef pointer) {
-    return std::any_of(stored.begin(), stored.end(), [pointer](const StoredPointer &earlier) {
-        return earlier.storedThroughAnotherSince && sameAddress(earlier.pointer, pointer);
-    });
+static void noteAccess(AccessState &state, LLVMValueRef pointer) {
+    if (TrackedAddress *tracked = trackedAt(state, pointer)) tracked->storedThroughAnotherSince = false;
+    else state.push_back({pointer, false});
 }
-static unsigned volatileReloadsAfterOtherStores(LLVMModuleRef module) {
+static void noteStore(LLVMModuleRef module, AccessState &state, LLVMValueRef pointer) {
+    for (TrackedAddress &tracked : state)
+        if (!sameAddress(tracked.pointer, pointer) && mayAlias(module, tracked.pointer, pointer)) tracked.storedThroughAnotherSince = true;
+    noteAccess(state, pointer);
+}
+static bool mergeInto(AccessState &into, const AccessState &from) {  // true when `into` changed
+    bool changed = false;
+    for (const TrackedAddress &incoming : from) {
+        TrackedAddress *tracked = trackedAt(into, incoming.pointer);
+        if (!tracked) {
+            into.push_back(incoming);
+            changed = true;
+        } else if (incoming.storedThroughAnotherSince && !tracked->storedThroughAnotherSince) {
+            tracked->storedThroughAnotherSince = true;
+            changed = true;
+        }
+    }
+    return changed;
+}
+// Runs a block's device / threadgroup loads and stores over `state`; with `mark`, makes the stale-prone loads volatile.
+static unsigned followBlock(LLVMModuleRef module, LLVMBasicBlockRef bb, AccessState &state, bool mark) {
+    unsigned marked = 0;
+    for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+        if (LLVMIsAStoreInst(inst) && sharedPointer(LLVMGetOperand(inst, 1))) {
+            noteStore(module, state, LLVMGetOperand(inst, 1));
+        } else if (LLVMIsALoadInst(inst) && sharedPointer(LLVMGetOperand(inst, 0))) {
+            LLVMValueRef pointer = LLVMGetOperand(inst, 0);
+            TrackedAddress *tracked = trackedAt(state, pointer);
+            if (mark && tracked && tracked->storedThroughAnotherSince && !LLVMGetVolatile(inst)) {
+                LLVMSetVolatile(inst, 1);
+                marked++;
+            }
+            noteAccess(state, pointer);
+        }
+    }
+    return marked;
+}
+static unsigned volatileStaleReloadsIn(LLVMModuleRef module, LLVMValueRef f) {
+    enum { kMaxPasses = 64 };
+    BlockPredecessors preds = blockPredecessors(f);
+    std::map<LLVMBasicBlockRef, AccessState> atEntry, atExit;
+    for (int pass = 0, changed = 1; changed && pass < kMaxPasses; pass++) {
+        changed = 0;
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb)) {
+            for (LLVMBasicBlockRef pred : preds[bb]) mergeInto(atEntry[bb], atExit[pred]);
+            AccessState state = atEntry[bb];
+            followBlock(module, bb, state, false);
+            changed |= mergeInto(atExit[bb], state);
+        }
+    }
+    unsigned marked = 0;
+    for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb)) {
+        AccessState state = atEntry[bb];
+        marked += followBlock(module, bb, state, true);
+    }
+    return marked;
+}
+static unsigned volatileStaleReloads(LLVMModuleRef module) {
     if (disabled("INTEL_STALE_RELOAD_FIX")) return 0;
     unsigned marked = 0;
     for (LLVMValueRef f = LLVMGetFirstFunction(module); f; f = LLVMGetNextFunction(f))
-        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb)) {
-            std::vector<StoredPointer> stored;  // device / threadgroup pointers stored to in this block
-            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
-                if (LLVMIsAStoreInst(inst) && sharedPointer(LLVMGetOperand(inst, 1))) {
-                    noteStore(stored, LLVMGetOperand(inst, 1));
-                } else if (LLVMIsALoadInst(inst) && !LLVMGetVolatile(inst) && sharedPointer(LLVMGetOperand(inst, 0)) &&
-                           reloadsAfterAnotherStore(stored, LLVMGetOperand(inst, 0))) {
-                    LLVMSetVolatile(inst, 1);
-                    marked++;
-                }
-            }
-        }
+        if (LLVMGetFirstBasicBlock(f)) marked += volatileStaleReloadsIn(module, f);
     return marked;
 }
 
@@ -5733,7 +5801,7 @@ static const ModuleFix kModuleFixes[] = {
     {expandConstantCopies, "%u constant-length copie(s) done as 32-bit loads and stores"},  // after volatilizePunnedAccesses (see there)
     {flattenBranchChains, "%u short branch(es) folded into selects"},
     {selectBufferIndices, "%u select(s) of pointers into one buffer turned into a selected index"},  // after flattenBranchChains, whose selects can pick pointers
-    {volatileReloadsAfterOtherStores, "%u reload(s) after a store through another pointer made volatile"},  // after the rewrites that add loads and stores
+    {volatileStaleReloads, "%u load(s) after a store through a pointer that may alias made volatile"},  // after the rewrites that add loads and stores
     {bitTestCompares, "%u compare(s) of a 0/1 value with 1 in a vertex/fragment module done as a compare with 0"},
     {expandRenderInt64, "%u 64-bit division(s) / variable shift(s) in a vertex/fragment function done on 32-bit halves"},
     {widenNarrowVectorCompares, "%u compare(s), select(s) and operation(s) on byte / halfword vectors in a vertex/fragment module done on 32-bit lanes"},
