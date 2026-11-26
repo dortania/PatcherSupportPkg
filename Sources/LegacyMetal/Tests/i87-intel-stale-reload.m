@@ -1,10 +1,11 @@
 // i87-intel-stale-reload: a load after a store through a pointer that may alias must see that store; the Intel back
 // end gave it the value of an earlier load. Fix: IntelTextureAtomics INTEL_STALE_RELOAD_FIX.
 // Checks: increment and swap through two pointers into one buffer (device and threadgroup memory), a reload after a store
-// through a pointer to the same word, and increments in a loop the back end unrolls. Argument: GPU name.
+// through a pointer to the same word, increments in a loop the back end unrolls, and a reload across an atomic. Argument:
+// GPU name.
 #import "repro.h"
 
-enum { kFirst = 10, kSecond = 100, kStoredThroughAlias = 7, kLoopRounds = 5, kResults = 7 };
+enum { kFirst = 10, kSecond = 100, kStoredThroughAlias = 7, kLoopRounds = 5, kResults = 8 };
 
 static NSString *const source =
     @"#include <metal_stdlib>\n"
@@ -37,6 +38,10 @@ static NSString *const source =
     "    for (int round = 0; round < 5; round++) { *u += 1; *w += 1; }\n"
     "    out[4] = *u;\n"
     "    out[5] = *w;\n"
+    "    device int *v = memory + 7 + index[0];\n"
+    "    *v = *v + 1;\n"
+    "    atomic_fetch_add_explicit((device atomic_int *)(out + 8), 1, memory_order_relaxed);\n"
+    "    out[7] = *v;\n"
     "}\n";
 
 int main(int argc, char **argv) {
@@ -48,10 +53,10 @@ int main(int argc, char **argv) {
         NSString *why = nil;
         id<MTLComputePipelineState> ps = reproComputePipeline(dev, source, nil, &why);
         if (!ps) return FAIL(bug, "%s", why.UTF8String);
-        const int32_t memoryStart[7] = {kFirst, kSecond, kFirst, kSecond, kFirst, kFirst, kSecond}, indices[2] = {0, 1};
+        const int32_t memoryStart[8] = {kFirst, kSecond, kFirst, kSecond, kFirst, kFirst, kSecond, kSecond}, indices[2] = {0, 1};
         id<MTLBuffer> memory = [dev newBufferWithBytes:memoryStart length:sizeof memoryStart options:MTLResourceStorageModeShared];
         id<MTLBuffer> index = [dev newBufferWithBytes:indices length:sizeof indices options:MTLResourceStorageModeShared];
-        id<MTLBuffer> out = [dev newBufferWithLength:kResults * sizeof(int32_t) options:MTLResourceStorageModeShared];
+        id<MTLBuffer> out = [dev newBufferWithLength:(kResults + 1) * sizeof(int32_t) options:MTLResourceStorageModeShared];  // + the atomic's word
         memset(out.contents, 0xee, out.length);
         id<MTLCommandBuffer> cb = [[dev newCommandQueue] commandBuffer];
         id<MTLComputeCommandEncoder> ce = [cb computeCommandEncoder];
@@ -63,10 +68,11 @@ int main(int argc, char **argv) {
         [ce endEncoding];
         if (!reproRun(cb)) return FAIL(bug, "%s: command buffer failed", name);
         const int32_t *o = out.contents;
-        const int32_t want[kResults] = {kFirst + 1, kSecond + 1, kFirst + 1, kStoredThroughAlias, kFirst + kLoopRounds, kSecond + kLoopRounds, kFirst};
+        const int32_t want[kResults] = {kFirst + 1, kSecond + 1, kFirst + 1, kStoredThroughAlias, kFirst + kLoopRounds, kSecond + kLoopRounds, kFirst, kSecond + 1};
         const char *what[kResults] = {"*p after incrementing *p and *q", "*p after swapping *p and *q", "threadgroup *s after incrementing *s and *t",
                                       "a word read again after a store through a pointer to it", "*u after 5 rounds of incrementing *u and *w",
-                                      "*w after 5 rounds of incrementing *u and *w", "that word before the store"};
+                                      "*w after 5 rounds of incrementing *u and *w", "that word before the store",
+                                      "*v after incrementing it and an atomic add elsewhere"};
         for (int i = 0; i < kResults; i++)
             if (o[i] != want[i]) return FAIL(bug, "%s: %s read %d, want %d", name, what[i], o[i], want[i]);
         return PASS(bug, "%s: loads after stores through pointers that may alias read the stored values", name);

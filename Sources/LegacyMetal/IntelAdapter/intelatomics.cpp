@@ -4809,17 +4809,21 @@ static unsigned addressSpaceOf(LLVMValueRef pointer) { return LLVMGetPointerAddr
 static bool isEntryPoint(LLVMModuleRef module, LLVMValueRef function) {
     return isEntry(module, "air.kernel", function) || isEntry(module, "air.vertex", function) || isEntry(module, "air.fragment", function);
 }
-static bool isBufferArgumentOfEntry(LLVMModuleRef module, LLVMValueRef root) {  // not a hidden argument-buffer member
+struct AliasScope {  // the function whose accesses are followed
+    bool isEntryPoint;
+    std::vector<LLVMValueRef> storedPointers;  // the device / threadgroup pointers it stores through
+};
+static bool isEntryBufferArgument(const AliasScope &scope, LLVMValueRef root) {  // not a hidden argument-buffer member
     static const char kArgumentBufferMemberPrefix[] = "__ivbab_";
-    return LLVMIsAArgument(root) && isEntryPoint(module, LLVMGetParamParent(root)) &&
+    return scope.isEntryPoint && LLVMIsAArgument(root) &&
            strncmp(LLVMGetValueName(root), kArgumentBufferMemberPrefix, sizeof kArgumentBufferMemberPrefix - 1);
 }
-static bool mayAlias(LLVMModuleRef module, LLVMValueRef a, LLVMValueRef b) {
+static bool mayAlias(const AliasScope &scope, LLVMValueRef a, LLVMValueRef b) {
     if (addressSpaceOf(a) != addressSpaceOf(b)) return false;
     LLVMValueRef rootA = pointerRoot(a), rootB = pointerRoot(b);
     if (rootA == rootB) return true;
     bool distinctGlobals = LLVMIsAGlobalVariable(rootA) && LLVMIsAGlobalVariable(rootB);
-    bool distinctEntryBuffers = isBufferArgumentOfEntry(module, rootA) && isBufferArgumentOfEntry(module, rootB);
+    bool distinctEntryBuffers = isEntryBufferArgument(scope, rootA) && isEntryBufferArgument(scope, rootB);
     return !distinctGlobals && !distinctEntryBuffers;
 }
 
@@ -4838,9 +4842,9 @@ static void noteAccess(AccessState &state, LLVMValueRef pointer) {
     if (TrackedAddress *tracked = trackedAt(state, pointer)) tracked->storedThroughAnotherSince = false;
     else state.push_back({pointer, false});
 }
-static void noteStore(LLVMModuleRef module, AccessState &state, LLVMValueRef pointer) {
+static void noteStore(const AliasScope &scope, AccessState &state, LLVMValueRef pointer) {
     for (TrackedAddress &tracked : state)
-        if (!sameAddress(tracked.pointer, pointer) && mayAlias(module, tracked.pointer, pointer)) tracked.storedThroughAnotherSince = true;
+        if (!sameAddress(tracked.pointer, pointer) && mayAlias(scope, tracked.pointer, pointer)) tracked.storedThroughAnotherSince = true;
     noteAccess(state, pointer);
 }
 static bool mergeInto(AccessState &into, const AccessState &from) {  // true when `into` changed
@@ -4857,12 +4861,31 @@ static bool mergeInto(AccessState &into, const AccessState &from) {  // true whe
     }
     return changed;
 }
+// A call that can write memory counts as a store through every other pointer: atomics, barriers, copies and fills, and
+// functions with a body (the back end forwards loads across those too).
+static bool callMayWriteMemory(LLVMValueRef call) {
+    static const char *const kWritingPrefixes[] = {"air.atomic", "air.wg.barrier", "air.mem_barrier", "air.simdgroup.barrier",
+                                                   "llvm.memcpy", "llvm.memmove", "llvm.memset"};
+    LLVMValueRef callee = LLVMGetCalledValue(call);
+    if (!LLVMIsAFunction(callee) || !LLVMIsDeclaration(callee)) return true;
+    const char *name = LLVMGetValueName(callee);
+    return std::any_of(std::begin(kWritingPrefixes), std::end(kWritingPrefixes),
+                       [name](const char *prefix) { return !strncmp(name, prefix, strlen(prefix)); });
+}
+static void noteCallWriting(const AliasScope &scope, AccessState &state) {  // only memory the function itself writes changes
+    for (TrackedAddress &tracked : state)
+        if (std::any_of(scope.storedPointers.begin(), scope.storedPointers.end(),
+                        [&](LLVMValueRef stored) { return sameAddress(stored, tracked.pointer) || mayAlias(scope, stored, tracked.pointer); }))
+            tracked.storedThroughAnotherSince = true;
+}
 // Runs a block's device / threadgroup loads and stores over `state`; with `mark`, makes the stale-prone loads volatile.
-static unsigned followBlock(LLVMModuleRef module, LLVMBasicBlockRef bb, AccessState &state, bool mark) {
+static unsigned followBlock(const AliasScope &scope, LLVMBasicBlockRef bb, AccessState &state, bool mark) {
     unsigned marked = 0;
     for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
         if (LLVMIsAStoreInst(inst) && sharedPointer(LLVMGetOperand(inst, 1))) {
-            noteStore(module, state, LLVMGetOperand(inst, 1));
+            noteStore(scope, state, LLVMGetOperand(inst, 1));
+        } else if (LLVMIsACallInst(inst) && callMayWriteMemory(inst)) {
+            noteCallWriting(scope, state);
         } else if (LLVMIsALoadInst(inst) && sharedPointer(LLVMGetOperand(inst, 0))) {
             LLVMValueRef pointer = LLVMGetOperand(inst, 0);
             TrackedAddress *tracked = trackedAt(state, pointer);
@@ -4875,8 +4898,16 @@ static unsigned followBlock(LLVMModuleRef module, LLVMBasicBlockRef bb, AccessSt
     }
     return marked;
 }
+static std::vector<LLVMValueRef> sharedStoresIn(LLVMValueRef f) {
+    std::vector<LLVMValueRef> pointers;
+    for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
+        for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst))
+            if (LLVMIsAStoreInst(inst) && sharedPointer(LLVMGetOperand(inst, 1))) pointers.push_back(LLVMGetOperand(inst, 1));
+    return pointers;
+}
 static unsigned volatileStaleReloadsIn(LLVMModuleRef module, LLVMValueRef f) {
     enum { kMaxPasses = 64 };
+    const AliasScope scope = {isEntryPoint(module, f), sharedStoresIn(f)};
     BlockPredecessors preds = blockPredecessors(f);
     std::map<LLVMBasicBlockRef, AccessState> atEntry, atExit;
     for (int pass = 0, changed = 1; changed && pass < kMaxPasses; pass++) {
@@ -4884,14 +4915,14 @@ static unsigned volatileStaleReloadsIn(LLVMModuleRef module, LLVMValueRef f) {
         for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb)) {
             for (LLVMBasicBlockRef pred : preds[bb]) mergeInto(atEntry[bb], atExit[pred]);
             AccessState state = atEntry[bb];
-            followBlock(module, bb, state, false);
+            followBlock(scope, bb, state, false);
             changed |= mergeInto(atExit[bb], state);
         }
     }
     unsigned marked = 0;
     for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb)) {
         AccessState state = atEntry[bb];
-        marked += followBlock(module, bb, state, true);
+        marked += followBlock(scope, bb, state, true);
     }
     return marked;
 }
