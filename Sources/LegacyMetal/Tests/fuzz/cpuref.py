@@ -113,7 +113,7 @@ typedef std::atomic<uint> atomic_uint;
 static void atomic_store_explicit(atomic_uint *a, uint v, std::memory_order o) { a->store(v, o); }
 static uint atomic_load_explicit(atomic_uint *a, std::memory_order o) { return a->load(o); }
 static uint atomic_fetch_add_explicit(atomic_uint *a, uint v, std::memory_order o) { return a->fetch_add(v, o); }
-struct Group { uint tg[64]; uchar tc[64]; bool tb; atomic_uint ta; std::barrier<> bar{64}; };
+struct Group { uint tg[64]; uchar tc[64]; uint ts[128]; bool tb; atomic_uint ta; std::barrier<> bar{64}; };
 typedef void (*Kernel)(const uint *, uint *, uint, uint, Group *);
 enum { T = 256 };
 static uint32_t run(Kernel k, unsigned seed, std::vector<uint> &out) {
@@ -140,13 +140,14 @@ def translate(src):
     body = body.replace('    uint t = uint(pos.x);', '').replace('    return float4(0.0);', '')  # fragment form
     # Threadgroup variables become members of the shared group state.
     body = body.replace('threadgroup uint tg[64];', '').replace('threadgroup bool tb;', '').replace('threadgroup atomic_uint ta;', '')
-    body = body.replace('threadgroup uchar tc[64];', '')
+    body = body.replace('threadgroup uchar tc[64];', '').replace('threadgroup uint ts[128];', '')  # ts: ALIAS=1
     body = re.sub(r'\btg\[', 'G->tg[', body)
     body = re.sub(r'\btc\[', 'G->tc[', body)
+    body = re.sub(r'\bts\b', 'G->ts', body)
     body = re.sub(r'\btb\b', 'G->tb', body)
     body = body.replace('&ta', '&G->ta')
     body = body.replace('threadgroup_barrier(mem_flags::mem_threadgroup);', 'G->bar.arrive_and_wait();')
-    body = body.replace('thread uint *', 'uint *')
+    body = body.replace('thread uint *', 'uint *').replace('device uint *', 'uint *').replace('threadgroup uint *', 'uint *')
     body = re.sub(r'metal::array<(\w+), (\d+)> (\w+);', r'\1 \3[\2];', body)  # ANGLE=1's arrays
     body = re.sub(r'\.([xyzw]{4})\b', lambda m: '.swz(' + ','.join(str('xyzw'.index(c)) for c in m.group(1)) + ')', body)
     # Functional casts as C-style casts: nested ones like uint(ushort(x)) can parse as declarations in C++.

@@ -10,6 +10,9 @@
 # instead of C arrays, while (true) loops with the condition as a break, helper functions taking thread references
 # (GLSL inout parameters), and function constants: plain ones, which fuzzrun specializes (0, 1: bool true / false, 2, 3:
 # uint 37 / 0x9e3779b9), and one through is_function_constant_defined, left undefined (ANGLE's optional constants).
+# ALIAS=1: also stores and reloads through two pointers that may alias, chosen at run time from the input (two device
+# words of the thread's own output and, in kernels, two threadgroup words of its own), the pattern where Intel's back
+# end reloaded a stale value (i87).
 import random, sys
 
 seed = int(sys.argv[1])
@@ -24,6 +27,7 @@ ASTYPE = bool(os.environ.get('ASTYPE'))
 # LONG=1: also 64-bit integers (ulong / long: multiply, high halves, division, remainder, shifts, compares, min/max).
 LONG = bool(os.environ.get('LONG'))
 ANGLE = bool(os.environ.get('ANGLE'))
+ALIAS = bool(os.environ.get('ALIAS'))
 R = random.Random(seed * 7919 + 1)
 NV = 6
 lines = []
@@ -214,9 +218,36 @@ ANGLEHEAD = ['constant bool fc0 [[function_constant(0)]];', 'constant bool fc1 [
              'static void angle_swap(thread uint &a, thread uint &b) { uint c = a; a = b ^ 0x5bd1e995u; b = c; }']
 
 
+def aliasstmt():  # ALIAS=1's statements: through pointers that may or may not point at the same word
+    pointers = ['da', 'db'] if FRAG else R.choice([['da', 'db'], ['sa', 'sb']])
+    p, q = R.sample(pointers, 2)
+    k = R.randrange(8)
+    if k == 0: emit(f'*{p} = {expr(1)};')
+    elif k == 1: emit(f'*{p} {R.choice(["+=", "^=", "-="])} {expr(1)};')
+    elif k == 2: emit(f'(*{p})++;')
+    elif k == 3: emit(f'{var()} {R.choice(["=", "^=", "+="])} *{p};')
+    elif k == 4: emit(f'*{p} = *{q} ^ {expr(1)};')
+    elif k == 5: emit(f'{{ uint s = *{p}; *{p} = *{q}; *{q} = s; }}')
+    elif k == 6: emit(f'(*{p})++; (*{q})++; {var()} ^= *{p};')
+    else: emit(f'*{p} = {expr(1)}; *{q} += {expr(1)}; {var()} += *{p} * {R.randrange(1, 300)}u;')
+
+
+ALIASHEAD = ['    device uint *da = out + (t * 8u + 6u + (in[(t * 4u + 2u)] & 1u));',
+             '    device uint *db = out + (t * 8u + 6u + ((in[(t * 4u + 3u)] >> 1u) & 1u));',
+             '    out[t * 8u + 6u] = in[(t * 4u + 0u)] ^ 0x9e3779b9u; out[t * 8u + 7u] = in[(t * 4u + 1u)] + 0x7f4a7c15u;']
+ALIASHEAD_THREADGROUP = ['    threadgroup uint ts[128];',
+                         '    threadgroup uint *sa = ts + (l * 2u + (in[(t * 4u + 1u)] & 1u));',
+                         '    threadgroup uint *sb = ts + (l * 2u + ((in[(t * 4u + 2u)] >> 2u) & 1u));',
+                         '    ts[l * 2u] = in[(t * 4u + 3u)] * 3u; ts[l * 2u + 1u] = in[(t * 4u + 0u)] ^ t;']
+# The aliased words, folded into v4 / v5 before the outputs overwrite the device ones
+ALIASFOLD = ['    v4 ^= out[t * 8u + 6u]; v5 ^= out[t * 8u + 7u] * 3u;']
+ALIASFOLD_THREADGROUP = ['    v3 ^= ts[l * 2u] ^ (ts[l * 2u + 1u] << 1u);']
+
+
 def stmt():
     global depth
     if ANGLE and R.random() < 0.12: return anglestmt()
+    if ALIAS and R.random() < 0.3: return aliasstmt()
     k = R.randrange(16)
     if k <= 3:
         emit(f'{var()} {R.choice(["=", "+=", "^=", "-="])} {expr()};')
@@ -289,12 +320,14 @@ src = HEAD + [
        '    metal::array<uint, 8> p;' if ANGLE else '    uint p[8];', f'    for (uint j = 0; j < 8u; j++) {{ {ASM}p[j] = in[(t * 4u + (j & 3u))] + j; }}' if ANGLE else '    for (uint j = 0; j < 8u; j++) p[j] = in[(t * 4u + (j & 3u))] + j;',
        '    metal::array<uchar, 8> pc;' if ANGLE else '    uchar pc[8];', '    for (uint j = 0; j < 8u; j++) pc[j] = uchar(in[(t * 4u + (j & 3u))] >> j);']
 src += [f'    uint v{i} = in[(t * 4u + {i % 4}u)] * {2 * i + 1}u + t;' for i in range(NV)]
+if ALIAS: src += ALIASHEAD + ([] if FRAG else ALIASHEAD_THREADGROUP)
 for _ in range(nstmts): stmt()
 # C-style casts: nested functional casts like uint(short(in[i])) parse as declarations in C++ (and MSL).
 import re
 lines = [re.sub(r'\b(uint|int|uchar|ushort|char|short|bool|ulong|long)\(', r'(\1)(', l) for l in lines]
 lines.append('    threadgroup_barrier(mem_flags::mem_threadgroup);' if not FRAG else '    // end')
 src += lines
+if ALIAS: src += ALIASFOLD + ([] if FRAG else ALIASFOLD_THREADGROUP)
 src += [f'    out[t * 8u + {i}u] = v{i};' for i in range(NV)]
 src += ['    out[t * 8u + 6u] = p[0] ^ p[1] ^ p[2] ^ p[3] ^ p[4] ^ p[5] ^ p[6] ^ p[7] ^ '
         '(uint(pc[0]) | (uint(pc[1]) << 8u) | (uint(pc[2]) << 16u) | (uint(pc[3]) << 24u)) ^ '

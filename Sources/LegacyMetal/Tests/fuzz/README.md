@@ -30,6 +30,7 @@ this folder:
 ./fuzz.sh Intel 1 1000 VEC=1 ASTYPE=1  # narrow vectors and as_type (the "VEC" seeds)
 ./fuzz.sh Intel 1 500 LONG=1           # 64-bit integers (the "LONG" seeds)
 ./fuzz.sh AMD 1 1000 FRAG=1            # fragment functions instead of kernels
+./fuzz.sh Intel 1 500 ALIAS=1          # stores and reloads through two pointers that may alias
 ./fuzz.sh AMD 1 1000 GEN=mslfuzz.py    # the first generator
 ```
 
