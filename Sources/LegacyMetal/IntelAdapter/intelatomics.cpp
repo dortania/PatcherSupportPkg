@@ -4811,7 +4811,8 @@ static bool isEntryPoint(LLVMModuleRef module, LLVMValueRef function) {
 }
 struct AliasScope {  // the function whose accesses are followed
     bool isEntryPoint;
-    std::vector<LLVMValueRef> storedPointers;  // the device / threadgroup pointers it stores through
+    std::vector<LLVMValueRef> writtenPointers;  // device / threadgroup pointers it stores through or passes to a writing call
+    mutable std::map<LLVMValueRef, bool> aliasesWritten;  // per address: may it alias one of them
 };
 static bool isEntryBufferArgument(const AliasScope &scope, LLVMValueRef root) {  // not a hidden argument-buffer member
     static const char kArgumentBufferMemberPrefix[] = "__ivbab_";
@@ -4872,11 +4873,17 @@ static bool callMayWriteMemory(LLVMValueRef call) {
     return std::any_of(std::begin(kWritingPrefixes), std::end(kWritingPrefixes),
                        [name](const char *prefix) { return !strncmp(name, prefix, strlen(prefix)); });
 }
+static bool aliasesWrittenMemory(const AliasScope &scope, LLVMValueRef pointer) {
+    auto cached = scope.aliasesWritten.find(pointer);
+    if (cached != scope.aliasesWritten.end()) return cached->second;
+    bool aliases = std::any_of(scope.writtenPointers.begin(), scope.writtenPointers.end(), [&](LLVMValueRef written) {
+        return sameAddress(written, pointer) || mayAlias(scope, written, pointer);
+    });
+    return scope.aliasesWritten[pointer] = aliases;
+}
 static void noteCallWriting(const AliasScope &scope, AccessState &state) {  // only memory the function itself writes changes
     for (TrackedAddress &tracked : state)
-        if (std::any_of(scope.storedPointers.begin(), scope.storedPointers.end(),
-                        [&](LLVMValueRef stored) { return sameAddress(stored, tracked.pointer) || mayAlias(scope, stored, tracked.pointer); }))
-            tracked.storedThroughAnotherSince = true;
+        if (aliasesWrittenMemory(scope, tracked.pointer)) tracked.storedThroughAnotherSince = true;
 }
 // Runs a block's device / threadgroup loads and stores over `state`; with `mark`, makes the stale-prone loads volatile.
 static unsigned followBlock(const AliasScope &scope, LLVMBasicBlockRef bb, AccessState &state, bool mark) {
@@ -4898,16 +4905,20 @@ static unsigned followBlock(const AliasScope &scope, LLVMBasicBlockRef bb, Acces
     }
     return marked;
 }
-static std::vector<LLVMValueRef> sharedStoresIn(LLVMValueRef f) {
+static std::vector<LLVMValueRef> sharedPointersWrittenIn(LLVMValueRef f) {  // stored through, or passed to a writing call
     std::vector<LLVMValueRef> pointers;
     for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(f); bb; bb = LLVMGetNextBasicBlock(bb))
-        for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst))
+        for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
             if (LLVMIsAStoreInst(inst) && sharedPointer(LLVMGetOperand(inst, 1))) pointers.push_back(LLVMGetOperand(inst, 1));
+            if (!LLVMIsACallInst(inst) || !callMayWriteMemory(inst)) continue;
+            for (int i = 0, arguments = LLVMGetNumOperands(inst) - 1; i < arguments; i++)  // the last operand is the callee
+                if (sharedPointer(LLVMGetOperand(inst, i))) pointers.push_back(LLVMGetOperand(inst, i));
+        }
     return pointers;
 }
 static unsigned volatileStaleReloadsIn(LLVMModuleRef module, LLVMValueRef f) {
     enum { kMaxPasses = 64 };
-    const AliasScope scope = {isEntryPoint(module, f), sharedStoresIn(f)};
+    const AliasScope scope = {isEntryPoint(module, f), sharedPointersWrittenIn(f), {}};
     BlockPredecessors preds = blockPredecessors(f);
     std::map<LLVMBasicBlockRef, AccessState> atEntry, atExit;
     for (int pass = 0, changed = 1; changed && pass < kMaxPasses; pass++) {
