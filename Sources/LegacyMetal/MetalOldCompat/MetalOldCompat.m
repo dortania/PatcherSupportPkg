@@ -100,6 +100,7 @@
 //  90. Intel: swizzled texture views were nil (MoltenVK: Godot's L8 / LA8 and font textures): a shadow texture
 //  91. Intel: MoltenVK's unretained command buffers freed the shim's temporaries (item 27: Godot lost the device): retained
 //  92. Ivy Bridge: vertex buffers at item 47's hidden indices (MoltenVK's, from 30 down: Godot drew nothing): moved
+//  93. Haswell: swizzled texture views (item 90's shadow, nil where it can't): the swizzle in the surface state
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <objc/message.h>
@@ -4114,11 +4115,63 @@ static BOOL swizzleChangesNothing(MTLPixelFormat format, MTLTextureSwizzleChanne
            (r001 && (channels == 1 || depthOrStencil(format))) ||
            (channels == 2 && swizzleIs(swizzle, MTLTextureSwizzleRed, MTLTextureSwizzleGreen, MTLTextureSwizzleZero, MTLTextureSwizzleOne));
 }
+// 93. Haswell's sampler swizzles in hardware: DWord 7 of a texture's SURFACE_STATE has a channel select for each of R, G,
+// B and A (0 zero, 1 one, 4-7 the texel's R, G, B, A). The driver always writes the identity there (alpha one where the
+// format has no alpha) and its swizzled-view method returns nil. So a swizzled view is a plain view whose sampling
+// surface state (m_Info.hwSurfaceState; render targets use hwSurfaceStateTarget) gets the swizzle's selects, and whose
+// -swizzle (MTLIOAccelTexture's _swizzle) returns it. Only where m_Info's layout has the selects (Ivy Bridge's hardware
+// has none) and the plain view's are the identity; depth and stencil views stay with item 32. Test: s96.
+static const char kChannelSelectsDWord7[] = "\"ResourceMinLOD\"b12\"\"b4\"ShaderChannelSelectA\"b3\"ShaderChannelSelectB\"b3"
+                                             "\"ShaderChannelSelectG\"b3\"ShaderChannelSelectR\"b3\"AlphaClearColor\"b1\"BlueClearColor\"b1"
+                                             "\"GreenClearColor\"b1\"RedClearColor\"b1}\"hwSurfaceStateTarget\"";
+enum { kSurfaceStateDWord7 = 0x1c, kChannelSelectShift = 16, kChannelSelectMask = 0xfffu, kSelectZero = 0, kSelectOne = 1 };
+typedef struct { ptrdiff_t dword7, swizzle; } ChannelSelectIvars;
+static ChannelSelectIvars channelSelectIvars(id texture) {  // offsets into the texture, or -1 where the layout differs
+    static ChannelSelectIvars ivars = {-1, -1};
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        Ivar info = class_getInstanceVariable(object_getClass(texture), "m_Info");
+        Ivar swizzle = class_getInstanceVariable(object_getClass(texture), "_swizzle");
+        const char *infoType = info ? ivar_getTypeEncoding(info) : NULL;
+        static const char surfaceStateFirst[] = "{MTLIGAccelTextureInfo=\"hwSurfaceState\"{SGfxSurfaceState=";
+        BOOL laidOut = infoType && !strncmp(infoType, surfaceStateFirst, sizeof surfaceStateFirst - 1) && strstr(infoType, kChannelSelectsDWord7);
+        if (laidOut && swizzle && !strcmp(ivar_getTypeEncoding(swizzle), "I"))
+            ivars = (ChannelSelectIvars){ivar_getOffset(info) + kSurfaceStateDWord7, ivar_getOffset(swizzle)};
+    });
+    return ivars;
+}
+static uint32_t channelSelect(MTLTextureSwizzle channel, uint32_t identity) {  // identity: the driver's 12 select bits
+    switch (channel) {
+        case MTLTextureSwizzleZero: return kSelectZero;
+        case MTLTextureSwizzleOne: return kSelectOne;
+        default: return (identity >> (3 * (MTLTextureSwizzleAlpha - channel))) & 7;  // R in bits 11:9 ... A in 2:0
+    }
+}
+static id<MTLTexture> newChannelSelectView(id<MTLTexture> source, MTLPixelFormat format, MTLTextureType type, NSRange levels,
+                                           NSRange slices, MTLTextureSwizzleChannels swizzle) {
+    ChannelSelectIvars ivars = channelSelectIvars(source);
+    if (ivars.dword7 < 0 || depthOrStencil(format) || disabled("MTLSHIM_SWIZZLE_CHANNEL_SELECTS")) return nil;
+    id<MTLTexture> view = [source newTextureViewWithPixelFormat:format textureType:type levels:levels slices:slices];
+    if (!view || object_getClass(view) != object_getClass(source)) return nil;
+    uint32_t *dword7 = (uint32_t *)((char *)(__bridge void *)view + ivars.dword7);
+    uint32_t identity = (*dword7 >> kChannelSelectShift) & kChannelSelectMask;
+    if (identity != 0x977 && identity != 0x971) return nil;  // RGBA or RGB1: anything else is not a layout we know
+    uint32_t selects = channelSelect(swizzle.red, identity) << 9 | channelSelect(swizzle.green, identity) << 6 |
+                       channelSelect(swizzle.blue, identity) << 3 | channelSelect(swizzle.alpha, identity);
+    *dword7 = (*dword7 & ~(kChannelSelectMask << kChannelSelectShift)) | selects << kChannelSelectShift;
+    memcpy((char *)(__bridge void *)view + ivars.swizzle, &swizzle, sizeof(uint32_t));
+    if (verbose())
+        shimLog("[mtlshim] swizzled texture view (format %lu, swizzle %d%d%d%d): channel selects %03x\n", (unsigned long)format, swizzle.red,
+                swizzle.green, swizzle.blue, swizzle.alpha, selects);
+    return view;
+}
 static id igSwizzleView(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices, MTLTextureSwizzleChannels swizzle) {
     format = sampleableStencilView(self, format);  // item 36
     id view = origIGSwizzleView(self, _cmd, format, type, levels, slices, swizzle);
     if (view) return view;
     if (!swizzleChangesNothing(format, swizzle)) {
+        id<MTLTexture> selected = newChannelSelectView(self, format, type, levels, slices, swizzle);  // item 93
+        if (selected) return selected;
         id<MTLTexture> shadow = newSwizzleShadow(self, format, type, levels, slices, swizzle);  // item 90
         if (shadow) return shadow;
         if (verbose())
