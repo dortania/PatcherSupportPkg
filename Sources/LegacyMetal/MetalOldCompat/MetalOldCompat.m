@@ -97,6 +97,9 @@
 //  87. All: the OS's validation layers (MTL_DEBUG_LAYER, MTL_SHADER_VALIDATION), which abort on MetalOld: switched off
 //  88. Kepler: swizzled texture views were nil (MoltenVK: Godot's L8 / LA8 and font textures): swizzled in the header
 //  89. Kepler: argument encoders said 8-byte alignment, constant buffers bind in 256-byte steps (Godot's glow): 256
+//  90. Intel: swizzled texture views were nil (MoltenVK: Godot's L8 / LA8 and font textures): a shadow texture
+//  91. Intel: MoltenVK's unretained command buffers freed the shim's temporaries (item 27: Godot lost the device): retained
+//  92. Ivy Bridge: vertex buffers at item 47's hidden indices (MoltenVK's, from 30 down: Godot drew nothing): moved
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <objc/message.h>
@@ -963,6 +966,18 @@ static id ivbNewArgumentEncoder(id self, SEL _cmd, id layout) {
     return [layout isKindOfClass:[MTLShimArgumentLayout class]] ? [[MTLShimArgumentEncoder alloc] initWithLayout:layout device:self] : nil;
 }
 
+// A vertex descriptor's buffer in a pipeline's reflection ("vertexBuffer.<n>"; a shader's names have no dot): the adapter
+// compiles the function without the vertex descriptor, so its indices don't count as used there (item 92)
+static BOOL abVertexBufferMovesOn(void) {
+    static dispatch_once_t once;
+    static BOOL on;
+    dispatch_once(&once, ^{ on = !disabled("MTLSHIM_IVB_VERTEX_BUFFER_MOVES"); });
+    return on;
+}
+static BOOL abIsVertexDescriptorBuffer(MTLArgument *argument) {
+    return abVertexBufferMovesOn() && argument.type == MTLArgumentTypeBuffer && [argument.name hasPrefix:@"vertexBuffer."];
+}
+
 // The adapter's hidden indices for one stage, from its reflection arguments: buffers counted down from 30 (17 the
 // lowest in a vertex function), textures from 30 and samplers (item 79) from 15, over the indices the function uses.
 static void abStageBindings(NSArray<MTLArgument *> *arguments, uint8_t stage, NSMutableData *out) {
@@ -972,7 +987,7 @@ static void abStageBindings(NSArray<MTLArgument *> *arguments, uint8_t stage, NS
     for (MTLArgument *a in arguments) {
         int kind = a.type == MTLArgumentTypeBuffer ? kABPointer : a.type == MTLArgumentTypeTexture ? kABTexture
                    : a.type == MTLArgumentTypeSampler ? kABSampler : kABConstant;
-        if (kind == kABConstant) continue;
+        if (kind == kABConstant || abIsVertexDescriptorBuffer(a)) continue;
         for (NSUInteger k = 0; k < MAX(a.arrayLength, (NSUInteger)1); k++)
             if (a.index + k < 31) used[kind][a.index + k] = YES;
         MTLStructType *type = kind == kABPointer ? a.bufferStructType : nil;
@@ -1040,6 +1055,81 @@ static BOOL abDevice(id device) {
 }
 static const MTLPipelineOption kABReflection = MTLPipelineOptionArgumentInfo | MTLPipelineOptionBufferTypeInfo;
 
+// 92. The adapter picks its hidden indices without the vertex descriptor, which MoltenVK fills from index 30 down (binding
+// 0 at 30): reflection's vertex buffers made the hidden indices worked out here differ from the adapter's, and a vertex
+// buffer and a hidden binding met at one index (Godot's Mobile renderer drew nothing). Vertex buffers now don't count
+// here either; a pipeline whose vertex descriptor uses a hidden index is made again with that layout at a free index,
+// and each draw binds the app's vertex buffer there too, then puts back what was there. Test: s95.
+enum { kABBufferSlots = 31 };
+typedef struct { uint8_t from, to; } ABVertexMove;
+static const void *kABVertexMovesKey = &kABVertexMovesKey;
+
+static NSIndexSet *abHiddenVertexBuffers(NSArray<MTLArgument *> *vertexArguments) {
+    NSMutableData *bindings = [NSMutableData data];
+    abStageBindings(vertexArguments, 0, bindings);
+    NSMutableIndexSet *hidden = [NSMutableIndexSet indexSet];
+    const ABBinding *b = bindings.bytes;
+    for (NSUInteger k = 0; k < bindings.length / sizeof(ABBinding); k++)
+        if (b[k].kind == kABPointer) [hidden addIndex:b[k].hidden];
+    return hidden;
+}
+static NSIndexSet *abBufferArguments(NSArray<MTLArgument *> *arguments) {
+    NSMutableIndexSet *indices = [NSMutableIndexSet indexSet];
+    for (MTLArgument *a in arguments)
+        if (a.type == MTLArgumentTypeBuffer && !abIsVertexDescriptorBuffer(a))
+            [indices addIndexesInRange:NSMakeRange(a.index, MAX(a.arrayLength, (NSUInteger)1))];
+    return indices;
+}
+static NSIndexSet *abVertexLayoutsInUse(MTLVertexDescriptor *vertexDescriptor) {
+    NSMutableIndexSet *layouts = [NSMutableIndexSet indexSet];
+    for (NSUInteger a = 0; a < kABBufferSlots; a++) {
+        MTLVertexAttributeDescriptor *attribute = vertexDescriptor.attributes[a];
+        if (attribute.format != MTLVertexFormatInvalid && attribute.bufferIndex < kABBufferSlots) [layouts addIndex:attribute.bufferIndex];
+    }
+    return layouts;
+}
+static BOOL abSharesAnIndex(NSIndexSet *a, NSIndexSet *b) {
+    for (NSUInteger i = a.firstIndex; i != NSNotFound; i = [a indexGreaterThanIndex:i])
+        if ([b containsIndex:i]) return YES;
+    return NO;
+}
+static NSUInteger abFreeBufferIndex(NSIndexSet *taken) {
+    for (NSUInteger i = kABBufferSlots; i-- > 0;)
+        if (![taken containsIndex:i]) return i;
+    return NSNotFound;
+}
+
+// The descriptor with each vertex layout at a hidden index moved to a free index (the moves in *moves), or nil
+static MTLRenderPipelineDescriptor *abWithVertexLayoutsMoved(MTLRenderPipelineDescriptor *d, NSArray<MTLArgument *> *vertexArguments,
+                                                            NSData **moves) {
+    MTLVertexDescriptor *vertexDescriptor = d.vertexDescriptor;
+    if (!vertexDescriptor || !abVertexBufferMovesOn()) return nil;
+    NSIndexSet *hidden = abHiddenVertexBuffers(vertexArguments), *layouts = abVertexLayoutsInUse(vertexDescriptor);
+    if (!abSharesAnIndex(layouts, hidden)) return nil;
+    NSMutableIndexSet *taken = [abBufferArguments(vertexArguments) mutableCopy];
+    [taken addIndexes:hidden];
+    [taken addIndexes:layouts];
+    MTLVertexDescriptor *moved = [vertexDescriptor copy];
+    NSMutableData *table = [NSMutableData data];
+    for (NSUInteger from = 0; from < kABBufferSlots; from++) {
+        if (![layouts containsIndex:from] || ![hidden containsIndex:from]) continue;
+        NSUInteger to = abFreeBufferIndex(taken);
+        if (to == NSNotFound) return nil;
+        [taken addIndex:to];
+        moved.layouts[to] = vertexDescriptor.layouts[from];
+        moved.layouts[from] = nil;
+        for (NSUInteger a = 0; a < kABBufferSlots; a++)
+            if (moved.attributes[a].format != MTLVertexFormatInvalid && vertexDescriptor.attributes[a].bufferIndex == from)
+                moved.attributes[a].bufferIndex = to;
+        ABVertexMove move = {(uint8_t)from, (uint8_t)to};
+        [table appendBytes:&move length:sizeof move];
+    }
+    MTLRenderPipelineDescriptor *descriptor = [d copy];
+    descriptor.vertexDescriptor = moved;
+    *moves = table;
+    return descriptor;
+}
+
 typedef id (*ABReflMsgIMP)(id, SEL, id, MTLPipelineOption, id *, NSError **) RETURNS_RETAINED;  // the reflection variants, by message
 typedef id (*ABRenderReflIMP)(id, SEL, MTLRenderPipelineDescriptor *, MTLPipelineOption, MTLAutoreleasedRenderPipelineReflection *, NSError **) RETURNS_RETAINED;
 typedef void (*ABRenderOptAsyncIMP)(id, SEL, MTLRenderPipelineDescriptor *, MTLPipelineOption, MTLNewRenderPipelineStateWithReflectionCompletionHandler);
@@ -1054,19 +1144,42 @@ static ABComputeDescReflIMP abOrigComputeDescRefl;
 static ABComputeFnOptAsyncIMP abOrigComputeFnOptAsync;
 static ABComputeDescOptAsyncIMP abOrigComputeDescOptAsync;
 
+// Attaches the hidden bindings, after making the pipeline again if item 92 moves vertex layouts (if that fails, the first)
+static id abFinishRenderPipeline(id device, MTLRenderPipelineDescriptor *d, MTLPipelineOption options, id pipeline,
+                                 MTLRenderPipelineReflection *__strong *reflection, NSError *__strong *error) RETURNS_RETAINED;
+static id abFinishRenderPipeline(id device, MTLRenderPipelineDescriptor *d, MTLPipelineOption options, id pipeline,
+                                 MTLRenderPipelineReflection *__strong *reflection, NSError *__strong *error) {
+    NSData *moves = nil;
+    MTLRenderPipelineDescriptor *moved = pipeline ? abWithVertexLayoutsMoved(d, (*reflection).vertexArguments, &moves) : nil;
+    if (moved) {
+        MTLAutoreleasedRenderPipelineReflection again = nil;
+        NSError *failure = nil;
+        id remade = abOrigRenderRefl(device, @selector(newRenderPipelineStateWithDescriptor:options:reflection:error:), moved,
+                                     options | kABReflection, &again, &failure);
+        if (remade) pipeline = remade, *reflection = again, *error = failure;
+        else moves = nil;
+        if (verbose())
+            shimLog("[mtlshim] vertex buffers at hidden indices: %lu moved%s\n", (unsigned long)(moves.length / sizeof(ABVertexMove)),
+                    remade ? "" : ", but the pipeline failed: kept as it was");
+    }
+    abAttach(pipeline, (*reflection).vertexArguments, (*reflection).fragmentArguments, nil);
+    if (moves) objc_setAssociatedObject(pipeline, kABVertexMovesKey, moves, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return pipeline;
+}
+
 static id abRenderRefl(id self, SEL _cmd, MTLRenderPipelineDescriptor *d, MTLPipelineOption options,
                        MTLAutoreleasedRenderPipelineReflection *reflection, NSError **error) __attribute__((ns_returns_retained));
 static id abRenderRefl(id self, SEL _cmd, MTLRenderPipelineDescriptor *d, MTLPipelineOption options,
                        MTLAutoreleasedRenderPipelineReflection *reflection, NSError **error) {
     if (!abDevice(self)) return abOrigRenderRefl(self, _cmd, d, options, reflection, error);
-    MTLAutoreleasedRenderPipelineReflection r = nil;
+    MTLRenderPipelineReflection *r = nil;
     NSError *failure = nil;
     id pipeline = abOrigRenderRefl(self, _cmd, d, options | kABReflection, &r, &failure);
-    if (error) *error = failure;
     if (!pipeline && verbose())
         shimLog("[mtlshim] render pipeline failed (vertex %s, fragment %s): %.600s\n", d.vertexFunction.name.UTF8String ?: "-",
                 d.fragmentFunction.name.UTF8String ?: "-", failure.localizedDescription.UTF8String ?: "?");
-    abAttach(pipeline, r.vertexArguments, r.fragmentArguments, nil);
+    pipeline = abFinishRenderPipeline(self, d, options, pipeline, &r, &failure);
+    if (error) *error = failure;
     if (reflection) *reflection = r;
     return pipeline;
 }
@@ -1079,8 +1192,10 @@ static void abRenderOptAsync(id self, SEL _cmd, MTLRenderPipelineDescriptor *d, 
                              MTLNewRenderPipelineStateWithReflectionCompletionHandler handler) {
     if (!abDevice(self)) return abOrigRenderOptAsync(self, _cmd, d, options, handler);
     abOrigRenderOptAsync(self, _cmd, d, options | kABReflection, ^(id<MTLRenderPipelineState> p, MTLRenderPipelineReflection *r, NSError *e) {
-        abAttach(p, r.vertexArguments, r.fragmentArguments, nil);
-        handler(p, r, e);
+        MTLRenderPipelineReflection *reflection = r;
+        NSError *failure = e;
+        id pipeline = abFinishRenderPipeline(self, d, options, p, &reflection, &failure);
+        handler(pipeline, reflection, failure);
     });
 }
 static void abRenderAsync(id self, SEL _cmd, MTLRenderPipelineDescriptor *d, MTLNewRenderPipelineStateCompletionHandler handler) {
@@ -1147,6 +1262,7 @@ static void abComputeDescOptAsync(id self, SEL _cmd, MTLComputePipelineDescripto
     float lodMin[3][16], lodMax[3][16];
     BOOL clamped[3][16];
     __strong NSData *bindings;
+    __strong NSData *vertexMoves;  // item 92
 }
 @end
 @implementation MTLShimABState
@@ -1260,6 +1376,7 @@ AB_HANDLE_HOOKS(Compute, 2)
 
 static void abSetRenderPipeline(id self, SEL _cmd, id pipeline) {
     abState(self)->bindings = objc_getAssociatedObject(pipeline, kABBindingsKey);
+    abState(self)->vertexMoves = objc_getAssociatedObject(pipeline, kABVertexMovesKey);
     abOrigSetRenderPipeline(self, _cmd, pipeline);
 }
 static void abSetComputePipeline(id self, SEL _cmd, id pipeline) {
@@ -1267,10 +1384,23 @@ static void abSetComputePipeline(id self, SEL _cmd, id pipeline) {
     abOrigSetComputePipeline(self, _cmd, pipeline);
 }
 
+// item 92: binds the app's vertex buffers at the indices their layouts moved to (restore NO), or puts back what was there
+static void abBindMovedVertexBuffers(id encoder, MTLShimABState *s, BOOL restore) {
+    const ABVertexMove *m = s->vertexMoves.bytes;
+    for (NSUInteger k = 0; k < s->vertexMoves.length / sizeof(ABVertexMove); k++) {
+        NSUInteger source = restore ? m[k].to : m[k].from;
+        if (s->buffers[0][source])
+            abOrigSetBuffer[0](encoder, abSetBufferSel[0], s->buffers[0][source], s->offsets[0][source], m[k].to);
+        else if (s->bytes[0][source])
+            abOrigSetBytes[0](encoder, abSetBytesSel[0], s->bytes[0][source].bytes, s->bytes[0][source].length, m[k].to);
+    }
+}
+
 // Binds what the bound argument buffers point to (restore NO), or puts back what the app had bound there (YES).
 static void abBind(id encoder, BOOL restore) {
     MTLShimABState *s = objc_getAssociatedObject(encoder, kABStateKey);
     if (!s || !s->bindings) return;
+    if (s->vertexMoves) abBindMovedVertexBuffers(encoder, s, restore);
     const ABBinding *b = s->bindings.bytes;
     for (NSUInteger k = 0; k < s->bindings.length / sizeof(ABBinding); k++) {
         int st = b[k].stage, h = b[k].hidden;
@@ -3975,6 +4105,8 @@ static BOOL swizzleIs(MTLTextureSwizzleChannels s, MTLTextureSwizzle r, MTLTextu
     return s.red == r && s.green == g && s.blue == b && s.alpha == a;
 }
 static id igSwizzleView(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices, MTLTextureSwizzleChannels swizzle) RETURNS_RETAINED;
+static id<MTLTexture> newSwizzleShadow(id<MTLTexture> source, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices,
+                                       MTLTextureSwizzleChannels swizzle);  // item 90
 static BOOL swizzleChangesNothing(MTLPixelFormat format, MTLTextureSwizzleChannels swizzle) {  // items 32 and 54
     int channels = channelCount(format);
     BOOL r001 = swizzleIs(swizzle, MTLTextureSwizzleRed, MTLTextureSwizzleZero, MTLTextureSwizzleZero, MTLTextureSwizzleOne);
@@ -3987,6 +4119,8 @@ static id igSwizzleView(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType
     id view = origIGSwizzleView(self, _cmd, format, type, levels, slices, swizzle);
     if (view) return view;
     if (!swizzleChangesNothing(format, swizzle)) {
+        id<MTLTexture> shadow = newSwizzleShadow(self, format, type, levels, slices, swizzle);  // item 90
+        if (shadow) return shadow;
         if (verbose())
             shimLog("[mtlshim] swizzled texture view (format %lu, swizzle %d%d%d%d): nil, as the driver said\n", (unsigned long)format, swizzle.red,
                     swizzle.green, swizzle.blue, swizzle.alpha);
@@ -4003,6 +4137,357 @@ static void swizzledViews(void) {
         return;
     origIGSwizzleView = (SwizzleViewIMP)swizzle("MTLIGAccelTexture", "newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:",
                                                 (IMP)igSwizzleView);
+}
+
+// 90. MoltenVK 1.4.1 makes every swizzled VkImageView with a swizzled Metal view and never checks for nil, so on Intel
+// (item 32's nil) Godot's L8 / LA8 textures (RRR1 / RRRG: its font cache) sampled 0 and its Mobile renderer lost the
+// device. For a 2D or 2D-array texture of 8-bit channels that shaders don't write, the view becomes a shadow 4-channel
+// 8-bit texture (unorm, sRGB, uint or sint as the view's format) holding the swizzled texels, filled when it is made,
+// after a CPU upload, and in the same command buffer after a blit encoder or render pass that wrote the texture (MoltenVK
+// makes every texture a copy can reach a render target, to clear it). A write in one queue's command buffer and a sample
+// in another's can still see the old shadow. Tests: s93, s91.
+typedef enum { kShadowFloat, kShadowUint, kShadowSint, kShadowSampleTypes } ShadowSampleType;
+@interface MTLShimSwizzleShadow : NSObject {
+@public
+    NSArray *sourceLevels;  // per level: a plain view of the source, read by the refresh
+    NSArray *shadowLevels;  // per level: a linear view of the shadow, written by the refresh
+    uint32_t channels[4];   // the MTLTextureSwizzle for red, green, blue and alpha
+    ShadowSampleType sampleType;
+    BOOL isArray;
+}
+@end
+@implementation MTLShimSwizzleShadow
+@end
+
+static const char kShadowInfoKey = 0, kShadowsOfSourceKey = 0, kWrittenSourcesKey = 0, kEncoderCommandBufferKey = 0;
+static os_unfair_lock shadowLock = OS_UNFAIR_LOCK_INIT;
+
+// The shadow's formats for a view format: stored (Invalid: no shadow), the refresh's linear views of source and shadow
+typedef struct { MTLPixelFormat stored, sourceRead, shadowWritten; ShadowSampleType sampleType; } ShadowFormats;
+static ShadowFormats shadowFormats(MTLPixelFormat format) {
+    const MTLPixelFormat unorm = MTLPixelFormatRGBA8Unorm, srgb = MTLPixelFormatRGBA8Unorm_sRGB, uint = MTLPixelFormatRGBA8Uint,
+                         sint = MTLPixelFormatRGBA8Sint;
+    switch (format) {
+        case MTLPixelFormatR8Unorm: case MTLPixelFormatRG8Unorm: case MTLPixelFormatRGBA8Unorm: case MTLPixelFormatBGRA8Unorm:
+            return (ShadowFormats){unorm, format, unorm, kShadowFloat};
+        case MTLPixelFormatR8Unorm_sRGB: return (ShadowFormats){srgb, MTLPixelFormatR8Unorm, unorm, kShadowFloat};
+        case MTLPixelFormatRG8Unorm_sRGB: return (ShadowFormats){srgb, MTLPixelFormatRG8Unorm, unorm, kShadowFloat};
+        case MTLPixelFormatRGBA8Unorm_sRGB: return (ShadowFormats){srgb, MTLPixelFormatRGBA8Unorm, unorm, kShadowFloat};
+        case MTLPixelFormatBGRA8Unorm_sRGB: return (ShadowFormats){srgb, MTLPixelFormatBGRA8Unorm, unorm, kShadowFloat};
+        case MTLPixelFormatR8Uint: case MTLPixelFormatRG8Uint: case MTLPixelFormatRGBA8Uint:
+            return (ShadowFormats){uint, format, uint, kShadowUint};
+        case MTLPixelFormatR8Sint: case MTLPixelFormatRG8Sint: case MTLPixelFormatRGBA8Sint:
+            return (ShadowFormats){sint, format, sint, kShadowSint};
+        default: return (ShadowFormats){MTLPixelFormatInvalid, MTLPixelFormatInvalid, MTLPixelFormatInvalid, kShadowFloat};
+    }
+}
+static BOOL shadowable2D(id<MTLTexture> source, MTLTextureType viewType) {
+    BOOL is2D = source.textureType == MTLTextureType2D || source.textureType == MTLTextureType2DArray;
+    BOOL viewIs2D = viewType == MTLTextureType2D || viewType == MTLTextureType2DArray;
+    return is2D && viewIs2D && !(source.usage & MTLTextureUsageShaderWrite);
+}
+
+// Kernels swizzle2D_<T> and swizzle2DArray_<T> for T float, uint and int (ShadowSampleType's order); ONE is 1 in T
+static NSString *const kSwizzleShadowSource =
+    @"#include <metal_stdlib>\n"
+    "using namespace metal;\n"
+    "template <typename T> static T pick(vec<T, 4> c, uint channel) {\n"  // MTLTextureSwizzle: zero, one, red, green, blue, alpha
+    "    return channel == 0 ? T(0) : channel == 1 ? T(1) : channel == 2 ? c.r : channel == 3 ? c.g : channel == 4 ? c.b : c.a;\n"
+    "}\n"
+    "template <typename T> static vec<T, 4> swizzled(vec<T, 4> c, uint4 channels) {\n"
+    "    return vec<T, 4>(pick(c, channels.x), pick(c, channels.y), pick(c, channels.z), pick(c, channels.w));\n"
+    "}\n"
+    "#define SWIZZLE_KERNELS(T) \\\n"
+    "kernel void swizzle2D_##T(texture2d<T, access::read> source [[texture(0)]], texture2d<T, access::write> shadow [[texture(1)]], \\\n"
+    "                          constant uint4 &channels [[buffer(0)]], uint2 at [[thread_position_in_grid]]) { \\\n"
+    "    if (at.x < shadow.get_width() && at.y < shadow.get_height()) shadow.write(swizzled(source.read(at), channels), at); \\\n"
+    "} \\\n"
+    "kernel void swizzle2DArray_##T(texture2d_array<T, access::read> source [[texture(0)]], \\\n"
+    "                               texture2d_array<T, access::write> shadow [[texture(1)]], constant uint4 &channels [[buffer(0)]], \\\n"
+    "                               uint3 at [[thread_position_in_grid]]) { \\\n"
+    "    if (at.x < shadow.get_width() && at.y < shadow.get_height() && at.z < shadow.get_array_size()) \\\n"
+    "        shadow.write(swizzled(source.read(at.xy, at.z), channels), at.xy, at.z); \\\n"
+    "}\n"
+    "SWIZZLE_KERNELS(float)\n"
+    "SWIZZLE_KERNELS(uint)\n"
+    "SWIZZLE_KERNELS(int)\n";
+static NSString *const kShadowKernelTypes[kShadowSampleTypes] = {@"float", @"uint", @"int"};
+
+typedef struct {
+    id<MTLDevice> device;  // unretained: the shim lives as long as the process, and so does a Metal device
+    id<MTLComputePipelineState> plain[kShadowSampleTypes], array[kShadowSampleTypes];
+    id<MTLCommandQueue> queue;  // for refreshes outside a command buffer of the app's
+} SwizzleShadowKernels;
+enum { kShadowDevices = 4 };  // GPUs in one Mac
+static SwizzleShadowKernels shadowKernels[kShadowDevices];
+
+static SwizzleShadowKernels *swizzleShadowKernels(id<MTLDevice> device) {  // under shadowLock
+    for (int i = 0; i < kShadowDevices; i++)
+        if (shadowKernels[i].device == device) return &shadowKernels[i];
+    for (int i = 0; i < kShadowDevices; i++) {
+        if (shadowKernels[i].device) continue;
+        NSError *error = nil;
+        id<MTLLibrary> library = [device newLibraryWithSource:kSwizzleShadowSource options:nil error:&error];
+        SwizzleShadowKernels kernels = {.device = device, .queue = [device newCommandQueue]};
+        BOOL complete = library && kernels.queue;
+        for (int t = 0; t < kShadowSampleTypes && complete; t++) {
+            id<MTLFunction> plain = [library newFunctionWithName:[@"swizzle2D_" stringByAppendingString:kShadowKernelTypes[t]]];
+            id<MTLFunction> array = [library newFunctionWithName:[@"swizzle2DArray_" stringByAppendingString:kShadowKernelTypes[t]]];
+            kernels.plain[t] = plain ? [device newComputePipelineStateWithFunction:plain error:&error] : nil;
+            kernels.array[t] = array ? [device newComputePipelineStateWithFunction:array error:&error] : nil;
+            complete = kernels.plain[t] && kernels.array[t];
+        }
+        if (!complete) {
+            if (verbose()) shimLog("[mtlshim] swizzle shadow kernels: %s\n", error.localizedDescription.UTF8String ?: "no library");
+            return NULL;
+        }
+        shadowKernels[i] = kernels;
+        return &shadowKernels[i];
+    }
+    return NULL;
+}
+
+enum { kRefreshGroupSide = 8 };
+static void encodeShadowRefresh(id<MTLComputeCommandEncoder> encoder, MTLShimSwizzleShadow *shadow, SwizzleShadowKernels *kernels) {
+    [encoder setComputePipelineState:shadow->isArray ? kernels->array[shadow->sampleType] : kernels->plain[shadow->sampleType]];
+    [encoder setBytes:shadow->channels length:sizeof shadow->channels atIndex:0];
+    for (NSUInteger level = 0; level < shadow->shadowLevels.count; level++) {
+        id<MTLTexture> written = shadow->shadowLevels[level];
+        [encoder setTexture:shadow->sourceLevels[level] atIndex:0];
+        [encoder setTexture:written atIndex:1];
+        MTLSize groups = MTLSizeMake((written.width + kRefreshGroupSide - 1) / kRefreshGroupSide,
+                                     (written.height + kRefreshGroupSide - 1) / kRefreshGroupSide, shadow->isArray ? written.arrayLength : 1);
+        [encoder dispatchThreadgroups:groups threadsPerThreadgroup:MTLSizeMake(kRefreshGroupSide, kRefreshGroupSide, 1)];
+    }
+}
+static NSArray *shadowsOf(id<MTLTexture> source) {  // under shadowLock
+    NSHashTable *shadows = objc_getAssociatedObject(source, &kShadowsOfSourceKey);
+    return shadows.allObjects;
+}
+static void encodeRefreshOfShadowsOf(id<MTLCommandBuffer> commandBuffer, NSArray *sources) {
+    os_unfair_lock_lock(&shadowLock);
+    SwizzleShadowKernels *kernels = swizzleShadowKernels(commandBuffer.device);
+    NSMutableArray *shadows = [NSMutableArray array];
+    for (id<MTLTexture> source in sources) [shadows addObjectsFromArray:shadowsOf(source)];
+    os_unfair_lock_unlock(&shadowLock);
+    if (!kernels || !shadows.count) return;
+    id<MTLComputeCommandEncoder> encoder = [commandBuffer computeCommandEncoder];
+    for (id<MTLTexture> shadowTexture in shadows) encodeShadowRefresh(encoder, objc_getAssociatedObject(shadowTexture, &kShadowInfoKey), kernels);
+    [encoder endEncoding];
+}
+static void refreshShadowsNow(id<MTLTexture> source) {  // after a CPU upload, and when a shadow is made
+    os_unfair_lock_lock(&shadowLock);
+    SwizzleShadowKernels *kernels = swizzleShadowKernels(source.device);
+    BOOL any = shadowsOf(source).count > 0;
+    os_unfair_lock_unlock(&shadowLock);
+    if (!kernels || !any) return;
+    id<MTLCommandBuffer> commandBuffer = [kernels->queue commandBuffer];
+    encodeRefreshOfShadowsOf(commandBuffer, @[source]);
+    [commandBuffer commit];
+    [commandBuffer waitUntilCompleted];
+}
+
+static NSArray *levelViews(id<MTLTexture> texture, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices) {
+    NSMutableArray *views = [NSMutableArray arrayWithCapacity:levels.length];
+    for (NSUInteger level = levels.location; level < NSMaxRange(levels); level++) {
+        id<MTLTexture> view = ((NewViewRangeIMP)objc_msgSend)(texture, @selector(newTextureViewWithPixelFormat:textureType:levels:slices:), format, type,
+                                                               NSMakeRange(level, 1), slices);
+        if (!view) return nil;
+        [views addObject:view];
+    }
+    return views;
+}
+static void reportSwizzle(id<MTLTexture> texture, MTLTextureSwizzleChannels swizzle) {  // what -swizzle answers
+    Ivar stored = class_getInstanceVariable(objc_getClass("MTLIOAccelTexture"), "_swizzle");
+    if (stored && !strcmp(ivar_getTypeEncoding(stored), "I") && [texture isKindOfClass:objc_getClass("MTLIOAccelTexture")])
+        memcpy((char *)(__bridge void *)texture + ivar_getOffset(stored), &swizzle, sizeof swizzle);
+}
+static id<MTLTexture> newSwizzleShadow(id<MTLTexture> source, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices,
+                                       MTLTextureSwizzleChannels swizzle) {
+    ShadowFormats formats = shadowFormats(format);
+    if (disabled("MTLSHIM_SWIZZLE_SHADOW") || formats.stored == MTLPixelFormatInvalid || !shadowable2D(source, type) || !levels.length) return nil;
+    MTLTextureDescriptor *descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:formats.stored
+        width:MAX((NSUInteger)1, source.width >> levels.location) height:MAX((NSUInteger)1, source.height >> levels.location) mipmapped:NO];
+    descriptor.textureType = type;
+    descriptor.mipmapLevelCount = levels.length;
+    descriptor.arrayLength = type == MTLTextureType2DArray ? slices.length : 1;
+    descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite | MTLTextureUsagePixelFormatView;
+    descriptor.storageMode = MTLStorageModePrivate;
+    id<MTLTexture> shadowTexture = [source.device newTextureWithDescriptor:descriptor];
+    MTLShimSwizzleShadow *shadow = [MTLShimSwizzleShadow new];
+    shadow->sourceLevels = levelViews(source, formats.sourceRead, type, levels, slices);
+    shadow->shadowLevels = levelViews(shadowTexture, formats.shadowWritten, type, NSMakeRange(0, levels.length), NSMakeRange(0, descriptor.arrayLength));
+    shadow->channels[0] = swizzle.red, shadow->channels[1] = swizzle.green, shadow->channels[2] = swizzle.blue, shadow->channels[3] = swizzle.alpha;
+    shadow->sampleType = formats.sampleType;
+    shadow->isArray = type == MTLTextureType2DArray;
+    if (!shadowTexture || !shadow->sourceLevels || !shadow->shadowLevels) return nil;
+    objc_setAssociatedObject(shadowTexture, &kShadowInfoKey, shadow, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    os_unfair_lock_lock(&shadowLock);
+    NSHashTable *shadows = objc_getAssociatedObject(source, &kShadowsOfSourceKey);
+    if (!shadows) {
+        shadows = [NSHashTable weakObjectsHashTable];
+        objc_setAssociatedObject(source, &kShadowsOfSourceKey, shadows, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    [shadows addObject:shadowTexture];
+    os_unfair_lock_unlock(&shadowLock);
+    refreshShadowsNow(source);
+    reportSwizzle(shadowTexture, swizzle);
+    if (verbose()) shimLog("[mtlshim] swizzled texture view (format %lu): a shadow texture (format %lu)\n", (unsigned long)format,
+                           (unsigned long)formats.stored);
+    return shadowTexture;
+}
+
+// Blits and render passes that write a texture note it on their encoder; the encoder's end appends the refresh of its
+// shadows to the same command buffer.
+static id<MTLTexture> shadowedTextureOf(id<MTLTexture> written) {  // the texture itself or the one it views, if shadowed
+    os_unfair_lock_lock(&shadowLock);
+    id<MTLTexture> shadowed = shadowsOf(written).count ? written : written.parentTexture && shadowsOf(written.parentTexture).count ? written.parentTexture : nil;
+    os_unfair_lock_unlock(&shadowLock);
+    return shadowed;
+}
+static void noteWrite(id encoder, id<MTLTexture> written) {
+    id<MTLTexture> shadowed = written ? shadowedTextureOf(written) : nil;
+    if (!shadowed) return;
+    NSMutableSet *sources = objc_getAssociatedObject(encoder, &kWrittenSourcesKey);
+    if (!sources) {
+        sources = [NSMutableSet set];
+        objc_setAssociatedObject(encoder, &kWrittenSourcesKey, sources, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    [sources addObject:shadowed];
+}
+static void refreshAfterEncoder(id encoder) {  // after the encoder's end
+    NSSet *sources = objc_getAssociatedObject(encoder, &kWrittenSourcesKey);
+    id<MTLCommandBuffer> commandBuffer = objc_getAssociatedObject(encoder, &kEncoderCommandBufferKey);
+    if (!sources.count || !commandBuffer) return;
+    objc_setAssociatedObject(encoder, &kWrittenSourcesKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    encodeRefreshOfShadowsOf(commandBuffer, sources.allObjects);
+}
+typedef void (*ShadowB2TIMP)(id, SEL, id, NSUInteger, NSUInteger, NSUInteger, MTLSize, id, NSUInteger, NSUInteger, MTLOrigin);
+typedef void (*ShadowB2TOIMP)(id, SEL, id, NSUInteger, NSUInteger, NSUInteger, MTLSize, id, NSUInteger, NSUInteger, MTLOrigin, MTLBlitOption);
+typedef void (*ShadowT2TIMP)(id, SEL, id, NSUInteger, NSUInteger, MTLOrigin, MTLSize, id, NSUInteger, NSUInteger, MTLOrigin);
+typedef void (*ShadowMipsIMP)(id, SEL, id);
+typedef void (*ShadowEndIMP)(id, SEL);
+typedef id (*ShadowEncoderIMP)(id, SEL);
+typedef void (*ShadowReplaceIMP)(id, SEL, MTLRegion, NSUInteger, const void *, NSUInteger);
+typedef void (*ShadowReplaceSliceIMP)(id, SEL, MTLRegion, NSUInteger, NSUInteger, const void *, NSUInteger, NSUInteger);
+static ShadowB2TIMP shadowOrigB2T;
+static ShadowB2TOIMP shadowOrigB2TO;
+static ShadowT2TIMP shadowOrigT2T;
+static ShadowMipsIMP shadowOrigMips;
+static ShadowEndIMP shadowOrigEndEncoding;
+static ShadowEndIMP shadowOrigRenderEndEncoding;
+typedef id (*ShadowRenderEncoderIMP)(id, SEL, MTLRenderPassDescriptor *);
+static ShadowRenderEncoderIMP shadowOrigRenderEncoder;
+static ShadowEncoderIMP shadowOrigBlitEncoder;
+static ShadowReplaceIMP shadowOrigReplace;
+static ShadowReplaceSliceIMP shadowOrigReplaceSlice;
+
+static void shadowB2T(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInteger bytesPerRow, NSUInteger bytesPerImage, MTLSize size, id texture,
+                      NSUInteger slice, NSUInteger level, MTLOrigin origin) {
+    shadowOrigB2T(self, _cmd, buffer, offset, bytesPerRow, bytesPerImage, size, texture, slice, level, origin);
+    noteWrite(self, texture);
+}
+static void shadowB2TO(id self, SEL _cmd, id buffer, NSUInteger offset, NSUInteger bytesPerRow, NSUInteger bytesPerImage, MTLSize size, id texture,
+                       NSUInteger slice, NSUInteger level, MTLOrigin origin, MTLBlitOption options) {
+    shadowOrigB2TO(self, _cmd, buffer, offset, bytesPerRow, bytesPerImage, size, texture, slice, level, origin, options);
+    noteWrite(self, texture);
+}
+static void shadowT2T(id self, SEL _cmd, id from, NSUInteger fromSlice, NSUInteger fromLevel, MTLOrigin fromOrigin, MTLSize size, id to,
+                      NSUInteger toSlice, NSUInteger toLevel, MTLOrigin toOrigin) {
+    shadowOrigT2T(self, _cmd, from, fromSlice, fromLevel, fromOrigin, size, to, toSlice, toLevel, toOrigin);
+    noteWrite(self, to);
+}
+static void shadowMips(id self, SEL _cmd, id texture) {
+    shadowOrigMips(self, _cmd, texture);
+    noteWrite(self, texture);
+}
+static void shadowEndEncoding(id self, SEL _cmd) {
+    shadowOrigEndEncoding(self, _cmd);
+    refreshAfterEncoder(self);
+}
+static void shadowRenderEndEncoding(id self, SEL _cmd) {
+    shadowOrigRenderEndEncoding(self, _cmd);
+    refreshAfterEncoder(self);
+}
+enum { kColorAttachments = 8 };
+static id shadowRenderEncoder(id self, SEL _cmd, MTLRenderPassDescriptor *pass) {
+    id encoder = shadowOrigRenderEncoder(self, _cmd, pass);
+    if (!encoder) return nil;
+    for (int i = 0; i < kColorAttachments; i++) {
+        noteWrite(encoder, pass.colorAttachments[i].texture);
+        noteWrite(encoder, pass.colorAttachments[i].resolveTexture);
+    }
+    noteWrite(encoder, pass.depthAttachment.texture);
+    noteWrite(encoder, pass.stencilAttachment.texture);
+    objc_setAssociatedObject(encoder, &kEncoderCommandBufferKey, self, OBJC_ASSOCIATION_ASSIGN);
+    return encoder;
+}
+static id shadowBlitEncoder(id self, SEL _cmd) {
+    id encoder = shadowOrigBlitEncoder(self, _cmd);
+    objc_setAssociatedObject(encoder, &kEncoderCommandBufferKey, self, OBJC_ASSOCIATION_ASSIGN);  // the encoder ends before its buffer goes
+    return encoder;
+}
+static void shadowReplace(id self, SEL _cmd, MTLRegion region, NSUInteger level, const void *bytes, NSUInteger bytesPerRow) {
+    shadowOrigReplace(self, _cmd, region, level, bytes, bytesPerRow);
+    refreshShadowsNow(self);
+}
+static void shadowReplaceSlice(id self, SEL _cmd, MTLRegion region, NSUInteger level, NSUInteger slice, const void *bytes, NSUInteger bytesPerRow,
+                               NSUInteger bytesPerImage) {
+    shadowOrigReplaceSlice(self, _cmd, region, level, slice, bytes, bytesPerRow, bytesPerImage);
+    refreshShadowsNow(self);
+}
+static void swizzleShadows(void) {
+    static BOOL done;
+    if (done || disabled("MTLSHIM_SWIZZLE_SHADOW") || !origIGSwizzleView) return;
+    done = YES;
+    const struct { const char *cls, *sel; IMP imp; IMP *orig; } hooks[] = {
+        {"MTLIGAccelBlitCommandEncoder",
+         "copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:",
+         (IMP)shadowB2T, (IMP *)&shadowOrigB2T},
+        {"MTLIGAccelBlitCommandEncoder",
+         "copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:options:",
+         (IMP)shadowB2TO, (IMP *)&shadowOrigB2TO},
+        {"MTLIGAccelBlitCommandEncoder",
+         "copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:",
+         (IMP)shadowT2T, (IMP *)&shadowOrigT2T},
+        {"MTLIGAccelBlitCommandEncoder", "generateMipmapsForTexture:", (IMP)shadowMips, (IMP *)&shadowOrigMips},
+        {"MTLIGAccelBlitCommandEncoder", "endEncoding", (IMP)shadowEndEncoding, (IMP *)&shadowOrigEndEncoding},
+        {"MTLIGAccelCommandBuffer", "blitCommandEncoder", (IMP)shadowBlitEncoder, (IMP *)&shadowOrigBlitEncoder},
+        {"MTLIGAccelCommandBuffer", "renderCommandEncoderWithDescriptor:", (IMP)shadowRenderEncoder, (IMP *)&shadowOrigRenderEncoder},
+        {"MTLIGAccelRenderCommandEncoder", "endEncoding", (IMP)shadowRenderEndEncoding, (IMP *)&shadowOrigRenderEndEncoding},
+        {"MTLIGAccelTexture", "replaceRegion:mipmapLevel:withBytes:bytesPerRow:", (IMP)shadowReplace, (IMP *)&shadowOrigReplace},
+        {"MTLIGAccelTexture", "replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:", (IMP)shadowReplaceSlice,
+         (IMP *)&shadowOrigReplaceSlice},
+    };
+    for (size_t i = 0; i < sizeof hooks / sizeof *hooks; i++)
+        if (definesMethod(hooks[i].cls, hooks[i].sel)) *hooks[i].orig = swizzle(hooks[i].cls, hooks[i].sel, hooks[i].imp);
+}
+
+// 91. MoltenVK's command buffers don't retain what is encoded into them (commandBufferWithUnretainedReferences, or a
+// descriptor without retainedReferences), so the shim's own temporaries in them (item 27's readback buffers and others)
+// were freed before the GPU ran them: Invalid Resource, and Godot's Mobile renderer lost the device. Intel command queues
+// now make every command buffer retain its references. Test: s94.
+typedef id (*CommandBufferWithDescriptorIMP)(id, SEL, MTLCommandBufferDescriptor *);
+static CommandBufferWithDescriptorIMP origCommandBufferWithDescriptor;
+
+static id igRetainingCommandBuffer(id self, SEL _cmd) {
+    return [(id<MTLCommandQueue>)self commandBuffer];
+}
+static id retainingCommandBufferWithDescriptor(id self, SEL _cmd, MTLCommandBufferDescriptor *descriptor) {
+    if (descriptor.retainedReferences || ![self isKindOfClass:objc_getClass("MTLIGAccelCommandQueue")])
+        return origCommandBufferWithDescriptor(self, _cmd, descriptor);
+    MTLCommandBufferDescriptor *retaining = [descriptor copy];
+    retaining.retainedReferences = YES;
+    return origCommandBufferWithDescriptor(self, _cmd, retaining);
+}
+static void retainingCommandBuffers(void) {
+    static BOOL done;
+    if (done || disabled("MTLSHIM_RETAIN_REFERENCES") || !definesMethod("MTLIGAccelCommandQueue", "commandBufferWithUnretainedReferences")) return;
+    done = YES;
+    swizzle("MTLIGAccelCommandQueue", "commandBufferWithUnretainedReferences", (IMP)igRetainingCommandBuffer);
+    if (definesMethod("_MTLCommandQueue", "commandBufferWithDescriptor:"))
+        origCommandBufferWithDescriptor = (CommandBufferWithDescriptorIMP)swizzle("_MTLCommandQueue", "commandBufferWithDescriptor:",
+                                                                                  (IMP)retainingCommandBufferWithDescriptor);
 }
 
 // 54. Methods the Kepler driver lacks, which threw "unrecognized selector":
@@ -5486,6 +5971,8 @@ static void patchDriverClasses(void) {
     nearestCubeClamp();
     encoderLodClamps();
     swizzledViews();
+    swizzleShadows();  // item 90, after item 32
+    retainingCommandBuffers();  // item 91
     keplerMissingMethods();  // item 54
     keplerResolveLevels();  // item 55
     keplerViewsOfViews();  // item 56

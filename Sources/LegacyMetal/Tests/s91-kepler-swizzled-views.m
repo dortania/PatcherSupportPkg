@@ -1,9 +1,9 @@
 // s91-kepler-swizzled-views: texture views with a component swizzle must read swizzled on Kepler; the driver has no
 // such method and item 54 gave nil, so MoltenVK's swizzled image views (Godot's L8 / LA8 textures, its font glyphs
-// among them) read as zero (Godot drew no text). Fix: MetalOldCompat item 88. Checks: R8 as L8 (RRR1), RG8 as LA8
-// (RRRG), RGBA8 reversed (ABGR), RGBA8Uint with an integer one (RGB1) and a 2D-array slice as L8, sampled (read for the
-// integer one) bound directly and through an argument buffer; -swizzle reports the swizzle. SKIP on Intel GPUs, whose
-// swizzled views are still nil (item 32); the R9 runs it. Argument: GPU name (default: NVIDIA).
+// among them) read as zero (Godot drew no text). Fix: MetalOldCompat item 88 (Intel: item 90). Checks: R8 as L8 (RRR1),
+// RG8 as LA8 (RRRG), RGBA8 reversed (ABGR), RGBA8Uint with an integer one (RGB1) and a 2D-array slice as L8, sampled
+// (read for the integer one) bound directly and through an argument buffer; -swizzle reports the swizzle; the R9 runs it
+// too. Argument: GPU name (default: NVIDIA).
 #import "repro.h"
 
 static NSString *const src = @"#include <metal_stdlib>\nusing namespace metal;\n"
@@ -22,7 +22,6 @@ int main(int argc, char **argv) { @autoreleasepool {
     id<MTLDevice> dev = reproDevice(argc, argv, "NVIDIA");
     if (!dev) return SKIP(bug, "no such GPU");
     const char *name = dev.name.UTF8String;
-    if (strstr(name, "Intel")) return SKIP(bug, "%s: Intel has no swizzled views yet (item 32)", name);
     NSError *err = nil;
     id<MTLLibrary> lib = [dev newLibraryWithSource:[reproUniqueComment() stringByAppendingString:src] options:nil error:&err];
     if (!lib) return FAIL(bug, "compile: %s", err.localizedDescription.UTF8String);
