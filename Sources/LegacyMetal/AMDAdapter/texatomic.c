@@ -45,7 +45,8 @@ extern void *operatorNewArray(unsigned long) asm("__Znam");  // AMDShared frees 
 extern void operatorDeleteArray(void *) asm("__ZdaPv");
 
 static bool logging(void) { return getenv("TEXATOMIC_LOG") != NULL; }
-// A fix is on unless its switch is set to 0.
+// A fix is on unless its switch is set to 0. No switch may start with AMD_SC_: libSC reads every variable with that
+// prefix as one of its own options and throws on one it doesn't know, which crashes SCCompileShader.
 static bool disabled(const char *setting) {
     const char *value = getenv(setting);
     return value && !strcmp(value, "0");
@@ -3361,6 +3362,78 @@ static int singleLoopExits(const char *in, Text *out) {
     return n;
 }
 
+// SC numbers a buffer load by its address and the last store before it that may write there, and two stores of the same
+// value to the same address count as one: `(*a)++; *b = 7; (*a)++; *b = 7; (*a)++;` with pointers that may be equal
+// reads `*a` twice for the three increments, as if the second store to `*b` left memory as the first did (R9 fuzz).
+// A memory fence goes before such a load: one that loads an address loaded before in the same block, when a store to
+// another address is the last store since then and another store came between. Returns the count.
+typedef struct { char key[64]; int addressRegister; bool isStore; } BufferAccess;
+// A buffer access's address as "<uav id>:<descriptor>:<address register>" (its first source operand).
+static bool bufferAccessKey(const char *text, const char *descriptor, char *key, size_t size, int *addressRegister) {
+    if (strncmp(text, "uav_", 4)) return false;
+    const char *operands = strchr(text, ' '), *address = operands ? strchr(operands, ',') : NULL;
+    unsigned reg;
+    if (!address || sscanf(address + 1, " r%u", &reg) != 1) return false;
+    const char *id = strstr(text, "_id(");
+    snprintf(key, size, "%.*s:%s:r%u", id ? (int)(strcspn(id, ")") + 1) : 0, id ? id : "", strstr(text, "_ext_") ? descriptor : "", reg);
+    *addressRegister = (int)reg;
+    return true;
+}
+static bool isBufferStore(const char *text) {
+    return strstr(text, "_store") != NULL || strstr(text, "_atomic") != NULL || !strncmp(text, "uav_read_", 9);
+}
+static bool endsBlock(const char *text) {
+    static const char *const kControl[] = {"if_", "else", "endif", "whileloop", "endloop", "break", "continue", "switch",
+                                           "case", "default", "endswitch", "ret", "call", "func", "endfunc", "fence", "discard"};
+    for (size_t i = 0; i < sizeof kControl / sizeof *kControl; i++) if (!strncmp(text, kControl[i], strlen(kControl[i]))) return true;
+    return false;
+}
+static int fenceLoadsAfterRepeatedStores(const char *in, Text *out) {
+    if (disabled("AMD_REPEATED_STORE_FIX") || !strstr(in, "_store")) return 0;
+    int n = 0, count = 0, cap = 64;
+    BufferAccess *accesses = malloc(cap * sizeof *accesses);
+    char descriptor[32] = "";
+    char *copy = strdup(in);
+    for (char *save, *line = strtok_r(copy, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
+        const char *text = line + strspn(line, " \t");
+        char key[64];
+        int addressRegister, written = writtenRegister(text);
+        if (endsBlock(text)) {
+            count = 0;
+        } else if (!strncmp(text, "set_descriptor ", 15)) {
+            snprintf(descriptor, sizeof descriptor, "%s", text + 15);
+        } else if (bufferAccessKey(text, descriptor, key, sizeof key, &addressRegister)) {
+            bool store = isBufferStore(text);
+            if (!store) {
+                int earlierLoad = -1, lastStore = -1, storesBefore = 0;
+                for (int i = count - 1; i >= 0 && earlierLoad < 0; i--) {
+                    if (accesses[i].isStore && lastStore < 0) lastStore = i;
+                    else if (accesses[i].isStore) storesBefore++;
+                    else if (!strcmp(accesses[i].key, key)) earlierLoad = i;
+                }
+                if (earlierLoad >= 0 && lastStore >= 0 && strcmp(accesses[lastStore].key, key) && storesBefore > 0) {
+                    append(out, line, (size_t)(text - line));
+                    append(out, "fence_memory\n", 13);
+                    count = 0;
+                    n++;
+                }
+            }
+            if (count == cap) accesses = realloc(accesses, (cap *= 2) * sizeof *accesses);
+            BufferAccess *access = &accesses[count++];
+            snprintf(access->key, sizeof access->key, "%s", key);
+            access->addressRegister = addressRegister;
+            access->isStore = store;
+        }
+        if (written >= 0)  // an address register given a new value: earlier accesses through it are another address
+            for (int i = 0; i < count; i++) if (accesses[i].addressRegister == written) accesses[i].key[0] = 0;
+        append(out, line, strlen(line));
+        append(out, "\n", 1);
+    }
+    free(copy);
+    free(accesses);
+    return n;
+}
+
 static int hookedSCCompileShader(void *sc, void *src, void *out) {
     void **tokens = (void **)((char *)src + kSrcTokens);
     uint32_t *size = (uint32_t *)((char *)src + kSrcSize);
@@ -3390,12 +3463,20 @@ static int hookedSCCompileShader(void *sc, void *src, void *out) {
         free(il.buf);
         il = exits;
     }
-    if (atomics || ldsBase || gathers || fmasks || loops) {
+    Text fenced = {0};
+    int repeatedStores = il.buf ? fenceLoadsAfterRepeatedStores(il.buf, &fenced) : 0;
+    if (repeatedStores) {
+        free(il.buf);
+        il = fenced;
+    } else {
+        free(fenced.buf);
+    }
+    if (atomics || ldsBase || gathers || fmasks || loops || repeatedStores) {
         Text edited = {0}, based = {0};
         int n = atomics ? rewriteIL(il.buf, &edited) : 0;
         if (atomics && n == 0) atomics = false;  // "0x7A70" / "0x7A71" in an unrelated constant (0x7A71AD9B): no tags
         int k = ldsBase && (!atomics || n > 0) ? dropThreadgroupBase(atomics ? edited.buf : il.buf, &based) : 0;
-        const char *text = k > 0 ? based.buf : atomics && n > 0 ? edited.buf : gathers || fmasks || loops ? il.buf : NULL;
+        const char *text = k > 0 ? based.buf : atomics && n > 0 ? edited.buf : gathers || fmasks || loops || repeatedStores ? il.buf : NULL;
         void *binary = NULL;
         unsigned dwords = 0;
         int ok = text ? ilXltTextToBinary(text, &binary, &dwords) : 0;
@@ -3405,6 +3486,7 @@ static int hookedSCCompileShader(void *sc, void *src, void *out) {
             if (gathers) fprintf(stderr, "[texatomic] IL: %d integer gather(s) use normalized coordinates\n", gathers);
             if (fmasks) fprintf(stderr, "[texatomic] IL: %d multisample read(s) without FMASK\n", fmasks);
             if (loops) fprintf(stderr, "[texatomic] IL: %d loop(s) given a single exit\n", loops);
+            if (repeatedStores) fprintf(stderr, "[texatomic] IL: %d load(s) fenced after a repeated store\n", repeatedStores);
             if (text) fprintf(stderr, "[texatomic] IL: assembled %s\n", ok == 1 ? "ok" : "FAILED");
             if (getenv("TEXATOMIC_DUMP")) fprintf(stderr, "%s\n", text ? text : "");
         }
