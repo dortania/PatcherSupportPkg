@@ -10,7 +10,9 @@
 # and ~/Applications). Exit status: FAIL count.
 # The apps run in-process (--in-process-gpu) so that the shim, inserted into the app, is in the process that uses Metal.
 # Apps that reach Metal without Chromium run too, each with its settings in the throwaway folder: Godot's editor (Vulkan
-# through MoltenVK, whose SPIRV-Cross writes the MSL), Blender (its own Metal back end) and Firefox (apps-page.html).
+# through MoltenVK, whose SPIRV-Cross writes the MSL), Blender (its own Metal back end), Firefox (apps-page.html), and
+# PPSSPP's and RetroArch's menus on their Vulkan back ends (each bundles its own MoltenVK; RetroArch's XMB draws a shader
+# ribbon). PPSSPP, like Firefox, is hardened without allow-dyld-environment-variables, so it runs with the installed shim.
 # Firefox is hardened without allow-dyld-environment-variables: it ignores DYLD_INSERT_LIBRARIES, so it runs with the
 # installed shim (its compiler service still gets this build's compiler libraries).
 # Those also FAIL if they quit before [seconds].
@@ -54,7 +56,7 @@ for dir in "${dirs[@]}"; do
         [[ $app == *.app ]] || continue; [ "$app" = "$dir" ] && [[ $dir != *.app ]] && continue
         [ -d "$app" ] || continue
         id=$(defaults read "$app/Contents/Info.plist" CFBundleIdentifier 2>/dev/null)
-        native=; case "$id" in org.godotengine.godot|org.blenderfoundation.blender|org.mozilla.firefox|com.apple.Chess) native=1 ;; esac
+        native=; case "$id" in org.godotengine.godot|org.blenderfoundation.blender|org.mozilla.firefox|com.apple.Chess|org.ppsspp.ppsspp|com.libretro.dist.RetroArch) native=1 ;; esac
         fw=$(ls -d "$app"/Contents/Frameworks/*" Framework.framework" 2>/dev/null | head -1)
         [ -n "$native$fw" ] || [ -f "$app/Contents/Frameworks/libGLESv2.dylib" ] || continue  # neither Chromium-based nor known
         name=$(basename "$app" .app)
@@ -84,6 +86,12 @@ for dir in "${dirs[@]}"; do
                 extra=(BLENDER_USER_CONFIG="$prof/config" BLENDER_USER_SCRIPTS="$prof/scripts" BLENDER_USER_DATAFILES="$prof/data")
                 args=(--factory-startup --gpu-backend metal --debug-gpu) ;;  # --debug-gpu: it then says why it refuses a GPU
             com.apple.Chess) args=() ;;  # a new game on its SceneKit board
+            org.ppsspp.ppsspp)  # its SDL build picks Vulkan or OpenGL from ppsspp.ini, read before the command line
+                mkdir -p "$prof/.config/ppsspp/PSP/SYSTEM"; printf '[Graphics]\nGraphicsBackend = 3 (VULKAN)\n' > "$prof/.config/ppsspp/PSP/SYSTEM/ppsspp.ini"
+                extra=(HOME="$prof"); args=(--windowed) ;;
+            com.libretro.dist.RetroArch)  # the XMB menu with its shader ribbon, on the Vulkan driver
+                mkdir -p "$prof"; printf 'video_driver = "vulkan"\nmenu_driver = "xmb"\nmenu_shader_pipeline = "2"\nvideo_fullscreen = "false"\naudio_driver = "null"\n' > "$prof/retroarch.cfg"
+                extra=(HOME="$prof"); args=(--config "$prof/retroarch.cfg" --menu) ;;
             org.mozilla.firefox)  # console.log to stdout, so that the page's result reaches the log
                 # Firefox 160's GPU-process sandbox allows reading its own bundle only on the volume it was started from
                 # as the kernel resolves it: run from another volume than the boot one (a repo on a second macOS

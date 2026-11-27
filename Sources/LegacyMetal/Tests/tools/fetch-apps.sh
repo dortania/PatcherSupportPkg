@@ -5,9 +5,10 @@
 #   electron [first last]   the latest stable patch of each Electron major (default the last 18 majors): one Chromium and
 #                           ANGLE version each, as bundled by Electron apps, which lag Chrome by up to a couple of years
 #   chrome [first last step]  Chrome for Testing builds, one per milestone (default every 4th of the last 40)
-#   vscode firefox firefox-esr blender godot obsidian discord slack signal anki   single apps (latest release), chosen for
-#                           the different ways they reach Metal: Chromium/ANGLE in Electron apps, Qt WebEngine (Anki),
-#                           Firefox's own ANGLE and wgpu, native Metal renderers (Blender, Godot)
+#   vscode firefox firefox-esr blender godot obsidian discord slack signal anki ppsspp retroarch   single apps (latest
+#                           release), chosen for the different ways they reach Metal: Chromium/ANGLE in Electron apps,
+#                           Qt WebEngine (Anki), Firefox's own ANGLE and wgpu, native Metal renderers (Blender, Godot),
+#                           MoltenVK as a bundled library of its own version (PPSSPP, RetroArch's Vulkan driver)
 # Needs curl, ditto and hdiutil (macOS); Python 3 for the release indexes. Intel builds (x64), or universal where only that exists.
 set -u
 T=$(cd "$(dirname "$0")/.." && pwd)
@@ -94,6 +95,12 @@ single() {
                 url=$(grep -o 'signal-desktop-mac-x64-[0-9.]*\.zip' .dl/signal.yml | head -1) && [ -n "$url" ] &&
                 get "https://updates.signal.org/desktop/$url" .dl/a.zip && unzip_app .dl/a.zip Signal "$app" ;;
         anki) app="Anki.app"; url=$(github_asset ankitects/anki 'mac-intel.*\.dmg$') && [ -n "$url" ] && get "$url" .dl/a.dmg && dmg_app .dl/a.dmg Anki "$app" ;;
+        ppsspp) app="PPSSPP.app"
+            url=$(curl -fsSL -A "$ua" https://www.ppsspp.org/download | grep -o '/files/[0-9_]*/PPSSPP_macOS\.dmg' | sort -t/ -k3 -V | tail -1)
+            [ -n "$url" ] && get "https://www.ppsspp.org$url" .dl/a.dmg && dmg_app .dl/a.dmg PPSSPP "$app" ;;
+        retroarch) app="RetroArch.app"
+            url=$(curl -fsSL -A "$ua" https://buildbot.libretro.com/stable/ | grep -o '/stable/[0-9.]*/' | sort -t/ -k3 -V | tail -1)
+            [ -n "$url" ] && get "https://buildbot.libretro.com${url}apple/osx/universal/RetroArch_Metal.dmg" .dl/a.dmg && dmg_app .dl/a.dmg RetroArch "$app" ;;
         *) echo "unknown: $1" >&2; return ;;
     esac
     report "$app"
@@ -102,7 +109,7 @@ single() {
 [ $# -gt 0 ] || set -- all
 while [ $# -gt 0 ]; do
     case $1 in
-        all) electron; chrome; for a in vscode firefox firefox-esr blender godot obsidian discord slack signal anki; do single $a; done; shift ;;
+        all) electron; chrome; for a in vscode firefox firefox-esr blender godot obsidian discord slack signal anki ppsspp retroarch; do single $a; done; shift ;;
         electron) a=${2:-}; b=${3:-}; [[ $a =~ ^[0-9]+$ ]] && [[ $b =~ ^[0-9]+$ ]] && shift 2 || { a=; b=; }; electron "$a" "$b"; shift ;;
         chrome) a=${2:-}; b=${3:-}; c=${4:-}; if [[ $a =~ ^[0-9]+$ ]] && [[ $b =~ ^[0-9]+$ ]]; then shift 2; [[ $c =~ ^[0-9]+$ ]] && shift || c=; else a=; b=; c=; fi
             chrome "$a" "$b" "$c"; shift ;;
