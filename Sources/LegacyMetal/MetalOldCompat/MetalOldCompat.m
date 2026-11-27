@@ -96,7 +96,7 @@
 //  86. Ivy Bridge: stencil copied into a level of a Depth32Float_Stencil8 zeroed deeper levels' depth: kept around it
 //  87. All: the OS's validation layers (MTL_DEBUG_LAYER, MTL_SHADER_VALIDATION), which abort on MetalOld: switched off
 //  88. Kepler: swizzled texture views were nil (MoltenVK: Godot's L8 / LA8 and font textures): swizzled in the header
-//  89. Kepler: MoltenVK's argument buffers, whose command buffers the driver failed (Godot's glow): off by default
+//  89. Kepler: argument encoders said 8-byte alignment, constant buffers bind in 256-byte steps (Godot's glow): 256
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <objc/message.h>
@@ -5431,6 +5431,24 @@ static void ivbVertexInputs(void) {
     origIvbGenerateVF = (GenerateVFIMP)swizzle("MTLIGRenderPipelineState", "generate3DStateVF:", (IMP)ivbGenerateVF);
 }
 
+// 89. Kepler binds a buffer in the constant address space at offsets in 256-byte steps (the driver rounds an offset
+// down), as Metal's macOS rule allows, but its argument encoder reported 8-byte alignment. MoltenVK 1.4 packs its
+// descriptor sets (Metal argument buffers, its default) at that alignment in one buffer and binds each at its offset, so
+// every set but the first read another's bytes: wrong textures and, in a render pass, texture handle 0, a GPU fault at
+// address 0 that the driver reports on the next command buffer (Invalid Resource: Godot lost the device with glow or
+// auto exposure on, as in its editor). The encoder's alignment is at least 256. MTLSHIM_NV_ARGUMENT_ALIGNMENT=0 leaves
+// the driver's. Test: s92.
+static NSUInteger (*origNVArgumentAlignment)(id, SEL);
+static NSUInteger nvArgumentAlignment(id self, SEL _cmd) {
+    NSUInteger alignment = origNVArgumentAlignment(self, _cmd);
+    return alignment < 256 ? 256 : alignment;
+}
+static void keplerArgumentAlignment(void) {
+    static const char *const kEncoder = "NVMTLIndirectArgumentEncoder";
+    if (origNVArgumentAlignment || disabled("MTLSHIM_NV_ARGUMENT_ALIGNMENT") || !definesMethod(kEncoder, "alignment")) return;
+    origNVArgumentAlignment = (NSUInteger (*)(id, SEL))swizzle(kEncoder, "alignment", (IMP)nvArgumentAlignment);
+}
+
 static void patchDriverClasses(void) {
     if (patched) restoreArgumentEncoders();  // item 14: after the wrapper's initializer
     if (patched) ivbDrawParameters();  // item 48, under item 47's draw hooks
@@ -5475,6 +5493,7 @@ static void patchDriverClasses(void) {
     keplerVisibilitySums();  // item 59
     keplerZeroBuffers();  // item 60
     keplerModifiedRetain();  // item 82
+    keplerArgumentAlignment();  // item 89
     zeroDepthTextures();  // item 84, after item 58 and intelDepthWithoutHiZ: wraps their newTextureWithDescriptor:
     keplerResolveResidency();  // item 61
     keplerReversedDepth();  // item 70, before item 69's viewport hooks: it checks the driver's own setters
@@ -6691,23 +6710,9 @@ static void preferNoMTLHeaps(void) {
     if (verbose()) shimLog("[mtlshim] MoltenVK: MVK_CONFIG_USE_MTLHEAP=0 (no placement heaps on these GPUs)\n");
 }
 
-// 89. Kepler: with MoltenVK 1.4's Metal argument buffers (its default) the Kepler driver failed whole command buffers
-// (Invalid Resource, so the device was lost) in Godot's Mobile renderer with glow on, which its editor's 3D view has;
-// binding each resource directly, MoltenVK's classic path, runs. On a Mac with the Kepler driver installed,
-// MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS gets 0 unless the environment sets it. Which argument-buffer contents the driver
-// rejects isn't known: the same kinds of textures, views, samplers, writes and mip feedback through argument buffers
-// run in small tests. MTLSHIM_NV_MVK_ARGUMENT_BUFFERS=0 leaves MoltenVK's default. Test: s92.
-static void keplerNoMVKArgumentBuffers(void) {
-    if (getenv("MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS") || disabled("MTLSHIM_NV_MVK_ARGUMENT_BUFFERS") ||
-        access("/System/Library/Extensions/GeForceMTLDriver.bundle/Contents/MacOS/GeForceMTLDriver", F_OK))
-        return;
-    setenv("MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", "0", 0);
-    if (verbose()) shimLog("[mtlshim] MoltenVK: MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS=0 (Kepler)\n");
-}
-
 __attribute__((constructor)) static void init(void) {
 #ifndef METALOLDCOMPAT_NOOP
-    if (onMetalOld()) dropValidationLayers(), preferNoMTLHeaps(), keplerNoMVKArgumentBuffers();
+    if (onMetalOld()) dropValidationLayers(), preferNoMTLHeaps();
     patchDeviceBase();
     installAIR27Retargeting();
     installOldAIRPassThrough();
@@ -6719,7 +6724,6 @@ __attribute__((constructor)) static void init(void) {
 #else
     (void)dropValidationLayers;
     (void)preferNoMTLHeaps;
-    (void)keplerNoMVKArgumentBuffers;
     (void)keepPortraitLibraries;
     (void)installStitchingReflection;
     (void)installMPSMatmulFallback;
