@@ -101,6 +101,7 @@
 //  91. Intel: MoltenVK's unretained command buffers freed the shim's temporaries (item 27: Godot lost the device): retained
 //  92. Ivy Bridge: vertex buffers at item 47's hidden indices (MoltenVK's, from 30 down: Godot drew nothing): moved
 //  93. Haswell: swizzled texture views (item 90's shadow, nil where it can't): the swizzle in the surface state
+//  94. Haswell: MoltenVK's argument buffers, whose padding the driver's emulation misread (Godot lost its encoder): off
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <objc/message.h>
@@ -7250,9 +7251,26 @@ static void preferNoMTLHeaps(void) {
     if (verbose()) shimLog("[mtlshim] MoltenVK: MVK_CONFIG_USE_MTLHEAP=0 (no placement heaps on these GPUs)\n");
 }
 
+// 94. Haswell's driver emulates argument buffers on the CPU, by a layout per struct that puts all buffers first, then all
+// textures, then all samplers (24 and 8 bytes each), and each pipeline reads its argument buffers back through its own
+// shader's layout. MoltenVK 1.4 pads each shader's struct to its descriptor set with members of its own choosing, so where
+// a pad's type differs from the set's binding, the encoder's layout and the shader's disagree: a texture slot read a
+// buffer's bytes (Godot's Mobile renderer: "-[MTLIGAccelBuffer textureType]: unrecognized selector" in a draw, which
+// MoltenVK caught, dropping its render encoder: "Command encoder released without endEncoding"). Real argument buffers
+// place a member by its id alone, which MoltenVK relies on. With the Haswell driver installed,
+// MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS gets 0 (MoltenVK binds each resource directly) unless the environment sets it;
+// MTLSHIM_HASWELL_MVK_ARGUMENT_BUFFERS=0 leaves MoltenVK's default. Test: s97.
+static void haswellNoMVKArgumentBuffers(void) {
+    if (getenv("MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS") || disabled("MTLSHIM_HASWELL_MVK_ARGUMENT_BUFFERS") ||
+        access("/System/Library/Extensions/AppleIntelHD5000GraphicsMTLDriver.bundle/Contents/MacOS/AppleIntelHD5000GraphicsMTLDriver", F_OK))
+        return;
+    setenv("MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", "0", 0);
+    if (verbose()) shimLog("[mtlshim] MoltenVK: MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS=0 (Haswell's emulated argument buffers)\n");
+}
+
 __attribute__((constructor)) static void init(void) {
 #ifndef METALOLDCOMPAT_NOOP
-    if (onMetalOld()) dropValidationLayers(), preferNoMTLHeaps();
+    if (onMetalOld()) dropValidationLayers(), preferNoMTLHeaps(), haswellNoMVKArgumentBuffers();
     patchDeviceBase();
     installAIR27Retargeting();
     installOldAIRPassThrough();
@@ -7264,6 +7282,7 @@ __attribute__((constructor)) static void init(void) {
 #else
     (void)dropValidationLayers;
     (void)preferNoMTLHeaps;
+    (void)haswellNoMVKArgumentBuffers;
     (void)keepPortraitLibraries;
     (void)installStitchingReflection;
     (void)installMPSMatmulFallback;
