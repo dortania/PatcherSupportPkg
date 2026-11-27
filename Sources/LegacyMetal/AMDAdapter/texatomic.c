@@ -3365,9 +3365,11 @@ static int singleLoopExits(const char *in, Text *out) {
 // SC numbers a buffer load by its address and the last store before it that may write there, and two stores of the same
 // value to the same address count as one: `(*a)++; *b = 7; (*a)++; *b = 7; (*a)++;` with pointers that may be equal
 // reads `*a` twice for the three increments, as if the second store to `*b` left memory as the first did (R9 fuzz).
-// A memory fence goes before such a load: one that loads an address loaded before in the same block, when a store to
-// another address is the last store since then and another store came between. Returns the count.
-typedef struct { char key[64]; int addressRegister; bool isStore; } BufferAccess;
+// A memory fence goes right before such a load: one of an address also loaded earlier in the same block with two stores
+// or more after that load, the last of them to another address and no fence after it. A fence anywhere else doesn't
+// help: SC still takes the two stores for one memory state. Returns the count.
+typedef enum { kBufferLoad, kBufferStore, kMemoryFence } BufferAccessKind;
+typedef struct { char key[64]; int addressRegister; BufferAccessKind kind; } BufferAccess;
 // A buffer access's address as "<uav id>:<descriptor>:<address register>" (its first source operand).
 static bool bufferAccessKey(const char *text, const char *descriptor, char *key, size_t size, int *addressRegister) {
     if (strncmp(text, "uav_", 4)) return false;
@@ -3384,9 +3386,34 @@ static bool isBufferStore(const char *text) {
 }
 static bool endsBlock(const char *text) {
     static const char *const kControl[] = {"if_", "else", "endif", "whileloop", "endloop", "break", "continue", "switch",
-                                           "case", "default", "endswitch", "ret", "call", "func", "endfunc", "fence", "discard"};
+                                           "case", "default", "endswitch", "ret", "call", "func", "endfunc", "discard"};
     for (size_t i = 0; i < sizeof kControl / sizeof *kControl; i++) if (!strncmp(text, kControl[i], strlen(kControl[i]))) return true;
     return false;
+}
+static bool loadNeedsFence(const BufferAccess *accesses, int count, const char *key) {
+    int storesSince = 0;
+    for (int i = count - 1; i >= 0; i--) {
+        bool sameAddress = !strcmp(accesses[i].key, key);
+        switch (accesses[i].kind) {
+            case kMemoryFence:
+                if (storesSince == 0) return false;
+                break;
+            case kBufferStore:
+                if (storesSince++ == 0 && sameAddress) return false;  // SC passes the stored value on
+                break;
+            case kBufferLoad:
+                if (sameAddress && storesSince >= 2) return true;
+                break;
+        }
+    }
+    return false;
+}
+static void addBufferAccess(BufferAccess **accesses, int *count, int *capacity, const char *key, int addressRegister, BufferAccessKind kind) {
+    if (*count == *capacity) *accesses = realloc(*accesses, (*capacity *= 2) * sizeof **accesses);
+    BufferAccess *access = &(*accesses)[(*count)++];
+    snprintf(access->key, sizeof access->key, "%s", key);
+    access->addressRegister = addressRegister;
+    access->kind = kind;
 }
 static int fenceLoadsAfterRepeatedStores(const char *in, Text *out) {
     if (disabled("AMD_REPEATED_STORE_FIX") || !strstr(in, "_store")) return 0;
@@ -3400,29 +3427,19 @@ static int fenceLoadsAfterRepeatedStores(const char *in, Text *out) {
         int addressRegister, written = writtenRegister(text);
         if (endsBlock(text)) {
             count = 0;
+        } else if (!strncmp(text, "fence", 5)) {
+            if (strstr(text, "memory")) addBufferAccess(&accesses, &count, &cap, "", -1, kMemoryFence);
         } else if (!strncmp(text, "set_descriptor ", 15)) {
             snprintf(descriptor, sizeof descriptor, "%s", text + 15);
         } else if (bufferAccessKey(text, descriptor, key, sizeof key, &addressRegister)) {
             bool store = isBufferStore(text);
-            if (!store) {
-                int earlierLoad = -1, lastStore = -1, storesBefore = 0;
-                for (int i = count - 1; i >= 0 && earlierLoad < 0; i--) {
-                    if (accesses[i].isStore && lastStore < 0) lastStore = i;
-                    else if (accesses[i].isStore) storesBefore++;
-                    else if (!strcmp(accesses[i].key, key)) earlierLoad = i;
-                }
-                if (earlierLoad >= 0 && lastStore >= 0 && strcmp(accesses[lastStore].key, key) && storesBefore > 0) {
-                    append(out, line, (size_t)(text - line));
-                    append(out, "fence_memory\n", 13);
-                    count = 0;
-                    n++;
-                }
+            if (!store && loadNeedsFence(accesses, count, key)) {
+                append(out, line, (size_t)(text - line));
+                append(out, "fence_memory\n", 13);
+                addBufferAccess(&accesses, &count, &cap, "", -1, kMemoryFence);
+                n++;
             }
-            if (count == cap) accesses = realloc(accesses, (cap *= 2) * sizeof *accesses);
-            BufferAccess *access = &accesses[count++];
-            snprintf(access->key, sizeof access->key, "%s", key);
-            access->addressRegister = addressRegister;
-            access->isStore = store;
+            addBufferAccess(&accesses, &count, &cap, key, addressRegister, store ? kBufferStore : kBufferLoad);
         }
         if (written >= 0)  // an address register given a new value: earlier accesses through it are another address
             for (int i = 0; i < count; i++) if (accesses[i].addressRegister == written) accesses[i].key[0] = 0;
