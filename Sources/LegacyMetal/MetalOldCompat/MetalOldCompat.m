@@ -95,6 +95,8 @@
 //  85. Ivy Bridge: vertex functions with 32 inputs, whose input walk never ended: stopped after the 32nd
 //  86. Ivy Bridge: stencil copied into a level of a Depth32Float_Stencil8 zeroed deeper levels' depth: kept around it
 //  87. All: the OS's validation layers (MTL_DEBUG_LAYER, MTL_SHADER_VALIDATION), which abort on MetalOld: switched off
+//  88. Kepler: swizzled texture views were nil (MoltenVK: Godot's L8 / LA8 and font textures): swizzled in the header
+//  89. Kepler: MoltenVK's argument buffers, whose command buffers the driver failed (Godot's glow): off by default
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <objc/message.h>
@@ -4009,9 +4011,132 @@ static void swizzledViews(void) {
 //   - -[NVMTLDevice newIndirectCommandBufferWithDescriptor:maxCount:options:], which MetalOld calls for every driver:
 //     nil (Kepler has no indirect command buffers).
 // Tests: s36, s42 and s54 on the GTX 770.
+//
+// 88. Kepler: swizzled texture views. MoltenVK 1.4 makes every VkImageView with a component swizzle through that method
+// and never checks for nil: Godot's L8 / LA8 textures (its font glyphs among them) are R8 / RG8 with RRR1 / RRRG, and
+// item 54's nil read as zero, so Godot drew no text. The hardware swizzles in the texture header: word 0's X/Y/Z/W
+// sources at bits 18/21/24/27 (0 zero, 2-5 R/G/B/A, 6 / 7 one as integer / float). GeForceMTLDriver writes a texture's
+// header when the texture is made, from a per-format table (24-byte entries, word 0 at +16), at the index its driver
+// object keeps (MTLIOAccelResource _res.vendor[0]: +0x194 the index, +0x130 the header it wrote); editing either
+// afterwards changes nothing, as the header has already gone to the GPU. So the view is made plain while the format's
+// table entry holds the swizzled sources, under a lock, and the entry is put back at once. The table is found from the
+// one place that reads it (mov 0x194(%rbx), %edi; ...; lea (%rdi,%rdi,2), %rax; lea table(%rip), %rcx; mov
+// 0x10(%rcx,%rax,8), %rsi), and the entry must equal the header a plain view of that format got; anything else, or
+// depth / stencil, stays nil as before. Another thread making a texture of the same format in those microseconds would
+// get the swizzle too: apps make swizzled views while setting up textures, not per draw. Only the entry's page is made
+// writable (a private copy), and only if no code shares the table's pages; it is left readable, not executable.
+// MTLSHIM_NV_SWIZZLE_VIEWS=0: nil, as item 54. Test: s91.
+static uint8_t *nvHeaderTable;  // item 88
+static size_t nvHeaderTableSize;
+static ptrdiff_t nvResourceOffset = -1;  // MTLIOAccelResource _res, whose first word is the driver's object
+static void keplerHeaderTable(Dl_info *driver) {
+    static const unsigned char kLoadIndex[6] = {0x8b, 0xbb, 0x94, 0x01, 0x00, 0x00};  // mov 0x194(%rbx), %edi
+    static const unsigned char kHead[7] = {0x48, 0x8d, 0x04, 0x7f, 0x48, 0x8d, 0x0d}, kTail[5] = {0x48, 0x8b, 0x74, 0xc1, 0x10};
+    Ivar res = class_getInstanceVariable(objc_getClass("MTLIOAccelResource"), "_res");
+    const char *resType = res ? ivar_getTypeEncoding(res) : NULL;
+    static const char kResType[] = "{_MTLIOAccelResource=\"vendor\"";  // the driver's object is the vendor area's first word
+    if (!resType || strncmp(resType, kResType, sizeof kResType - 1)) return;
+    unsigned long textSize = 0, constSize = 0;
+    const unsigned char *text = getsectiondata((const struct mach_header_64 *)driver->dli_fbase, "__TEXT", "__text", &textSize);
+    const unsigned char *consts = getsectiondata((const struct mach_header_64 *)driver->dli_fbase, "__TEXT", "__const", &constSize);
+    const unsigned char *table = NULL;
+    for (unsigned long i = 0x80; text && consts && i + 16 <= textSize; i++) {
+        if (memcmp(text + i, kHead, 7) || memcmp(text + i + 11, kTail, 5)) continue;
+        BOOL loadsIndex = NO;
+        for (unsigned long k = i - 0x80; !loadsIndex && k < i; k++) loadsIndex = !memcmp(text + k, kLoadIndex, 6);
+        int32_t displacement;
+        memcpy(&displacement, text + i + 7, 4);
+        if (table || !loadsIndex) return;  // a second site, or not the one we know: another driver build
+        table = text + i + 11 + displacement;
+    }
+    if (!table || table < consts || table >= consts + constSize) return;
+    // the pages it spans must hold no code: they are written through private copies, never executable again afterwards
+    uintptr_t first = (uintptr_t)table & ~(uintptr_t)(vm_page_size - 1), end = (uintptr_t)(consts + constSize);
+    const struct mach_header_64 *header = (const struct mach_header_64 *)driver->dli_fbase;
+    const struct load_command *command = (const struct load_command *)(header + 1);
+    for (uint32_t c = 0; c < header->ncmds; c++, command = (const struct load_command *)((const char *)command + command->cmdsize)) {
+        if (command->cmd != LC_SEGMENT_64) continue;
+        const struct segment_command_64 *segment = (const struct segment_command_64 *)command;
+        const struct section_64 *section = (const struct section_64 *)(segment + 1);
+        for (uint32_t k = 0; k < segment->nsects; k++, section++) {
+            if (!(section->flags & (S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS))) continue;
+            unsigned long size = 0;
+            uintptr_t code = (uintptr_t)getsectiondata(header, section->segname, section->sectname, &size);
+            if (code && code < end && code + size > first) return;
+        }
+    }
+    nvHeaderTable = (uint8_t *)table;
+    nvHeaderTableSize = (size_t)(consts + constSize - table);
+    nvResourceOffset = ivar_getOffset(res);
+}
+static const uint8_t *nvDriverObject(id texture) {
+    return nvResourceOffset < 0 || !texture ? NULL : *(const uint8_t *const *)((const char *)(__bridge const void *)texture + nvResourceOffset);
+}
+static BOOL integerFormat(MTLPixelFormat f) {
+    switch (f) {
+        case MTLPixelFormatR8Uint: case MTLPixelFormatR8Sint: case MTLPixelFormatR16Uint: case MTLPixelFormatR16Sint: case MTLPixelFormatRG8Uint:
+        case MTLPixelFormatRG8Sint: case MTLPixelFormatR32Uint: case MTLPixelFormatR32Sint: case MTLPixelFormatRG16Uint: case MTLPixelFormatRG16Sint:
+        case MTLPixelFormatRGBA8Uint: case MTLPixelFormatRGBA8Sint: case MTLPixelFormatRGB10A2Uint: case MTLPixelFormatRG32Uint:
+        case MTLPixelFormatRG32Sint: case MTLPixelFormatRGBA16Uint: case MTLPixelFormatRGBA16Sint: case MTLPixelFormatRGBA32Uint: case MTLPixelFormatRGBA32Sint:
+            return YES;
+        default:
+            return NO;
+    }
+}
+// A header word 0 whose sources are the format's own (in word0) put through a Metal swizzle
+static uint32_t swizzledHeaderWord(uint32_t word0, MTLTextureSwizzleChannels swizzle, BOOL integer) {
+    const uint32_t own[4] = {(word0 >> 18) & 7, (word0 >> 21) & 7, (word0 >> 24) & 7, (word0 >> 27) & 7};
+    const MTLTextureSwizzle channel[4] = {swizzle.red, swizzle.green, swizzle.blue, swizzle.alpha};
+    uint32_t word = word0 & ~(0xfffu << 18);
+    for (int c = 0; c < 4; c++) {
+        uint32_t source = channel[c] == MTLTextureSwizzleZero ? 0 : channel[c] == MTLTextureSwizzleOne ? (integer ? 6 : 7)
+                        : channel[c] <= MTLTextureSwizzleAlpha ? own[channel[c] - MTLTextureSwizzleRed] : 0;
+        word |= source << (18 + 3 * c);
+    }
+    return word;
+}
+static id nvSwizzledView(id self, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices, MTLTextureSwizzleChannels swizzle) RETURNS_RETAINED;
+static id nvSwizzledView(id self, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices, MTLTextureSwizzleChannels swizzle) {
+    SEL plain = @selector(newTextureViewWithPixelFormat:textureType:levels:slices:);
+    id probe = ((NewViewRangeIMP)objc_msgSend)(self, plain, format, type, levels, slices);  // the header this format gets
+    const uint8_t *object = nvDriverObject(probe);
+    if (!object) return nil;
+    uint32_t index = *(const uint32_t *)(object + 0x194), header = *(const uint32_t *)(object + 0x130);
+    if ((size_t)index * 24 + 20 > nvHeaderTableSize) return nil;
+    uint32_t *entry = (uint32_t *)(nvHeaderTable + (size_t)index * 24 + 16);
+    if (*entry != header) {
+        if (verbose()) shimLog("[mtlshim] swizzled texture view on Kepler: table entry %u is %08x, the header %08x: nil\n", index, *entry, header);
+        return nil;
+    }
+    uint32_t word = swizzledHeaderWord(header, swizzle, integerFormat(format));
+    static os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
+    vm_address_t page = (vm_address_t)entry & ~(vm_address_t)(vm_page_size - 1);
+    id view = nil;
+    os_unfair_lock_lock(&lock);
+    if (vm_protect(mach_task_self(), page, vm_page_size, FALSE, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY) == KERN_SUCCESS) {
+        *entry = word;
+        view = ((NewViewRangeIMP)objc_msgSend)(self, plain, format, type, levels, slices);
+        *entry = header;
+        vm_protect(mach_task_self(), page, vm_page_size, FALSE, VM_PROT_READ);  // data only (keplerHeaderTable checked)
+    }
+    os_unfair_lock_unlock(&lock);
+    const uint8_t *made = nvDriverObject(view);
+    if (!made || *(const uint32_t *)(made + 0x130) != word) {
+        if (verbose()) shimLog("[mtlshim] swizzled texture view on Kepler: the driver didn't take the swizzle: nil\n");
+        return nil;
+    }
+    Ivar stored = class_getInstanceVariable(objc_getClass("MTLIOAccelTexture"), "_swizzle");  // what -swizzle reports
+    if (stored && !strcmp(ivar_getTypeEncoding(stored), "I")) memcpy((char *)(__bridge void *)view + ivar_getOffset(stored), &swizzle, 4);
+    if (verbose())
+        shimLog("[mtlshim] swizzled texture view on Kepler (format %lu, swizzle %d%d%d%d): header word 0 %08x -> %08x\n", (unsigned long)format,
+                swizzle.red, swizzle.green, swizzle.blue, swizzle.alpha, header, word);
+    return view;
+}
 static id nvSwizzleView(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices, MTLTextureSwizzleChannels swizzle) RETURNS_RETAINED;
 static id nvSwizzleView(id self, SEL _cmd, MTLPixelFormat format, MTLTextureType type, NSRange levels, NSRange slices, MTLTextureSwizzleChannels swizzle) {
     if (!swizzleChangesNothing(format, swizzle)) {
+        if (nvHeaderTable && !depthOrStencil(format) && !disabled("MTLSHIM_NV_SWIZZLE_VIEWS"))
+            return nvSwizzledView(self, format, type, levels, slices, swizzle);  // item 88
         if (verbose()) shimLog("[mtlshim] swizzled texture view on Kepler: swizzle not supported, nil\n");
         return nil;
     }
@@ -4036,6 +4161,9 @@ static void keplerMissingMethods(void) {
     MethodEntry icbMethod[] = {{"newIndirectCommandBufferWithDescriptor:maxCount:options:", (IMP)nvNoIndirectCommandBuffer, "@@:@QQ"}};
     if (view.types) addMethods(texture, "Kepler texture", viewMethod, 1);
     addMethods(device, "Kepler device", icbMethod, 1);
+    Dl_info driver;
+    if (dladdr((__bridge const void *)texture, &driver) && strstr(driver.dli_fname, "/GeForceMTLDriver.bundle/")) keplerHeaderTable(&driver);  // item 88
+    if (verbose()) shimLog("[mtlshim] Kepler texture header table (item 88): %s\n", nvHeaderTable ? "found" : "not found");
 }
 
 // 56. On the Kepler driver a view of a texture view of levels or slices 1+ dropped the first view's offset (Dawn reads
@@ -6563,9 +6691,23 @@ static void preferNoMTLHeaps(void) {
     if (verbose()) shimLog("[mtlshim] MoltenVK: MVK_CONFIG_USE_MTLHEAP=0 (no placement heaps on these GPUs)\n");
 }
 
+// 89. Kepler: with MoltenVK 1.4's Metal argument buffers (its default) the Kepler driver failed whole command buffers
+// (Invalid Resource, so the device was lost) in Godot's Mobile renderer with glow on, which its editor's 3D view has;
+// binding each resource directly, MoltenVK's classic path, runs. On a Mac with the Kepler driver installed,
+// MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS gets 0 unless the environment sets it. Which argument-buffer contents the driver
+// rejects isn't known: the same kinds of textures, views, samplers, writes and mip feedback through argument buffers
+// run in small tests. MTLSHIM_NV_MVK_ARGUMENT_BUFFERS=0 leaves MoltenVK's default. Test: s92.
+static void keplerNoMVKArgumentBuffers(void) {
+    if (getenv("MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS") || disabled("MTLSHIM_NV_MVK_ARGUMENT_BUFFERS") ||
+        access("/System/Library/Extensions/GeForceMTLDriver.bundle/Contents/MacOS/GeForceMTLDriver", F_OK))
+        return;
+    setenv("MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", "0", 0);
+    if (verbose()) shimLog("[mtlshim] MoltenVK: MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS=0 (Kepler)\n");
+}
+
 __attribute__((constructor)) static void init(void) {
 #ifndef METALOLDCOMPAT_NOOP
-    if (onMetalOld()) dropValidationLayers(), preferNoMTLHeaps();
+    if (onMetalOld()) dropValidationLayers(), preferNoMTLHeaps(), keplerNoMVKArgumentBuffers();
     patchDeviceBase();
     installAIR27Retargeting();
     installOldAIRPassThrough();
@@ -6577,6 +6719,7 @@ __attribute__((constructor)) static void init(void) {
 #else
     (void)dropValidationLayers;
     (void)preferNoMTLHeaps;
+    (void)keplerNoMVKArgumentBuffers;
     (void)keepPortraitLibraries;
     (void)installStitchingReflection;
     (void)installMPSMatmulFallback;
