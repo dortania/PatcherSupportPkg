@@ -8,7 +8,8 @@
 # (RetroArch quit; a crash report is named), devlost (MoltenVK / Metal lost the device). RetroArch restarts after a death
 # or device loss. Results: DIR/results.tsv (index, status, seconds, preset, detail), the log per RetroArch run, small
 # screenshots of non-ok presets. Throwaway HOME; the app's Metal shader cache is cleared at the start.
-import argparse, glob, os, re, shutil, socket, subprocess, sys, time
+import argparse, faulthandler, glob, os, re, shutil, signal, socket, subprocess, sys, time
+faulthandler.register(signal.SIGUSR1, all_threads=True)  # kill -USR1 <pid>: where a stalled sweep is
 T = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # Tests
 APP = T + '/apps/RetroArch.app/Contents/MacOS/RetroArch'
 X = T + '/apps/retroarch-extras'
@@ -23,10 +24,12 @@ ap.add_argument('--start', type=int, default=0); ap.add_argument('--count', type
 ap.add_argument('--timeout', type=float, default=90); ap.add_argument('--settle', type=float, default=2.0)
 ap.add_argument('--out', default=''); ap.add_argument('--port', type=int, default=55355)
 ap.add_argument('--keep-shots', action='store_true'); ap.add_argument('--presets', default='', help='comma list relative to shaders_slang')
+ap.add_argument('--list', default='', help='file: one preset per line, relative to shaders_slang (names may hold commas)')
+ap.add_argument('--cfg', default='', help='extra retroarch.cfg lines, ; separated (the Metal driver: video_vsync = "false", or it crawls)')
 a = ap.parse_args()
 out = a.out or f'{T}/build/ra-sweep-{a.driver}'
 os.makedirs(out + '/shots', exist_ok=True)
-presets = [X + '/shaders_slang/' + q for q in a.presets.split(',')] if a.presets else sorted(p for p in glob.glob(X + '/shaders_slang/**/*.slangp', recursive=True) if a.only in p)
+presets = [X + '/shaders_slang/' + q.strip() for q in open(a.list) if q.strip()] if a.list else [X + '/shaders_slang/' + q for q in a.presets.split(',')] if a.presets else sorted(p for p in glob.glob(X + '/shaders_slang/**/*.slangp', recursive=True) if a.only in p)
 presets = presets[a.start:a.start + a.count]
 cache = subprocess.run(['getconf', 'DARWIN_USER_CACHE_DIR'], capture_output=True, text=True).stdout.strip() + 'com.libretro.dist.RetroArch/com.apple.metal'
 shutil.rmtree(cache, ignore_errors=True)
@@ -41,7 +44,7 @@ def start():
         f.write(f'video_driver = "{a.driver}"\nlibretro_directory = "{X}"\nvideo_shader_dir = "{X}/shaders_slang"\n'
                 f'video_shader_enable = "true"\nnetwork_cmd_enable = "true"\nnetwork_cmd_port = "{a.port}"\npause_nonactive = "false"\n'
                 'audio_driver = "null"\nvideo_fullscreen = "false"\nlog_verbosity = "true"\nconfig_save_on_exit = "false"\n'
-                'video_shader_preset_save_reference_enable = "false"\nauto_shaders_enable = "false"\n')
+                'video_shader_preset_save_reference_enable = "false"\nauto_shaders_enable = "false"\n' + ''.join(l.strip() + '\n' for l in a.cfg.split(';') if l.strip()))
     logpath = f'{out}/log-{run}.txt'; logf = open(logpath, 'w')
     subprocess.run([CW, 'start', f'{out}/mark-{run}'])
     env = dict(os.environ, HOME=home, CFFIXED_USER_HOME=home)
