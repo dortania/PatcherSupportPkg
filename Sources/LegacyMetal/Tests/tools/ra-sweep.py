@@ -66,14 +66,17 @@ def stop():
         except subprocess.TimeoutExpired: proc.kill(); proc.wait()
 
 def crashes():
-    r = subprocess.run([CW, 'new', f'{out}/mark-{run}', 'MTLCompilerService', 'RetroArch'], capture_output=True, text=True).stdout.split()
+    try: r = subprocess.run([CW, 'new', f'{out}/mark-{run}', 'MTLCompilerService', 'RetroArch'], capture_output=True, text=True, timeout=60).stdout.split()
+    except subprocess.TimeoutExpired: r = []
     return ' '.join(os.path.basename(x) for x in r[:3])
 
 def shot(name):
-    wid = subprocess.run([WINID, str(proc.pid)], capture_output=True, text=True).stdout.strip()
+    try: wid = subprocess.run([WINID, str(proc.pid)], capture_output=True, text=True, timeout=10).stdout.strip()
+    except subprocess.TimeoutExpired: return None
     if not wid: return None
     path = f'{out}/shots/{name}.png'
-    subprocess.run(['screencapture', '-x', '-o', '-l', wid, path])
+    try: subprocess.run(['screencapture', '-x', '-o', '-l', wid, path], timeout=20)  # a permission prompt can block it
+    except subprocess.TimeoutExpired: return None
     try:
         from PIL import Image, ImageStat
         im = Image.open(path).convert('L'); w, h = im.size
