@@ -1,0 +1,48 @@
+// n28-kepler-overflow-check: multiply-overflow checks must compile; they become llvm.umul.with.overflow, which the back
+// end can't select. Fix: GeForceAIRCompat NVAIR_OVERFLOW_FIX. Checks: three check forms and the low word for 256 pairs
+// of edge and random values. Argument: GPU name (default: NVIDIA).
+#import "repro.h"
+
+static NSString *const src = @
+    "#include <metal_stdlib>\n"
+    "using namespace metal;\n"
+    "kernel void k(device const uint2 *in [[buffer(0)]], device uint2 *out [[buffer(1)]], uint t [[thread_position_in_grid]]) {\n"
+    "    uint a = in[t].x, b = in[t].y;\n"
+    "    uint f = ((0xffffffffu / (a | 1u)) < b ? 1u : 0u) | (ulong(a) * ulong(b) > 0xffffffffull ? 2u : 0u) |\n"
+    "             ((ulong(a) * ulong(b)) >> 32 != 0ul ? 4u : 0u);\n"
+    "    out[t] = uint2(f, a * b);\n"
+    "}\n";
+
+int main(int argc, char **argv) { @autoreleasepool {
+    const char *bug = "n28-kepler-overflow-check";
+    id<MTLDevice> dev = reproDevice(argc, argv, "NVIDIA");
+    if (!dev) return SKIP(bug, "no such GPU");
+    const char *name = dev.name.UTF8String;
+    NSString *why = nil;
+    id<MTLComputePipelineState> ps = reproComputePipeline(dev, src, nil, &why);
+    if (!ps) return FAIL(bug, "%s", why.UTF8String);
+    enum { T = 256 };
+    static const uint32_t edge[11] = {0, 1, 2, 3, 0xffff, 0x10000, 0x10001, 0x7fffffff, 0x80000000u, 0xfffffffeu, 0xffffffffu};
+    id<MTLBuffer> in = [dev newBufferWithLength:T * 8 options:MTLResourceStorageModeShared];
+    id<MTLBuffer> out = [dev newBufferWithLength:T * 8 options:MTLResourceStorageModeShared];
+    uint32_t *pairs = in.contents, x = 2478u * 2654435761u + 12345u;
+    for (int i = 0; i < T; i++) {
+        if (i < 121) {
+            pairs[i * 2] = edge[i / 11], pairs[i * 2 + 1] = edge[i % 11];
+        } else {
+            for (int k = 0; k < 2; k++) { x ^= x << 13; x ^= x >> 17; x ^= x << 5; pairs[i * 2 + k] = (i & 1) ? (x >> (x & 15)) : x; }
+        }
+    }
+    memset(out.contents, 0xcd, out.length);
+    if (!reproDispatch([dev newCommandQueue], ps, @[in, out], MTLSizeMake(T / 64, 1, 1), MTLSizeMake(64, 1, 1))) return FAIL(bug, "%s: command buffer failed", name);
+    const uint32_t *got = out.contents;
+    for (int i = 0; i < T; i++) {
+        uint32_t a = pairs[i * 2], b = pairs[i * 2 + 1];
+        uint64_t p = (uint64_t)a * b;
+        uint32_t want = ((0xffffffffu / (a | 1u)) < b ? 1u : 0u) | (p > 0xffffffffull ? 2u : 0u) | ((p >> 32) != 0 ? 4u : 0u);
+        if (got[i * 2] != want || got[i * 2 + 1] != (uint32_t)p)
+            return FAIL(bug, "%s: a = %#x, b = %#x: checks %#x and product %#x, want %#x and %#x", name, a, b, got[i * 2], got[i * 2 + 1], want,
+                        (uint32_t)p);
+    }
+    return PASS(bug, "%s: 32-bit multiply overflow checks compile and give the right answer", name);
+}}

@@ -1,0 +1,790 @@
+// -*- Metal -*-
+//===-- metal_command_buffer ----------------------------------------------===//
+// Copyright (c) 2018-2019 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_COMMAND_BUFFER
+#define __METAL_COMMAND_BUFFER
+
+
+#pragma METAL internals : enable
+namespace metal
+{
+// Metal 2.1 s5.16: Encoding Commands for Indirect Command Buffers
+
+struct MTLIndirectCommandBufferExecutionRange
+{
+  uint location;
+  uint length;
+};
+
+struct command_buffer
+{
+  METAL_FUNC command_buffer() thread = default;
+  METAL_FUNC command_buffer() device = default;
+  METAL_FUNC command_buffer() constant = default;
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC command_buffer() ray_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC command_buffer() object_data = default;
+#endif
+
+  METAL_FUNC command_buffer(const thread command_buffer &) thread = default;
+  METAL_FUNC command_buffer(const device command_buffer &) thread = default;
+  METAL_FUNC command_buffer(const constant command_buffer &) thread = default;
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC command_buffer(const ray_data command_buffer &) thread = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC command_buffer(const object_data command_buffer &) thread = default;
+#endif
+  METAL_FUNC command_buffer(const thread command_buffer &) constant = default;
+  METAL_FUNC command_buffer(const device command_buffer &) constant = default;
+  METAL_FUNC command_buffer(const constant command_buffer &) constant = default;
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC command_buffer(const ray_data command_buffer &) constant = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC command_buffer(const object_data command_buffer &) constant = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC command_buffer(const thread command_buffer &) ray_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC command_buffer(const device command_buffer &) ray_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC command_buffer(const constant command_buffer &) ray_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC command_buffer(const ray_data command_buffer &) ray_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC command_buffer(const object_data command_buffer &) ray_data = default;
+#endif
+#endif
+
+  METAL_FUNC thread command_buffer &operator=(const thread command_buffer &) thread = default;
+  METAL_FUNC thread command_buffer &operator=(const device command_buffer &) thread = default;
+  METAL_FUNC thread command_buffer &operator=(const constant command_buffer &) thread = default;
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC thread command_buffer &operator=(const ray_data command_buffer &) thread = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC thread command_buffer &operator=(const object_data command_buffer &) thread = default;
+#endif
+  METAL_FUNC device command_buffer &operator=(const thread command_buffer &) device = default;
+  METAL_FUNC device command_buffer &operator=(const device command_buffer &) device = default;
+  METAL_FUNC device command_buffer &operator=(const constant command_buffer &) device = default;
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC device command_buffer &operator=(const ray_data command_buffer &) device = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC device command_buffer &operator=(const object_data command_buffer &) device = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC ray_data command_buffer &operator=(const thread command_buffer &) ray_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC ray_data command_buffer &operator=(const device command_buffer &) ray_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC ray_data command_buffer &operator=(const constant command_buffer &) ray_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC ray_data command_buffer &operator=(const ray_data command_buffer &) ray_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC ray_data command_buffer &operator=(const object_data command_buffer &) ray_data = default;
+#endif
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data command_buffer &operator=(const thread command_buffer &) object_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data command_buffer &operator=(const device command_buffer &) object_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data command_buffer &operator=(const constant command_buffer &) object_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data command_buffer &operator=(const ray_data command_buffer &) object_data = default;
+#endif
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data command_buffer &operator=(const object_data command_buffer &) object_data = default;
+#endif
+
+#if defined(__HAVE_GET_SIZE_COMMAND_BUFFER__)
+  METAL_FUNC size_t size() const thread
+  {
+    return __metal_get_size_command_buffer(t);
+  }
+  METAL_FUNC size_t size() const device
+  {
+    return __metal_get_size_command_buffer(t);
+  }
+  METAL_FUNC size_t size() const constant
+  {
+    return __metal_get_size_command_buffer(t);
+  }
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC size_t size() const ray_data
+  {
+    return __metal_get_size_command_buffer(t);
+  }
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC size_t size() const object_data
+  {
+    return __metal_get_size_command_buffer(t);
+  }
+#endif
+#endif
+private:
+  __metal_command_buffer_t t;
+  friend struct _command;
+};
+
+struct _command
+{
+protected:
+  METAL_FUNC explicit _command(command_buffer icb, uint icb_index) thread
+      : icb(icb.t),
+        icb_index(icb_index)
+  {
+  }
+
+  __metal_command_buffer_t icb;
+  uint icb_index;
+
+  friend struct render_command;
+#if defined(__HAVE_COMPUTE_COMMANDS__)
+  friend struct compute_command;
+#endif
+};
+
+#if defined(__HAVE_COMPUTE_COMMANDS__)
+struct compute_pipeline_state
+{
+  METAL_FUNC compute_pipeline_state() thread = default;
+  METAL_FUNC compute_pipeline_state() device = default;
+  METAL_FUNC compute_pipeline_state() constant = default;
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC compute_pipeline_state() ray_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC compute_pipeline_state() object_data = default;
+#endif
+
+  METAL_FUNC compute_pipeline_state(const thread compute_pipeline_state &) thread = default;
+  METAL_FUNC compute_pipeline_state(const device compute_pipeline_state &) thread = default;
+  METAL_FUNC compute_pipeline_state(const constant compute_pipeline_state &) thread = default;
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC compute_pipeline_state(const ray_data compute_pipeline_state &) thread = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC compute_pipeline_state(const object_data compute_pipeline_state &) thread = default;
+#endif
+  METAL_FUNC compute_pipeline_state(const thread compute_pipeline_state &) constant = default;
+  METAL_FUNC compute_pipeline_state(const device compute_pipeline_state &) constant = default;
+  METAL_FUNC compute_pipeline_state(const constant compute_pipeline_state &) constant = default;
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC compute_pipeline_state(const ray_data compute_pipeline_state &) constant = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC compute_pipeline_state(const object_data compute_pipeline_state &) constant = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC compute_pipeline_state(const thread compute_pipeline_state &) ray_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC compute_pipeline_state(const device compute_pipeline_state &) ray_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC compute_pipeline_state(const constant compute_pipeline_state &) ray_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC compute_pipeline_state(const ray_data compute_pipeline_state &) ray_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC compute_pipeline_state(const object_data compute_pipeline_state &) ray_data = default;
+#endif
+#endif
+
+  METAL_FUNC thread compute_pipeline_state &operator=(const thread compute_pipeline_state &) thread = default;
+  METAL_FUNC thread compute_pipeline_state &operator=(const device compute_pipeline_state &) thread = default;
+  METAL_FUNC thread compute_pipeline_state &operator=(const constant compute_pipeline_state &) thread = default;
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC thread compute_pipeline_state &operator=(const ray_data compute_pipeline_state &) thread = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC thread compute_pipeline_state &operator=(const object_data compute_pipeline_state &) thread = default;
+#endif
+  METAL_FUNC device compute_pipeline_state &operator=(const thread compute_pipeline_state &) device = default;
+  METAL_FUNC device compute_pipeline_state &operator=(const device compute_pipeline_state &) device = default;
+  METAL_FUNC device compute_pipeline_state &operator=(const constant compute_pipeline_state &) device = default;
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC device compute_pipeline_state &operator=(const ray_data compute_pipeline_state &) device = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC device compute_pipeline_state &operator=(const object_data compute_pipeline_state &) device = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC ray_data compute_pipeline_state &operator=(const thread compute_pipeline_state &) ray_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC ray_data compute_pipeline_state &operator=(const device compute_pipeline_state &) ray_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC ray_data compute_pipeline_state &operator=(const constant compute_pipeline_state &) ray_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC ray_data compute_pipeline_state &operator=(const ray_data compute_pipeline_state &) ray_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC ray_data compute_pipeline_state &operator=(const object_data compute_pipeline_state &) ray_data = default;
+#endif
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data compute_pipeline_state &operator=(const thread compute_pipeline_state &) object_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data compute_pipeline_state &operator=(const device compute_pipeline_state &) object_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data compute_pipeline_state &operator=(const constant compute_pipeline_state &) object_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data compute_pipeline_state &operator=(const ray_data compute_pipeline_state &) object_data = default;
+#endif
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data compute_pipeline_state &operator=(const object_data compute_pipeline_state &) object_data = default;
+#endif
+
+private:
+  __metal_compute_pipeline_state_t t;
+  friend struct compute_command;
+};
+
+struct compute_command : _command
+{
+  METAL_FUNC explicit compute_command(command_buffer icb, uint icb_index) thread
+      : _command(icb, icb_index)
+  {
+  }
+
+  METAL_FUNC compute_command(const thread compute_command &) thread = default;
+
+  METAL_FUNC thread compute_command &operator=(const thread compute_command &) thread = default;
+
+  METAL_FUNC void set_compute_pipeline_state(compute_pipeline_state pipeline_state) thread
+  {
+    __metal_set_pipeline_state_compute_command(icb, icb_index, pipeline_state.t);
+  }
+
+
+  template <typename T, typename _E = typename enable_if<is_metal_buffer_pointee<T>::value>::type>
+  METAL_FUNC void set_kernel_buffer(device T *buffer, uint index) thread
+  {
+    __metal_set_kernel_buffer_compute_command(icb, icb_index, static_cast<device void *>(const_cast<device remove_const_t<T> *>(buffer)), ~size_t(0), index);
+  }
+#if defined(__HAVE_COMPUTE_COMMAND_KERNEL_BUFFER_STRIDE__)
+
+  template <typename T, typename _E = typename enable_if<is_metal_buffer_pointee<T>::value>::type>
+  METAL_FUNC void set_kernel_buffer(device T *buffer, size_t stride, uint index) thread
+  {
+    __metal_set_kernel_buffer_compute_command(icb, icb_index, static_cast<device void *>(const_cast<device remove_const_t<T> *>(buffer)), stride, index);
+  }
+#endif
+  template <typename T, typename _E = typename enable_if<is_metal_buffer_pointee<T>::value>::type>
+  METAL_FUNC void set_kernel_buffer(constant T *buffer, uint index) thread
+  {
+    __metal_set_kernel_buffer_compute_command(icb, icb_index, static_cast<constant void *>(const_cast<constant remove_const_t<T> *>(buffer)), ~size_t(0), index);
+  }
+#if defined(__HAVE_COMPUTE_COMMAND_KERNEL_BUFFER_STRIDE__)
+
+  template <typename T, typename _E = typename enable_if<is_metal_buffer_pointee<T>::value>::type>
+  METAL_FUNC void set_kernel_buffer(constant T *buffer, size_t stride, uint index) thread
+  {
+    __metal_set_kernel_buffer_compute_command(icb, icb_index, static_cast<constant void *>(const_cast<constant remove_const_t<T> *>(buffer)), stride, index);
+  }
+#endif
+
+  METAL_FUNC void concurrent_dispatch_threadgroups(uint3 threadgroups_per_grid, uint3 threads_per_threadgroup) thread
+  {
+    __metal_concurrent_dispatch_threadgroups_compute_command(icb, icb_index, threadgroups_per_grid, threads_per_threadgroup);
+  }
+
+  METAL_FUNC void concurrent_dispatch_threads(uint3 threads_per_grid, uint3 threads_per_threadgroup) thread
+  {
+    __metal_concurrent_dispatch_threads_compute_command(icb, icb_index, threads_per_grid, threads_per_threadgroup);
+  }
+
+  METAL_FUNC void set_barrier() thread
+  {
+    __metal_set_barrier_compute_command(icb, icb_index);
+  }
+
+  METAL_FUNC void clear_barrier() thread
+  {
+    __metal_clear_barrier_compute_command(icb, icb_index);
+  }
+
+  METAL_FUNC void set_stage_in_region(uint3 origin, uint3 size) thread
+  {
+    __metal_set_stage_in_region_compute_command(icb, icb_index, origin, size);
+  }
+
+  METAL_FUNC void set_threadgroup_memory_length(uint length, uint idx) thread
+  {
+    __metal_set_threadgroup_memory_length_compute_command(icb, icb_index, length, idx);
+  }
+
+#if defined(__HAVE_COMPUTE_COMMANDS_SET_IMAGEBLOCK_SIZE__)
+  METAL_FUNC void set_imageblock_size(ushort2 size) thread
+  {
+    __metal_set_imageblock_size_compute_command(icb, icb_index, size);
+  }
+#endif
+
+  METAL_FUNC void reset() thread
+  {
+    __metal_reset_compute_command(icb, icb_index);
+  }
+
+  // Copy the content of the _command `that` into this _command.
+  METAL_FUNC void copy_command(compute_command that) thread
+  {
+    __metal_copy_compute_command(icb, icb_index, that.icb, that.icb_index);
+  }
+};
+#endif
+
+#if defined(__HAVE_RENDER_COMMANDS__)
+#if defined(__HAVE_RENDER_PIPELINE_STATE__)
+struct render_pipeline_state
+{
+  METAL_FUNC render_pipeline_state() thread = default;
+  METAL_FUNC render_pipeline_state() device = default;
+  METAL_FUNC render_pipeline_state() constant = default;
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC render_pipeline_state() ray_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC render_pipeline_state() object_data = default;
+#endif
+
+  METAL_FUNC render_pipeline_state(const thread render_pipeline_state &) thread = default;
+  METAL_FUNC render_pipeline_state(const device render_pipeline_state &) thread = default;
+  METAL_FUNC render_pipeline_state(const constant render_pipeline_state &) thread = default;
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC render_pipeline_state(const ray_data render_pipeline_state &) thread = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC render_pipeline_state(const object_data render_pipeline_state &) thread = default;
+#endif
+  METAL_FUNC render_pipeline_state(const thread render_pipeline_state &) constant = default;
+  METAL_FUNC render_pipeline_state(const device render_pipeline_state &) constant = default;
+  METAL_FUNC render_pipeline_state(const constant render_pipeline_state &) constant = default;
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC render_pipeline_state(const ray_data render_pipeline_state &) constant = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC render_pipeline_state(const object_data render_pipeline_state &) constant = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC render_pipeline_state(const thread render_pipeline_state &) ray_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC render_pipeline_state(const device render_pipeline_state &) ray_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC render_pipeline_state(const constant render_pipeline_state &) ray_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC render_pipeline_state(const ray_data render_pipeline_state &) ray_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC render_pipeline_state(const object_data render_pipeline_state &) ray_data = default;
+#endif
+#endif
+
+  METAL_FUNC thread render_pipeline_state &operator=(const thread render_pipeline_state &) thread = default;
+  METAL_FUNC thread render_pipeline_state &operator=(const device render_pipeline_state &) thread = default;
+  METAL_FUNC thread render_pipeline_state &operator=(const constant render_pipeline_state &) thread = default;
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC thread render_pipeline_state &operator=(const ray_data render_pipeline_state &) thread = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC thread render_pipeline_state &operator=(const object_data render_pipeline_state &) thread = default;
+#endif
+  METAL_FUNC device render_pipeline_state &operator=(const thread render_pipeline_state &) device = default;
+  METAL_FUNC device render_pipeline_state &operator=(const device render_pipeline_state &) device = default;
+  METAL_FUNC device render_pipeline_state &operator=(const constant render_pipeline_state &) device = default;
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC device render_pipeline_state &operator=(const ray_data render_pipeline_state &) device = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC device render_pipeline_state &operator=(const object_data render_pipeline_state &) device = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC ray_data render_pipeline_state &operator=(const thread render_pipeline_state &) ray_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC ray_data render_pipeline_state &operator=(const device render_pipeline_state &) ray_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC ray_data render_pipeline_state &operator=(const constant render_pipeline_state &) ray_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC ray_data render_pipeline_state &operator=(const ray_data render_pipeline_state &) ray_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+#if defined(__HAVE_RAYTRACING__)
+  METAL_FUNC ray_data render_pipeline_state &operator=(const object_data render_pipeline_state &) ray_data = default;
+#endif
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data render_pipeline_state &operator=(const thread render_pipeline_state &) object_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data render_pipeline_state &operator=(const device render_pipeline_state &) object_data = default;
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data render_pipeline_state &operator=(const constant render_pipeline_state &) object_data = default;
+#endif
+#if defined(__HAVE_RAYTRACING__)
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data render_pipeline_state &operator=(const ray_data render_pipeline_state &) object_data = default;
+#endif
+#endif
+#if defined(__HAVE_MESH__)
+  METAL_FUNC object_data render_pipeline_state &operator=(const object_data render_pipeline_state &) object_data = default;
+#endif
+
+private:
+  __metal_render_pipeline_state_t t;
+  friend struct render_command;
+};
+#endif
+
+enum class primitive_type
+{
+  point,
+  line,
+  line_strip,
+  triangle,
+  triangle_strip
+};
+
+struct render_command : public _command
+{
+  METAL_FUNC explicit render_command(command_buffer icb, uint icb_index) thread
+      : _command(icb, icb_index)
+  {
+  }
+
+  METAL_FUNC render_command(const thread render_command &) thread = default;
+
+  METAL_FUNC thread render_command &operator=(const thread render_command &) thread = default;
+
+#if defined(__HAVE_RENDER_PIPELINE_STATE__)
+  METAL_FUNC void set_render_pipeline_state(render_pipeline_state pipeline_state) thread
+  {
+    __metal_set_pipeline_state_render_command(icb, icb_index, pipeline_state.t);
+  }
+#endif
+
+
+  template <typename T, typename _E = typename enable_if<is_metal_buffer_pointee<T>::value>::type>
+  METAL_FUNC void set_vertex_buffer(device T *buffer, uint index) thread
+  {
+    __metal_set_vertex_buffer_render_command(icb, icb_index, static_cast<device void *>(const_cast<device remove_const_t<T> *>(buffer)), ~size_t(0), index);
+  }
+#if defined(__HAVE_RENDER_COMMAND_VERTEX_BUFFER_STRIDE__)
+
+  template <typename T, typename _E = typename enable_if<is_metal_buffer_pointee<T>::value>::type>
+  METAL_FUNC void set_vertex_buffer(device T *buffer, size_t stride, uint index) thread
+  {
+    __metal_set_vertex_buffer_render_command(icb, icb_index, static_cast<device void *>(const_cast<device remove_const_t<T> *>(buffer)), stride, index);
+  }
+#endif
+  template <typename T, typename _E = typename enable_if<is_metal_buffer_pointee<T>::value>::type>
+  METAL_FUNC void set_vertex_buffer(constant T *buffer, uint index) thread
+  {
+    __metal_set_vertex_buffer_render_command(icb, icb_index, static_cast<constant void *>(const_cast<constant remove_const_t<T> *>(buffer)), ~size_t(0), index);
+  }
+#if defined(__HAVE_RENDER_COMMAND_VERTEX_BUFFER_STRIDE__)
+
+  template <typename T, typename _E = typename enable_if<is_metal_buffer_pointee<T>::value>::type>
+  METAL_FUNC void set_vertex_buffer(constant T *buffer, size_t stride, uint index) thread
+  {
+    __metal_set_vertex_buffer_render_command(icb, icb_index, static_cast<constant void *>(const_cast<constant remove_const_t<T> *>(buffer)), stride, index);
+  }
+#endif
+
+
+  template <typename T, typename _E = typename enable_if<is_metal_buffer_pointee<T>::value>::type>
+  METAL_FUNC void set_fragment_buffer(device T *buffer, uint index) thread
+  {
+    __metal_set_fragment_buffer_render_command(icb, icb_index, static_cast<device void *>(const_cast<device remove_const_t<T> *>(buffer)), index);
+  }
+  template <typename T, typename _E = typename enable_if<is_metal_buffer_pointee<T>::value>::type>
+  METAL_FUNC void set_fragment_buffer(constant T *buffer, uint index) thread
+  {
+    __metal_set_fragment_buffer_render_command(icb, icb_index, static_cast<constant void *>(const_cast<constant remove_const_t<T> *>(buffer)), index);
+  }
+
+#if defined(__HAVE_RENDER_COMMAND_MESH__)
+
+  template <typename T, typename _E = typename enable_if<is_metal_buffer_pointee<T>::value>::type>
+  METAL_FUNC void set_object_buffer(device T *buffer, uint index) thread
+  {
+    __metal_set_object_buffer_render_command(icb, icb_index, static_cast<device void *>(const_cast<device remove_const_t<T> *>(buffer)), index);
+  }
+  template <typename T, typename _E = typename enable_if<is_metal_buffer_pointee<T>::value>::type>
+  METAL_FUNC void set_object_buffer(constant T *buffer, uint index) thread
+  {
+    __metal_set_object_buffer_render_command(icb, icb_index, static_cast<constant void *>(const_cast<constant remove_const_t<T> *>(buffer)), index);
+  }
+
+  METAL_FUNC void set_object_threadgroup_memory_length(uint length, uint idx) thread
+  {
+    __metal_set_object_threadgroup_memory_length_render_command(icb, icb_index, length, idx);
+  }
+
+
+  template <typename T, typename _E = typename enable_if<is_metal_buffer_pointee<T>::value>::type>
+  METAL_FUNC void set_mesh_buffer(device T *buffer, uint index) thread
+  {
+    __metal_set_mesh_buffer_render_command(icb, icb_index, static_cast<device void *>(const_cast<device remove_const_t<T> *>(buffer)), index);
+  }
+  template <typename T, typename _E = typename enable_if<is_metal_buffer_pointee<T>::value>::type>
+  METAL_FUNC void set_mesh_buffer(constant T *buffer, uint index) thread
+  {
+    __metal_set_mesh_buffer_render_command(icb, icb_index, static_cast<constant void *>(const_cast<constant remove_const_t<T> *>(buffer)), index);
+  }
+#endif
+
+  METAL_FUNC void draw_primitives(primitive_type type, uint vertex_start, uint vertex_count, uint instance_count, uint base_instance = 0) thread
+  {
+    __metal_draw_primitives_render_command(icb, icb_index, uint(type), vertex_start, vertex_count, instance_count, base_instance);
+  }
+
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, ushort>, is_same<T, uint>>>::type>
+  METAL_FUNC void draw_indexed_primitives(primitive_type type, uint index_count, const device T *index_buffer, uint instance_count, uint base_vertex = 0, uint base_instance = 0) thread
+  {
+    __metal_draw_indexed_primitives_render_command(icb, icb_index, uint(type), index_count, index_buffer, instance_count, base_vertex, base_instance);
+  }
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, ushort>, is_same<T, uint>>>::type>
+  METAL_FUNC void draw_indexed_primitives(primitive_type type, uint index_count, const constant T *index_buffer, uint instance_count, uint base_vertex = 0, uint base_instance = 0) thread
+  {
+    __metal_draw_indexed_primitives_render_command(icb, icb_index, uint(type), index_count, index_buffer, instance_count, base_vertex, base_instance);
+  }
+
+#if defined(__HAVE_RENDER_DRAW_PATCHES_TESSELLATION_FACTOR_SCALE__)
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, MTLQuadTessellationFactorsHalf>, is_same<T, MTLTriangleTessellationFactorsHalf>>>::type>
+  METAL_FUNC void draw_patches(uint num_patch_control_points, uint patch_start, uint patch_count, const device uint *patch_index_buffer, uint instance_count, uint base_instance, const device T *tessellation_factor_buffer, uint instance_stride = 0, float scale = 1.0f) thread
+  {
+    __metal_draw_patches_render_command(icb, icb_index, num_patch_control_points, patch_start, patch_count, patch_index_buffer, instance_count, base_instance, static_cast<const device void *>(tessellation_factor_buffer), instance_stride, scale);
+  }
+#else
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, MTLQuadTessellationFactorsHalf>, is_same<T, MTLTriangleTessellationFactorsHalf>>>::type>
+  METAL_FUNC void draw_patches(uint num_patch_control_points, uint patch_start, uint patch_count, const device uint *patch_index_buffer, uint instance_count, uint base_instance, const device T *tessellation_factor_buffer, uint instance_stride = 0) thread
+  {
+    __metal_draw_patches_render_command(icb, icb_index, num_patch_control_points, patch_start, patch_count, patch_index_buffer, instance_count, base_instance, static_cast<const device void *>(tessellation_factor_buffer), instance_stride, 1.0f);
+  }
+#endif
+#if defined(__HAVE_RENDER_DRAW_PATCHES_TESSELLATION_FACTOR_SCALE__)
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, MTLQuadTessellationFactorsHalf>, is_same<T, MTLTriangleTessellationFactorsHalf>>>::type>
+  METAL_FUNC void draw_patches(uint num_patch_control_points, uint patch_start, uint patch_count, const device uint *patch_index_buffer, uint instance_count, uint base_instance, const constant T *tessellation_factor_buffer, uint instance_stride = 0, float scale = 1.0f) thread
+  {
+    __metal_draw_patches_render_command(icb, icb_index, num_patch_control_points, patch_start, patch_count, patch_index_buffer, instance_count, base_instance, static_cast<const constant void *>(tessellation_factor_buffer), instance_stride, scale);
+  }
+#else
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, MTLQuadTessellationFactorsHalf>, is_same<T, MTLTriangleTessellationFactorsHalf>>>::type>
+  METAL_FUNC void draw_patches(uint num_patch_control_points, uint patch_start, uint patch_count, const device uint *patch_index_buffer, uint instance_count, uint base_instance, const constant T *tessellation_factor_buffer, uint instance_stride = 0) thread
+  {
+    __metal_draw_patches_render_command(icb, icb_index, num_patch_control_points, patch_start, patch_count, patch_index_buffer, instance_count, base_instance, static_cast<const constant void *>(tessellation_factor_buffer), instance_stride, 1.0f);
+  }
+#endif
+#if defined(__HAVE_RENDER_DRAW_PATCHES_TESSELLATION_FACTOR_SCALE__)
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, MTLQuadTessellationFactorsHalf>, is_same<T, MTLTriangleTessellationFactorsHalf>>>::type>
+  METAL_FUNC void draw_patches(uint num_patch_control_points, uint patch_start, uint patch_count, const constant uint *patch_index_buffer, uint instance_count, uint base_instance, const device T *tessellation_factor_buffer, uint instance_stride = 0, float scale = 1.0f) thread
+  {
+    __metal_draw_patches_render_command(icb, icb_index, num_patch_control_points, patch_start, patch_count, patch_index_buffer, instance_count, base_instance, static_cast<const device void *>(tessellation_factor_buffer), instance_stride, scale);
+  }
+#else
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, MTLQuadTessellationFactorsHalf>, is_same<T, MTLTriangleTessellationFactorsHalf>>>::type>
+  METAL_FUNC void draw_patches(uint num_patch_control_points, uint patch_start, uint patch_count, const constant uint *patch_index_buffer, uint instance_count, uint base_instance, const device T *tessellation_factor_buffer, uint instance_stride = 0) thread
+  {
+    __metal_draw_patches_render_command(icb, icb_index, num_patch_control_points, patch_start, patch_count, patch_index_buffer, instance_count, base_instance, static_cast<const device void *>(tessellation_factor_buffer), instance_stride, 1.0f);
+  }
+#endif
+#if defined(__HAVE_RENDER_DRAW_PATCHES_TESSELLATION_FACTOR_SCALE__)
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, MTLQuadTessellationFactorsHalf>, is_same<T, MTLTriangleTessellationFactorsHalf>>>::type>
+  METAL_FUNC void draw_patches(uint num_patch_control_points, uint patch_start, uint patch_count, const constant uint *patch_index_buffer, uint instance_count, uint base_instance, const constant T *tessellation_factor_buffer, uint instance_stride = 0, float scale = 1.0f) thread
+  {
+    __metal_draw_patches_render_command(icb, icb_index, num_patch_control_points, patch_start, patch_count, patch_index_buffer, instance_count, base_instance, static_cast<const constant void *>(tessellation_factor_buffer), instance_stride, scale);
+  }
+#else
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, MTLQuadTessellationFactorsHalf>, is_same<T, MTLTriangleTessellationFactorsHalf>>>::type>
+  METAL_FUNC void draw_patches(uint num_patch_control_points, uint patch_start, uint patch_count, const constant uint *patch_index_buffer, uint instance_count, uint base_instance, const constant T *tessellation_factor_buffer, uint instance_stride = 0) thread
+  {
+    __metal_draw_patches_render_command(icb, icb_index, num_patch_control_points, patch_start, patch_count, patch_index_buffer, instance_count, base_instance, static_cast<const constant void *>(tessellation_factor_buffer), instance_stride, 1.0f);
+  }
+#endif
+
+#if defined(__HAVE_RENDER_DRAW_PATCHES_TESSELLATION_FACTOR_SCALE__)
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, MTLQuadTessellationFactorsHalf>, is_same<T, MTLTriangleTessellationFactorsHalf>>>::type>
+  METAL_FUNC void draw_indexed_patches(uint num_patch_control_points, uint patch_start, uint patch_count, const device uint *patch_index_buffer, const device void *control_point_index_buffer, uint instance_count, uint base_instance, const device T *tessellation_factor_buffer, uint instance_stride = 0, float scale = 1.0f) thread
+  {
+    __metal_draw_indexed_patches_render_command(icb, icb_index, num_patch_control_points, patch_start, patch_count, patch_index_buffer, control_point_index_buffer, instance_count, base_instance, static_cast<const device void *>(tessellation_factor_buffer), instance_stride, scale);
+  }
+#else
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, MTLQuadTessellationFactorsHalf>, is_same<T, MTLTriangleTessellationFactorsHalf>>>::type>
+  METAL_FUNC void draw_indexed_patches(uint num_patch_control_points, uint patch_start, uint patch_count, const device uint *patch_index_buffer, const device void *control_point_index_buffer, uint instance_count, uint base_instance, const device T *tessellation_factor_buffer, uint instance_stride = 0) thread
+  {
+    __metal_draw_indexed_patches_render_command(icb, icb_index, num_patch_control_points, patch_start, patch_count, patch_index_buffer, control_point_index_buffer, instance_count, base_instance, static_cast<const device void *>(tessellation_factor_buffer), instance_stride, 1.0f);
+  }
+#endif
+#if defined(__HAVE_RENDER_DRAW_PATCHES_TESSELLATION_FACTOR_SCALE__)
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, MTLQuadTessellationFactorsHalf>, is_same<T, MTLTriangleTessellationFactorsHalf>>>::type>
+  METAL_FUNC void draw_indexed_patches(uint num_patch_control_points, uint patch_start, uint patch_count, const device uint *patch_index_buffer, const device void *control_point_index_buffer, uint instance_count, uint base_instance, const constant T *tessellation_factor_buffer, uint instance_stride = 0, float scale = 1.0f) thread
+  {
+    __metal_draw_indexed_patches_render_command(icb, icb_index, num_patch_control_points, patch_start, patch_count, patch_index_buffer, control_point_index_buffer, instance_count, base_instance, static_cast<const constant void *>(tessellation_factor_buffer), instance_stride, scale);
+  }
+#else
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, MTLQuadTessellationFactorsHalf>, is_same<T, MTLTriangleTessellationFactorsHalf>>>::type>
+  METAL_FUNC void draw_indexed_patches(uint num_patch_control_points, uint patch_start, uint patch_count, const device uint *patch_index_buffer, const device void *control_point_index_buffer, uint instance_count, uint base_instance, const constant T *tessellation_factor_buffer, uint instance_stride = 0) thread
+  {
+    __metal_draw_indexed_patches_render_command(icb, icb_index, num_patch_control_points, patch_start, patch_count, patch_index_buffer, control_point_index_buffer, instance_count, base_instance, static_cast<const constant void *>(tessellation_factor_buffer), instance_stride, 1.0f);
+  }
+#endif
+#if defined(__HAVE_RENDER_DRAW_PATCHES_TESSELLATION_FACTOR_SCALE__)
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, MTLQuadTessellationFactorsHalf>, is_same<T, MTLTriangleTessellationFactorsHalf>>>::type>
+  METAL_FUNC void draw_indexed_patches(uint num_patch_control_points, uint patch_start, uint patch_count, const device uint *patch_index_buffer, const constant void *control_point_index_buffer, uint instance_count, uint base_instance, const device T *tessellation_factor_buffer, uint instance_stride = 0, float scale = 1.0f) thread
+  {
+    __metal_draw_indexed_patches_render_command(icb, icb_index, num_patch_control_points, patch_start, patch_count, patch_index_buffer, control_point_index_buffer, instance_count, base_instance, static_cast<const device void *>(tessellation_factor_buffer), instance_stride, scale);
+  }
+#else
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, MTLQuadTessellationFactorsHalf>, is_same<T, MTLTriangleTessellationFactorsHalf>>>::type>
+  METAL_FUNC void draw_indexed_patches(uint num_patch_control_points, uint patch_start, uint patch_count, const device uint *patch_index_buffer, const constant void *control_point_index_buffer, uint instance_count, uint base_instance, const device T *tessellation_factor_buffer, uint instance_stride = 0) thread
+  {
+    __metal_draw_indexed_patches_render_command(icb, icb_index, num_patch_control_points, patch_start, patch_count, patch_index_buffer, control_point_index_buffer, instance_count, base_instance, static_cast<const device void *>(tessellation_factor_buffer), instance_stride, 1.0f);
+  }
+#endif
+#if defined(__HAVE_RENDER_DRAW_PATCHES_TESSELLATION_FACTOR_SCALE__)
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, MTLQuadTessellationFactorsHalf>, is_same<T, MTLTriangleTessellationFactorsHalf>>>::type>
+  METAL_FUNC void draw_indexed_patches(uint num_patch_control_points, uint patch_start, uint patch_count, const device uint *patch_index_buffer, const constant void *control_point_index_buffer, uint instance_count, uint base_instance, const constant T *tessellation_factor_buffer, uint instance_stride = 0, float scale = 1.0f) thread
+  {
+    __metal_draw_indexed_patches_render_command(icb, icb_index, num_patch_control_points, patch_start, patch_count, patch_index_buffer, control_point_index_buffer, instance_count, base_instance, static_cast<const constant void *>(tessellation_factor_buffer), instance_stride, scale);
+  }
+#else
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, MTLQuadTessellationFactorsHalf>, is_same<T, MTLTriangleTessellationFactorsHalf>>>::type>
+  METAL_FUNC void draw_indexed_patches(uint num_patch_control_points, uint patch_start, uint patch_count, const device uint *patch_index_buffer, const constant void *control_point_index_buffer, uint instance_count, uint base_instance, const constant T *tessellation_factor_buffer, uint instance_stride = 0) thread
+  {
+    __metal_draw_indexed_patches_render_command(icb, icb_index, num_patch_control_points, patch_start, patch_count, patch_index_buffer, control_point_index_buffer, instance_count, base_instance, static_cast<const constant void *>(tessellation_factor_buffer), instance_stride, 1.0f);
+  }
+#endif
+#if defined(__HAVE_RENDER_DRAW_PATCHES_TESSELLATION_FACTOR_SCALE__)
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, MTLQuadTessellationFactorsHalf>, is_same<T, MTLTriangleTessellationFactorsHalf>>>::type>
+  METAL_FUNC void draw_indexed_patches(uint num_patch_control_points, uint patch_start, uint patch_count, const constant uint *patch_index_buffer, const device void *control_point_index_buffer, uint instance_count, uint base_instance, const device T *tessellation_factor_buffer, uint instance_stride = 0, float scale = 1.0f) thread
+  {
+    __metal_draw_indexed_patches_render_command(icb, icb_index, num_patch_control_points, patch_start, patch_count, patch_index_buffer, control_point_index_buffer, instance_count, base_instance, static_cast<const device void *>(tessellation_factor_buffer), instance_stride, scale);
+  }
+#else
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, MTLQuadTessellationFactorsHalf>, is_same<T, MTLTriangleTessellationFactorsHalf>>>::type>
+  METAL_FUNC void draw_indexed_patches(uint num_patch_control_points, uint patch_start, uint patch_count, const constant uint *patch_index_buffer, const device void *control_point_index_buffer, uint instance_count, uint base_instance, const device T *tessellation_factor_buffer, uint instance_stride = 0) thread
+  {
+    __metal_draw_indexed_patches_render_command(icb, icb_index, num_patch_control_points, patch_start, patch_count, patch_index_buffer, control_point_index_buffer, instance_count, base_instance, static_cast<const device void *>(tessellation_factor_buffer), instance_stride, 1.0f);
+  }
+#endif
+#if defined(__HAVE_RENDER_DRAW_PATCHES_TESSELLATION_FACTOR_SCALE__)
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, MTLQuadTessellationFactorsHalf>, is_same<T, MTLTriangleTessellationFactorsHalf>>>::type>
+  METAL_FUNC void draw_indexed_patches(uint num_patch_control_points, uint patch_start, uint patch_count, const constant uint *patch_index_buffer, const device void *control_point_index_buffer, uint instance_count, uint base_instance, const constant T *tessellation_factor_buffer, uint instance_stride = 0, float scale = 1.0f) thread
+  {
+    __metal_draw_indexed_patches_render_command(icb, icb_index, num_patch_control_points, patch_start, patch_count, patch_index_buffer, control_point_index_buffer, instance_count, base_instance, static_cast<const constant void *>(tessellation_factor_buffer), instance_stride, scale);
+  }
+#else
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, MTLQuadTessellationFactorsHalf>, is_same<T, MTLTriangleTessellationFactorsHalf>>>::type>
+  METAL_FUNC void draw_indexed_patches(uint num_patch_control_points, uint patch_start, uint patch_count, const constant uint *patch_index_buffer, const device void *control_point_index_buffer, uint instance_count, uint base_instance, const constant T *tessellation_factor_buffer, uint instance_stride = 0) thread
+  {
+    __metal_draw_indexed_patches_render_command(icb, icb_index, num_patch_control_points, patch_start, patch_count, patch_index_buffer, control_point_index_buffer, instance_count, base_instance, static_cast<const constant void *>(tessellation_factor_buffer), instance_stride, 1.0f);
+  }
+#endif
+#if defined(__HAVE_RENDER_DRAW_PATCHES_TESSELLATION_FACTOR_SCALE__)
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, MTLQuadTessellationFactorsHalf>, is_same<T, MTLTriangleTessellationFactorsHalf>>>::type>
+  METAL_FUNC void draw_indexed_patches(uint num_patch_control_points, uint patch_start, uint patch_count, const constant uint *patch_index_buffer, const constant void *control_point_index_buffer, uint instance_count, uint base_instance, const device T *tessellation_factor_buffer, uint instance_stride = 0, float scale = 1.0f) thread
+  {
+    __metal_draw_indexed_patches_render_command(icb, icb_index, num_patch_control_points, patch_start, patch_count, patch_index_buffer, control_point_index_buffer, instance_count, base_instance, static_cast<const device void *>(tessellation_factor_buffer), instance_stride, scale);
+  }
+#else
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, MTLQuadTessellationFactorsHalf>, is_same<T, MTLTriangleTessellationFactorsHalf>>>::type>
+  METAL_FUNC void draw_indexed_patches(uint num_patch_control_points, uint patch_start, uint patch_count, const constant uint *patch_index_buffer, const constant void *control_point_index_buffer, uint instance_count, uint base_instance, const device T *tessellation_factor_buffer, uint instance_stride = 0) thread
+  {
+    __metal_draw_indexed_patches_render_command(icb, icb_index, num_patch_control_points, patch_start, patch_count, patch_index_buffer, control_point_index_buffer, instance_count, base_instance, static_cast<const device void *>(tessellation_factor_buffer), instance_stride, 1.0f);
+  }
+#endif
+#if defined(__HAVE_RENDER_DRAW_PATCHES_TESSELLATION_FACTOR_SCALE__)
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, MTLQuadTessellationFactorsHalf>, is_same<T, MTLTriangleTessellationFactorsHalf>>>::type>
+  METAL_FUNC void draw_indexed_patches(uint num_patch_control_points, uint patch_start, uint patch_count, const constant uint *patch_index_buffer, const constant void *control_point_index_buffer, uint instance_count, uint base_instance, const constant T *tessellation_factor_buffer, uint instance_stride = 0, float scale = 1.0f) thread
+  {
+    __metal_draw_indexed_patches_render_command(icb, icb_index, num_patch_control_points, patch_start, patch_count, patch_index_buffer, control_point_index_buffer, instance_count, base_instance, static_cast<const constant void *>(tessellation_factor_buffer), instance_stride, scale);
+  }
+#else
+  template <typename T, typename _E = typename enable_if<disjunction_v<is_same<T, MTLQuadTessellationFactorsHalf>, is_same<T, MTLTriangleTessellationFactorsHalf>>>::type>
+  METAL_FUNC void draw_indexed_patches(uint num_patch_control_points, uint patch_start, uint patch_count, const constant uint *patch_index_buffer, const constant void *control_point_index_buffer, uint instance_count, uint base_instance, const constant T *tessellation_factor_buffer, uint instance_stride = 0) thread
+  {
+    __metal_draw_indexed_patches_render_command(icb, icb_index, num_patch_control_points, patch_start, patch_count, patch_index_buffer, control_point_index_buffer, instance_count, base_instance, static_cast<const constant void *>(tessellation_factor_buffer), instance_stride, 1.0f);
+  }
+#endif
+
+#if defined(__HAVE_RENDER_COMMAND_MESH__)
+  METAL_FUNC void draw_mesh_threadgroups(uint3 threadgroups_per_grid, uint3 threads_per_object_threadgroup, uint3 threads_per_mesh_threadgroup) thread
+  {
+    __metal_draw_mesh_threadgroups_render_command(icb, icb_index, threadgroups_per_grid, threads_per_object_threadgroup, threads_per_mesh_threadgroup);
+  }
+
+  METAL_FUNC void draw_mesh_threads(uint3 threads_per_grid, uint3 threads_per_object_threadgroup, uint3 threads_per_mesh_threadgroup) thread
+  {
+    __metal_draw_mesh_threads_render_command(icb, icb_index, threads_per_grid, threads_per_object_threadgroup, threads_per_mesh_threadgroup);
+  }
+
+  METAL_FUNC void set_barrier() thread
+  {
+    __metal_set_barrier_render_command(icb, icb_index);
+  }
+
+  METAL_FUNC void clear_barrier() thread
+  {
+    __metal_clear_barrier_render_command(icb, icb_index);
+  }
+#endif
+
+  METAL_FUNC void reset() thread
+  {
+    __metal_reset_render_command(icb, icb_index);
+  }
+
+  // Copy the content of the _command `that` into this _command.
+  METAL_FUNC void copy_command(render_command that) thread
+  {
+    __metal_copy_render_command(icb, icb_index, that.icb, that.icb_index);
+  }
+};
+#endif
+} // namespace metal
+#pragma METAL internals : disable
+
+#endif // __METAL_COMMAND_BUFFER

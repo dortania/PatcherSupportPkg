@@ -1,0 +1,196 @@
+// -*- Metal -*-
+//===-- metal_curves ------------------------------------------------------===//
+// Copyright (c) 2023 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_CURVES
+#define __METAL_CURVES
+
+#if defined(__HAVE_RAYTRACING_CURVES__)
+#include <metal_type_traits>
+
+namespace metal {
+// These functions return the position or first or second derivative on a
+// curve given the curve parameter 't' and control points 'p0', 'p1', etc.
+
+// Quadratic Bezier curve
+
+template <typename P>
+typename enable_if<is_floating_point<P>::value, P>::type
+bezier(make_scalar_t<P> t, P p0, P p1, P p2) {
+  make_scalar_t<P> omt = 1.0f - t;
+  make_scalar_t<P> omt2 = omt * omt;
+  make_scalar_t<P> t2 = t * t;
+
+  return omt2 * p0 + 2 * omt * t * p1 + t2 * p2;
+}
+
+template <typename P>
+typename enable_if<is_floating_point<P>::value, P>::type
+bezier_derivative(make_scalar_t<P> t, P p0, P p1, P p2) {
+  make_scalar_t<P> omt = 1.0f - t;
+
+  return 2 * omt * (p1 - p0) +
+         2 * t * (p2 - p1);
+}
+
+template <typename P>
+typename enable_if<is_floating_point<P>::value, P>::type
+bezier_second_derivative(make_scalar_t<P> t, P p0, P p1, P p2) {
+  return 2 * (p2 - 2 * p1 + p0);
+}
+
+// Cubic Bezier curve
+
+template <typename P>
+typename enable_if<is_floating_point<P>::value, P>::type
+bezier(make_scalar_t<P> t, P p0, P p1, P p2, P p3) {
+  make_scalar_t<P> omt = 1.0f - t;
+  make_scalar_t<P> omt2 = omt * omt;
+  make_scalar_t<P> t2 = t * t;
+
+  return omt2 * omt * p0 + 3 * omt2 * t * p1 + 3 * omt * t2 * p2 + t2 * t * p3;
+}
+
+template <typename P>
+typename enable_if<is_floating_point<P>::value, P>::type
+bezier_derivative(make_scalar_t<P> t, P p0, P p1, P p2, P p3) {
+  make_scalar_t<P> omt = 1.0f - t;
+
+  return 3 * omt * omt * (p1 - p0) +
+         6 * omt * t * (p2 - p1) +
+         3 * t * t * (p3 - p2);
+}
+
+template <typename P>
+typename enable_if<is_floating_point<P>::value, P>::type
+bezier_second_derivative(make_scalar_t<P> t, P p0, P p1, P p2, P p3) {
+  return 6 * (1 - t) * (p2 - 2 * p1 + p0) + 6 * t * (p3 - 2 * p2 + p1);
+}
+
+// Quadratic B-Spline curve
+
+template <typename P>
+typename enable_if<is_floating_point<P>::value, P>::type
+bspline(make_scalar_t<P> t, P p0, P p1, P p2) {
+  make_scalar_t<P> t2 = t * t;
+
+  return ((t2 - 2 * t + 1) * p0 +
+          (-2 * t2 + 2 * t + 1) * p1 +
+          t2 * p2) / 2.0f;
+}
+
+template <typename P>
+typename enable_if<is_floating_point<P>::value, P>::type
+bspline_derivative(make_scalar_t<P> t, P p0, P p1, P p2) {
+  return ((2 * t - 2) * p0 +
+          (-4 * t + 2) * p1 +
+          2 * t * p2) / 2.0f;
+}
+
+template <typename P>
+typename enable_if<is_floating_point<P>::value, P>::type
+bspline_second_derivative(make_scalar_t<P> t, P p0, P p1, P p2) {
+  return (2 * p0 - 4 * p1 + 2 * p2) / 2.0f;
+}
+
+// Cubic B-Spline curve
+
+template <typename P>
+typename enable_if<is_floating_point<P>::value, P>::type
+bspline(make_scalar_t<P> t, P p0, P p1, P p2, P p3) {
+  make_scalar_t<P> t2 = t * t;
+  make_scalar_t<P> t3 = t2 * t;
+
+  return ((-t3 + 3 * t2 - 3 * t + 1) * p0 +
+          (3 * t3 - 6 * t2 + 4) * p1 +
+          (-3 * t3 + 3 * t2 + 3 * t + 1) * p2 +
+          t3 * p3) / 6.0f;
+}
+
+template <typename P>
+typename enable_if<is_floating_point<P>::value, P>::type
+bspline_derivative(make_scalar_t<P> t, P p0, P p1, P p2, P p3) {
+  make_scalar_t<P> t2 = t * t;
+
+  return ((-3 * t2 + 6 * t - 3) * p0 +
+          (9 * t2 - 12 * t) * p1 +
+          (-9 * t2 + 6 * t + 3) * p2 +
+          (3 * t2) * p3) / 6.0f;
+}
+
+template <typename P>
+typename enable_if<is_floating_point<P>::value, P>::type
+bspline_second_derivative(make_scalar_t<P> t, P p0, P p1, P p2, P p3) {
+  return ((-6 * t + 6) * p0 +
+          (18 * t - 12) * p1 +
+          (-18 * t + 6) * p2 +
+          (6 * t) * p3) / 6.0f;
+}
+
+// Cubic Hermite curve
+
+template <typename P>
+typename enable_if<is_floating_point<P>::value, P>::type
+hermite(make_scalar_t<P> t, P p0, P p1, P m0, P m1) {
+  make_scalar_t<P> t2 = t * t;
+  make_scalar_t<P> t3 = t2 * t;
+
+  return (2 * t3 - 3 * t2 + 1) * p0 +
+         (t3 - 2 * t2 + t) * m0 +
+         (-2 * t3 + 3 * t2) * p1 +
+         (t3 - t2) * m1;
+}
+
+template <typename P>
+typename enable_if<is_floating_point<P>::value, P>::type
+hermite_derivative(make_scalar_t<P> t, P p0, P p1, P m0, P m1) {
+  make_scalar_t<P> t2 = t * t;
+
+  return (6 * t2 - 6 * t) * p0 +
+         (3 * t2 - 4 * t + 1) * m0 +
+         (-6 * t2 + 6 * t) * p1 +
+         (3 * t2 - 2 * t) * m1;
+}
+
+template <typename P>
+typename enable_if<is_floating_point<P>::value, P>::type
+hermite_second_derivative(make_scalar_t<P> t, P p0, P p1, P m0, P m1) {
+  return (12 * t - 6) * p0 +
+         (6 * t - 4) * m0 +
+         (-12 * t + 6) * p1 +
+         (6 * t - 2) * m1;
+}
+
+// Catmull-Rom curve
+
+template <typename P>
+typename enable_if<is_floating_point<P>::value, P>::type
+catmull_rom(make_scalar_t<P> t, P p0, P p1, P p2, P p3) {
+  P m0 = 0.5f * (p2 - p0);
+  P m1 = 0.5f * (p3 - p1);
+
+  return hermite(t, p1, p2, m0, m1);
+}
+
+template <typename P>
+typename enable_if<is_floating_point<P>::value, P>::type
+catmull_rom_derivative(make_scalar_t<P> t, P p0, P p1, P p2, P p3) {
+  P m0 = 0.5f * (p2 - p0);
+  P m1 = 0.5f * (p3 - p1);
+
+  return hermite_derivative(t, p1, p2, m0, m1);
+}
+
+template <typename P>
+typename enable_if<is_floating_point<P>::value, P>::type
+catmull_rom_second_derivative(make_scalar_t<P> t, P p0, P p1, P p2, P p3) {
+  P m0 = 0.5f * (p2 - p0);
+  P m1 = 0.5f * (p3 - p1);
+
+  return hermite_second_derivative(t, p1, p2, m0, m1);
+}
+} // namespace metal
+#endif
+
+#endif // __METAL_CURVES

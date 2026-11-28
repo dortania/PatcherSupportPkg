@@ -1,0 +1,450 @@
+// -*- Metal -*-
+//===-- metal_extended_vector ---------------------------------------------===//
+// Copyright (c) 2014-2018 Apple Inc. All rights reserved
+//===----------------------------------------------------------------------===//
+
+#ifndef __METAL_EXTENDED_VECTOR
+#define __METAL_EXTENDED_VECTOR
+
+typedef __attribute__((__ext_vector_type__(2))) bool bool2;
+typedef __attribute__((__ext_vector_type__(3))) bool bool3;
+typedef __attribute__((__ext_vector_type__(4))) bool bool4;
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+typedef __attribute__((__ext_vector_type__(8))) bool bool8;
+typedef __attribute__((__ext_vector_type__(16))) bool bool16;
+#else
+typedef struct __Reserved_Name__Do_not_use_bool8 bool8;
+typedef struct __Reserved_Name__Do_not_use_bool16 bool16;
+#endif
+
+typedef __attribute__((__ext_vector_type__(2))) char char2;
+typedef __attribute__((__ext_vector_type__(3))) char char3;
+typedef __attribute__((__ext_vector_type__(4))) char char4;
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+typedef __attribute__((__ext_vector_type__(8))) char char8;
+typedef __attribute__((__ext_vector_type__(16))) char char16;
+#else
+typedef struct __Reserved_Name__Do_not_use_char8 char8;
+typedef struct __Reserved_Name__Do_not_use_char16 char16;
+#endif
+
+typedef __attribute__((__ext_vector_type__(2))) unsigned char uchar2;
+typedef __attribute__((__ext_vector_type__(3))) unsigned char uchar3;
+typedef __attribute__((__ext_vector_type__(4))) unsigned char uchar4;
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+typedef __attribute__((__ext_vector_type__(8))) unsigned char uchar8;
+typedef __attribute__((__ext_vector_type__(16))) unsigned char uchar16;
+#else
+typedef struct __Reserved_Name__Do_not_use_uchar8 uchar8;
+typedef struct __Reserved_Name__Do_not_use_uchar16 uchar16;
+#endif
+
+typedef __attribute__((__ext_vector_type__(2))) short short2;
+typedef __attribute__((__ext_vector_type__(3))) short short3;
+typedef __attribute__((__ext_vector_type__(4))) short short4;
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+typedef __attribute__((__ext_vector_type__(8))) short short8;
+typedef __attribute__((__ext_vector_type__(16))) short short16;
+#else
+typedef struct __Reserved_Name__Do_not_use_short8 short8;
+typedef struct __Reserved_Name__Do_not_use_short16 short16;
+#endif
+
+typedef __attribute__((__ext_vector_type__(2))) unsigned short ushort2;
+typedef __attribute__((__ext_vector_type__(3))) unsigned short ushort3;
+typedef __attribute__((__ext_vector_type__(4))) unsigned short ushort4;
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+typedef __attribute__((__ext_vector_type__(8))) unsigned short ushort8;
+typedef __attribute__((__ext_vector_type__(16))) unsigned short ushort16;
+#else
+typedef struct __Reserved_Name__Do_not_use_ushort8 ushort8;
+typedef struct __Reserved_Name__Do_not_use_ushort16 ushort16;
+#endif
+
+typedef __attribute__((__ext_vector_type__(2))) int int2;
+typedef __attribute__((__ext_vector_type__(3))) int int3;
+typedef __attribute__((__ext_vector_type__(4))) int int4;
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+typedef __attribute__((__ext_vector_type__(8))) int int8;
+typedef __attribute__((__ext_vector_type__(16))) int int16;
+#else
+typedef struct __Reserved_Name__Do_not_use_int8 int8;
+typedef struct __Reserved_Name__Do_not_use_int16 int16;
+#endif
+
+typedef __attribute__((__ext_vector_type__(2))) unsigned int uint2;
+typedef __attribute__((__ext_vector_type__(3))) unsigned int uint3;
+typedef __attribute__((__ext_vector_type__(4))) unsigned int uint4;
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+typedef __attribute__((__ext_vector_type__(8))) unsigned int uint8;
+typedef __attribute__((__ext_vector_type__(16))) unsigned int uint16;
+#else
+typedef struct __Reserved_Name__Do_not_use_uint8 uint8;
+typedef struct __Reserved_Name__Do_not_use_uint16 uint16;
+#endif
+
+typedef __attribute__((__ext_vector_type__(2))) long long2;
+typedef __attribute__((__ext_vector_type__(3))) long long3;
+typedef __attribute__((__ext_vector_type__(4))) long long4;
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+typedef __attribute__((__ext_vector_type__(8))) long long8;
+typedef __attribute__((__ext_vector_type__(16))) long long16;
+#else
+typedef struct __Reserved_Name__Do_not_use_long8 long8;
+typedef struct __Reserved_Name__Do_not_use_long16 long16;
+#endif
+
+typedef __attribute__((__ext_vector_type__(2))) unsigned long ulong2;
+typedef __attribute__((__ext_vector_type__(3))) unsigned long ulong3;
+typedef __attribute__((__ext_vector_type__(4))) unsigned long ulong4;
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+typedef __attribute__((__ext_vector_type__(8))) unsigned long ulong8;
+typedef __attribute__((__ext_vector_type__(16))) unsigned long ulong16;
+#else
+typedef struct __Reserved_Name__Do_not_use_ulong8 ulong8;
+typedef struct __Reserved_Name__Do_not_use_ulong16 ulong16;
+#endif
+
+typedef struct __Reserved_Name__Do_not_use_llong2 llong2;
+typedef struct __Reserved_Name__Do_not_use_llong3 llong3;
+typedef struct __Reserved_Name__Do_not_use_llong4 llong4;
+typedef struct __Reserved_Name__Do_not_use_llong8 llong8;
+typedef struct __Reserved_Name__Do_not_use_llong16 llong16;
+
+typedef struct __Reserved_Name__Do_not_use_ullong2 ullong2;
+typedef struct __Reserved_Name__Do_not_use_ullong3 ullong3;
+typedef struct __Reserved_Name__Do_not_use_ullong4 ullong4;
+typedef struct __Reserved_Name__Do_not_use_ullong8 ullong8;
+typedef struct __Reserved_Name__Do_not_use_ullong16 ullong16;
+
+#if defined(__HAVE_BFLOAT__)
+typedef __attribute__((__ext_vector_type__(2))) bfloat bfloat2;
+typedef __attribute__((__ext_vector_type__(3))) bfloat bfloat3;
+typedef __attribute__((__ext_vector_type__(4))) bfloat bfloat4;
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+typedef __attribute__((__ext_vector_type__(8))) bfloat bfloat8;
+typedef __attribute__((__ext_vector_type__(16))) bfloat bfloat16;
+#else
+typedef struct __Reserved_Name__Do_not_use_bfloat8 bfloat8;
+typedef struct __Reserved_Name__Do_not_use_bfloat16 bfloat16;
+#endif
+#endif
+
+typedef __attribute__((__ext_vector_type__(2))) half half2;
+typedef __attribute__((__ext_vector_type__(3))) half half3;
+typedef __attribute__((__ext_vector_type__(4))) half half4;
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+typedef __attribute__((__ext_vector_type__(8))) half half8;
+typedef __attribute__((__ext_vector_type__(16))) half half16;
+#else
+typedef struct __Reserved_Name__Do_not_use_half8 half8;
+typedef struct __Reserved_Name__Do_not_use_half16 half16;
+#endif
+
+typedef __attribute__((__ext_vector_type__(2))) float float2;
+typedef __attribute__((__ext_vector_type__(3))) float float3;
+typedef __attribute__((__ext_vector_type__(4))) float float4;
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+typedef __attribute__((__ext_vector_type__(8))) float float8;
+typedef __attribute__((__ext_vector_type__(16))) float float16;
+#else
+typedef struct __Reserved_Name__Do_not_use_float8 float8;
+typedef struct __Reserved_Name__Do_not_use_float16 float16;
+#endif
+
+#if defined(__HAVE_NATIVE_DOUBLE__)
+typedef __attribute__((__ext_vector_type__(2))) double double2;
+typedef __attribute__((__ext_vector_type__(3))) double double3;
+typedef __attribute__((__ext_vector_type__(4))) double double4;
+#if defined(__HAVE_NATIVE_WIDE_VECTORS__)
+typedef __attribute__((__ext_vector_type__(8))) double double8;
+typedef __attribute__((__ext_vector_type__(16))) double double16;
+#else
+typedef struct __Reserved_Name__Do_not_use_double8 double8;
+typedef struct __Reserved_Name__Do_not_use_double16 double16;
+#endif
+#else
+typedef struct __Reserved_Name__Do_not_use_double2 double2;
+typedef struct __Reserved_Name__Do_not_use_double3 double3;
+typedef struct __Reserved_Name__Do_not_use_double4 double4;
+typedef struct __Reserved_Name__Do_not_use_double8 double8;
+typedef struct __Reserved_Name__Do_not_use_double16 double16;
+#endif
+
+typedef struct __Reserved_Name__Do_not_use_quad2 quad2;
+typedef struct __Reserved_Name__Do_not_use_quad3 quad3;
+typedef struct __Reserved_Name__Do_not_use_quad4 quad4;
+typedef struct __Reserved_Name__Do_not_use_quad8 quad8;
+typedef struct __Reserved_Name__Do_not_use_quad16 quad16;
+
+typedef bool2 vector_bool2;
+typedef bool3 vector_bool3;
+typedef bool4 vector_bool4;
+typedef bool8 vector_bool8;
+typedef bool16 vector_bool16;
+
+typedef char2 vector_char2;
+typedef char3 vector_char3;
+typedef char4 vector_char4;
+typedef char8 vector_char8;
+typedef char16 vector_char16;
+
+typedef uchar2 vector_uchar2;
+typedef uchar3 vector_uchar3;
+typedef uchar4 vector_uchar4;
+typedef uchar8 vector_uchar8;
+typedef uchar16 vector_uchar16;
+
+typedef short2 vector_short2;
+typedef short3 vector_short3;
+typedef short4 vector_short4;
+typedef short8 vector_short8;
+typedef short16 vector_short16;
+
+typedef ushort2 vector_ushort2;
+typedef ushort3 vector_ushort3;
+typedef ushort4 vector_ushort4;
+typedef ushort8 vector_ushort8;
+typedef ushort16 vector_ushort16;
+
+typedef int2 vector_int2;
+typedef int3 vector_int3;
+typedef int4 vector_int4;
+typedef int8 vector_int8;
+typedef int16 vector_int16;
+
+typedef uint2 vector_uint2;
+typedef uint3 vector_uint3;
+typedef uint4 vector_uint4;
+typedef uint8 vector_uint8;
+typedef uint16 vector_uint16;
+
+typedef long2 vector_long2;
+typedef long3 vector_long3;
+typedef long4 vector_long4;
+typedef long8 vector_long8;
+typedef long16 vector_long16;
+
+typedef ulong2 vector_ulong2;
+typedef ulong3 vector_ulong3;
+typedef ulong4 vector_ulong4;
+typedef ulong8 vector_ulong8;
+typedef ulong16 vector_ulong16;
+
+typedef half2 vector_half2;
+typedef half3 vector_half3;
+typedef half4 vector_half4;
+typedef half8 vector_half8;
+typedef half16 vector_half16;
+
+typedef float2 vector_float2;
+typedef float3 vector_float3;
+typedef float4 vector_float4;
+typedef float8 vector_float8;
+typedef float16 vector_float16;
+
+typedef double2 vector_double2;
+typedef double3 vector_double3;
+typedef double4 vector_double4;
+typedef double8 vector_double8;
+typedef double16 vector_double16;
+
+typedef quad2 vector_quad2;
+typedef quad3 vector_quad3;
+typedef quad4 vector_quad4;
+typedef quad8 vector_quad8;
+typedef quad16 vector_quad16;
+
+#if defined(__HAVE_SIMD_TYPES_PREFIX__)
+typedef bool2 simd_bool2;
+typedef bool3 simd_bool3;
+typedef bool4 simd_bool4;
+typedef bool8 simd_bool8;
+typedef bool16 simd_bool16;
+
+typedef char2 simd_char2;
+typedef char3 simd_char3;
+typedef char4 simd_char4;
+typedef char8 simd_char8;
+typedef char16 simd_char16;
+
+typedef uchar2 simd_uchar2;
+typedef uchar3 simd_uchar3;
+typedef uchar4 simd_uchar4;
+typedef uchar8 simd_uchar8;
+typedef uchar16 simd_uchar16;
+
+typedef short2 simd_short2;
+typedef short3 simd_short3;
+typedef short4 simd_short4;
+typedef short8 simd_short8;
+typedef short16 simd_short16;
+
+typedef ushort2 simd_ushort2;
+typedef ushort3 simd_ushort3;
+typedef ushort4 simd_ushort4;
+typedef ushort8 simd_ushort8;
+typedef ushort16 simd_ushort16;
+
+typedef int2 simd_int2;
+typedef int3 simd_int3;
+typedef int4 simd_int4;
+typedef int8 simd_int8;
+typedef int16 simd_int16;
+
+typedef uint2 simd_uint2;
+typedef uint3 simd_uint3;
+typedef uint4 simd_uint4;
+typedef uint8 simd_uint8;
+typedef uint16 simd_uint16;
+
+typedef long2 simd_long2;
+typedef long3 simd_long3;
+typedef long4 simd_long4;
+typedef long8 simd_long8;
+typedef long16 simd_long16;
+
+typedef ulong2 simd_ulong2;
+typedef ulong3 simd_ulong3;
+typedef ulong4 simd_ulong4;
+typedef ulong8 simd_ulong8;
+typedef ulong16 simd_ulong16;
+
+#if defined(__HAVE_BFLOAT__)
+typedef bfloat2 simd_bfloat2;
+typedef bfloat3 simd_bfloat3;
+typedef bfloat4 simd_bfloat4;
+typedef bfloat8 simd_bfloat8;
+typedef bfloat16 simd_bfloat16;
+#endif
+
+typedef half2 simd_half2;
+typedef half3 simd_half3;
+typedef half4 simd_half4;
+typedef half8 simd_half8;
+typedef half16 simd_half16;
+
+typedef float2 simd_float2;
+typedef float3 simd_float3;
+typedef float4 simd_float4;
+typedef float8 simd_float8;
+typedef float16 simd_float16;
+
+typedef double2 simd_double2;
+typedef double3 simd_double3;
+typedef double4 simd_double4;
+typedef double8 simd_double8;
+typedef double16 simd_double16;
+
+typedef quad2 simd_quad2;
+typedef quad3 simd_quad3;
+typedef quad4 simd_quad4;
+typedef quad8 simd_quad8;
+typedef quad16 simd_quad16;
+#endif
+
+namespace metal
+{
+typedef ::bool2 bool2;
+typedef ::bool3 bool3;
+typedef ::bool4 bool4;
+typedef ::bool8 bool8;
+typedef ::bool16 bool16;
+
+typedef ::char2 char2;
+typedef ::char3 char3;
+typedef ::char4 char4;
+typedef ::char8 char8;
+typedef ::char16 char16;
+
+typedef ::uchar2 uchar2;
+typedef ::uchar3 uchar3;
+typedef ::uchar4 uchar4;
+typedef ::uchar8 uchar8;
+typedef ::uchar16 uchar16;
+
+typedef ::short2 short2;
+typedef ::short3 short3;
+typedef ::short4 short4;
+typedef ::short8 short8;
+typedef ::short16 short16;
+
+typedef ::ushort2 ushort2;
+typedef ::ushort3 ushort3;
+typedef ::ushort4 ushort4;
+typedef ::ushort8 ushort8;
+typedef ::ushort16 ushort16;
+
+typedef ::int2 int2;
+typedef ::int3 int3;
+typedef ::int4 int4;
+typedef ::int8 int8;
+typedef ::int16 int16;
+
+typedef ::uint2 uint2;
+typedef ::uint3 uint3;
+typedef ::uint4 uint4;
+typedef ::uint8 uint8;
+typedef ::uint16 uint16;
+
+typedef ::long2 long2;
+typedef ::long3 long3;
+typedef ::long4 long4;
+typedef ::long8 long8;
+typedef ::long16 long16;
+
+typedef ::ulong2 ulong2;
+typedef ::ulong3 ulong3;
+typedef ::ulong4 ulong4;
+typedef ::ulong8 ulong8;
+typedef ::ulong16 ulong16;
+
+typedef ::llong2 llong2;
+typedef ::llong3 llong3;
+typedef ::llong4 llong4;
+typedef ::llong8 llong8;
+typedef ::llong16 llong16;
+
+typedef ::ullong2 ullong2;
+typedef ::ullong3 ullong3;
+typedef ::ullong4 ullong4;
+typedef ::ullong8 ullong8;
+typedef ::ullong16 ullong16;
+
+#if defined(__HAVE_BFLOAT__)
+typedef ::bfloat2 bfloat2;
+typedef ::bfloat3 bfloat3;
+typedef ::bfloat4 bfloat4;
+typedef ::bfloat8 bfloat8;
+typedef ::bfloat16 bfloat16;
+#endif
+
+typedef ::half2 half2;
+typedef ::half3 half3;
+typedef ::half4 half4;
+typedef ::half8 half8;
+typedef ::half16 half16;
+
+typedef ::float2 float2;
+typedef ::float3 float3;
+typedef ::float4 float4;
+typedef ::float8 float8;
+typedef ::float16 float16;
+
+typedef ::double2 double2;
+typedef ::double3 double3;
+typedef ::double4 double4;
+typedef ::double8 double8;
+typedef ::double16 double16;
+
+typedef ::quad2 quad2;
+typedef ::quad3 quad3;
+typedef ::quad4 quad4;
+typedef ::quad8 quad8;
+typedef ::quad16 quad16;
+
+template <typename T, int N>
+using vec = T __attribute__((__ext_vector_type__(N)));
+} // namespace metal
+
+#endif // __METAL_EXTENDED_VECTOR

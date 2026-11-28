@@ -1,0 +1,38 @@
+// n13-kepler-half-constant: a constant half2x2 array must compile; its bitcast constant expressions crashed the
+// compiler service. Fix: GeForceAIRCompat NVAIR_HALF_CONSTANT_FIX. Checks: a kernel copying the constant {11, 12, 21,
+// 22} out. Argument: GPU name (default: NVIDIA).
+#import "repro.h"
+
+static NSString *const src = @
+    "#include <metal_stdlib>\n"
+    "using namespace metal;\n"
+    "struct Output { half2x2 value; };\n"
+    "constant array<half2x2, 1> v = array<half2x2, 1>{half2x2(half2(11.0h, 12.0h), half2(21.0h, 22.0h))};\n"
+    "kernel void k(device array<Output, 1> *outputs [[buffer(0)]], constant uint &n [[buffer(1)]]) {\n"
+    "    for (uint i = 0; i < n; i++) (*outputs)[i].value = v[i]; }\n";
+
+int main(int argc, char **argv) { @autoreleasepool {
+    const char *bug = "n13-kepler-half-constant";
+    id<MTLDevice> dev = reproDevice(argc, argv, "NVIDIA");
+    if (!dev) return SKIP(bug, "no such GPU");
+    const char *name = dev.name.UTF8String;
+    NSString *why = nil;
+    id<MTLComputePipelineState> ps = reproComputePipeline(dev, src, nil, &why);
+    if (!ps) return FAIL(bug, "%s", why.UTF8String);
+    id<MTLBuffer> out = [dev newBufferWithLength:8 options:MTLResourceStorageModeShared];
+    memset(out.contents, 0, 8);
+    uint32_t n = 1;
+    id<MTLCommandQueue> queue = [dev newCommandQueue];
+    id<MTLCommandBuffer> cb = [queue commandBuffer];
+    id<MTLComputeCommandEncoder> ce = [cb computeCommandEncoder];
+    [ce setComputePipelineState:ps];
+    [ce setBuffer:out offset:0 atIndex:0];
+    [ce setBytes:&n length:4 atIndex:1];
+    [ce dispatchThreads:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+    [ce endEncoding];
+    if (!reproRun(cb)) return FAIL(bug, "%s: command buffer failed", name);
+    const __fp16 *h = out.contents;
+    if (h[0] != 11 || h[1] != 12 || h[2] != 21 || h[3] != 22)
+        return FAIL(bug, "%s: the constant half2x2 read back (%g, %g, %g, %g), want (11, 12, 21, 22)", name, (float)h[0], (float)h[1], (float)h[2], (float)h[3]);
+    return PASS(bug, "%s: a constant array of half2x2 compiles and reads back right", name);
+}}

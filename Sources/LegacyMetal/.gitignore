@@ -1,0 +1,9 @@
+build/
+Tests/build/
+Tests/tools/localcc.dylib
+Tests/tools/bronzeload.dylib
+Tests/RESULTS*.md
+Tests/fuzz/runs/
+Tests/tools/angle-caller/libANGLE-shared.dylib
+Tests/apps
+Tests/runs/

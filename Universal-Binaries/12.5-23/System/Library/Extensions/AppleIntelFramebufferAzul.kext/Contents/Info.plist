@@ -137,11 +137,11 @@
 				<key>RC1_Threshold</key>
 				<integer>260</integer>
 				<key>RC6_Threshold</key>
-				<integer>520</integer>
+				<integer>50000</integer>
 				<key>RC6p_Threshold</key>
 				<integer>1300</integer>
 				<key>RC_Eval_Interval</key>
-				<integer>26000</integer>
+				<integer>125000</integer>
 			</dict>
 		</dict>
 		<key>FBClientController</key>
