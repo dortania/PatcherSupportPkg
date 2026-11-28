@@ -5,7 +5,7 @@
 #   electron [first last]   the latest stable patch of each Electron major (default the last 18 majors): one Chromium and
 #                           ANGLE version each, as bundled by Electron apps, which lag Chrome by up to a couple of years
 #   chrome [first last step]  Chrome for Testing builds, one per milestone (default every 4th of the last 40)
-#   vscode firefox firefox-esr blender godot obsidian discord slack signal anki ppsspp retroarch   single apps (latest
+#   vscode firefox firefox-esr blender godot obsidian discord slack signal anki ppsspp retroarch retroarch-extras   single apps (latest
 #                           release), chosen for the different ways they reach Metal: Chromium/ANGLE in Electron apps,
 #                           Qt WebEngine (Anki), Firefox's own ANGLE and wgpu, native Metal renderers (Blender, Godot),
 #                           MoltenVK as a bundled library of its own version (PPSSPP, RetroArch's Vulkan driver)
@@ -101,6 +101,11 @@ single() {
         retroarch) app="RetroArch.app"
             url=$(curl -fsSL -A "$ua" https://buildbot.libretro.com/stable/ | grep -o '/stable/[0-9.]*/' | sort -t/ -k3 -V | tail -1)
             [ -n "$url" ] && get "https://buildbot.libretro.com${url}apple/osx/universal/RetroArch_Metal.dmg" .dl/a.dmg && dmg_app .dl/a.dmg RetroArch "$app" ;;
+        retroarch-extras) app="retroarch-extras"  # for tools/ra-sweep.py: the slang shader pack and the content-less 2048 core
+            mkdir -p "$app" && get https://buildbot.libretro.com/assets/frontend/shaders_slang.zip .dl/s.zip && rm -rf "$app/shaders_slang" &&
+                unzip -q .dl/s.zip -d "$app/shaders_slang" && rm -f .dl/s.zip &&
+                get https://buildbot.libretro.com/nightly/apple/osx/x86_64/latest/2048_libretro.dylib.zip .dl/c.zip && unzip -q -o .dl/c.zip -d "$app" && rm -f .dl/c.zip
+            [ -f "$app/2048_libretro.dylib" ] || rm -rf "$app" ;;
         *) echo "unknown: $1" >&2; return ;;
     esac
     report "$app"
