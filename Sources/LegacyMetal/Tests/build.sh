@@ -33,8 +33,8 @@ if xcrun -sdk macosx -f metal >/dev/null 2>&1; then
             rm -f "build/$test-$tag.air"
         done
     done
-    # s75: one shader set built for each macOS target from 10.14 (AIR 2.1, Chromium's prebuilt ANGLE library) up
-    for version in 10.14 10.15 11.0 12.0 13.0 14.0 15.0 26.0; do
+    # s75: one shader set built for each macOS target from 10.13 (AIR 2.0, RetroArch's prebuilt library) up
+    for version in 10.13 10.14 10.15 11.0 12.0 13.0 14.0 15.0 26.0; do
         xcrun -sdk macosx metal -mmacosx-version-min="$version" -c data/s75-air.metal -o "build/s75-$version.air" 2>/dev/null &&
             xcrun -sdk macosx metallib "build/s75-$version.air" -o "build/s75-air-macos$version.metallib"
         rm -f "build/s75-$version.air"

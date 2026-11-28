@@ -1,9 +1,9 @@
-// s75-air-version-matrix: a sweep: shaders built for every macOS target from 10.14 (AIR 2.1) up must run; on Tahoe old
+// s75-air-version-matrix: a sweep: shaders built for every macOS target from 10.13 (AIR 2.0) up must run; on Tahoe old
 // texture calls broke (item 75). Fix: the whole stack; only the fixed run must pass. SKIP without Xcode's metal.
 // Checks: fragment and kernel pipelines per library; AIR 2.7+ is reported, not failed. Argument: GPU name.
 #import "repro.h"
 
-static const char *targets[] = {"10.14", "10.15", "11.0", "12.0", "13.0", "14.0", "15.0", "26.0"};
+static const char *targets[] = {"10.13", "10.14", "10.15", "11.0", "12.0", "13.0", "14.0", "15.0", "26.0"};
 static BOOL required(const char *target) { return atof(target) < 15.0; }
 
 enum { N = 8 };

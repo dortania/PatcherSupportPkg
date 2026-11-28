@@ -6491,24 +6491,130 @@ static void installAIR27Retargeting(void) {
 // AIR 2.8 libraries load, which hides an older module's version from the 31001 compiler's upgrade pass: its texture
 // calls stay in the AIR 2.1-era form, the downgrade for the 3802 back ends makes invalid IR, and the reader aborts
 // MTLCompilerService (s75; Chromium's ANGLE library, s74). fixIr now returns modules older than macOS 13.2 as they are,
-// for the upgrade pass to convert. Hooked through the wrapper's __got slot for fixIr, resolved with dlsym.
+// for the upgrade pass to convert. Hooked through the wrapper's __got slot for fixIr, resolved with dlsym. The upgrade
+// pass doesn't take AIR 2.0 (macOS 10.13 libraries: RetroArch's Metal driver, whose pipelines all failed), so such a
+// module is relabelled AIR 2.1 / macOS 10.14 first, the same calls in both, through libLLVM_real's API.
 static NSData *(*origFixIr)(NSData *);
 static const char kLLVMWrapper31001[] = "/System/Library/PrivateFrameworks/GPUCompiler.framework/Versions/31001/Libraries/libLLVM.dylib";
 
-static bool olderThanMacOS132(NSData *module) {  // the "-apple-macosxMAJOR.MINOR" of the module's triple
+// The "-apple-macosxMAJOR.MINOR" of the module's triple, when its bytes show it (an AIR 2.0 module's don't)
+static bool tripleMacOSVersion(NSData *module, int *major, int *minor) {
     static const char key[] = "-apple-macosx";
     const char *p = module.bytes, *end = p + module.length;
     for (const char *q = p; q + sizeof key + 4 < end; q++) {
         if (*q != '-' || memcmp(q, key, sizeof key - 1)) continue;
         const char *version = q + sizeof key - 1, *dot = memchr(version, '.', (size_t)(end - version));
-        int major = atoi(version), minor = dot ? atoi(dot + 1) : 0;
-        return major < 13 || (major == 13 && minor < 2);
+        *major = atoi(version), *minor = dot ? atoi(dot + 1) : 0;
+        return true;
     }
     return false;
 }
 
+// libLLVM_real's C API (and NamedMDNode::setOperand, which the C API lacks), resolved from its symbol table
+static const void *symbolInImage(const struct mach_header *mh, intptr_t slide, const char *name);
+static struct { const struct mach_header *mh; intptr_t slide; } llvmReal31001;
+typedef struct {
+    void *(*contextCreate)(void);
+    void (*contextDispose)(void *);
+    void *(*bufferCopy)(const char *, size_t, const char *);
+    const char *(*bufferStart)(void *);
+    size_t (*bufferSize)(void *);
+    void (*disposeBuffer)(void *);
+    int (*parseBitcode)(void *, void *, void **);
+    void *(*writeBitcode)(void *);
+    void (*disposeModule)(void *);
+    const char *(*getTarget)(void *);
+    void (*setTarget)(void *, const char *);
+    void *(*getNamedMetadata)(void *, const char *, size_t);
+    unsigned (*namedMetadataCount)(void *, const char *);
+    void (*namedMetadataOperands)(void *, const char *, void **);
+    unsigned (*nodeOperandCount)(void *);
+    void (*nodeOperands)(void *, void **);
+    unsigned long long (*constIntValue)(void *);
+    void *(*int32Type)(void *);
+    void *(*constInt)(void *, unsigned long long, int);
+    void *(*valueAsMetadata)(void *);
+    void *(*mdString)(void *, const char *, size_t);
+    void *(*mdNode)(void *, void **, size_t);
+    void (*setNamedOperand)(void *, unsigned, void *);
+} LLVMRealAPI;
+static const LLVMRealAPI *llvmRealAPI(void) {
+    static LLVMRealAPI api;
+    static dispatch_once_t once;
+    static BOOL complete;
+    dispatch_once(&once, ^{
+        if (!llvmReal31001.mh) return;
+        const struct { const char *name; void **slot; } symbols[] = {
+            {"_LLVMContextCreate", (void **)&api.contextCreate}, {"_LLVMContextDispose", (void **)&api.contextDispose},
+            {"_LLVMCreateMemoryBufferWithMemoryRangeCopy", (void **)&api.bufferCopy}, {"_LLVMGetBufferStart", (void **)&api.bufferStart},
+            {"_LLVMGetBufferSize", (void **)&api.bufferSize}, {"_LLVMDisposeMemoryBuffer", (void **)&api.disposeBuffer},
+            {"_LLVMParseBitcodeInContext2", (void **)&api.parseBitcode}, {"_LLVMWriteBitcodeToMemoryBuffer", (void **)&api.writeBitcode},
+            {"_LLVMDisposeModule", (void **)&api.disposeModule}, {"_LLVMGetTarget", (void **)&api.getTarget},
+            {"_LLVMSetTarget", (void **)&api.setTarget}, {"_LLVMGetNamedMetadata", (void **)&api.getNamedMetadata},
+            {"_LLVMGetNamedMetadataNumOperands", (void **)&api.namedMetadataCount},
+            {"_LLVMGetNamedMetadataOperands", (void **)&api.namedMetadataOperands},
+            {"_LLVMGetMDNodeNumOperands", (void **)&api.nodeOperandCount}, {"_LLVMGetMDNodeOperands", (void **)&api.nodeOperands},
+            {"_LLVMConstIntGetZExtValue", (void **)&api.constIntValue}, {"_LLVMInt32TypeInContext", (void **)&api.int32Type},
+            {"_LLVMConstInt", (void **)&api.constInt}, {"_LLVMValueAsMetadata", (void **)&api.valueAsMetadata},
+            {"_LLVMMDStringInContext2", (void **)&api.mdString}, {"_LLVMMDNodeInContext2", (void **)&api.mdNode},
+            {"__ZN4llvm11NamedMDNode10setOperandEjPNS_6MDNodeE", (void **)&api.setNamedOperand},
+        };
+        complete = YES;
+        for (size_t i = 0; i < sizeof symbols / sizeof *symbols; i++) {
+            *symbols[i].slot = (void *)symbolInImage(llvmReal31001.mh, llvmReal31001.slide, symbols[i].name);
+            if (!*symbols[i].slot) complete = NO;
+        }
+    });
+    return complete ? &api : NULL;
+}
+
+// A version record's MDNode: {major, minor, patch} (air.version) or {"Metal", major, minor, patch} (air.language_version)
+static BOOL isAIRVersion20(const LLVMRealAPI *api, void *module, const char *name, unsigned firstNumber) {
+    if (api->namedMetadataCount(module, name) != 1) return NO;
+    void *node = NULL;
+    api->namedMetadataOperands(module, name, &node);
+    if (api->nodeOperandCount(node) != firstNumber + 3) return NO;
+    void *operands[4] = {NULL};
+    api->nodeOperands(node, operands);
+    return api->constIntValue(operands[firstNumber]) == 2 && api->constIntValue(operands[firstNumber + 1]) == 0;
+}
+static void setAIRVersion21(const LLVMRealAPI *api, void *context, void *module, const char *name, BOOL language) {
+    void *i32 = api->int32Type(context), *fields[4];
+    unsigned n = 0;
+    if (language) fields[n++] = api->mdString(context, "Metal", 5);
+    const unsigned version[3] = {2, 1, 0};
+    for (int k = 0; k < 3; k++) fields[n++] = api->valueAsMetadata(api->constInt(i32, version[k], 0));
+    api->setNamedOperand(api->getNamedMetadata(module, name, strlen(name)), 0, api->mdNode(context, fields, n));
+}
+static NSData *relabelledAIR21(NSData *module) {  // nil: not an AIR 2.0 module, or no API
+    const LLVMRealAPI *api = llvmRealAPI();
+    if (!api || disabled("MTLSHIM_AIR20_RELABEL")) return nil;
+    void *context = api->contextCreate(), *buffer = api->bufferCopy(module.bytes, module.length, "air"), *parsed = NULL;
+    NSData *relabelled = nil;
+    if (!api->parseBitcode(context, buffer, &parsed) && parsed && isAIRVersion20(api, parsed, "air.version", 0) &&
+        isAIRVersion20(api, parsed, "air.language_version", 1)) {
+        api->setTarget(parsed, "air64_v21-apple-macosx10.14.0");
+        setAIRVersion21(api, context, parsed, "air.version", NO);
+        setAIRVersion21(api, context, parsed, "air.language_version", YES);
+        void *written = api->writeBitcode(parsed);
+        if (written) relabelled = [NSData dataWithBytes:api->bufferStart(written) length:api->bufferSize(written)];
+        if (written) api->disposeBuffer(written);
+    }
+    if (parsed) api->disposeModule(parsed);
+    api->disposeBuffer(buffer);
+    api->contextDispose(context);
+    return relabelled;
+}
+
 static NSData *fixIrKeepingOldModules(NSData *module) {
-    if (module && olderThanMacOS132(module)) {
+    int major = 0, minor = 0;
+    bool tripleShown = module && tripleMacOSVersion(module, &major, &minor);
+    NSData *relabelled = module && !tripleShown ? relabelledAIR21(module) : nil;  // parsed only when the bytes don't tell
+    if (relabelled) {
+        if (verbose()) shimLog("[mtlshim] AIR 2.0 module relabelled AIR 2.1 for the upgrade pass\n");
+        return relabelled;
+    }
+    if (tripleShown && (major < 13 || (major == 13 && minor < 2))) {
         if (verbose()) shimLog("[mtlshim] module older than macOS 13.2 left as it is for the upgrade pass\n");
         return module;
     }
@@ -6545,6 +6651,8 @@ static void interposeLLVMWrapper(const struct mach_header *mh, intptr_t slide) {
     if (!strcmp(info.dli_fname, kLLVMWrapper31001)) llvmWrapper31001.mh = mh, llvmWrapper31001.slide = slide;
     else if (strstr(info.dli_fname, "GPUCompiler.framework/Versions/31001/Libraries/libLLVM_helper.dylib"))
         llvmHelper31001.mh = mh, llvmHelper31001.slide = slide;
+    else if (strstr(info.dli_fname, "GPUCompiler.framework/Versions/31001/Libraries/libLLVM_real.dylib"))
+        llvmReal31001.mh = mh, llvmReal31001.slide = slide;
     else return;
     if (origFixIr || !llvmWrapper31001.mh || !llvmHelper31001.mh) return;
     origFixIr = (NSData *(*)(NSData *))symbolInImage(llvmHelper31001.mh, llvmHelper31001.slide, "__Z5fixIrP6NSData");
